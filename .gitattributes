@@ -1,0 +1,5 @@
+*.pt filter=lfs diff=lfs merge=lfs -text
+*.pth filter=lfs diff=lfs merge=lfs -text
+models/** filter=lfs diff=lfs merge=lfs -text
+*.png filter=lfs diff=lfs merge=lfs -text
+examples/models/digit_mobility.jit filter=lfs diff=lfs merge=lfs -text

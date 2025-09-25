@@ -1,0 +1,17 @@
+__pycache__/
+temp/
+sample_*
+
+# Python packaging artifacts
+*.egg-info/
+build/
+dist/
+*.egg
+
+# PyPI upload artifacts
+.pypirc
+
+# Virtual environments
+venv/
+env/
+.venv/
