@@ -29,8 +29,10 @@ unit-test-job:
   script:
     - pip install pytest
     - pip install dist/*.whl
-    - pytest
+# add this back in when there are tests
+#    - pytest
 
+# FIXME: deploy wheel
 #deploy-job:      # This job runs in the deploy stage.
 #  stage: deploy  # It only runs when *both* jobs in the test stage complete successfully.
 #  environment: production
