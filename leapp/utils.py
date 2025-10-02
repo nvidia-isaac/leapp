@@ -21,6 +21,7 @@ import ast
 import re
 import textwrap
 import copy
+import os
 import collections.abc
 from dataclasses import dataclass, field
 from typing import Optional, Any, Dict
@@ -173,6 +174,14 @@ class CompactYamlList(list):
     This class will behave exactly like a list. The only difference is that it will be
     formatted in a more compact way in the yaml file.
 
+    """
+    pass
+
+
+class CompactYamlDict(dict):
+    """Custom dict class for tensor shapes that enables compact YAML formatting
+    This class will behave exactly like a dict. The only difference is that it will be
+    formatted in a more compact way in the yaml file.
     """
     pass
 
@@ -370,17 +379,18 @@ def describe_io_helper(data, name_str, dtype_notation):
     if isinstance(data, list):
         io_format = []
         for idx, item in enumerate(data):
+            child_name = ".".join([name_str, str(idx)])
             child_description, child_format = describe_io_helper(
-                item, name_str+str(idx), dtype_notation)
+                item, child_name, dtype_notation)
             io_format.append(child_format)
             data_description.extend(child_description)
         return data_description, io_format
     elif isinstance(data, dict):
         io_format = {}
         for k, v in data.items():
+            child_name = ".".join([name_str, k])
             child_description, child_format = describe_io_helper(
-                v, name_str+k, dtype_notation)
-
+                v, child_name, dtype_notation)
             io_format[k] = child_format
             data_description.extend(child_description)
     elif isinstance(data, torch.Tensor):
@@ -791,3 +801,25 @@ def get_tagged_subclass(base_class, value, tag):
     new_class = new_cls(value, tag)
 
     return new_class
+
+
+def get_relative_path(model_path, yaml_save_path):
+    """
+    Convert a single model path to be relative to the YAML file location.
+
+    Args:
+        model_path: Absolute path to the model file
+        yaml_save_path: Directory path where the YAML file will be saved
+
+    Returns:
+        Relative model path, or original path if conversion fails
+    """
+    if not yaml_save_path or not model_path:
+        return model_path
+
+    try:
+        # Convert to relative path
+        return os.path.relpath(model_path, yaml_save_path)
+    except ValueError:
+        # If relative path calculation fails (e.g., different drives on Windows), keep absolute path
+        return model_path

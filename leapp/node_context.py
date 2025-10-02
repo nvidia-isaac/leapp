@@ -15,7 +15,7 @@
 # limitations under the License.
 #
 
-from .utils import extract_return_names, describe_io, CompactYamlList
+from .utils import extract_return_names, describe_io, CompactYamlList, CompactYamlDict
 from .utils import (
     safe_deepcopy,
     get_atrribute_value_from_frame,
@@ -29,7 +29,7 @@ import inspect
 class NodeContext:
     def __init__(self, name,  from_function, backend=None, use_trace=False, backend_params=None,
                  inputs=None, outputs=None, environment_constants=None, register_buffers=None,
-                 tag_io=True, enable_fp16=False, enable_cuda_graph=False):
+                 tag_io=True, enable_fp16=False, enable_cuda_graphs=False):
         self.name = name
         # input parameters
         # this variable is for temporary use only,
@@ -63,7 +63,7 @@ class NodeContext:
             self.register_buffers = []
         self.tag_io = tag_io
         self.enable_fp16 = enable_fp16
-        self.enable_cuda_graph = enable_cuda_graph
+        self.enable_cuda_graphs = enable_cuda_graphs
 
         # Check for overlap between register_buffers and environment_constants
         overlap = set(self.register_buffers) & set(self.environment_constants)
@@ -133,42 +133,40 @@ class NodeContext:
 
     def get_description(self, description_types):
         # dynamically generate i/o descriptions depending on need
-        if 'inputs' in description_types or 'input_format' in description_types:
-            # Directly use the TensorDescription objects in self.inputs
-            input_descriptions = [input.dict() for input in self.inputs]
-            # Resolve TensorDescription objects in input_formats to their string names
-            input_formats = CompactYamlList(
-                resolve_tensor_descriptions_to_names(self.input_formats))
+        # Directly use the TensorDescription objects in self.inputs
+        input_descriptions = [input.dict() for input in self.inputs]
+        # Resolve TensorDescription objects in input_formats to their string names
+        input_formats = CompactYamlList(
+            resolve_tensor_descriptions_to_names(self.input_formats))
 
-        if 'outputs' in description_types or 'output_format' in description_types:
-            # Directly use the TensorDescription objects in self.outputs
-            output_descriptions = [output.dict() for output in self.outputs]
-            # Resolve TensorDescription objects in output_formats to their string names
-            output_formats = CompactYamlList(
-                resolve_tensor_descriptions_to_names(self.output_formats))
-            if len(output_formats) == 1:
-                output_formats = output_formats[0]
+        # Directly use the TensorDescription objects in self.outputs
+        output_descriptions = [output.dict() for output in self.outputs]
+        # Resolve TensorDescription objects in output_formats to their string names
+        output_formats = resolve_tensor_descriptions_to_names(
+            self.output_formats)
+        if len(output_formats) == 1:
+            output_formats = output_formats[0]
+        if isinstance(output_formats, list):
+            output_formats = CompactYamlList(output_formats)
+        elif isinstance(output_formats, dict):
+            output_formats = CompactYamlDict(output_formats)
 
         description = {}
-        for description_type in description_types:
-            if description_type == 'inputs':
-                description['inputs'] = input_descriptions
-            elif description_type == 'outputs':
-                description['outputs'] = output_descriptions
-            elif description_type == 'parameters':
-                description['parameters'] = {
-                    'model_path': self.model_path,
-                    'md5sum': self.md5sum,
-                    'device': self.model_device,
-                    'is_engine_path': self.is_engine_path(),
-                    'backend': self.export_backend.get_backed_model_type(),
-                    'enable_fp16': self.enable_fp16,
-                    'enable_cuda_graph': self.enable_cuda_graph,
-                }
-            elif description_type == 'input_format':
-                description['input_format'] = input_formats
-            elif description_type == 'output_format':
-                description['output_format'] = output_formats
+        description['inputs'] = input_descriptions
+        description['outputs'] = output_descriptions
+        description['parameters'] = {
+            'model_path': self.model_path,
+            'md5sum': self.md5sum,
+            'device': self.model_device,
+            'is_engine_path': self.is_engine_path(),
+            'backend': self.export_backend.get_backed_model_type(),
+            'enable_fp16': self.enable_fp16,
+            'enable_cuda_graphs': self.enable_cuda_graphs,
+        }
+        description['formatting'] = {
+            'input_format': input_formats,
+            'output_format': output_formats,
+        }
 
         return description
 
