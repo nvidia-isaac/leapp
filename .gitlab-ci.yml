@@ -11,7 +11,7 @@ cache:
 
 before_script:
   - python --version ; pip --version  # For debugging
-  - pip install virtualenv
+  - pip install virtualenv build
   - virtualenv venv
   - source venv/bin/activate
 
@@ -19,7 +19,7 @@ before_script:
 build-job:
   stage: build
   script:
-    - python -m build
+    - python -m build --wheel
   artifacts:
     paths:
       - dist/
