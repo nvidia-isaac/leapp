@@ -1,20 +1,19 @@
-image: python:latest
-
-stages:
-  - build
-  - test
-#  - deploy
-
-cache:
-  paths:
+default:
+  image: python:latest
+  cache:
+    paths:
     - .cache/pip
-
-before_script:
+  before_script:
   - python --version ; pip --version  # For debugging
   - pip install virtualenv
   - virtualenv venv
   - source venv/bin/activate
-  - pip install build
+  - pip install build twine
+
+stages:
+  - build
+  - test
+  - deploy
 
 build-job:
   stage: build
@@ -32,10 +31,10 @@ unit-test-job:
 # add this back in when there are tests
 #    - pytest
 
-# FIXME: deploy wheel
-#deploy-job:      # This job runs in the deploy stage.
-#  stage: deploy  # It only runs when *both* jobs in the test stage complete successfully.
-#  environment: production
-#  script:
-#    - echo "Deploying application..."
-#    - echo "Application successfully deployed."
+deploy-job:      # This job runs in the deploy stage.
+  stage: deploy  # It only runs when *both* jobs in the test stage complete successfully.
+  script:
+  - TWINE_PASSWORD=${CI_JOB_TOKEN} TWINE_USERNAME=gitlab-ci-token python -m twine upload --repository-url ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi dist/*
+# TODO: decide on correct upload strategy
+#  rules:
+#  - if: $CI_COMMIT_TAG
