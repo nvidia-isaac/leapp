@@ -22,7 +22,7 @@ import yaml
 import os
 import time
 from .node_context import NodeContext
-from .utils import verify_data_exact_match, CompactYamlList
+from .utils import verify_data_exact_match, CompactYamlList, CompactYamlDict, get_relative_path
 
 
 class ExportManager:
@@ -154,7 +154,7 @@ class ExportManager:
                                        tag_io=self.TAG_IO,
                                        enable_fp16=kwargs.get(
                                            "enable_fp16", False),
-                                       enable_cuda_graph=kwargs.get("enable_cuda_graph", False))
+                                       enable_cuda_graphs=kwargs.get("enable_cuda_graphs", False))
             # store the node context
             self.nodes[name] = node_context
             return True
@@ -469,6 +469,12 @@ class ExportManager:
             print(f"Compiling parameters for {node.name}")
             description = node.get_description(
                 ['inputs', 'outputs', 'parameters', 'input_format', 'output_format'])
+            if 'parameters' in description and 'model_path' in description['parameters']:
+                # Convert model path to be relative to YAML file location
+                model_path = description['parameters']['model_path']
+                if model_path:
+                    description['parameters']['model_path'] = get_relative_path(
+                        model_path, self.SAVE_PATH)
             models["models"][node.name] = description
         print()
         return models
@@ -504,9 +510,13 @@ class ExportManager:
         # Set up custom YAML representers before writing any YAML
         def represent_shape_list(dumper, data):
             return dumper.represent_sequence('tag:yaml.org,2002:seq', data, flow_style=True)
+
+        def represent_shape_dict(dumper, data):
+            return dumper.represent_mapping('tag:yaml.org,2002:map', data, flow_style=True)
+
         # Register the custom representers
-        # Compact formatting for shapes
         yaml.add_representer(CompactYamlList, represent_shape_list)
+        yaml.add_representer(CompactYamlDict, represent_shape_dict)
         # Convert dangling inputs and outputs from "node_name/field" format to {"node_name": [field1, field2]} format
         dangling_inputs_dict = {}
         for inp in dangling_inputs:
