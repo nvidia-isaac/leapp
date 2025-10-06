@@ -147,7 +147,6 @@ After running `compile_graph()`, LEAPP generates:
 - **`sample_robot_pipeline.yaml`** - Complete graph specification with metadata
 - **`sample_robot_pipeline_graph.png`** - Visual diagram of your computational graph  
 - **Individual model files** - Exported models for each annotated function/block
-
 ## Try It Yourself
 
 1. Save the example code to a file (e.g., `simple_pipeline.py`)
@@ -162,7 +161,7 @@ When you run the example, LEAPP generates several files that help you understand
 
 First, let's look at the generated graph visualization:
 
-![Sample Robot Pipeline Graph](images/sample_robot_pipeline.png)
+![Sample Robot Pipeline Graph](images/robot_pipeline.png)
 
 This automatically generated diagram shows your entire computational pipeline at a glance. You can see:
 - **Function nodes** (sensor_processor, speed_calculator) represented as rectangles
