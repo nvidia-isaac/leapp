@@ -28,13 +28,11 @@ unit-test-job:
   script:
     - pip install pytest
     - pip install dist/*.whl
-# add this back in when there are tests
-#    - pytest
+    - pytest
 
-deploy-job:      # This job runs in the deploy stage.
-  stage: deploy  # It only runs when *both* jobs in the test stage complete successfully.
+deploy-job:
+  stage: deploy
   script:
   - TWINE_PASSWORD=${CI_JOB_TOKEN} TWINE_USERNAME=gitlab-ci-token python -m twine upload --repository-url ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi dist/*
-# TODO: decide on correct upload strategy
-#  rules:
-#  - if: $CI_COMMIT_TAG
+  rules:
+  - if: $CI_COMMIT_TAG
