@@ -18,13 +18,13 @@ A Python package for tracing and exporting computational graphs from PyTorch cod
 
 ## Installation
 
-Clone the repository and install:
-
 ```bash
-git clone <your-repo-url>
-cd leapp
-pip install -e .
+pip install leapp
 ```
+
+## Documentation
+
+For more detailed documentation, examples, and guides, see the `docs/` directory in this repository.
 
 ## Quick Start
 
@@ -91,10 +91,6 @@ with annotate.block("inference",
 annotate.stop()
 annotate.compile_graph()
 ```
-
-## Documentation
-
-For more detailed documentation, examples, and guides, see the `docs/` directory in this repository.
 
 ## API Reference
 
