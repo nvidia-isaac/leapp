@@ -329,6 +329,10 @@ class CompassNavigationModel:
     """Main compass navigation model that orchestrates the full pipeline."""
 
     def __init__(self, mobility_model_path: str, device: str = "cuda"):
+        # Check if CUDA is available and fallback to CPU if not
+        if device == "cuda" and not torch.cuda.is_available():
+            print("Warning: CUDA requested but not available. Falling back to CPU.")
+            device = "cpu"
         self.device = device
 
         # Initialize all processors
@@ -438,6 +442,10 @@ class CompassNavigationModel:
 
 def create_test_data(device: str = "cuda"):
     """Create test input data."""
+    # Check if CUDA is available and fallback to CPU if not
+    if not torch.cuda.is_available():
+        device = "cpu"
+
     # Create test image
     torch.manual_seed(42)
     test_image = torch.randint(0, 256, (720, 1280, 3), dtype=torch.uint8)
@@ -493,7 +501,8 @@ def main():
 
         # Create test data
         print("Creating test input data...")
-        test_image, test_odom, test_transform, goal_pose, route_transform = create_test_data()
+        test_image, test_odom, test_transform, goal_pose, route_transform = create_test_data(
+            device=compass_model.device)
 
         annotate.start(name="sample_compass_navigation_pipeline")
         # Run navigation pipeline
