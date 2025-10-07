@@ -20,8 +20,7 @@ A Python package for tracing and exporting computational graphs from PyTorch cod
 
 ### Pip Command
 pip install leapp --index-url https://__token__:<your_personal_token>@gitlab-master.nvidia.com/api/v4/projects/202237/packages/pypi/simple
-
-**You will need a gitlab personal access token.**
+You will need a gitlab personal access token.
 
 ## Documentation
 
