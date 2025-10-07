@@ -28,7 +28,11 @@ unit-test-job:
   script:
     - pip install pytest
     - pip install dist/*.whl
+    - pip install -r examples/requirements.txt
     - pytest
+
+# add this back in when there are tests
+#    - pytest
 
 deploy-job:
   stage: deploy
