@@ -331,6 +331,16 @@ class ExportManager:
         print("\033[1mProcessing Node Connections Using Tagged Values\033[0m")
         connections = {}
         for node in self.nodes.values():
+            # first check if any duplicate tags. duplicates are not suppported
+            tags = [input.tag for input in node.inputs if input.tag is not None]
+            duplicates = set([tag for tag in tags if tags.count(tag) > 1])
+            if duplicates:
+                for duplicate in duplicates:
+                    print(
+                        f"found duplicate input with the tag {duplicate} in node {node.name}")
+                raise Exception(
+                    "Error: unsupported use of sending the same tensor multiple times to the same node")
+
             for in_idx, input in enumerate(node.inputs):
                 if input.tag is None:  # case where the input is dangling
                     pass
