@@ -278,15 +278,13 @@ class ExportManager:
                     result = func(*args, **kwargs)
                 except Exception as e:
                     raise e
-
                 finally:
                     self._stop_tracing(node_context)
-                    node_context.inspect_function_outputs(func, result)
-
                     print(
                         f"****Tracing stopped for {node_context.name}****\n\n")
 
-                    return result
+                node_context.inspect_function_outputs(func, result)
+                return result
             return wrapper
         return decorator
 

@@ -5,7 +5,7 @@ import os
 import shutil
 
 
-class TestUnsupportedIOFail(unittest.TestCase):
+class TestUnsupportedFail(unittest.TestCase):
     """Unit tests to see if unsupported io is properly handled"""
     TEST_GRAPH_NAME = "test_graph"
 

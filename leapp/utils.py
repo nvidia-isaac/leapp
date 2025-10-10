@@ -67,21 +67,6 @@ def extract_source_from_line_range(executed_lines, from_function, context_name):
 
         try:
             tree = ast.parse(file_source)
-            target_line = min_line
-
-            def within(node):
-                node_start = getattr(node, 'lineno', None)
-                node_end = getattr(node, 'end_lineno', None)
-                if node_start is None:
-                    return False
-                if node_end is None:
-                    if getattr(node, 'body', None):
-                        last_child = node.body[-1]
-                        node_end = getattr(last_child, 'end_lineno', getattr(
-                            last_child, 'lineno', node_start))
-                    else:
-                        node_end = node_start
-                return node_start <= target_line <= node_end
 
             best_candidate = None
             best_start = -1
@@ -91,12 +76,27 @@ def extract_source_from_line_range(executed_lines, from_function, context_name):
             else:
                 wanted = (ast.With, ast.AsyncWith)
 
+            # Find the function that contains our line range
             for n in ast.walk(tree):
-                if isinstance(n, wanted) and within(n):
-                    cand_start = getattr(n, 'lineno', 0)
-                    if cand_start >= best_start and cand_start <= target_line:
-                        best_candidate = n
-                        best_start = cand_start
+                if isinstance(n, wanted):
+                    node_start = getattr(n, 'lineno', None)
+                    node_end = getattr(n, 'end_lineno', None)
+                    if node_start is None:
+                        continue
+                    if node_end is None:
+                        if getattr(n, 'body', None):
+                            last_child = n.body[-1]
+                            node_end = getattr(last_child, 'end_lineno', getattr(
+                                last_child, 'lineno', node_start))
+                        else:
+                            node_end = node_start
+
+                    # Check if this function overlaps with our line range
+                    # (handles decorators by checking if function def line or any body line is in range)
+                    if (min_line <= node_start <= max_line) or (node_start <= min_line <= node_end):
+                        if node_start > best_start:
+                            best_candidate = n
+                            best_start = node_start
 
             if best_candidate is not None and getattr(best_candidate, 'body', None):
                 body_start_line = getattr(
