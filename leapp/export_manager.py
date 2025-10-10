@@ -159,7 +159,9 @@ class ExportManager:
             self.nodes[name] = node_context
             return True
         else:
-            return False
+            raise Exception(
+                f"Error when attempting to set up new trace for {name}. \n"
+                f"ExportManager is already tracing {name}")
 
     def _start_tracing(self, frame, trace_function):
         if self.current_node_name is None:

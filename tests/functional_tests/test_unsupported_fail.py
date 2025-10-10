@@ -32,6 +32,32 @@ class TestUnsupportedFail(unittest.TestCase):
             return
         self.fail("Expected an exception")
 
+    def test_function_name_overlap(self):
+        node_name = "funcA"
+
+        @annotate.method(node_name=node_name)
+        def func(inputA: torch.Tensor):
+            return inputA
+
+        @annotate.method(node_name=node_name)
+        def func_copy(inputA: torch.Tensor):
+            return inputA
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+
+        try:
+            return_value = func(torch.tensor([1, 2, 3]))
+            func_copy(return_value)
+        except Exception as e:
+            annotate.stop()
+            self.assertEqual(
+                str(
+                    e), f"Error when attempting to set up new trace for {node_name}. \n"
+                f"ExportManager is already tracing {node_name}")
+            return
+
+        annotate.stop()
+
     def tearDown(self):
         """Clean up after each test."""
         if os.path.exists(self.TEST_GRAPH_NAME):
