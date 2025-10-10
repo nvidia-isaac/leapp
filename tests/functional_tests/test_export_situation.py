@@ -12,7 +12,7 @@ class TestExportSituation(unittest.TestCase):
     def test_export_nnModule_function(self):
         linear = torch.nn.Linear(3, 3)
 
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="torch", environment_constants=['linear'])
         def funcA(inputA: torch.Tensor):
             output = linear(inputA)
             return output
@@ -20,21 +20,22 @@ class TestExportSituation(unittest.TestCase):
         annotate.start(name=self.TEST_GRAPH_NAME)
         funcA(torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32))
         annotate.stop()
-        annotate.compile_graph()
+        annotate.compile_graph(visualize=False)
 
-    # def test_export_nnModule(self):
-    #     class moduleA(torch.nn.Module):
-    #         def __init__(self):
-    #             super(moduleA, self).__init__()
-    #             self.linear = torch.nn.Linear(3, 3)
+    def test_export_nnModule(self):
+        class moduleA(torch.nn.Module):
+            def __init__(self):
+                super(moduleA, self).__init__()
+                self.linear = torch.nn.Linear(3, 3)
 
-    #         def forward(self, inputA: torch.Tensor):
-    #             return self.linear(inputA)
+            @annotate.method(export_with="torch")
+            def forward(self, inputA: torch.Tensor):
+                return self.linear(inputA)
 
-    #     annotate.start(name=self.TEST_GRAPH_NAME)
-    #     moduleA()(torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32))
-    #     annotate.stop()
-    #     # annotate.compile_graph()
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        moduleA()(torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32))
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
 
     def tearDown(self):
         """Clean up after each test."""
@@ -44,4 +45,3 @@ class TestExportSituation(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
-#

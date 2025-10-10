@@ -646,6 +646,8 @@ def get_atrribute_value_from_frame(frame, attr_name):
 def create_module(name, parent_class):
     if parent_class is None:
         bases = (torch.nn.Module,)
+    elif isinstance(parent_class, torch.nn.Module) or issubclass(parent_class, torch.nn.Module):
+        bases = (parent_class,)
     else:
         bases = (torch.nn.Module, parent_class)
 
