@@ -50,13 +50,13 @@ class TestUnsupportedFail(unittest.TestCase):
             func_copy(return_value)
         except Exception as e:
             annotate.stop()
-            self.assertEqual(
-                str(
-                    e), f"Error when attempting to set up new trace for {node_name}. \n"
-                f"ExportManager is already tracing {node_name}")
+            first_line = str(e).split('\n')[0]
+            expected = "Error: funcA seen twice but detected lines do not match"
+            self.assertEqual(first_line, expected)
             return
 
         annotate.stop()
+        self.fail("Expected an exception")
 
     def tearDown(self):
         """Clean up after each test."""

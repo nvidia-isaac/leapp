@@ -52,18 +52,21 @@ class ExportManager:
 
             # tracetime variables
             self.current_node_name = None
+            self.node_candidate = None
             self.nodes = {}
 
             ExportManager._initialized = True
 
     def start(self, name, save_path=".", tag_io=True):
         if self.intepret_graph:
+            print()
             print("\033[1;33mWARNING: LEAPP graph interpretation is already enabled, \033[0m"
                   "\033[1;33mcalling start() again will reset the graph\033[0m")
             time.sleep(0.5)
             print("\033[1;33mResetting graph...\033[0m")
             self._is_tracing = False
             self.current_node_name = None
+            self.node_candidate = None
             time.sleep(0.5)
         self.nodes = {}
         self.intepret_graph = True
@@ -74,6 +77,7 @@ class ExportManager:
     def stop(self):
         if ExportManager._is_tracing:
             raise Exception("ExportManager is currently tracing")
+            ExportManager._is_tracing = False
         if not self.intepret_graph:
             raise Exception("ExportManager graph interpretation is disabled")
         self.intepret_graph = False
@@ -94,15 +98,14 @@ class ExportManager:
 
         # Capture line events to determine the range of executed code
         if event == 'line':
-            node_context = self.nodes[self.current_node_name]
             # Only track lines from the same file as the first line
-            if node_context.executed_lines['filename'] == code.co_filename and node_context.executed_lines['function_name'] == code.co_name:
-                node_context.executed_lines['lines'].add(frame.f_lineno)
-                node_context.executed_lines['min_line'] = min(
-                    node_context.executed_lines['min_line'], frame.f_lineno)
-                node_context.snapshot_buffer_values(frame)
-                node_context.executed_lines['max_line'] = max(
-                    node_context.executed_lines['max_line'], frame.f_lineno)
+            if self.node_candidate.executed_lines['filename'] == code.co_filename and self.node_candidate.executed_lines['function_name'] == code.co_name:
+                self.node_candidate.executed_lines['lines'].add(frame.f_lineno)
+                self.node_candidate.executed_lines['min_line'] = min(
+                    self.node_candidate.executed_lines['min_line'], frame.f_lineno)
+                self.node_candidate.snapshot_buffer_values(frame)
+                self.node_candidate.executed_lines['max_line'] = max(
+                    self.node_candidate.executed_lines['max_line'], frame.f_lineno)
 
         return self._trace_code_snippet
 
@@ -112,56 +115,53 @@ class ExportManager:
             return self._trace_function
 
         if event == 'call':
-            node_context = self.nodes[self.current_node_name]
             code = frame.f_code
             # Skip tracing our own file
             if code.co_filename.split('/')[-1] == __file__.split('/')[-1]:
                 return self._trace_function
 
             # Save frame if function name matches current node name
-            if (code.co_filename == node_context.executed_lines['filename'] and
-                    node_context.executed_lines['min_line'] <= frame.f_lineno <= node_context.executed_lines['max_line']):
+            if (code.co_filename == self.node_candidate.executed_lines['filename'] and
+                    self.node_candidate.executed_lines['min_line'] <= frame.f_lineno <= self.node_candidate.executed_lines['max_line']):
                 # if code.co_name == self.current_node_name and node_context.executed_lines['filename'] == code.co_filename:
-                node_context = self.nodes[self.current_node_name]
-                if node_context.input_frame is None:
-                    node_context.input_frame = frame  # we will only store input frame once
+                if self.node_candidate.input_frame is None:
+                    self.node_candidate.input_frame = frame  # we will only store input frame once
                     # store buffer values upon entering the function
-                    node_context.snapshot_buffer_values(frame)
+                    self.node_candidate.snapshot_buffer_values(frame)
                 # Keep on updating output frame
-                node_context.output_frame = frame
+                self.node_candidate.output_frame = frame
 
         return self._trace_function
 
     def _setup_new_node_context(self, name, from_function, **kwargs):
-        if self.current_node_name is not None:
+        if self.current_node_name is not None or self.node_candidate is not None:
+            self.current_node_name = name
+            if self.node_candidate.name is not None:
+                name = self.node_candidate.name
             raise Exception(
                 f"Error when attempting to set up new trace for {name}. \n"
                 f"ExportManager is already tracing {self.current_node_name}")
 
-        if name not in self.nodes:
-            node_context = NodeContext(name, from_function,
-                                       backend=kwargs.get("export_with", None),
-                                       backend_params=kwargs.get(
-                                           "backend_params", None),
-                                       use_trace=kwargs.get(
-                                           "use_trace", False),
-                                       inputs=kwargs.get("inputs", None),
-                                       outputs=kwargs.get("outputs", None),
-                                       environment_constants=kwargs.get(
-                                           "environment_constants", None),
-                                       register_buffers=kwargs.get(
-                                           "register_buffers", None),
-                                       tag_io=self.TAG_IO,
-                                       enable_fp16=kwargs.get(
-                                           "enable_fp16", False),
-                                       enable_cuda_graphs=kwargs.get("enable_cuda_graphs", False))
-            # store the node context
-            self.nodes[name] = node_context
-            return True
-        else:
-            raise Exception(
-                f"Error when attempting to set up new trace for {name}. \n"
-                f"ExportManager is already tracing {name}")
+        self.node_candidate = NodeContext(name, from_function,
+                                          backend=kwargs.get(
+                                              "export_with", None),
+                                          backend_params=kwargs.get(
+                                              "backend_params", None),
+                                          use_trace=kwargs.get(
+                                              "use_trace", False),
+                                          inputs=kwargs.get(
+                                              "inputs", None),
+                                          outputs=kwargs.get(
+                                              "outputs", None),
+                                          environment_constants=kwargs.get(
+                                              "environment_constants", None),
+                                          register_buffers=kwargs.get(
+                                              "register_buffers", None),
+                                          tag_io=self.TAG_IO,
+                                          enable_fp16=kwargs.get(
+                                              "enable_fp16", False),
+                                          enable_cuda_graphs=kwargs.get("enable_cuda_graphs", False))
+        self.current_node_name = name
 
     def _start_tracing(self, frame, trace_function):
         if self.current_node_name is None:
@@ -174,13 +174,34 @@ class ExportManager:
         frame.f_trace = trace_function
         sys.settrace(trace_function)
 
-    def _stop_tracing(self, node_context):
+    def _stop_tracing(self, node_name, node_context):
         if ExportManager._is_tracing:
             """Stop the trace function."""
             sys.settrace(None)
-            node_context.compile_trace()
-            ExportManager._is_tracing = False
-            self.current_node_name = None
+
+            try:
+                if node_name in self.nodes.keys():
+                    # we have seen this node before, we need to check if all values match.
+                    original_node_data = {
+                        k: v for k, v in self.nodes[node_name].executed_lines.items() if k != 'source_code'}
+                    new_node_data = {
+                        k: v for k, v in node_context.executed_lines.items() if k != 'source_code'}
+
+                    if original_node_data != new_node_data:
+                        raise Exception(
+                            f"Error: {node_name} seen twice but detected lines do not match\n"
+                            f"Original node data: {original_node_data}\n"
+                            f"New node data: {new_node_data}")
+
+                self.nodes[node_name] = node_context
+                self.nodes[node_name].compile_trace()
+
+            finally:
+                # Always reset tracing state, even if an exception occurred
+                ExportManager._is_tracing = False
+                # reset the current node name and node candidate
+                self.current_node_name = None
+                self.node_candidate = None
 
     def block(self, node_name, **kwargs):
         """Create a context manager for tracing a block of code in the computational graph.
@@ -194,45 +215,47 @@ class ExportManager:
         """
         if not self.intepret_graph:
             return self
-        if self._setup_new_node_context(node_name, from_function=False, **kwargs):
-            self.current_node_name = node_name
+        self._setup_new_node_context(node_name, from_function=False, **kwargs)
         return self
 
-    # Keep export for backward compatibility
-    def export(self, **params):
-        """Deprecated: Use method() instead."""
-        return self.method(**params)
-
     def __enter__(self):
-        if not self.intepret_graph or self.current_node_name is None:
+        """Enter context manager - called when entering 'with' block."""
+        if not self.intepret_graph:
             return
+        if self.current_node_name is None or self.node_candidate is None:
+            raise Exception(
+                "Unexpected error when setting up new node context, current_node_name or node_candidate is None")
 
         caller_frame = sys._getframe(1)  # Get the caller's frame
-        """Enter context manager - called when entering 'with' block."""
-        node_context = self.nodes[self.current_node_name]
 
-        node_context.capture_inputs_from_frame(caller_frame)
+        self.node_candidate.capture_inputs_from_frame(caller_frame)
 
         print(f"****Tracing started for {self.current_node_name}****")
         # CRITICAL: Set up local tracing for the caller frame
 
         if hasattr(caller_frame, 'f_trace_lines'):
             caller_frame.f_trace_lines = True
-        node_context.executed_lines['filename'] = caller_frame.f_code.co_filename
-        node_context.executed_lines['function_name'] = caller_frame.f_code.co_name
-        node_context.executed_lines['min_line'] = caller_frame.f_lineno
-        node_context.executed_lines['max_line'] = caller_frame.f_lineno
+        self.node_candidate.executed_lines['filename'] = caller_frame.f_code.co_filename
+        self.node_candidate.executed_lines['function_name'] = caller_frame.f_code.co_name
+        self.node_candidate.executed_lines['min_line'] = caller_frame.f_lineno
+        self.node_candidate.executed_lines['max_line'] = caller_frame.f_lineno
 
         self._start_tracing(caller_frame, self._trace_code_snippet)
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        if not self.intepret_graph or self.current_node_name is None:
+        if not self.intepret_graph:
             return
 
-        node_context = self.nodes[self.current_node_name]
+        if self.current_node_name is None or self.node_candidate is None:
+            raise Exception(
+                "Unexpected error when completing tracing, current_node_name or node_candidate is None")
 
-        self._stop_tracing(node_context)
+        name = self.current_node_name
+
+        self._stop_tracing(self.current_node_name, self.node_candidate)
+
+        node_context = self.nodes[name]
 
         node_context.capture_outputs_from_frame(sys._getframe(1))
         print(
@@ -251,27 +274,28 @@ class ExportManager:
                 if not self.intepret_graph:
                     return func(*args, **kwargs)
 
-                if not self._setup_new_node_context(name, from_function=True, **params):
-                    return func(*args, **kwargs)
+                self._setup_new_node_context(
+                    name, from_function=True, **params)
+                if self.current_node_name is None or self.node_candidate is None:
+                    raise Exception(
+                        "Unexpected error when setting up new node context, current_node_name or node_candidate is None")
 
                 print(f"****Tracing started for {name}****")
-                node_context = self.nodes[name]
-                node_context.inspect_function_inputs(
+                self.node_candidate.inspect_function_inputs(
                     func, args, kwargs)
-                self.current_node_name = name
 
                 func_code = func.__code__
-                node_context.executed_lines['filename'] = func_code.co_filename
-                node_context.executed_lines['function_name'] = func_code.co_name
+                self.node_candidate.executed_lines['filename'] = func_code.co_filename
+                self.node_candidate.executed_lines['function_name'] = func_code.co_name
 
                 # Get the line range of the function
                 func_lines, start_line = inspect.getsourcelines(func)
-                node_context.executed_lines['min_line'] = start_line
-                node_context.executed_lines['max_line'] = start_line + \
+                self.node_candidate.executed_lines['min_line'] = start_line
+                self.node_candidate.executed_lines['max_line'] = start_line + \
                     len(func_lines) - 1
 
                 # Initialize the lines set with all function lines
-                node_context.executed_lines['lines'] = set(
+                self.node_candidate.executed_lines['lines'] = set(
                     range(start_line, start_line + len(func_lines)))
 
                 self._start_tracing(sys._getframe(1), self._trace_function)
@@ -281,7 +305,12 @@ class ExportManager:
                 except Exception as e:
                     raise e
                 finally:
-                    self._stop_tracing(node_context)
+                    self._stop_tracing(
+                        self.current_node_name, self.node_candidate)
+                    if name not in self.nodes.keys():
+                        raise Exception(
+                            f"Error: expected node {name} to be in nodes to be in nodes dictionary")
+                    node_context = self.nodes[name]
                     print(
                         f"****Tracing stopped for {node_context.name}****\n\n")
 
@@ -552,3 +581,9 @@ class ExportManager:
             f.write("\n")  # Add a newline separator
             yaml.dump(pipeline, f)
             f.write("\n")
+
+        # store the models and pipeline as part of the object
+        # this will do a rewrite each time
+        # this is **ONLY USED FOR TESTING**
+        self.detected_nodes = models['models']
+        self.detected_pipeline = pipeline['pipeline']
