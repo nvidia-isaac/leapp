@@ -6,7 +6,13 @@ import shutil
 
 
 class TestExportSituation(unittest.TestCase):
-    """Unit tests to see if export situation is properly handled"""
+    """
+    Unit tests to see if export situation is properly handled
+
+    These tests test for things that are put inside of the code
+    snippet that we want to support
+
+    """
     TEST_GRAPH_NAME = "test_graph"
 
     def test_export_nnModule_function(self):

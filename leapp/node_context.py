@@ -54,18 +54,18 @@ class NodeContext:
         # node settings
         self.from_function = from_function
         if environment_constants is not None:
-            self.environment_constants = environment_constants
+            self.environment_constants = set(environment_constants)
         else:
-            self.environment_constants = []
+            self.environment_constants = set()
         if register_buffers is not None:
-            self.register_buffers = register_buffers
+            self.register_buffers = set(register_buffers)
         else:
-            self.register_buffers = []
+            self.register_buffers = set()
         self.enable_fp16 = enable_fp16
         self.enable_cuda_graphs = enable_cuda_graphs
 
         # Check for overlap between register_buffers and environment_constants
-        overlap = set(self.register_buffers) & set(self.environment_constants)
+        overlap = self.register_buffers & self.environment_constants
         if overlap:
             raise ValueError(
                 f"NodeContext '{self.name}': The following names are present in both register_buffers and environment_constants: {overlap}. "

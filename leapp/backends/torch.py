@@ -104,8 +104,7 @@ class TorchExportBackend(ExportBackend):
     def _create_data_patching_string(self):
         data_patch_template = "{const_name} = self.{const_name}\n"
         data_patch_string = ""
-        targets = set(self.node_context.environment_constants +
-                      self.node_context.register_buffers)
+        targets = self.node_context.environment_constants | self.node_context.register_buffers
 
         for const_name in targets:
             if "self." in const_name or const_name == "self":

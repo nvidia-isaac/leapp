@@ -825,3 +825,131 @@ def get_relative_path(model_path, yaml_save_path):
     except ValueError:
         # If relative path calculation fails (e.g., different drives on Windows), keep absolute path
         return model_path
+
+
+#########################################################
+# TorchScript Model Inspection
+#########################################################
+
+
+def inspect_torchscript_model(model):
+    """
+    Extract input and output information from a loaded TorchScript model.
+
+    Args:
+        model: A loaded torch.jit.ScriptModule
+
+    Returns:
+        dict: Dictionary containing:
+            - 'inputs': List of dicts with input information (name, type, shape)
+            - 'outputs': List of dicts with output information (name, type, shape)
+            - 'graph': The computation graph object
+            - 'code': String representation of the model's code
+    """
+    result = {
+        'inputs': [],
+        'outputs': [],
+        'graph': None,
+        'code': None
+    }
+
+    try:
+        # Get the computation graph
+        graph = model.graph
+        result['graph'] = graph
+
+        # Extract input information
+        inputs = list(graph.inputs())
+        for i, inp in enumerate(inputs):
+            input_info = {
+                'index': i,
+                'debug_name': inp.debugName(),
+                'type': str(inp.type()),
+            }
+
+            # Try to get shape information if it's a tensor
+            if hasattr(inp.type(), 'sizes'):
+                try:
+                    input_info['shape'] = list(inp.type().sizes())
+                except Exception:
+                    input_info['shape'] = None
+            else:
+                input_info['shape'] = None
+
+            result['inputs'].append(input_info)
+
+        # Extract output information
+        outputs = list(graph.outputs())
+        for i, out in enumerate(outputs):
+            output_info = {
+                'index': i,
+                'debug_name': out.debugName(),
+                'type': str(out.type()),
+            }
+
+            # Try to get shape information if it's a tensor
+            if hasattr(out.type(), 'sizes'):
+                try:
+                    output_info['shape'] = list(out.type().sizes())
+                except Exception:
+                    output_info['shape'] = None
+            else:
+                output_info['shape'] = None
+
+            result['outputs'].append(output_info)
+
+        # Get the code representation if available
+        if hasattr(model, 'code'):
+            result['code'] = model.code
+
+    except Exception as e:
+        print(f"Error inspecting TorchScript model: {e}")
+
+    return result
+
+
+def print_torchscript_model_info(model, verbose=True):
+    """
+    Pretty print information about a TorchScript model.
+
+    Args:
+        model: A loaded torch.jit.ScriptModule
+        verbose: If True, print the full graph representation
+    """
+    info = inspect_torchscript_model(model)
+
+    print("\n" + "="*60)
+    print("TorchScript Model Information")
+    print("="*60)
+
+    print("\n[Inputs]")
+    if not info['inputs']:
+        print("  No inputs found")
+    else:
+        for inp in info['inputs']:
+            print(f"  Input {inp['index']}:")
+            print(f"    Name: {inp['debug_name']}")
+            print(f"    Type: {inp['type']}")
+            if inp['shape']:
+                print(f"    Shape: {inp['shape']}")
+
+    print("\n[Outputs]")
+    if not info['outputs']:
+        print("  No outputs found")
+    else:
+        for out in info['outputs']:
+            print(f"  Output {out['index']}:")
+            print(f"    Name: {out['debug_name']}")
+            print(f"    Type: {out['type']}")
+            if out['shape']:
+                print(f"    Shape: {out['shape']}")
+
+    if verbose and info['graph']:
+        print("\n[Computation Graph]")
+        print(info['graph'])
+
+    if info['code']:
+        print("\n[Model Code]")
+        print(info['code'])
+
+    print("\n" + "="*60)

@@ -1,0 +1,68 @@
+
+import unittest
+import torch
+from leapp import annotate
+from leapp.utils import print_torchscript_model_info, inspect_torchscript_model
+import os
+import shutil
+
+
+class TestConnectionCase(unittest.TestCase):
+    """Unit tests to see if connections between nodes are properly handled"""
+    TEST_GRAPH_NAME = "test_graph"
+
+    def test_annotate_method(self):
+        """tests the basic situation of using the annotate.method decorator"""
+        @annotate.method(export_with="torch")
+        def funcA(inputA: torch.Tensor):
+            return inputA
+
+        @annotate.method(export_with="torch")
+        def funcC(inputB: torch.Tensor):
+            return inputB+5.0
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        for i in range(10):
+            outputA = funcA(torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32))
+            outputC = funcC(outputA)
+        annotate.stop()
+
+        self.assertEqual(len(annotate.nodes), 2)
+        self.assertEqual(len(annotate.nodes[funcA.__name__].inputs), 1)
+        self.assertEqual(len(annotate.nodes[funcC.__name__].inputs), 1)
+        self.assertEqual(len(annotate.nodes[funcA.__name__].outputs), 1)
+        self.assertEqual(len(annotate.nodes[funcC.__name__].outputs), 1)
+        self.assertEqual(
+            annotate.nodes[funcA.__name__].inputs[0].name, "inputA")
+        self.assertEqual(
+            annotate.nodes[funcC.__name__].inputs[0].name, "inputB")
+
+    def test_annotate_method_with_kwargs(self):
+        """tests the situation where the function has and default values"""
+        @annotate.method(export_with="torch")
+        def funcA(inputA: torch.Tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)):
+            return inputA
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        outputA = funcA()
+        annotate.stop()
+        annotate.compile_graph()
+        self.assertEqual(len(annotate.nodes), 1)
+        self.assertEqual(len(annotate.nodes[funcA.__name__].inputs), 0)
+        model = torch.jit.load(os.path.join(
+            self.TEST_GRAPH_NAME, funcA.__name__+".pt"))
+        self.assertTrue(torch.allclose(model(), torch.tensor(
+            [1.0, 2.0, 3.0], dtype=torch.float32)))
+        # Or get structured data
+        model_info = inspect_torchscript_model(model)
+        self.assertEqual(len(model_info['inputs']), 2)
+        self.assertEqual(len(model_info['outputs']), 1)
+
+    def tearDown(self):
+        """Clean up after each test."""
+        if os.path.exists(self.TEST_GRAPH_NAME):
+            shutil.rmtree(self.TEST_GRAPH_NAME)
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)
