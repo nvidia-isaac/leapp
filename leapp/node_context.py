@@ -29,7 +29,7 @@ import inspect
 class NodeContext:
     def __init__(self, name,  from_function, backend=None, use_trace=False, backend_params=None,
                  inputs=None, outputs=None, environment_constants=None, register_buffers=None,
-                 tag_io=True, enable_fp16=False, enable_cuda_graphs=False):
+                 enable_fp16=False, enable_cuda_graphs=False):
         self.name = name
         # input parameters
         # this variable is for temporary use only,
@@ -61,7 +61,6 @@ class NodeContext:
             self.register_buffers = register_buffers
         else:
             self.register_buffers = []
-        self.tag_io = tag_io
         self.enable_fp16 = enable_fp16
         self.enable_cuda_graphs = enable_cuda_graphs
 

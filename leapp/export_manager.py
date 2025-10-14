@@ -45,7 +45,6 @@ class ExportManager:
             # graph settings
             self.GRAPH_NAME = "my_graph"
             self.SAVE_PATH = None
-            self.TAG_IO = True
 
             # tracetime settings
             self.intepret_graph = False
@@ -57,7 +56,7 @@ class ExportManager:
 
             ExportManager._initialized = True
 
-    def start(self, name, save_path=".", tag_io=True):
+    def start(self, name, save_path="."):
         if self.intepret_graph:
             print()
             print("\033[1;33mWARNING: LEAPP graph interpretation is already enabled, \033[0m"
@@ -72,7 +71,6 @@ class ExportManager:
         self.intepret_graph = True
         self.GRAPH_NAME = name
         self.SAVE_PATH = os.path.join(save_path, self.GRAPH_NAME)
-        self.TAG_IO = tag_io
 
     def stop(self):
         if ExportManager._is_tracing:
@@ -157,7 +155,6 @@ class ExportManager:
                                               "environment_constants", None),
                                           register_buffers=kwargs.get(
                                               "register_buffers", None),
-                                          tag_io=self.TAG_IO,
                                           enable_fp16=kwargs.get(
                                               "enable_fp16", False),
                                           enable_cuda_graphs=kwargs.get("enable_cuda_graphs", False))
@@ -319,43 +316,7 @@ class ExportManager:
             return wrapper
         return decorator
 
-    #########################################################
-    # Graph compilation
-    #########################################################
-
-    def connect_untagged_graph_connections(self):
-        raise Exception("Untagged graph connections are not supported for now")
-        print()
-        print("\033[1mProcessing Node Connections Using Value Equivalence\033[0m")
-        connections = {}
-
-        for source_node in self.nodes.values():
-            for target_node in self.nodes.values():
-                for out_idx, output in enumerate(source_node.outputs):
-                    output_value = output.value  # Access TensorDescription.value attribute
-                    for in_idx, input in enumerate(target_node.inputs):
-                        input_value = input.value  # Access TensorDescription.value attribute
-                        if verify_data_exact_match(output_value,
-                                                   input_value):
-                            source_data = source_node.name + \
-                                '/' + output.name_str  # Use name_str property
-                            if source_data not in connections:
-                                connections[source_data] = {
-                                    'source': {'node': source_node, 'idx': out_idx},
-                                    'targets': []
-                                }
-                            connections[source_data]['targets'].append(
-                                {'node': target_node, 'idx': in_idx})
-                            break
-
-        total_connections = sum([len(connection['targets'])
-                                for connection in connections.values()])
-        print(
-            f"\033[92mDiscovered {total_connections} internal connections\033[0m")
-        print()
-        return connections
-
-    def connect_tagged_graph_connections(self):
+    def connect_graph_connections(self):
         print()
         print("\033[1mProcessing Node Connections Using Tagged Values\033[0m")
         connections = {}
@@ -461,10 +422,7 @@ class ExportManager:
         return graph_inputs, graph_outputs
 
     def process_graph_connections(self):
-        if self.TAG_IO:
-            connections = self.connect_tagged_graph_connections()
-        else:
-            connections = self.connect_untagged_graph_connections()
+        connections = self.connect_graph_connections()
 
         self.reconcile_io_names(connections)
 
