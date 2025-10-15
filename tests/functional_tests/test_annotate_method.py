@@ -37,7 +37,7 @@ class TestConnectionCase(unittest.TestCase):
         self.assertEqual(
             annotate.nodes[funcC.__name__].inputs[0].name, "inputB")
 
-    def test_annotate_method_with_kwargs(self):
+    def test_annotate_method_with_kwargs_and_default_value(self):
         """tests the situation where the function has and default values"""
         @annotate.method(export_with="torch")
         def funcA(inputA: torch.Tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)):
@@ -46,14 +46,34 @@ class TestConnectionCase(unittest.TestCase):
         annotate.start(name=self.TEST_GRAPH_NAME)
         outputA = funcA()
         annotate.stop()
-        annotate.compile_graph()
+        annotate.compile_graph(visualization=False)
         self.assertEqual(len(annotate.nodes), 1)
         self.assertEqual(len(annotate.nodes[funcA.__name__].inputs), 0)
         model = torch.jit.load(os.path.join(
             self.TEST_GRAPH_NAME, funcA.__name__+".pt"))
-        self.assertTrue(torch.allclose(model(), torch.tensor(
-            [1.0, 2.0, 3.0], dtype=torch.float32)))
+
+        expected_output = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+        # check if using default
+        self.assertTrue(torch.allclose(model(), expected_output))
         # Or get structured data
+        model_info = inspect_torchscript_model(model)
+        self.assertEqual(len(model_info['inputs']), 2)
+        self.assertEqual(len(model_info['outputs']), 1)
+
+    def test_annotate_method_ignoring_default_values(self):
+        """tests the situation where we pass in a value overriding the default"""
+        @annotate.method(export_with="torch")
+        def funcA(inputA: torch.Tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)):
+            return inputA
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        outputA = funcA(torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32))
+        annotate.stop()
+        annotate.compile_graph(visualization=False)
+        self.assertEqual(len(annotate.nodes), 1)
+        self.assertEqual(len(annotate.nodes[funcA.__name__].inputs), 1)
+        model = torch.jit.load(os.path.join(
+            self.TEST_GRAPH_NAME, funcA.__name__+".pt"))
         model_info = inspect_torchscript_model(model)
         self.assertEqual(len(model_info['inputs']), 2)
         self.assertEqual(len(model_info['outputs']), 1)

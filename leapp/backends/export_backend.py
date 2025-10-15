@@ -6,8 +6,9 @@ import shutil
 
 
 class ExportBackend(abc.ABC):
-    def __init__(self, node_context, backend_params=None):
+    def __init__(self, node_context, logger, backend_params=None):
         self.node_context = node_context
+        self.logger = logger
         if backend_params is None:
             self.backend_params = {}
         else:
@@ -54,11 +55,10 @@ class ExportBackend(abc.ABC):
 class NoneExportBackend(ExportBackend):
     def __call__(self, save_path: str, **kwargs) -> Tuple[str, str]:
         if "model_path" not in self.backend_params:
-            print(
-                f"\033[33mNo model path provided for {self.node_context.name}, \033[0m")
-            print(
-                "\033[33mWARNING: if this is intentional, please provide a path to the correct model"
-                " in the generated yaml file. Otherwise, please manually fill in the backend parameters.\033[0m")
+            self.logger.warning(
+                f"No model path provided for {self.node_context.name}")
+            self.logger.warning("if this is intentional, please provide a path to the correct model "
+                                "in the generated yaml file. Otherwise, please manually fill in the backend parameters.")
             return None, None
 
         md5sum = self._verify_model_location_and_get_md5sum(

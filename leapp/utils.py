@@ -159,14 +159,13 @@ def extract_source_from_line_range(executed_lines, from_function, context_name):
             source_code = dedented_code.rstrip()
         else:
             source_code = ""
-        print(
-            f"Extracted code from file: {filename}, function: {executed_lines['function_name']}")
+        message = f"Extracted code from file: {filename}, function: {executed_lines['function_name']}"
 
     except Exception as e:
-        print(f"Error extracting source from line range: {e}")
+        message = f"Error extracting source from line range: {e}"
         source_code = ""
 
-    return source_code
+    return source_code, message
 
 
 class CompactYamlList(list):

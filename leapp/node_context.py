@@ -27,10 +27,11 @@ import inspect
 
 
 class NodeContext:
-    def __init__(self, name,  from_function, backend=None, use_trace=False, backend_params=None,
+    def __init__(self, name,  from_function, logger=None, backend=None, use_trace=False, backend_params=None,
                  inputs=None, outputs=None, environment_constants=None, register_buffers=None,
                  enable_fp16=False, enable_cuda_graphs=False):
         self.name = name
+        self.logger = logger
         # input parameters
         # this variable is for temporary use only,
         # all data will be stored in self.inputs after the function is executed
@@ -96,7 +97,7 @@ class NodeContext:
         self.output_frame = None
         self.cached_buffer_values = {}
 
-        print(f"Node context initialized: {self.name}")
+        self.logger.info(f"Node context initialized: {self.name}")
 
     def export_model(self, save_path):
         self.model_path, self.md5sum = self.export_backend(save_path)
@@ -107,16 +108,16 @@ class NodeContext:
         if backend is None:
             from leapp.backends.export_backend import NoneExportBackend
             export_backend = NoneExportBackend(
-                self, backend_params)
+                self, self.logger, backend_params)
         elif backend == "torch":
             if self.use_trace:
                 from leapp.backends.torch import TorchTraceExportBackend
                 export_backend = TorchTraceExportBackend(
-                    self, backend_params)
+                    self, self.logger, backend_params)
             else:
                 from leapp.backends.torch import TorchScriptExportBackend
                 export_backend = TorchScriptExportBackend(
-                    self, backend_params)
+                    self, self.logger, backend_params)
         elif backend == "onnx":
             raise Exception("ONNX backend not implemented")
         elif backend == "cpp":
@@ -174,13 +175,15 @@ class NodeContext:
         self.tracing = False
 
         # Extract source code when tracing stops
-        self.executed_lines['source_code'] = extract_source_from_line_range(
+        self.executed_lines['source_code'], message = extract_source_from_line_range(
             self.executed_lines,
             self.from_function,
             self.name
         )
-        if self.executed_lines['source_code']:
-            print(f"Extracted source code for {self.name} during tracing")
+        if self.executed_lines['source_code'] != "":
+            self.logger.info(message)
+        else:
+            self.logger.error(message)
 
     def inspect_function_inputs(self, func, args, kwargs):
         # Get parameter names from function signature
@@ -246,7 +249,7 @@ class NodeContext:
                     input_name, frame)
                 self._add_input(final_input_name, final_input_value)
         except Exception as e:
-            print(f"Error capturing inputs from frame: {e}")
+            self.logger.error(f"Error capturing inputs from frame: {e}")
             raise e
         self.input_frame = frame
 
@@ -269,7 +272,7 @@ class NodeContext:
                     output_name, frame)
                 self._add_output(final_output_name, final_output_value)
         except Exception as e:
-            print(f"Error capturing outputs from frame: {e}")
+            self.logger.error(f"Error capturing outputs from frame: {e}")
             raise e
         self.output_frame = frame
 
@@ -295,8 +298,8 @@ class NodeContext:
             self.cached_buffer_values[buffer_name] = safe_deepcopy(value)
 
     def change_input_name(self, old_name, new_name):
-        print(
-            f"\033[33mWARNING: changing input name from {old_name} to {new_name} for model {self.name}\033[0m")
+        self.logger.warning(
+            f"changing input name from {old_name} to {new_name} for model {self.name}")
         if old_name == new_name:
             return
         current_input_names = [input.name_str for input in self.inputs]
@@ -309,8 +312,8 @@ class NodeContext:
                 input.change_name(new_name)
 
     def change_output_name(self, old_name, new_name):
-        print(
-            f"\033[33mWARNING: changing output name from {old_name} to {new_name} for model {self.name}\033[0m")
+        self.logger.warning(
+            f"changing output name from {old_name} to {new_name} for model {self.name}")
         if old_name == new_name:
             return
         current_output_names = [output.name_str for output in self.outputs]

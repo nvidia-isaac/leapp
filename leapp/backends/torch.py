@@ -67,7 +67,8 @@ class TorchExportBackend(ExportBackend):
 
             # Set as instance attribute - accessible as self.const_name
             setattr(module_instance, const_name, const_value)
-            print(f"Set instance attribute: {const_name} = {const_value}")
+            self.logger.debug(
+                f"Set instance attribute: {const_name} = {const_value}")
         # copy all the attributes from the original object to the module
         if 'self' in self.node_context.input_frame.f_locals:
             original_obj = self.node_context.input_frame.f_locals['self']
@@ -78,7 +79,7 @@ class TorchExportBackend(ExportBackend):
                     continue
                 try:
                     value = getattr(original_obj, attr_name)
-                    print(f"Setting attribute: {attr_name}")
+                    self.logger.debug(f"Setting attribute: {attr_name}")
 
                     # Check if it's a property (read-only or not)
                     if hasattr(type(original_obj), attr_name):
@@ -96,8 +97,8 @@ class TorchExportBackend(ExportBackend):
                         bound_method = types.MethodType(value, module_instance)
                         setattr(module_instance, attr_name, bound_method)
                 except Exception as e:
-                    print(
-                        f"\033[91mError setting attribute {attr_name}: {e}\033[0m")
+                    self.logger.error(
+                        f"Error setting attribute {attr_name}: {e}")
 
         return module_instance
 
@@ -127,15 +128,18 @@ class TorchExportBackend(ExportBackend):
             raise Exception(
                 f"Input or output frame not found for {self.node_context.name}")
 
-        source_code = extract_source_from_line_range(
+        source_code, message = extract_source_from_line_range(
             self.node_context.executed_lines,
             self.node_context.from_function,
             self.node_context.name
         )
 
         if source_code == "":
+            self.logger.error(message)
             raise Exception(
                 f"No source code found for {self.node_context.name}")
+        else:
+            self.logger.info(message)
 
         if self.node_context.from_function:
             # Read the entire function from min to max line with proper newlines
@@ -162,7 +166,7 @@ class TorchExportBackend(ExportBackend):
         filename = f"generated_{self.node_context.name}_function"
 
         try:
-            print(function_string)
+            self.logger.debug("\n"+function_string)
             code = compile(function_string, filename, "exec")
 
             # recreate the environment of the function
@@ -178,8 +182,8 @@ class TorchExportBackend(ExportBackend):
 
             exec(code, namespace)
         except Exception as e:
-            print(f"Error compiling function: {e}")
-            print(function_string)
+            self.logger.error(f"Error compiling function: {e}")
+            self.logger.error(function_string)
             raise e
 
         forward = namespace[function_name]
@@ -189,9 +193,9 @@ class TorchExportBackend(ExportBackend):
             len(function_string), None, lines, filename)
         m.forward = types.MethodType(forward, m)
         if len(m.saved_buffers) > 0:
-            print("Created the following buffers:")
+            self.logger.info("Created the following buffers:")
             for buffer_name in m.saved_buffers:
-                print(
+                self.logger.info(
                     f"  - self.{buffer_name}: intialized as {getattr(m, buffer_name)}")
         return m
 

@@ -22,7 +22,8 @@ import yaml
 import os
 import time
 from .node_context import NodeContext
-from .utils import verify_data_exact_match, CompactYamlList, CompactYamlDict, get_relative_path
+from .utils import CompactYamlList, CompactYamlDict, get_relative_path
+from .logging import LeappLogger
 
 
 class ExportManager:
@@ -54,23 +55,28 @@ class ExportManager:
             self.node_candidate = None
             self.nodes = {}
 
+            # logging
+            self.logger = LeappLogger(self)
+
             ExportManager._initialized = True
 
-    def start(self, name, save_path="."):
+    def start(self, name, save_path=".", verbose=False):
+        self.GRAPH_NAME = name
+        self.SAVE_PATH = os.path.join(save_path, self.GRAPH_NAME)
+        if not os.path.exists(self.SAVE_PATH):
+            os.makedirs(self.SAVE_PATH)
+        self.logger.configure_logger(self.SAVE_PATH, verbose=verbose)
         if self.intepret_graph:
-            print()
-            print("\033[1;33mWARNING: LEAPP graph interpretation is already enabled, \033[0m"
-                  "\033[1;33mcalling start() again will reset the graph\033[0m")
+            self.logger.warning("LEAPP graph interpretation is already enabled, "
+                                "calling start() again will reset the graph")
             time.sleep(0.5)
-            print("\033[1;33mResetting graph...\033[0m")
+            self.logger.warning("Resetting graph...")
             self._is_tracing = False
             self.current_node_name = None
             self.node_candidate = None
             time.sleep(0.5)
         self.nodes = {}
         self.intepret_graph = True
-        self.GRAPH_NAME = name
-        self.SAVE_PATH = os.path.join(save_path, self.GRAPH_NAME)
 
     def stop(self):
         if ExportManager._is_tracing:
@@ -141,6 +147,7 @@ class ExportManager:
                 f"ExportManager is already tracing {self.current_node_name}")
 
         self.node_candidate = NodeContext(name, from_function,
+                                          logger=self.logger,
                                           backend=kwargs.get(
                                               "export_with", None),
                                           backend_params=kwargs.get(
@@ -227,7 +234,8 @@ class ExportManager:
 
         self.node_candidate.capture_inputs_from_frame(caller_frame)
 
-        print(f"****Tracing started for {self.current_node_name}****")
+        self.logger.info(
+            f"****Tracing started for {self.current_node_name}****")
         # CRITICAL: Set up local tracing for the caller frame
 
         if hasattr(caller_frame, 'f_trace_lines'):
@@ -255,7 +263,7 @@ class ExportManager:
         node_context = self.nodes[name]
 
         node_context.capture_outputs_from_frame(sys._getframe(1))
-        print(
+        self.logger.info(
             f"****Tracing stopped for {node_context.name}****\n\n")
 
     def method(self, **params):
@@ -277,7 +285,7 @@ class ExportManager:
                     raise Exception(
                         "Unexpected error when setting up new node context, current_node_name or node_candidate is None")
 
-                print(f"****Tracing started for {name}****")
+                self.logger.info(f"****Tracing started for {name}****")
                 self.node_candidate.inspect_function_inputs(
                     func, args, kwargs)
 
@@ -308,7 +316,7 @@ class ExportManager:
                         raise Exception(
                             f"Error: expected node {name} to be in nodes to be in nodes dictionary")
                     node_context = self.nodes[name]
-                    print(
+                    self.logger.info(
                         f"****Tracing stopped for {node_context.name}****\n\n")
 
                 node_context.inspect_function_outputs(func, result)
@@ -317,8 +325,7 @@ class ExportManager:
         return decorator
 
     def connect_graph_connections(self):
-        print()
-        print("\033[1mProcessing Node Connections Using Tagged Values\033[0m")
+        self.logger.section("Processing Node Connections Using Tagged Values")
         connections = {}
         for node in self.nodes.values():
             # first check if any duplicate tags. duplicates are not suppported
@@ -326,7 +333,7 @@ class ExportManager:
             duplicates = set([tag for tag in tags if tags.count(tag) > 1])
             if duplicates:
                 for duplicate in duplicates:
-                    print(
+                    self.logger.info(
                         f"found duplicate input with the tag {duplicate} in node {node.name}")
                 raise Exception(
                     "Error: unsupported use of sending the same tensor multiple times to the same node")
@@ -336,7 +343,7 @@ class ExportManager:
                     pass
                 else:
                     source_node_name = input.tag.split('/')[0]
-                    print(f"source node name: {source_node_name}")
+                    self.logger.info(f"source node name: {source_node_name}")
 
                     source_node = self.nodes[source_node_name]
                     source_node_output_ports = [
@@ -359,8 +366,7 @@ class ExportManager:
 
     def reconcile_io_names(self, connections):
         names_changed = True
-        print()
-        print("\033[1mReconciling internal i/o names\033[0m")
+        self.logger.section("Reconciling internal i/o names")
         for connection in connections.values():
             source = connection['source']
             targets = connection['targets']
@@ -380,21 +386,18 @@ class ExportManager:
                 source['node'].change_output_name(
                     source['node'].outputs[source['idx']].name_str, desired_target_name)
         if names_changed:
-            print("\033[93;1mWARNING: i/o names changed, this process edits the node specifications,"
-                  " and may produce unexpected behavior. Please check the graph for correctness. \n"
-                  "if this is not desired behavior, please make sure to match io names in the source code \033[0m")
+            self.logger.warning("i/o names changed, this process edits the node specifications, and may produce\n"
+                                "unexpected behavior. Please check the graph for correctness. If this is not desired,\n"
+                                "please make sure to match io names in the source code")
         else:
-            print("\033[92mno names changed\033[0m")
-
-        print()
+            self.logger.info("no names changed")
 
     def compile_graph_io(self, connections):
         # any inputs and outputs that are not connected to any nodes are outside connections
         graph_inputs = []
         graph_outputs = []
 
-        print()
-        print("\033[1mDiscovering graph inputs and outputs\033[0m")
+        self.logger.section("Discovering graph inputs and outputs")
 
         # Collect all target connections (destinations)
         all_targets = []
@@ -416,9 +419,8 @@ class ExportManager:
                 if node_output not in connections:
                     graph_outputs.append(node_output)
 
-        print(f"\033[92mDiscovered {len(graph_inputs)} graph inputs\033[0m")
-        print(f"\033[92mDiscovered {len(graph_outputs)} graph outputs\033[0m")
-        print()
+        self.logger.info(f"Discovered {len(graph_inputs)} graph inputs")
+        self.logger.info(f"Discovered {len(graph_outputs)} graph outputs")
         return graph_inputs, graph_outputs
 
     def process_graph_connections(self):
@@ -451,19 +453,18 @@ class ExportManager:
         if not os.path.exists(self.SAVE_PATH):
             os.makedirs(self.SAVE_PATH)
 
-        print(f"\n\033[1mDiscovered {len(self.nodes)} nodes\033[0m\n")
+        self.logger.section(f"Discovered {len(self.nodes)} nodes")
         for node_context in self.nodes.values():
-            print(f"\033[1mCompiling {node_context.name}\033[0m")
+            self.logger.section(f"Compiling {node_context.name}")
             node_context.export_model(self.SAVE_PATH)
-            print("\033[92mSuccess\033[0m\n")
-        print()
+            self.logger.info("Success\n")
 
     def get_io_descriptions(self):
-        print(
-            f"\n\033[1mCompiling graph parameters for {len(self.nodes)} nodes\033[0m")
+        self.logger.section(
+            f"Compiling graph parameters for {len(self.nodes)} nodes")
         models = {"models": {}}
         for node in self.nodes.values():
-            print(f"Compiling parameters for {node.name}")
+            self.logger.info(f"Compiling parameters for {node.name}")
             description = node.get_description(
                 ['inputs', 'outputs', 'parameters', 'input_format', 'output_format'])
             if 'parameters' in description and 'model_path' in description['parameters']:
@@ -473,7 +474,6 @@ class ExportManager:
                     description['parameters']['model_path'] = get_relative_path(
                         model_path, self.SAVE_PATH)
             models["models"][node.name] = description
-        print()
         return models
 
     def compile_graph(self, visualize=True):
@@ -490,19 +490,19 @@ class ExportManager:
                 visualize_graph(self.nodes, connections,
                                 dangling_inputs, dangling_outputs, self.SAVE_PATH, self.GRAPH_NAME)
             except Exception as e:
-                print(f"Error visualizing graph: {e}")
+                self.logger.error(f"Error visualizing graph: {e}")
 
         internal_connections = sum([len(connection)
                                    for connection in connections.values()])
         # Print graph statistics
-        print(f"\nGraph Statistics:")
-        print(f"- Computation nodes: {len(self.nodes)}")
-        print(f"- Dangling inputs: {len(dangling_inputs)}")
-        print(f"- Dangling outputs: {len(dangling_outputs)}")
-        print(f"- Internal connections: {internal_connections}")
+        self.logger.section("Graph Statistics")
+        self.logger.info(f"- Computation nodes: {len(self.nodes)}")
+        self.logger.info(f"- Dangling inputs: {len(dangling_inputs)}")
+        self.logger.info(f"- Dangling outputs: {len(dangling_outputs)}")
+        self.logger.info(f"- Internal connections: {internal_connections}")
         total_edges = internal_connections + \
             len(dangling_inputs) + len(dangling_outputs)
-        print(f"- Total edges: {total_edges}")
+        self.logger.info(f"- Total edges: {total_edges}")
 
         # Set up custom YAML representers before writing any YAML
         def represent_shape_list(dumper, data):
