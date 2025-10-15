@@ -228,11 +228,11 @@ def funcA(input: torch.Tensor):
 
 @annotate.method()
 def funcB(detections):
-    retval = troch.tensor([])
+    retval = torch.tensor([])
     #some processing
     return retval
 @annotate.method()
-def funcC(input, detections)
+def funcC(input, detections):
     retval = torch.tensor([])
     return retval
 

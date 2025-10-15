@@ -58,6 +58,35 @@ class TestUnsupportedFail(unittest.TestCase):
         annotate.stop()
         self.fail("Expected an exception")
 
+    def test_io_reconciliation_name_overlap(self):
+        @annotate.method()
+        def funcA(input: torch.Tensor):
+            detections = torch.zeros(input.shape)
+            # some processing
+            return detections
+
+        @annotate.method()
+        def funcB(detections):
+            retval = torch.tensor([])
+            # some processing
+            return retval
+
+        @annotate.method()
+        def funcC(input, detections):
+            retval = torch.tensor([])
+            return retval
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        detections = funcA(torch.tensor([1.0, 2.0, 3.0]))
+        funcB(detections)
+        funcC(detections, torch.tensor([1.0, 2.0, 3.0]))
+        annotate.stop()
+        try:
+            annotate.compile_graph()
+        except Exception as e:
+            self.assertEqual(str(e),
+                             "Error requesting input name change for funcC/input: detections is already in use")
+
     def tearDown(self):
         """Clean up after each test."""
         if os.path.exists(self.TEST_GRAPH_NAME):
