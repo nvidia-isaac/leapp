@@ -22,7 +22,7 @@ import yaml
 import os
 import time
 from .node_context import NodeContext
-from .utils import CompactYamlList, CompactYamlDict, get_relative_path
+from .utils import CompactYamlList, CompactYamlDict, get_relative_path, get_system_info
 from .logging import LeappLogger
 
 
@@ -534,10 +534,13 @@ class ExportManager:
         pipeline = {'pipeline': {'data_flow': connections,
                                  'dangling_inputs': dangling_inputs_dict,
                                  'dangling_outputs': dangling_outputs_dict}}
+        system_info = get_system_info()
         with open(os.path.join(self.SAVE_PATH, f"{self.GRAPH_NAME}.yaml"), "w") as f:
             yaml.dump(models, f)
             f.write("\n")  # Add a newline separator
             yaml.dump(pipeline, f)
+            f.write("\n")
+            yaml.dump(system_info, f)
             f.write("\n")
 
         # store the models and pipeline as part of the object

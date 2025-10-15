@@ -22,8 +22,9 @@ import re
 import textwrap
 import copy
 import os
+import sys
 import collections.abc
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional, Any, Dict
 
 
@@ -825,6 +826,17 @@ def get_relative_path(model_path, yaml_save_path):
         # If relative path calculation fails (e.g., different drives on Windows), keep absolute path
         return model_path
 
+
+def get_system_info():
+    import leapp
+    metadata = {'system information': {}}
+    metadata['system information']['leapp version'] = leapp.__version__
+    metadata['system information']['torch version'] = str(torch.__version__)
+    metadata['system information']['python version'] = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    metadata['system information']['cuda version'] = str(torch.version.cuda)
+    metadata['system information']['os'] = os.uname().sysname
+
+    return metadata
 
 #########################################################
 # TorchScript Model Inspection
