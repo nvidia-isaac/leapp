@@ -59,6 +59,17 @@ class ExportManager:
             # logging
             self.logger = LeappLogger(self)
 
+            # Set up custom YAML representers before writing any YAML
+            def represent_shape_list(dumper, data):
+                return dumper.represent_sequence('tag:yaml.org,2002:seq', data, flow_style=True)
+
+            def represent_shape_dict(dumper, data):
+                return dumper.represent_mapping('tag:yaml.org,2002:map', data, flow_style=True)
+
+            # Register the custom representers
+            yaml.add_representer(CompactYamlList, represent_shape_list)
+            yaml.add_representer(CompactYamlDict, represent_shape_dict)
+
             ExportManager._initialized = True
 
     def start(self, name, save_path=".", verbose=False):
@@ -98,8 +109,8 @@ class ExportManager:
             raise Exception(
                 f"Error when attempting to set up new trace for {name}. \n"
                 f"ExportManager is already tracing {self.current_node_name}")
-
-        self.node_candidate = NodeContext(name, from_function,
+        node_index = len(self.nodes)
+        self.node_candidate = NodeContext(name, node_index, from_function,
                                           logger=self.logger,
                                           backend=kwargs.get(
                                               "export_with", None),
@@ -348,6 +359,19 @@ class ExportManager:
             models["models"][node.name] = description
         return models
 
+    def compile_models(self):
+        if self.SAVE_PATH is None:
+            raise Exception(
+                "Error: No save path provided, please provide a save path to export the graph")
+        if not os.path.exists(self.SAVE_PATH):
+            os.makedirs(self.SAVE_PATH)
+
+        self.logger.section(f"Discovered {len(self.nodes)} nodes")
+        for node_context in self.nodes.values():
+            self.logger.section(f"Compiling {node_context.name}")
+            node_context.export_model(self.SAVE_PATH)
+            self.logger.info("Success\n")
+
     #########################################################
     # graph compilation
     #########################################################
@@ -381,16 +405,6 @@ class ExportManager:
             len(dangling_inputs) + len(dangling_outputs)
         self.logger.info(f"- Total edges: {total_edges}")
 
-        # Set up custom YAML representers before writing any YAML
-        def represent_shape_list(dumper, data):
-            return dumper.represent_sequence('tag:yaml.org,2002:seq', data, flow_style=True)
-
-        def represent_shape_dict(dumper, data):
-            return dumper.represent_mapping('tag:yaml.org,2002:map', data, flow_style=True)
-
-        # Register the custom representers
-        yaml.add_representer(CompactYamlList, represent_shape_list)
-        yaml.add_representer(CompactYamlDict, represent_shape_dict)
         # Convert dangling inputs and outputs from "node_name/field" format to {"node_name": [field1, field2]} format
         dangling_inputs_dict = {}
         for inp in dangling_inputs:

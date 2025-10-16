@@ -27,9 +27,9 @@ import inspect
 
 
 class NodeContext:
-    def __init__(self, name,  from_function, logger=None, backend=None, use_trace=False, backend_params=None,
-                 inputs=None, outputs=None, environment_constants=None, register_buffers=None,
-                 enable_fp16=False, enable_cuda_graphs=False):
+    def __init__(self, name, node_index, from_function, logger=None, backend=None, use_trace=False,
+                 backend_params=None, inputs=None, outputs=None, environment_constants=None,
+                 register_buffers=None, enable_fp16=False, enable_cuda_graphs=False):
         self.name = name
         self.logger = logger
         # input parameters

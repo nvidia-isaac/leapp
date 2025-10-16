@@ -46,7 +46,7 @@ class TestConnectionCase(unittest.TestCase):
         annotate.start(name=self.TEST_GRAPH_NAME)
         outputA = funcA()
         annotate.stop()
-        annotate.compile_graph(visualization=False)
+        annotate.compile_graph(visualize=False)
         self.assertEqual(len(annotate.nodes), 1)
         self.assertEqual(len(annotate.nodes[funcA.__name__].inputs), 0)
         model = torch.jit.load(os.path.join(
@@ -69,7 +69,7 @@ class TestConnectionCase(unittest.TestCase):
         annotate.start(name=self.TEST_GRAPH_NAME)
         outputA = funcA(torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32))
         annotate.stop()
-        annotate.compile_graph(visualization=False)
+        annotate.compile_graph(visualize=False)
         self.assertEqual(len(annotate.nodes), 1)
         self.assertEqual(len(annotate.nodes[funcA.__name__].inputs), 1)
         model = torch.jit.load(os.path.join(
