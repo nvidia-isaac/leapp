@@ -24,6 +24,7 @@ import time
 from .node_context import NodeContext
 from .utils import CompactYamlList, CompactYamlDict, get_relative_path, get_system_info
 from .logging import LeappLogger
+from .leapp_graph import LeappGraph
 
 
 class ExportManager:
@@ -87,6 +88,39 @@ class ExportManager:
         self.intepret_graph = False
 
     #########################################################
+    # node context setup
+    #########################################################
+    def _setup_new_node_context(self, name, from_function, **kwargs):
+        if self.current_node_name is not None or self.node_candidate is not None:
+            self.current_node_name = name
+            if self.node_candidate.name is not None:
+                name = self.node_candidate.name
+            raise Exception(
+                f"Error when attempting to set up new trace for {name}. \n"
+                f"ExportManager is already tracing {self.current_node_name}")
+
+        self.node_candidate = NodeContext(name, from_function,
+                                          logger=self.logger,
+                                          backend=kwargs.get(
+                                              "export_with", None),
+                                          backend_params=kwargs.get(
+                                              "backend_params", None),
+                                          use_trace=kwargs.get(
+                                              "use_trace", False),
+                                          inputs=kwargs.get(
+                                              "inputs", None),
+                                          outputs=kwargs.get(
+                                              "outputs", None),
+                                          environment_constants=kwargs.get(
+                                              "environment_constants", None),
+                                          register_buffers=kwargs.get(
+                                              "register_buffers", None),
+                                          enable_fp16=kwargs.get(
+                                              "enable_fp16", False),
+                                          enable_cuda_graphs=kwargs.get("enable_cuda_graphs", False))
+        self.current_node_name = name
+
+    #########################################################
     # Tracing
     #########################################################
 
@@ -137,36 +171,6 @@ class ExportManager:
 
         return self._trace_function
 
-    def _setup_new_node_context(self, name, from_function, **kwargs):
-        if self.current_node_name is not None or self.node_candidate is not None:
-            self.current_node_name = name
-            if self.node_candidate.name is not None:
-                name = self.node_candidate.name
-            raise Exception(
-                f"Error when attempting to set up new trace for {name}. \n"
-                f"ExportManager is already tracing {self.current_node_name}")
-
-        self.node_candidate = NodeContext(name, from_function,
-                                          logger=self.logger,
-                                          backend=kwargs.get(
-                                              "export_with", None),
-                                          backend_params=kwargs.get(
-                                              "backend_params", None),
-                                          use_trace=kwargs.get(
-                                              "use_trace", False),
-                                          inputs=kwargs.get(
-                                              "inputs", None),
-                                          outputs=kwargs.get(
-                                              "outputs", None),
-                                          environment_constants=kwargs.get(
-                                              "environment_constants", None),
-                                          register_buffers=kwargs.get(
-                                              "register_buffers", None),
-                                          enable_fp16=kwargs.get(
-                                              "enable_fp16", False),
-                                          enable_cuda_graphs=kwargs.get("enable_cuda_graphs", False))
-        self.current_node_name = name
-
     def _start_tracing(self, frame, trace_function):
         if self.current_node_name is None:
             raise Exception("Error: No node context found")
@@ -207,6 +211,9 @@ class ExportManager:
                 self.current_node_name = None
                 self.node_candidate = None
 
+    #########################################################
+    # annotation APIs
+    #########################################################
     def block(self, node_name, **kwargs):
         """Create a context manager for tracing a block of code in the computational graph.
 
@@ -324,141 +331,6 @@ class ExportManager:
             return wrapper
         return decorator
 
-    def connect_graph_connections(self):
-        self.logger.section("Processing Node Connections Using Tagged Values")
-        connections = {}
-        for node in self.nodes.values():
-            # first check if any duplicate tags. duplicates are not suppported
-            tags = [input.tag for input in node.inputs if input.tag is not None]
-            duplicates = set([tag for tag in tags if tags.count(tag) > 1])
-            if duplicates:
-                for duplicate in duplicates:
-                    self.logger.info(
-                        f"found duplicate input with the tag {duplicate} in node {node.name}")
-                raise Exception(
-                    "Error: unsupported use of sending the same tensor multiple times to the same node")
-
-            for in_idx, input in enumerate(node.inputs):
-                if input.tag is None:  # case where the input is dangling
-                    pass
-                else:
-                    source_node_name = input.tag.split('/')[0]
-                    self.logger.info(f"source node name: {source_node_name}")
-
-                    source_node = self.nodes[source_node_name]
-                    source_node_output_ports = [
-                        output.tag for output in source_node.outputs]
-                    if input.tag not in source_node_output_ports:
-                        raise Exception(
-                            f"Error: {source_node_name} does not produce tag {input.tag}")
-
-                    out_idx = source_node_output_ports.index(input.tag)
-
-                    if input.tag not in connections:
-                        connections[input.tag] = {
-                            'source': {'node': source_node, 'idx': out_idx},
-                            'targets': []
-                        }
-                    connections[input.tag]['targets'].append(
-                        {'node': node, 'idx': in_idx})
-
-        return connections
-
-    def reconcile_io_names(self, connections):
-        names_changed = True
-        self.logger.section("Reconciling internal i/o names")
-        for connection in connections.values():
-            source = connection['source']
-            targets = connection['targets']
-
-            # Use name_str property for TensorDescription objects
-            target_names = [target['node'].inputs[target['idx']].name_str
-                            for target in targets]
-            desired_target_name = target_names[0]
-            if not all(name == desired_target_name for name in target_names):
-                names_changed = True
-                for target in targets:
-                    target['node'].change_input_name(
-                        target['node'].inputs[target['idx']].name_str, desired_target_name)
-
-            if not source['node'].outputs[source['idx']].name_str == desired_target_name:
-                names_changed = True
-                source['node'].change_output_name(
-                    source['node'].outputs[source['idx']].name_str, desired_target_name)
-        if names_changed:
-            self.logger.warning("i/o names changed, this process edits the node specifications, and may produce\n"
-                                "unexpected behavior. Please check the graph for correctness. If this is not desired,\n"
-                                "please make sure to match io names in the source code")
-        else:
-            self.logger.info("no names changed")
-
-    def compile_graph_io(self, connections):
-        # any inputs and outputs that are not connected to any nodes are outside connections
-        graph_inputs = []
-        graph_outputs = []
-
-        self.logger.section("Discovering graph inputs and outputs")
-
-        # Collect all target connections (destinations)
-        all_targets = []
-        for targets_list in connections.values():
-            all_targets.extend(targets_list)
-
-        for node in self.nodes.values():
-            # An input is dangling if it's not the target of any internal connection
-            for input_desc in node.inputs:
-                input_name = input_desc.name_str  # Use name_str property
-                node_input = node.name + '/' + input_name
-                if node_input not in all_targets:
-                    graph_inputs.append(node_input)
-
-            # An output is dangling if it's not the source of any internal connection
-            for output_desc in node.outputs:
-                output_name = output_desc.name_str  # Use name_str property
-                node_output = node.name + '/' + output_name
-                if node_output not in connections:
-                    graph_outputs.append(node_output)
-
-        self.logger.info(f"Discovered {len(graph_inputs)} graph inputs")
-        self.logger.info(f"Discovered {len(graph_outputs)} graph outputs")
-        return graph_inputs, graph_outputs
-
-    def process_graph_connections(self):
-        connections = self.connect_graph_connections()
-
-        self.reconcile_io_names(connections)
-
-        processed_connections = {}
-        for connection in connections.values():
-            source = connection['source']
-            targets = connection['targets']
-            source_port = source['node'].name + '/' + \
-                source['node'].outputs[source['idx']].name_str
-            target_ports = CompactYamlList()
-            for target in targets:
-                target_ports.append(target['node'].name + '/' +
-                                    target['node'].inputs[target['idx']].name_str)
-
-            processed_connections[source_port] = target_ports
-
-        graph_inputs, graph_outputs = self.compile_graph_io(
-            processed_connections)
-
-        return processed_connections, graph_inputs, graph_outputs
-
-    def compile_models(self):
-        if self.SAVE_PATH is None:
-            raise Exception(
-                "Error: No save path provided, please provide a save path to export the graph")
-        if not os.path.exists(self.SAVE_PATH):
-            os.makedirs(self.SAVE_PATH)
-
-        self.logger.section(f"Discovered {len(self.nodes)} nodes")
-        for node_context in self.nodes.values():
-            self.logger.section(f"Compiling {node_context.name}")
-            node_context.export_model(self.SAVE_PATH)
-            self.logger.info("Success\n")
-
     def get_io_descriptions(self):
         self.logger.section(
             f"Compiling graph parameters for {len(self.nodes)} nodes")
@@ -476,12 +348,17 @@ class ExportManager:
             models["models"][node.name] = description
         return models
 
+    #########################################################
+    # graph compilation
+    #########################################################
     def compile_graph(self, visualize=True):
         # compile models first before input name reconciliation
         self.compile_models()
-        # then process graph connections. this process may change input and output names
-        connections, dangling_inputs, dangling_outputs = self.process_graph_connections()
-        # then get io description, this finalizes the input and output names
+
+        # builds the graph connections. this may change input and output names
+        graph = LeappGraph(self.logger, self.nodes)
+
+        connections, dangling_inputs, dangling_outputs = graph.get_graph_description()
         models = self.get_io_descriptions()
 
         if visualize:
