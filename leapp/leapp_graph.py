@@ -1,4 +1,5 @@
 from .utils import CompactYamlList
+from .graph_gui import visualize_graph
 
 
 class LeappGraph:
@@ -7,12 +8,58 @@ class LeappGraph:
         self.nodes = nodes
 
         # process graph connections
-        connections = self._build_connections()
+        self.logger.section("Processing Node Connections Using Tagged Values")
+        self.connections, self.feedback_connections = self._build_connections()
 
-        self._reconcile_io_names(connections)
+        self.logger.section("Reconciling internal i/o names")
+        self._reconcile_io_names(self.connections)
 
-        self.processed_connections = {}
-        for connection in connections.values():
+        self.logger.section("Discovering graph inputs and outputs")
+        self.graph_inputs, self.graph_outputs = self._compile_graph_io()
+
+    def get_full_pipeline_description(self):
+        processed_connections = self._finalize_connections(self.connections)
+        processed_feedback_connections = self._finalize_connections(
+            self.feedback_connections)
+        graph_inputs = {}
+        for input in self.graph_inputs:
+            if '/' in input:
+                node_name, field_name = input.split('/', 1)
+                if node_name not in graph_inputs:
+                    graph_inputs[node_name] = CompactYamlList()
+                graph_inputs[node_name].append(field_name)
+        graph_outputs = {}
+        for output in self.graph_outputs:
+            if '/' in output:
+                node_name, field_name = output.split('/', 1)
+                if node_name not in graph_outputs:
+                    graph_outputs[node_name] = CompactYamlList()
+                graph_outputs[node_name].append(field_name)
+        pipeline = {'pipeline': {'data_flow': processed_connections,
+                                 'feedback_flow': processed_feedback_connections,
+                                 'dangling_inputs': graph_inputs,
+                                 'dangling_outputs': graph_outputs}}
+
+        return pipeline
+
+    def visualize(self, save_path, graph_name):
+        visualize_graph(self.nodes, self.connections, self.feedback_connections,
+                        self.graph_inputs, self.graph_outputs, save_path, graph_name)
+
+    def get_graph_statistics(self):
+        internal_connections = 0
+        for connection in self.connections:
+            internal_connections += len(connection['targets'])
+        for connection in self.feedback_connections:
+            internal_connections += len(connection['targets'])
+
+        total_edges = internal_connections + \
+            len(self.graph_inputs) + len(self.graph_outputs)
+        return internal_connections, total_edges
+
+    def _finalize_connections(self, connections_dict):
+        processed_connections = {}
+        for connection in connections_dict:
             source = connection['source']
             targets = connection['targets']
             source_port = source['node'].name + '/' + \
@@ -22,25 +69,20 @@ class LeappGraph:
                 target_ports.append(target['node'].name + '/' +
                                     target['node'].inputs[target['idx']].name_str)
 
-            self.processed_connections[source_port] = target_ports
-
-        self.graph_inputs, self.graph_outputs = self._compile_graph_io(
-            self.processed_connections)
-
-    def get_graph_description(self):
-        return self.processed_connections, self.graph_inputs, self.graph_outputs
+            processed_connections[source_port] = target_ports
+        return processed_connections
 
     def _build_connections(self):
-        self.logger.section("Processing Node Connections Using Tagged Values")
         connections = {}
+        feedback_connections = {}
         for node in self.nodes.values():
             # first check if any duplicate tags. duplicates are not suppported
             tags = [input.tag for input in node.inputs if input.tag is not None]
             duplicates = set([tag for tag in tags if tags.count(tag) > 1])
             if duplicates:
                 for duplicate in duplicates:
-                    self.logger.info(
-                        f"found duplicate input with the tag {duplicate} in node {node.name}")
+                    self.logger.error(
+                        f"Found duplicate input with the tag {duplicate} in node {node.name}")
                 raise Exception(
                     "Error: unsupported use of sending the same tensor multiple times to the same node")
 
@@ -49,7 +91,6 @@ class LeappGraph:
                     pass
                 else:
                     source_node_name = input.tag.split('/')[0]
-                    self.logger.info(f"source node name: {source_node_name}")
 
                     source_node = self.nodes[source_node_name]
                     source_node_output_ports = [
@@ -60,41 +101,78 @@ class LeappGraph:
 
                     out_idx = source_node_output_ports.index(input.tag)
 
-                    if input.tag not in connections:
-                        connections[input.tag] = {
-                            'source': {'node': source_node, 'idx': out_idx},
-                            'targets': []
-                        }
-                    connections[input.tag]['targets'].append(
-                        {'node': node, 'idx': in_idx})
+                    if source_node.node_index < node.node_index:
+                        if input.tag not in connections:
+                            connections[input.tag] = {
+                                'source': {'node': source_node, 'idx': out_idx},
+                                'targets': []
+                            }
+                        connections[input.tag]['targets'].append(
+                            {'node': node, 'idx': in_idx})
+                        self.logger.info("Found connection: "
+                                         f"{source_node.name}/{source_node.outputs[out_idx].name_str} "
+                                         f" -> {node.name}/{node.inputs[in_idx].name_str}")
+                    else:
+                        if input.tag not in feedback_connections:
+                            feedback_connections[input.tag] = {
+                                'source': {'node': source_node, 'idx': out_idx},
+                                'targets': []
+                            }
+                        feedback_connections[input.tag]['targets'].append(
+                            {'node': node, 'idx': in_idx})
+                        self.logger.info("Found feedback connection: "
+                                         f"{source_node.name}/{source_node.outputs[out_idx].name_str} "
+                                         f" -> {node.name}/{node.inputs[in_idx].name_str}")
 
-        return connections
+        return list(connections.values()), list(feedback_connections.values())
 
-    def _compile_graph_io(self, connections):
+    def _compile_graph_io(self):
         # any inputs and outputs that are not connected to any nodes are outside connections
         graph_inputs = []
         graph_outputs = []
 
-        self.logger.section("Discovering graph inputs and outputs")
+        # Collect all target ports (destinations) from both forward and feedback connections
+        all_target_ports = set()
+        for connection in self.connections:
+            for target in connection['targets']:
+                target_port = target['node'].name + '/' + \
+                    target['node'].inputs[target['idx']].name_str
+                all_target_ports.add(target_port)
 
-        # Collect all target connections (destinations)
-        all_targets = []
-        for targets_list in connections.values():
-            all_targets.extend(targets_list)
+        for connection in self.feedback_connections:
+            for target in connection['targets']:
+                target_port = target['node'].name + '/' + \
+                    target['node'].inputs[target['idx']].name_str
+                all_target_ports.add(target_port)
 
+        # Collect all source ports from both forward and feedback connections
+        all_source_ports = set()
+        for connection in self.connections:
+            source = connection['source']
+            source_port = source['node'].name + '/' + \
+                source['node'].outputs[source['idx']].name_str
+            all_source_ports.add(source_port)
+
+        for connection in self.feedback_connections:
+            source = connection['source']
+            source_port = source['node'].name + '/' + \
+                source['node'].outputs[source['idx']].name_str
+            all_source_ports.add(source_port)
+
+        # Find dangling inputs and outputs
         for node in self.nodes.values():
             # An input is dangling if it's not the target of any internal connection
             for input_desc in node.inputs:
-                input_name = input_desc.name_str  # Use name_str property
+                input_name = input_desc.name_str
                 node_input = node.name + '/' + input_name
-                if node_input not in all_targets:
+                if node_input not in all_target_ports:
                     graph_inputs.append(node_input)
 
             # An output is dangling if it's not the source of any internal connection
             for output_desc in node.outputs:
-                output_name = output_desc.name_str  # Use name_str property
+                output_name = output_desc.name_str
                 node_output = node.name + '/' + output_name
-                if node_output not in connections:
+                if node_output not in all_source_ports:
                     graph_outputs.append(node_output)
 
         self.logger.info(f"Discovered {len(graph_inputs)} graph inputs")
@@ -103,8 +181,7 @@ class LeappGraph:
 
     def _reconcile_io_names(self, connections):
         names_changed = True
-        self.logger.section("Reconciling internal i/o names")
-        for connection in connections.values():
+        for connection in connections:
             source = connection['source']
             targets = connection['targets']
 
@@ -123,8 +200,8 @@ class LeappGraph:
                 source['node'].change_output_name(
                     source['node'].outputs[source['idx']].name_str, desired_target_name)
         if names_changed:
-            self.logger.warning("i/o names changed, this process edits the node specifications, and may produce\n"
-                                "unexpected behavior. Please check the graph for correctness. If this is not desired,\n"
+            self.logger.warning("i/o names changed, this process edits the node specifications, and may produce"
+                                "unexpected behavior. Please check the graph for correctness. If this is not desired,"
                                 "please make sure to match io names in the source code")
         else:
             self.logger.info("no names changed")

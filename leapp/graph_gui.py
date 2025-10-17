@@ -26,7 +26,7 @@ def visualize_graph(nodes, connections, inputs, outputs, save_path, graph_name):
 
     Args:
         nodes: Dict of node_name -> NodeContext objects
-        connections: Dict of "source_node/output" -> ["target_node/input", ...]
+        connections: List of connection dicts with 'source' and 'targets' keys
         inputs: List of dangling graph inputs (not connected internally)
         outputs: List of dangling graph outputs (not connected internally) 
     """
@@ -65,16 +65,18 @@ def visualize_graph(nodes, connections, inputs, outputs, save_path, graph_name):
     # First collect all connections between node pairs to combine labels
     node_pair_connections = {}
 
-    for source_connection, targets in connections.items():
-        if '/' in source_connection:
-            source_node, source_output = source_connection.split('/', 1)
-            for target_connection in targets:
-                if '/' in target_connection:
-                    target_node, target_input = target_connection.split('/', 1)
-                    pair_key = (source_node, target_node)
-                    if pair_key not in node_pair_connections:
-                        node_pair_connections[pair_key] = []
-                    node_pair_connections[pair_key].append(source_output)
+    for connection in connections:
+        source = connection['source']
+        source_node = source['node'].name
+        source_output = source['node'].outputs[source['idx']].name_str
+
+        for target in connection['targets']:
+            target_node = target['node'].name
+
+            pair_key = (source_node, target_node)
+            if pair_key not in node_pair_connections:
+                node_pair_connections[pair_key] = []
+            node_pair_connections[pair_key].append(source_output)
 
     # Add edges with combined labels
     for (source_node, target_node), outputs in node_pair_connections.items():
@@ -209,8 +211,8 @@ def visualize_graph(nodes, connections, inputs, outputs, save_path, graph_name):
         """Find the closest node to the given coordinates."""
         min_dist = float('inf')
         closest_node = None
-        for node, (nx, ny) in pos.items():
-            dist = ((x - nx)**2 + (y - ny)**2)**0.5
+        for node, (node_x, node_y) in pos.items():
+            dist = ((x - node_x)**2 + (y - node_y)**2)**0.5
             if dist < min_dist and dist < threshold:
                 min_dist = dist
                 closest_node = node

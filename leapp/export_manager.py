@@ -109,7 +109,11 @@ class ExportManager:
             raise Exception(
                 f"Error when attempting to set up new trace for {name}. \n"
                 f"ExportManager is already tracing {self.current_node_name}")
-        node_index = len(self.nodes)
+        if name in self.nodes.keys():
+            # retracing inherits the node index of the original node
+            node_index = self.nodes[name].node_index
+        else:
+            node_index = len(self.nodes)
         self.node_candidate = NodeContext(name, node_index, from_function,
                                           logger=self.logger,
                                           backend=kwargs.get(
@@ -381,50 +385,26 @@ class ExportManager:
 
         # builds the graph connections. this may change input and output names
         graph = LeappGraph(self.logger, self.nodes)
+        pipeline = graph.get_full_pipeline_description()
 
-        connections, dangling_inputs, dangling_outputs = graph.get_graph_description()
         models = self.get_io_descriptions()
 
         if visualize:
             try:
-                from .graph_gui import visualize_graph
-                visualize_graph(self.nodes, connections,
-                                dangling_inputs, dangling_outputs, self.SAVE_PATH, self.GRAPH_NAME)
+                graph.visualize(self.SAVE_PATH, self.GRAPH_NAME)
             except Exception as e:
                 self.logger.error(f"Error visualizing graph: {e}")
 
-        internal_connections = sum([len(connection)
-                                   for connection in connections.values()])
+        internal_connections, total_edges = graph.get_graph_statistics()
+
         # Print graph statistics
         self.logger.section("Graph Statistics")
         self.logger.info(f"- Computation nodes: {len(self.nodes)}")
-        self.logger.info(f"- Dangling inputs: {len(dangling_inputs)}")
-        self.logger.info(f"- Dangling outputs: {len(dangling_outputs)}")
+        self.logger.info(f"- Dangling inputs: {len(graph.graph_inputs)}")
+        self.logger.info(f"- Dangling outputs: {len(graph.graph_outputs)}")
         self.logger.info(f"- Internal connections: {internal_connections}")
-        total_edges = internal_connections + \
-            len(dangling_inputs) + len(dangling_outputs)
         self.logger.info(f"- Total edges: {total_edges}")
 
-        # Convert dangling inputs and outputs from "node_name/field" format to {"node_name": [field1, field2]} format
-        dangling_inputs_dict = {}
-        for inp in dangling_inputs:
-            if '/' in inp:
-                node_name, field_name = inp.split('/', 1)
-                if node_name not in dangling_inputs_dict:
-                    dangling_inputs_dict[node_name] = CompactYamlList()
-                dangling_inputs_dict[node_name].append(field_name)
-
-        dangling_outputs_dict = {}
-        for out in dangling_outputs:
-            if '/' in out:
-                node_name, field_name = out.split('/', 1)
-                if node_name not in dangling_outputs_dict:
-                    dangling_outputs_dict[node_name] = CompactYamlList()
-                dangling_outputs_dict[node_name].append(field_name)
-
-        pipeline = {'pipeline': {'data_flow': connections,
-                                 'dangling_inputs': dangling_inputs_dict,
-                                 'dangling_outputs': dangling_outputs_dict}}
         system_info = get_system_info()
         with open(os.path.join(self.SAVE_PATH, f"{self.GRAPH_NAME}.yaml"), "w") as f:
             yaml.dump(models, f)

@@ -31,6 +31,7 @@ class NodeContext:
                  backend_params=None, inputs=None, outputs=None, environment_constants=None,
                  register_buffers=None, enable_fp16=False, enable_cuda_graphs=False):
         self.name = name
+        self.node_index = node_index
         self.logger = logger
         # input parameters
         # this variable is for temporary use only,
