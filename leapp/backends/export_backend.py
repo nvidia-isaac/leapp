@@ -17,7 +17,8 @@ class ExportBackend(abc.ABC):
     def _verify_model_location_and_get_md5sum(self, model_path):
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model file not found at {model_path}")
-        md5sum = hashlib.md5(open(model_path, 'rb').read()).hexdigest()
+        with open(model_path, 'rb') as f:
+            md5sum = hashlib.md5(f.read()).hexdigest()
         return md5sum
 
     def _copy_model_to_path(self, model_path, save_path):

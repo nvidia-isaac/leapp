@@ -25,7 +25,8 @@ class TestConnectionCase(unittest.TestCase):
             self.assertEqual(internal_connections, len(
                 annotate.detected_pipeline['data_flow']), "Number of internal connections do not match")
         if feedback_connections is not None:
-            pass  # TODO: implement this
+            self.assertEqual(feedback_connections, len(
+                annotate.detected_pipeline['feedback_flow']), "Number of feedback connections do not match")
 
     def test_multiple_runs_of_same_graph(self):
         """tests the situation where the same graph is run multiple times"""
@@ -45,9 +46,42 @@ class TestConnectionCase(unittest.TestCase):
                 outputB = outputA*2.
             outputC = funcC(outputB)
         annotate.stop()
-        annotate.compile_graph()
+        annotate.compile_graph(visualize=False)
         self.verify_num_connections(nodes=3, inputs=1, outputs=1,
                                     internal_connections=2)
+
+    def test_feedback_connections(self):
+        """tests the situation where the graph has feedback connections"""
+        @annotate.method()
+        def funcA(inputA: torch.Tensor, loop_back: torch.Tensor):
+            return inputA + loop_back
+
+        @annotate.method()
+        def funcB(inputB: torch.Tensor):
+            return inputB
+
+        @annotate.method()
+        def funcC(inputC: torch.Tensor, loop_back: torch.Tensor):
+            return inputC + loop_back
+
+        @annotate.method()
+        def funcD(inputD: torch.Tensor):
+            outputD = inputD.clone()
+            return outputD
+
+        annotate.start(name=self.TEST_GRAPH_NAME, verbose=False)
+        feedback_input = torch.tensor([0.0, 0.0, 0.0])
+        for i in range(2):
+            out_funcA = funcA(torch.tensor([1.0, 2.0, 3.0]), feedback_input)
+            out_funcB = funcB(out_funcA)
+            out_funcC = funcC(out_funcB, feedback_input)
+            out_funcD = funcD(out_funcC)
+            feedback_input = out_funcC
+
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_num_connections(nodes=4, inputs=1, outputs=1,
+                                    internal_connections=3, feedback_connections=1)
 
     def tearDown(self):
         """Clean up after each test."""
