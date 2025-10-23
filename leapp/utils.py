@@ -625,41 +625,6 @@ def safe_deepcopy(data):
         return copy.deepcopy(data)
 
 
-def build_function_header(text, name):
-    """
-    Extract function header from text and replace function name with the provided name.
-    Also inject 'self' as first parameter if not present.
-
-    Args:
-        text (str): Text containing one Python function
-        name (str): The name to use for the function
-
-    Returns:
-        str: Single-line function header with specified name and self as first parameter, or None if not found
-    """
-    # Find the function definition
-    match = re.search(r'def\s+([a-zA-Z_]\w*)\s*\(', text)
-    if not match:
-        return None
-
-    # Find the function header by balancing parentheses
-    start = match.start()
-    header_end = find_header_end(text, start)
-    if header_end is None:
-        return None
-
-    # Extract and clean the header
-    raw_header = text[start:header_end + 1]
-    clean_header = clean_header_to_single_line(raw_header)
-
-    # Replace the function name with the provided name
-    clean_header = re.sub(
-        r'def\s+[a-zA-Z_]\w*\s*\(', f'def {name}(', clean_header)
-
-    # Add self if not already present
-    return add_self_if_needed(clean_header) + '\n'
-
-
 def find_header_end(text, start_pos):
     """Find the end of function header (the colon after balanced parentheses)"""
     paren_count = 0

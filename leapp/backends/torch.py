@@ -1,8 +1,6 @@
 import torch
-from tensordict import TensorDict
 from leapp.backends.export_backend import ExportBackend
 import os
-import hashlib
 import linecache
 import textwrap
 import ast
@@ -10,7 +8,6 @@ import types
 from typing import Tuple, List, Dict
 from leapp.utils import (
     create_module,
-    build_function_header,
     resolve_tensor_descriptions_to_values,
     extract_source_from_line_range
 )
@@ -69,6 +66,13 @@ class TorchExportBackend(ExportBackend):
             setattr(module_instance, const_name, const_value)
             self.logger.debug(
                 f"Set instance attribute: {const_name} = {const_value}")
+
+        # Set default values as instance attributes (from stored dictionary)
+        for default_name, default_value in self.node_context.default_kwargs.items():
+            # Set as instance attribute - accessible as self.default_name
+            setattr(module_instance, default_name, default_value)
+            self.logger.debug(
+                f"Set instance attribute (default value): {default_name} = {default_value}")
         # copy all the attributes from the original object to the module
         if 'self' in self.node_context.input_frame.f_locals:
             original_obj = self.node_context.input_frame.f_locals['self']
@@ -105,7 +109,8 @@ class TorchExportBackend(ExportBackend):
     def _create_data_patching_string(self):
         data_patch_template = "{const_name} = self.{const_name}\n"
         data_patch_string = ""
-        targets = self.node_context.environment_constants | self.node_context.register_buffers
+        targets = self.node_context.environment_constants | self.node_context.register_buffers | set(
+            self.node_context.default_kwargs.keys())
 
         for const_name in targets:
             if "self." in const_name or const_name == "self":
@@ -141,18 +146,10 @@ class TorchExportBackend(ExportBackend):
         else:
             self.logger.info(message)
 
+        header, return_statement = self._create_header_and_return_statement()
         if self.node_context.from_function:
-            # Read the entire function from min to max line with proper newlines
-            with open(self.node_context.executed_lines['filename'], 'r') as f:
-                lines = ''.join(f.readlines()[
-                    self.node_context.executed_lines['min_line']-1:self.node_context.executed_lines['max_line']])
-
-                header = build_function_header(lines, self.node_context.name)
-            function_name = self.node_context.name
             return_statement = ""
-        else:
-            header, return_statement = self._create_header_and_return_statement()
-            function_name = "forward"
+        function_name = "forward"
         environment_constant_string = self._create_data_patching_string()
 
         # create function string

@@ -57,6 +57,7 @@ class NodeContext(LeappGraphElement):
             self.register_buffers = set(register_buffers)
         else:
             self.register_buffers = set()
+        self.default_kwargs = {}
 
         # Check for overlap between register_buffers and environment_constants
         overlap = self.register_buffers & self.environment_constants
@@ -110,18 +111,25 @@ class NodeContext(LeappGraphElement):
         sig = inspect.signature(func)
         param_names = list(sig.parameters.keys())
 
-        # Map positional arguments to their parameter names
-        for i, arg in enumerate(args):
-            if i < len(param_names):
-                param_name = param_names[i]
-            else:
-                param_name = f"arg_{i}"
-            if i == 0 and param_name == 'self':
-                continue  # skip all instances of self
-            self._add_input(param_name, arg)
+        # bind
+        bound_args = sig.bind(*args, **kwargs)
+        # apply default values
+        bound_args.apply_defaults()
 
-        for key, value in kwargs.items():
-            self._add_input(key, value)
+        for param_name, param_value in bound_args.arguments.items():
+            if param_name == 'self':
+                continue
+            # Check if this parameter was explicitly provided or is using default
+            param = sig.parameters[param_name]
+            was_provided = (
+                param_name in kwargs or
+                param_names.index(param_name) < len(args)
+            )
+            if was_provided:
+                self._add_input(param_name, param_value)
+            else:
+                # this parameter uses the default value in the function header
+                self.default_kwargs[param_name] = param_value
 
     def inspect_function_outputs(self, func, result):
         # Store outputs using actual variable names from return statement

@@ -54,7 +54,7 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
         self.assertTrue(torch.allclose(model(), expected_output))
         # Or get structured data
         model_info = inspect_torchscript_model(model)
-        self.assertEqual(len(model_info['inputs']), 2)
+        self.assertEqual(len(model_info['inputs']), 1)
         self.assertEqual(len(model_info['outputs']), 1)
 
     def test_annotate_method_ignoring_default_values(self):
@@ -74,6 +74,57 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
         model_info = inspect_torchscript_model(model)
         self.assertEqual(len(model_info['inputs']), 2)
         self.assertEqual(len(model_info['outputs']), 1)
+
+    def test_annotate_method_ignoring_middle_kwargs(self):
+        """tests the situation where the user provides kwargs out of order"""
+        default_tensor = torch.tensor([0])
+
+        @annotate.method(export_with="torch")
+        def funcA(input1=default_tensor, input2=default_tensor, input3=default_tensor,
+                  input4=default_tensor, input5=default_tensor):
+            output = torch.cat([input1, input2, input3, input4, input5], dim=0)
+            return output
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        outputA = funcA(input1=torch.tensor([1]), input4=torch.tensor([1]))
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.assertEqual(len(annotate.nodes), 1)
+        self.assertEqual(len(annotate.nodes[funcA.__name__].inputs), 2)
+        model = torch.jit.load(os.path.join(
+            self.TEST_GRAPH_NAME, funcA.__name__+".pt"))
+        model_info = inspect_torchscript_model(model)
+        self.assertEqual(len(model_info['inputs']), 3)
+        self.assertEqual(len(model_info['outputs']), 1)
+
+        self.assertTrue(torch.equal(
+            model(torch.tensor([1]), torch.tensor([1])), outputA))
+
+    def test_annotate_method_kwargs_out_of_order(self):
+        """tests the situation where the user provides kwargs out of order"""
+        default_tensor = torch.tensor([0])
+
+        @annotate.method(export_with="torch")
+        def funcA(input1=default_tensor, input2=default_tensor, input3=default_tensor,
+                  input4=default_tensor, input5=default_tensor):
+            output = torch.cat([input1, input2, input3, input4, input5], dim=0)
+            return output
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        outputA = funcA(input4=torch.tensor(
+            [2]), input1=torch.tensor([1]), input5=torch.tensor([3]))
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.assertEqual(len(annotate.nodes), 1)
+        self.assertEqual(len(annotate.nodes[funcA.__name__].inputs), 3)
+        input_format = annotate.detected_nodes[funcA.__name__]['formatting']['input_format']
+        self.assertEqual(input_format, ['input1', 'input4', 'input5'])
+        model = torch.jit.load(os.path.join(
+            self.TEST_GRAPH_NAME, funcA.__name__+".pt"))
+        model_info = inspect_torchscript_model(model)
+        self.assertEqual(len(model_info['inputs']), 4)
+        self.assertEqual(len(model_info['outputs']), 1)
+        self.assertTrue(torch.equal(
+            model(torch.tensor([1]), torch.tensor([2]), torch.tensor([3])), outputA))
 
 
 if __name__ == '__main__':
