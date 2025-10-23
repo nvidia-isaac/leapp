@@ -32,6 +32,7 @@ class LeappGraphElement():
         self.compiled_model = None
         self.model_path = None
         self.md5sum = None
+        self.sha256sum = None
         self.model_device = None
         self.backend = backend
 
@@ -67,6 +68,7 @@ class LeappGraphElement():
         description['parameters'] = {
             'model_path': self.model_path,
             'md5sum': self.md5sum,
+            'sha256sum': self.sha256sum,
             'device': self.model_device,
             'is_engine_path': self.is_engine_path(),
             'backend': self.get_backend(),
@@ -115,7 +117,7 @@ class LeappGraphElement():
         return export_backend
 
     def save_model(self, save_path: str):
-        self.model_path, self.md5sum = self.export_backend.save(
+        self.model_path, self.md5sum, self.sha256sum = self.export_backend.save(
             save_path, self.compiled_model)
         self.model_device = 'cuda'
 

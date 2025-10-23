@@ -14,12 +14,15 @@ class ExportBackend(abc.ABC):
         else:
             self.backend_params = backend_params
 
-    def _verify_model_location_and_get_md5sum(self, model_path):
+    def _verify_model_location_and_get_hash(self, model_path):
         if not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model file not found at {model_path}")
+            self.logger.error(f"Model file not found at {model_path}")
+            return None, None
         with open(model_path, 'rb') as f:
-            md5sum = hashlib.md5(f.read()).hexdigest()
-        return md5sum
+            file_data = f.read()
+            md5sum = hashlib.md5(file_data).hexdigest()
+            sha256sum = hashlib.sha256(file_data).hexdigest()
+        return md5sum, sha256sum
 
     def _copy_model_to_path(self, model_path, save_path):
         if not os.path.exists(save_path):
@@ -52,7 +55,7 @@ class ExportBackend(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def save(self, save_path: str) -> Tuple[str, str]:
+    def save(self, save_path: str) -> Tuple[str, str, str]:
         raise NotImplementedError
 
 
@@ -73,17 +76,17 @@ class NoneExportBackend(ExportBackend):
 
         return loaded_model
 
-    def save(self, save_path: str) -> Tuple[str, str]:
+    def save(self, save_path: str) -> Tuple[str, str, str]:
         if "model_path" not in self.backend_params or self.backend_params['model_path'] is None:
-            return None, None
-        md5sum = self._verify_model_location_and_get_md5sum(
+            return None, None, None
+        md5sum, sha256sum = self._verify_model_location_and_get_hash(
             self.backend_params['model_path'])
         model_path = self.backend_params['model_path']
 
         if "copy_original_model" in self.backend_params and self.backend_params['copy_original_model'] is True:
             model_path = self._copy_model_to_path(model_path, save_path)
 
-        return model_path, md5sum
+        return model_path, md5sum, sha256sum
 
     def load_model(self):
         backend_type = self.get_backed_model_type()

@@ -199,13 +199,13 @@ class TorchExportBackend(ExportBackend):
                     f"  - self.{buffer_name}: intialized as {getattr(m, buffer_name)}")
         return m
 
-    def save(self, save_path: str, compiled_model: torch.jit.ScriptModule = None) -> Tuple[str, str]:
+    def save(self, save_path: str, compiled_model: torch.jit.ScriptModule = None) -> Tuple[str, str, str]:
         if compiled_model is None:
             compiled_model = self.compiled_model
         path = os.path.join(save_path, f"{self.node_context.name}.pt")
         compiled_model.save(path)
-        md5sum = self._verify_model_location_and_get_md5sum(path)
-        return path, md5sum
+        md5sum, sha256sum = self._verify_model_location_and_get_hash(path)
+        return path, md5sum, sha256sum
 
     def compile(self) -> torch.jit.ScriptModule:
         raise NotImplementedError(
