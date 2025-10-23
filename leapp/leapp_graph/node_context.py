@@ -15,24 +15,23 @@
 # limitations under the License.
 #
 
-from .utils import extract_return_names, describe_io, CompactYamlList, CompactYamlDict
-from .utils import (
+from leapp.utils import (
+    extract_return_names,
+    describe_io,
     safe_deepcopy,
     get_atrribute_value_from_frame,
     tag_data,
-    resolve_tensor_descriptions_to_names,
     extract_source_from_line_range
 )
+from .graph_element import LeappGraphElement
 import inspect
 
 
-class NodeContext:
+class NodeContext(LeappGraphElement):
     def __init__(self, name, node_index, from_function, logger=None, backend=None, use_trace=False,
                  backend_params=None, inputs=None, outputs=None, environment_constants=None,
                  register_buffers=None, enable_fp16=False, enable_cuda_graphs=False):
-        self.name = name
-        self.node_index = node_index
-        self.logger = logger
+        super().__init__(name, node_index, logger, backend)
         # input parameters
         # this variable is for temporary use only,
         # all data will be stored in self.inputs after the function is executed
@@ -40,8 +39,6 @@ class NodeContext:
             self._declared_inputs = inputs
         else:
             self._declared_inputs = []
-        self.inputs = []
-
         # output parameters
         # this variable is for temporary use only,
         # all data will be stored in self.outputs after the function is executed
@@ -49,9 +46,6 @@ class NodeContext:
             self._declared_outputs = outputs
         else:
             self._declared_outputs = []
-        self.outputs = []
-        self.input_formats = []
-        self.output_formats = []
 
         # node settings
         self.from_function = from_function
@@ -63,8 +57,6 @@ class NodeContext:
             self.register_buffers = set(register_buffers)
         else:
             self.register_buffers = set()
-        self.enable_fp16 = enable_fp16
-        self.enable_cuda_graphs = enable_cuda_graphs
 
         # Check for overlap between register_buffers and environment_constants
         overlap = self.register_buffers & self.environment_constants
@@ -75,15 +67,12 @@ class NodeContext:
             )
 
         # model settings
-        self.model_device = None
-        self.use_trace = use_trace
-        self.model_path = None
-        self.md5sum = None
-        self.export_backend = self._setup_backend(backend, backend_params)
-
-        # state options
-        self.tracing = False
-        self.trace_counter = 0
+        # overwrite backend depending on using trace
+        if use_trace:
+            self.backend = "torch-trace"
+        else:
+            self.backend = "torch-script"
+        self.export_backend = self._setup_backend(self.backend, backend_params)
 
         # source code:
         self.executed_lines = {
@@ -100,80 +89,10 @@ class NodeContext:
 
         self.logger.info(f"Node context initialized: {self.name}")
 
-    def export_model(self, save_path):
-        self.model_path, self.md5sum = self.export_backend(save_path)
-        self.model_device = 'cuda'
-
-    def _setup_backend(self, backend, backend_params):
-        export_backend = None
-        if backend is None:
-            from leapp.backends.export_backend import NoneExportBackend
-            export_backend = NoneExportBackend(
-                self, self.logger, backend_params)
-        elif backend == "torch":
-            if self.use_trace:
-                from leapp.backends.torch import TorchTraceExportBackend
-                export_backend = TorchTraceExportBackend(
-                    self, self.logger, backend_params)
-            else:
-                from leapp.backends.torch import TorchScriptExportBackend
-                export_backend = TorchScriptExportBackend(
-                    self, self.logger, backend_params)
-        elif backend == "onnx":
-            raise Exception("ONNX backend not implemented")
-        elif backend == "cpp":
-            raise Exception("C++ backend not implemented")
-        elif backend == "py":
-            raise Exception("Python backend not implemented")
-        else:
-            raise Exception(
-                f"{self.name} Unexpected backend: {backend}, \n"
-                "please use one of the following: torch, onnx, cpp, py")
-
-        return export_backend
-
-    def get_description(self, description_types):
-        # dynamically generate i/o descriptions depending on need
-        # Directly use the TensorDescription objects in self.inputs
-        input_descriptions = [input.dict() for input in self.inputs]
-        # Resolve TensorDescription objects in input_formats to their string names
-        input_formats = CompactYamlList(
-            resolve_tensor_descriptions_to_names(self.input_formats))
-
-        # Directly use the TensorDescription objects in self.outputs
-        output_descriptions = [output.dict() for output in self.outputs]
-        # Resolve TensorDescription objects in output_formats to their string names
-        output_formats = resolve_tensor_descriptions_to_names(
-            self.output_formats)
-        if len(output_formats) == 1:
-            output_formats = output_formats[0]
-        if isinstance(output_formats, list):
-            output_formats = CompactYamlList(output_formats)
-        elif isinstance(output_formats, dict):
-            output_formats = CompactYamlDict(output_formats)
-
-        description = {}
-        description['inputs'] = input_descriptions
-        description['outputs'] = output_descriptions
-        description['parameters'] = {
-            'model_path': self.model_path,
-            'md5sum': self.md5sum,
-            'device': self.model_device,
-            'is_engine_path': self.is_engine_path(),
-            'backend': self.export_backend.get_backed_model_type(),
-            'enable_fp16': self.enable_fp16,
-            'enable_cuda_graphs': self.enable_cuda_graphs,
-        }
-        description['formatting'] = {
-            'input_format': input_formats,
-            'output_format': output_formats,
-        }
-
-        return description
+    def compile_model(self):
+        self.compiled_model = self.export_backend.compile()
 
     def compile_trace(self):
-        self.trace_counter += 1
-        self.tracing = False
 
         # Extract source code when tracing stops
         self.executed_lines['source_code'], message = extract_source_from_line_range(
@@ -325,8 +244,3 @@ class NodeContext:
         for output in self.outputs:
             if output.name_str == old_name:
                 output.change_name(new_name)
-
-    def is_engine_path(self):
-        if self.export_backend.get_backed_model_type() == 'trt':
-            return True
-        return False

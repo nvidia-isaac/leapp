@@ -21,10 +21,11 @@ import inspect
 import yaml
 import os
 import time
-from .node_context import NodeContext
 from .utils import CompactYamlList, CompactYamlDict, get_relative_path, get_system_info
 from .logging import LeappLogger
-from .leapp_graph import LeappGraph
+from leapp.leapp_graph.leapp_graph import LeappGraph
+from leapp.leapp_graph.node_context import NodeContext
+from .enums import MergeCfgEnum
 
 
 class ExportManager:
@@ -352,8 +353,7 @@ class ExportManager:
         models = {"models": {}}
         for node in self.nodes.values():
             self.logger.info(f"Compiling parameters for {node.name}")
-            description = node.get_description(
-                ['inputs', 'outputs', 'parameters', 'input_format', 'output_format'])
+            description = node.get_description()
             if 'parameters' in description and 'model_path' in description['parameters']:
                 # Convert model path to be relative to YAML file location
                 model_path = description['parameters']['model_path']
@@ -364,28 +364,42 @@ class ExportManager:
         return models
 
     def compile_models(self):
-        if self.SAVE_PATH is None:
-            raise Exception(
-                "Error: No save path provided, please provide a save path to export the graph")
-        if not os.path.exists(self.SAVE_PATH):
-            os.makedirs(self.SAVE_PATH)
-
         self.logger.section(f"Discovered {len(self.nodes)} nodes")
         for node_context in self.nodes.values():
             self.logger.section(f"Compiling {node_context.name}")
-            node_context.export_model(self.SAVE_PATH)
+            node_context.compile_model()
+            self.logger.info("Success\n")
+
+    def save_models(self):
+        if self.SAVE_PATH is None:
+            raise Exception(
+                "Error: No save path provided, please provide a save path to export the graph")
+        self.logger.section(
+            f"Saving {len(self.nodes)} models to {self.SAVE_PATH}")
+        if not os.path.exists(self.SAVE_PATH):
+            os.makedirs(self.SAVE_PATH)
+        for node_context in self.nodes.values():
+            self.logger.info(
+                f"Saving {node_context.name}")
+            node_context.save_model(self.SAVE_PATH)
             self.logger.info("Success\n")
 
     #########################################################
     # graph compilation
     #########################################################
-    def compile_graph(self, visualize=True):
+    def compile_graph(self, visualize=True, merge_nodes: MergeCfgEnum = MergeCfgEnum.NO_MERGE):
         # compile models first before input name reconciliation
         self.compile_models()
 
         # builds the graph connections. this may change input and output names
+        if not isinstance(merge_nodes, MergeCfgEnum):
+            raise Exception(
+                f"Error: merge_nodes must be an instance of MergeCfgEnum, got {type(merge_nodes)}")
         graph = LeappGraph(self.logger, self.nodes)
+        graph.merge_nodes(merge_nodes)
         pipeline = graph.get_full_pipeline_description()
+
+        self.save_models()
 
         models = self.get_io_descriptions()
 

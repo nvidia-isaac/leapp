@@ -1,13 +1,12 @@
 import unittest
 import torch
 from leapp import annotate
-import os
+from .base import LEAPPFunctionalTestBase
 import shutil
 
 
-class TestUnsupportedFail(unittest.TestCase):
+class TestUnsupportedFail(LEAPPFunctionalTestBase):
     """Unit tests to see if unsupported io is properly handled"""
-    TEST_GRAPH_NAME = "test_graph"
 
     def test_same_variable_used_twice(self):
 
@@ -86,11 +85,6 @@ class TestUnsupportedFail(unittest.TestCase):
         except Exception as e:
             self.assertEqual(str(e),
                              "Error requesting input name change for funcC/input: detections is already in use")
-
-    def tearDown(self):
-        """Clean up after each test."""
-        if os.path.exists(self.TEST_GRAPH_NAME):
-            shutil.rmtree(self.TEST_GRAPH_NAME)
 
 
 if __name__ == '__main__':

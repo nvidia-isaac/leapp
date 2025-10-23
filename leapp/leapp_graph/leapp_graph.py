@@ -1,21 +1,53 @@
-from .utils import CompactYamlList
+from leapp.utils import CompactYamlList
+from leapp.enums import MergeCfgEnum
 from .graph_gui import visualize_graph
+from .leapp_combination_node import get_subgraph_node
 
 
 class LeappGraph:
     def __init__(self, logger, nodes):
         self.logger = logger
         self.nodes = nodes
+        self.node_name_map = {node.name: node.name for node in nodes.values()}
 
         # process graph connections
         self.logger.section("Processing Node Connections Using Tagged Values")
-        self.connections, self.feedback_connections = self._build_connections()
+        self.connections, self.feedback_connections = self._build_connections(
+            self.nodes)
 
         self.logger.section("Reconciling internal i/o names")
         self._reconcile_io_names(self.connections)
 
         self.logger.section("Discovering graph inputs and outputs")
-        self.graph_inputs, self.graph_outputs = self._compile_graph_io()
+        self.graph_inputs, self.graph_outputs = self._compile_graph_io(
+            self.nodes, self.connections, self.feedback_connections)
+
+    def merge_nodes(self, merge_nodes):
+        if merge_nodes != MergeCfgEnum.NO_MERGE:
+            self.logger.section(
+                f"Merging nodes with the {merge_nodes.value} configuration")
+
+        num_merged = 0
+
+        if merge_nodes == MergeCfgEnum.NO_MERGE:
+            return
+        elif merge_nodes == MergeCfgEnum.AUTOMATIC:
+            merged_node_list, num_merged = self._merge_nodes_automatically()
+        elif merge_nodes == MergeCfgEnum.SIGNATURE:
+            raise NotImplementedError(
+                "Signature merging is not implemented yet")
+
+        # Rediscover connections after merging nodes
+        if num_merged:
+            self.logger.info(f"Successfully merged {num_merged} nodes")
+            self.logger.info("Rediscovering connections after node merge")
+            self.connections, self.feedback_connections = self._build_connections(
+                self.nodes)
+            self.logger.section("Rediscovering graph inputs and outputs")
+            self.graph_inputs, self.graph_outputs = self._compile_graph_io(
+                self.nodes, self.connections, self.feedback_connections)
+
+        return merged_node_list
 
     def get_full_pipeline_description(self):
         processed_connections = self._finalize_connections(self.connections)
@@ -72,10 +104,10 @@ class LeappGraph:
             processed_connections[source_port] = target_ports
         return processed_connections
 
-    def _build_connections(self):
+    def _build_connections(self, nodes):
         connections = {}
         feedback_connections = {}
-        for node in self.nodes.values():
+        for node in nodes.values():
             # first check if any duplicate tags. duplicates are not suppported
             tags = [input.tag for input in node.inputs if input.tag is not None]
             duplicates = set([tag for tag in tags if tags.count(tag) > 1])
@@ -92,12 +124,12 @@ class LeappGraph:
                 else:
                     source_node_name = input.tag.split('/')[0]
 
-                    source_node = self.nodes[source_node_name]
+                    source_node = nodes[self.node_name_map[source_node_name]]
                     source_node_output_ports = [
                         output.tag for output in source_node.outputs]
                     if input.tag not in source_node_output_ports:
                         raise Exception(
-                            f"Error: {source_node_name} does not produce tag {input.tag}")
+                            f"Error: {source_node.name} does not produce tag {input.tag}")
 
                     out_idx = source_node_output_ports.index(input.tag)
 
@@ -126,20 +158,20 @@ class LeappGraph:
 
         return list(connections.values()), list(feedback_connections.values())
 
-    def _compile_graph_io(self):
+    def _compile_graph_io(self, nodes, connections, feedback_connections):
         # any inputs and outputs that are not connected to any nodes are outside connections
         graph_inputs = []
         graph_outputs = []
 
         # Collect all target ports (destinations) from both forward and feedback connections
         all_target_ports = set()
-        for connection in self.connections:
+        for connection in connections:
             for target in connection['targets']:
                 target_port = target['node'].name + '/' + \
                     target['node'].inputs[target['idx']].name_str
                 all_target_ports.add(target_port)
 
-        for connection in self.feedback_connections:
+        for connection in feedback_connections:
             for target in connection['targets']:
                 target_port = target['node'].name + '/' + \
                     target['node'].inputs[target['idx']].name_str
@@ -147,20 +179,20 @@ class LeappGraph:
 
         # Collect all source ports from both forward and feedback connections
         all_source_ports = set()
-        for connection in self.connections:
+        for connection in connections:
             source = connection['source']
             source_port = source['node'].name + '/' + \
                 source['node'].outputs[source['idx']].name_str
             all_source_ports.add(source_port)
 
-        for connection in self.feedback_connections:
+        for connection in feedback_connections:
             source = connection['source']
             source_port = source['node'].name + '/' + \
                 source['node'].outputs[source['idx']].name_str
             all_source_ports.add(source_port)
 
         # Find dangling inputs and outputs
-        for node in self.nodes.values():
+        for node in nodes.values():
             # An input is dangling if it's not the target of any internal connection
             for input_desc in node.inputs:
                 input_name = input_desc.name_str
@@ -205,3 +237,54 @@ class LeappGraph:
                                 "please make sure to match io names in the source code")
         else:
             self.logger.info("no names changed")
+
+    def _merge_nodes_automatically(self):
+        merged = 0
+        node_groups = []
+
+        node_groups = []
+        connection_candidates = {}
+        for connection in self.connections:
+            if len(connection['targets']) != 1:
+                continue  # this connection is not a simple output to input connection
+            source = connection['source']['node']
+            target = connection['targets'][0]['node']
+            if source not in connection_candidates:
+                connection_candidates[source] = []
+            elif target is not connection_candidates[source][0]:
+                continue  # this connection is not a simple output to input connection
+            connection_candidates[source].append(target)
+
+        for source, connections in connection_candidates.items():
+            target = connections[0]
+            if len(connections) != len(target.inputs) or len(connections) != len(source.outputs):
+                continue  # this connection has unaccounted for inputs or outputs
+
+            valid_group = set([source, target])
+            for node_group in node_groups:
+                if valid_group.intersection(node_group):
+                    node_group.update(valid_group)
+                    break
+            else:
+                node_groups.append(valid_group)
+
+        for group in node_groups:
+            current_group_sorted = sorted(
+                list(group), key=lambda x: x.node_index)
+            name = current_group_sorted[0].name
+            for node in current_group_sorted[1:]:
+                name += "-" + node.name
+            self.logger.info("Creating merged node: " + name)
+            subgraph_node = get_subgraph_node(
+                name=name, nodes=current_group_sorted, logger=self.logger)
+
+            # Remove all nodes in the group from self.nodes
+            for node in current_group_sorted:
+                self.node_name_map[node.name] = subgraph_node.name
+                del self.nodes[node.name]
+                merged += 1
+
+            # Insert the subgraph node
+            self.nodes[subgraph_node.name] = subgraph_node
+
+        return self.nodes, merged

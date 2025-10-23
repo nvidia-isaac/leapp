@@ -1,11 +1,10 @@
 import unittest
+from .base import LEAPPFunctionalTestBase
 import torch
 from leapp import annotate
-import os
-import shutil
 
 
-class TestExportSituation(unittest.TestCase):
+class TestExportSituation(LEAPPFunctionalTestBase):
     """
     Unit tests to see if export situation is properly handled
 
@@ -13,7 +12,6 @@ class TestExportSituation(unittest.TestCase):
     snippet that we want to support
 
     """
-    TEST_GRAPH_NAME = "test_graph"
 
     def test_export_nnModule_function(self):
         linear = torch.nn.Linear(3, 3)
@@ -42,11 +40,6 @@ class TestExportSituation(unittest.TestCase):
         moduleA()(torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32))
         annotate.stop()
         annotate.compile_graph(visualize=False)
-
-    def tearDown(self):
-        """Clean up after each test."""
-        if os.path.exists(self.TEST_GRAPH_NAME):
-            shutil.rmtree(self.TEST_GRAPH_NAME)
 
 
 if __name__ == '__main__':

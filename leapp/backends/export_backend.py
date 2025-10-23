@@ -1,5 +1,5 @@
 import abc
-from typing import Tuple
+from typing import Tuple, Any
 import os
 import hashlib
 import shutil
@@ -48,27 +48,52 @@ class ExportBackend(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def __call__(self, save_path: str, func: callable, **kwargs) -> Tuple[str, str]:
+    def compile(self) -> Any:
         raise NotImplementedError
-        return None, None
+
+    @abc.abstractmethod
+    def save(self, save_path: str) -> Tuple[str, str]:
+        raise NotImplementedError
 
 
 class NoneExportBackend(ExportBackend):
-    def __call__(self, save_path: str, **kwargs) -> Tuple[str, str]:
+    def __call__(self) -> Any:
+        return self.compile()
+
+    def compile(self) -> Any:
         if "model_path" not in self.backend_params:
             self.logger.warning(
                 f"No model path provided for {self.node_context.name}")
             self.logger.warning("if this is intentional, please provide a path to the correct model "
                                 "in the generated yaml file. Otherwise, please manually fill in the backend parameters.")
-            return None, None
+            return None
 
+        # try to load the model if possible
+        loaded_model = self.load_model()
+
+        return loaded_model
+
+    def save(self, save_path: str) -> Tuple[str, str]:
+        if "model_path" not in self.backend_params or self.backend_params['model_path'] is None:
+            return None, None
         md5sum = self._verify_model_location_and_get_md5sum(
             self.backend_params['model_path'])
         model_path = self.backend_params['model_path']
-        if "copy_original_model" in self.backend_params and self.backend_params['copy_original_model'] is False:
+
+        if "copy_original_model" in self.backend_params and self.backend_params['copy_original_model'] is True:
             model_path = self._copy_model_to_path(model_path, save_path)
 
         return model_path, md5sum
+
+    def load_model(self):
+        backend_type = self.get_backed_model_type()
+        if backend_type == "torch":
+            import torch
+            return torch.jit.load(self.backend_params['model_path'])
+        else:
+            self.logger.warning(
+                f"LEAPP detected a {backend_type} model, but no load method is implemented for this backend")
+            return None
 
     def get_backed_model_type(self):
         if "model_path" not in self.backend_params:
@@ -76,15 +101,17 @@ class NoneExportBackend(ExportBackend):
 
         path = self.backend_params['model_path']
         suffix = path.split('.')[-1]
-        if suffix == 'pt' or suffix == 'pt2':
+        if suffix == 'pt':
             return "torch"
+        elif suffix == 'pt2':
+            return "torchscript2"
         elif suffix == 'onnx':
             return "onnx"
         elif suffix == 'cpp' or suffix == "cc":
             return "cpp"
         elif suffix == 'py':
             return "py"
-        elif suffix == 'engine':
+        elif suffix == 'engine' or suffix == 'plan':
             return 'trt'
         else:
             raise Exception(

@@ -2,15 +2,12 @@
 import unittest
 import torch
 from leapp import annotate
-from leapp.utils import print_torchscript_model_info, inspect_torchscript_model
+from leapp.utils import inspect_torchscript_model
+from .base import LEAPPFunctionalTestBase
 import os
-import shutil
 
 
-class TestConnectionCase(unittest.TestCase):
-    """Unit tests to see if connections between nodes are properly handled"""
-    TEST_GRAPH_NAME = "test_graph"
-
+class TestAnnotateMethod(LEAPPFunctionalTestBase):
     def test_annotate_method(self):
         """tests the basic situation of using the annotate.method decorator"""
         @annotate.method(export_with="torch")
@@ -77,11 +74,6 @@ class TestConnectionCase(unittest.TestCase):
         model_info = inspect_torchscript_model(model)
         self.assertEqual(len(model_info['inputs']), 2)
         self.assertEqual(len(model_info['outputs']), 1)
-
-    def tearDown(self):
-        """Clean up after each test."""
-        if os.path.exists(self.TEST_GRAPH_NAME):
-            shutil.rmtree(self.TEST_GRAPH_NAME)
 
 
 if __name__ == '__main__':

@@ -199,43 +199,45 @@ class TorchExportBackend(ExportBackend):
                     f"  - self.{buffer_name}: intialized as {getattr(m, buffer_name)}")
         return m
 
-    def __call__(self, save_path, func, **kwargs):
-        raise Exception("TorchExportBackend is not callable")
+    def save(self, save_path: str, compiled_model: torch.jit.ScriptModule = None) -> Tuple[str, str]:
+        if compiled_model is None:
+            compiled_model = self.compiled_model
+        path = os.path.join(save_path, f"{self.node_context.name}.pt")
+        compiled_model.save(path)
+        md5sum = self._verify_model_location_and_get_md5sum(path)
+        return path, md5sum
+
+    def compile(self) -> torch.jit.ScriptModule:
+        raise NotImplementedError(
+            "TorchExportBackend does not support compilation")
+        return None
 
 
 class TorchTraceExportBackend(TorchExportBackend):
-    def __call__(self, save_path, **kwargs):
-        # traced torchscript does not support buffers, all non input values are frozen
+    def compile(self):
         if not len(self.node_context.register_buffers) == 0:
             raise Exception(
-                "TorchScriptExportBackend does not support buffers")
+                "TorchTraceExportBackend does not support buffers, "
+                "consider using export_with='torch' without use_trace=True")
         m = self.create_module_from_source()
         inputs = resolve_tensor_descriptions_to_values(
-            self.node_context.format)
-        scripted_model = torch.jit.trace(m, inputs, **self.backend_params)
+            self.node_context.input_formats)
+
+        self.compiled_model = torch.jit.trace(m, inputs, **self.backend_params)
         if isinstance(m, torch.nn.Module) and hasattr(m, 'forward'):
-            torch.jit.freeze(scripted_model.eval(),
+            torch.jit.freeze(self.compiled_model.eval(),
                              preserved_attrs=m.saved_buffers)
 
-        path = os.path.join(save_path, f"{self.node_context.name}.pt")
-        scripted_model.save(path)
-
-        md5sum = self._verify_model_location_and_get_md5sum(path)
-        return path, md5sum
+        return self.compiled_model
 
 
 class TorchScriptExportBackend(TorchExportBackend):
-    def __call__(self, save_path, **kwargs):
+    def compile(self):
         m = self.create_module_from_source()
-        scripted_model = torch.jit.script(m, **self.backend_params)
+        self.compiled_model = torch.jit.script(m, **self.backend_params)
 
         if isinstance(m, torch.nn.Module) and hasattr(m, 'forward'):
-            torch.jit.freeze(scripted_model.eval(),
+            torch.jit.freeze(self.compiled_model.eval(),
                              preserved_attrs=m.saved_buffers)
 
-        path = os.path.join(save_path, f"{self.node_context.name}.pt")
-        scripted_model.save(path)
-
-        self.node_context.model_path = path
-        md5sum = self._verify_model_location_and_get_md5sum(path)
-        return path, md5sum
+        return self.compiled_model

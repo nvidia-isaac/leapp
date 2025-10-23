@@ -483,6 +483,136 @@ def resolve_tensor_descriptions_to_values(io_format):
     return _resolve_tensor_descriptions(io_format, lambda td: td.value)
 
 
+def reconstruct_from_named_dict(named_dict, io_format, use_tag_first=True):
+    """
+    Reverse of describe_io_helper: reconstruct data structure from named dict and format.
+
+    Takes a dictionary mapping names/tags to actual data values and an io_format structure,
+    and reconstructs the original nested data structure.
+
+    Args:
+        named_dict: Dictionary mapping names or tags to actual data values
+        io_format: The format structure returned by describe_io_helper (can be TensorDescription objects or strings)
+        use_tag_first: If True, try to lookup by tag first, then by name. If False, use name only.
+
+    Returns:
+        The reconstructed data structure with the same shape as the original
+
+    Example:
+        # Original data
+        data = {'a': tensor1, 'b': [tensor2, tensor3]}
+
+        # Describe it
+        desc, fmt = describe_io_helper(data, "root", "python")
+
+        # Later reconstruct from a named dict
+        named = {'root.a': new_tensor1, 'root.b.0': new_tensor2, 'root.b.1': new_tensor3}
+        reconstructed = reconstruct_from_named_dict(named, fmt)
+        # reconstructed = {'a': new_tensor1, 'b': [new_tensor2, new_tensor3]}
+    """
+    def resolve(item):
+        if isinstance(item, TensorDescription):
+            # Try to find the value in named_dict
+            # First try by tag if it exists
+            if item.tag is not None and item.tag in named_dict:
+                return named_dict[item.tag]
+
+            # Then try by name
+            if item.name in named_dict:
+                return named_dict[item.name]
+
+            raise KeyError(
+                f"Could not find data for TensorDescription with name='{item.name}' and tag='{item.tag}' in named_dict")
+        elif isinstance(item, str):
+            # If it's a string, look it up directly in named_dict
+            if item in named_dict:
+                return named_dict[item]
+            raise KeyError(
+                f"Could not find data for key '{item}' in named_dict")
+        elif isinstance(item, list):
+            return [resolve(sub_item) for sub_item in item]
+        elif isinstance(item, dict):
+            return {key: resolve(value) for key, value in item.items()}
+        else:
+            # Return as-is for other types
+            return item
+
+    return resolve(io_format)
+
+
+def flatten_to_named_dict(data, io_format, use_tag_first=True):
+    """
+    Flatten a nested data structure to a dictionary using io_format as a guide.
+
+    This is the inverse of reconstruct_from_named_dict: given a nested data structure
+    and its corresponding format, it creates a flat dictionary mapping tags/names to values.
+
+    Args:
+        data: The nested data structure (can be tensor, list, dict, etc.)
+        io_format: The format structure (containing TensorDescription objects)
+        use_tag_first: If True, use tag as key if available, otherwise use name
+
+    Returns:
+        Dictionary mapping tags/names to actual values
+
+    Example:
+        # Original data
+        data = {'a': tensor1, 'b': [tensor2, tensor3]}
+
+        # Describe it to get format
+        desc, fmt = describe_io_helper(data, "root", "python")
+
+        # Flatten it back
+        flat = flatten_to_named_dict(data, fmt)
+        # flat = {'root.a': tensor1, 'root.b.0': tensor2, 'root.b.1': tensor3}
+    """
+    result = {}
+
+    def flatten(data_item, format_item):
+        if isinstance(format_item, TensorDescription):
+            # Extract the key (tag or name)
+            if use_tag_first and format_item.tag is not None:
+                key = format_item.tag
+            else:
+                key = format_item.name
+
+            # Store the value
+            result[key] = data_item
+
+        elif isinstance(format_item, list):
+            # Both should be lists
+            if not isinstance(data_item, list):
+                raise TypeError(
+                    f"Format expects a list but data is {type(data_item)}")
+            if len(data_item) != len(format_item):
+                raise ValueError(
+                    f"List length mismatch: data has {len(data_item)} items, "
+                    f"format expects {len(format_item)}")
+
+            for data_sub, format_sub in zip(data_item, format_item):
+                flatten(data_sub, format_sub)
+
+        elif isinstance(format_item, dict):
+            # Both should be dicts
+            if not isinstance(data_item, dict):
+                raise TypeError(
+                    f"Format expects a dict but data is {type(data_item)}")
+            if set(data_item.keys()) != set(format_item.keys()):
+                raise ValueError(
+                    f"Dict keys mismatch: data has {set(data_item.keys())}, "
+                    f"format expects {set(format_item.keys())}")
+
+            for key in format_item.keys():
+                flatten(data_item[key], format_item[key])
+        else:
+            # For other types, we don't have a good way to extract a key
+            # This shouldn't normally happen if format was created by describe_io_helper
+            pass
+
+    flatten(data, io_format)
+    return result
+
+
 def safe_deepcopy(data):
     if isinstance(data, torch.Tensor):
         return data.clone()
