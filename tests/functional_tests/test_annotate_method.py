@@ -126,6 +126,25 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
         self.assertTrue(torch.equal(
             model(torch.tensor([1]), torch.tensor([2]), torch.tensor([3])), outputA))
 
+    def test_annotate_method_with_multiple_unnamed_returns(self):
+        """tests the situation where the function has multiple unnamed returns"""
+        @annotate.method(export_with="torch")
+        def funcA(input1: torch.Tensor):
+            return input1+1, input1+2, input1+3
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        outputA, outputB, outputC = funcA(torch.tensor([1]))
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+
+        self.assertEqual(len(annotate.nodes), 1)
+        self.assertEqual(len(annotate.nodes[funcA.__name__].inputs), 1)
+        self.assertEqual(len(annotate.nodes[funcA.__name__].outputs), 3)
+
+        model = torch.jit.load(os.path.join(
+            self.TEST_GRAPH_NAME, funcA.__name__+".pt"))
+        self.assertEqual(model(torch.tensor([1])), (outputA, outputB, outputC))
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
