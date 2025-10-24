@@ -1,6 +1,6 @@
-# Diving Deeper with LEAPP
+# Advanced Node Configuration with LEAPP
 
-This guide dives deeper into specific scenarios you might encounter when using LEAPP for complex computational graphs. Unlike the getting started guide, this focuses on particular situations rather than end-to-end examples.
+This guide dives deeper into specific scenarios you might encounter when using LEAPP for complex nodes. Unlike the getting started guide, this focuses on particular situations rather than end-to-end examples.
 
 ## Environment Constants: Referencing External Data
 
@@ -244,10 +244,10 @@ annotate.stop()
 annotate.compile_graph() #failure on this line
 ```
 #### Why does this fail?
-this example passes the output of funcA `detections` to `funcB` and `funcC`. `funcC` function signature register detections as input while also containing a detections field. During io reconciliation, LEAPP tries to update the `funcC` input name to detections which causes an unresolvable confict with the other input. 
+this example passes the output of funcA `detections` to `funcB` and `funcC`. `funcC` function signature register detections as input while also containing a detections field. During io reconciliation, LEAPP tries to update the `funcC` input name to detections which causes an unresolvable conflict with the other input. 
 
 ### Best Practices to Avoid Issues
-The best way to avoid these issues is to avoid io reconsiliation alltogether. For that we should try to use clear and consistent naming throuout. Reconsiliation is for cases where that is not possible and as a last resort.
+The best way to avoid these issues is to avoid io reconciliation altogether. For that we should try to use clear and consistent naming throughout. Reconciliation is for cases where that is not possible and as a last resort.
 ```python
 # GOOD: Consistent naming throughout the pipeline
 ```python
@@ -259,7 +259,7 @@ def funcA(input: torch.Tensor):
 
 @annotate.method()
 def funcB(detections):
-    retval = troch.tensor([])
+    retval = torch.tensor([])
     #some processing
     return functionB_retval
 @annotate.method()
@@ -286,12 +286,6 @@ When you see the warning about IO names being changed:
    - Function parameter names
    - Declared input/output names in blocks
    - Actual variable usage in your code
-
-```python
-# The generated forward method will show you what LEAPP expects:
-# def forward(self, sensor_data: Tensor, movement_speed: Tensor) -> Tensor:
-#     # Your code must use these exact parameter names
-```
 
 ## Summary
 

@@ -74,6 +74,27 @@ class ExportManager:
             ExportManager._initialized = True
 
     def start(self, name, save_path=".", verbose=False):
+        """Initialize and start LEAPP graph interpretation.
+
+        This method prepares the export manager for tracing by setting up the graph name,
+        creating the save directory, configuring the logger, and enabling graph interpretation.
+        If graph interpretation is already active, it will reset the current graph state.
+
+        Args:
+            name (str): The name of the graph to be created. This will be used as the 
+                directory name where graph artifacts are saved.
+            save_path (str, optional): The base directory path where the graph directory 
+                will be created. Defaults to "." (current directory).
+            verbose (bool, optional): If True, enables verbose logging output. 
+                Defaults to False.
+
+        Returns:
+            None
+
+        Note:
+            - The full save path will be: {save_path}/{name}/
+            - Calling start() while interpretation is already active will reset the graph. This is discouraged.
+        """
         self.GRAPH_NAME = name
         self.SAVE_PATH = os.path.join(save_path, self.GRAPH_NAME)
         if not os.path.exists(self.SAVE_PATH):
@@ -92,6 +113,26 @@ class ExportManager:
         self.intepret_graph = True
 
     def stop(self):
+        """Stop LEAPP graph interpretation and disable tracing.
+
+        This method disables graph interpretation mode that was previously enabled by start().
+        It performs safety checks to ensure that no active tracing is in progress and that
+        graph interpretation is currently enabled before stopping.
+
+        Args:
+            None
+
+        Returns:
+            None
+
+        Raises:
+            Exception: If ExportManager is currently in the middle of tracing a node.
+            Exception: If graph interpretation is not currently enabled.
+
+        Note:
+            - This method should only be called after start() has been called.
+            - Ensure all active tracing operations are completed before calling stop().
+        """
         if ExportManager._is_tracing:
             raise Exception("ExportManager is currently tracing")
             ExportManager._is_tracing = False
@@ -233,12 +274,38 @@ class ExportManager:
     def block(self, node_name, **kwargs):
         """Create a context manager for tracing a block of code in the computational graph.
 
+        This method initializes a context manager that traces a specific block of code when 
+        used with a 'with' statement. It captures inputs, outputs, and execution details of 
+        the code block to create a node in the LEAPP computational graph.
+
         Args:
-            node_name: Name of the node to trace
-            **kwargs: Additional parameters for node configuration
+            node_name (str): The unique name to identify this node in the computational graph.
+            **kwargs: Additional parameters for node configuration. Supported options include:
+                - export_with: Backend to use for exporting the model.
+                - backend_params: Parameters for the export backend.
+                - use_trace: Whether to use tracing for model compilation.
+                - inputs: Input specifications for the node.
+                - outputs: Output specifications for the node.
+                - environment_constants: Constants to capture from the environment.
+                - register_buffers: Buffers to register with the model.
+                - enable_fp16: Enable FP16 precision mode.
+                - enable_cuda_graphs: Enable CUDA graphs optimization.
 
         Returns:
-            Self for use as a context manager
+            ExportManager: Self reference for use as a context manager with 'with' statement.
+
+        Example:
+            ```python
+            with export_manager.block("preprocessing_block"):
+                # Code to be traced
+                data = preprocess(raw_input)
+                result = transform(data)
+            ```
+
+        Note:
+            - Must be used with a 'with' statement to properly enter and exit tracing.
+            - Graph interpretation must be enabled via start() before using this method.
+            - The traced code block should not contain nested block() or method() annotations.
         """
         if not self.intepret_graph:
             return self
@@ -290,6 +357,36 @@ class ExportManager:
             f"****Tracing stopped for {node_context.name}****\n\n")
 
     def method(self, **params):
+        """Create a decorator for tracing functions/methods in the computational graph.
+
+        This method returns a decorator that wraps functions to trace their execution,
+        capturing inputs, outputs, and execution details to create nodes in the LEAPP 
+        computational graph. The decorated function becomes a traceable node that can
+        be connected with other nodes in the graph.
+
+        Args:
+            **params: Configuration parameters for the node. Supported options include:
+                - node_name (str): Custom name for the node. If not provided, uses the 
+                  function's name.
+                - export_with: Backend to use for exporting the model.
+                - backend_params: Parameters for the export backend.
+                - use_trace: Whether to use tracing for model compilation.
+                - inputs: Input specifications for the node.
+                - outputs: Output specifications for the node.
+                - environment_constants: Constants to capture from the environment.
+                - register_buffers: Buffers to register with the model.
+                - enable_fp16: Enable FP16 precision mode.
+                - enable_cuda_graphs: Enable CUDA graphs optimization.
+
+        Returns:
+            decorator: A decorator function that can be applied to functions/methods.
+
+        Note:
+            - Graph interpretation must be enabled via start() before decorated functions are called.
+            - The decorator preserves the original function's metadata using functools.wraps.
+            - Functions decorated with method() should not contain nested block() or method() annotations.
+            - If graph interpretation is disabled, decorated functions execute normally without tracing.
+        """
         def decorator(func):
 
             if "node_name" in params:
@@ -388,6 +485,42 @@ class ExportManager:
     # graph compilation
     #########################################################
     def compile_graph(self, visualize=True, merge_nodes: MergeCfgEnum = MergeCfgEnum.NO_MERGE):
+        """Compile and save the computational graph from traced nodes.
+
+        This method performs the complete pipeline of compiling traced nodes into exportable
+        models, building graph connections, saving models to disk, and generating a YAML 
+        description of the entire computational graph. It also optionally creates a 
+        visualization of the graph structure.
+
+        Args:
+            visualize (bool, optional): If True, generates a visual representation of the 
+                graph structure and saves it to the output directory. The visualization 
+                will be created even if an error occurs during the process. 
+                Defaults to True.
+            merge_nodes (MergeCfgEnum, optional): Strategy for merging nodes in the graph.
+                Options from MergeCfgEnum include:
+                - NO_MERGE: Keep all nodes separate (default)
+                - MERGE_ALL: Merge all possible nodes
+                - MERGE_SEQUENTIAL: Merge only sequentially connected nodes (not available yet)
+                Defaults to MergeCfgEnum.NO_MERGE.
+
+        Returns:
+            None
+
+        Generated Artifacts:
+            - Compiles all traced models using the configured backend
+            - Saves compiled models to {SAVE_PATH}/ directory
+            - Creates {GRAPH_NAME}.yaml file with complete graph description
+            - Generates visualization files if visualize=True
+            - Updates self.detected_nodes and self.detected_pipeline attributes
+            - Prints graph statistics to the logger
+
+        Note:
+            - Must be called after tracing is complete and stop() has been called.
+            - The YAML file contains model descriptions, pipeline connections, and system info.
+            - Graph statistics include node count, dangling inputs/outputs, and edge counts.
+            - Visualization errors are logged but don't stop the compilation process.
+        """
         # compile models first before input name reconciliation
         self.compile_models()
 
