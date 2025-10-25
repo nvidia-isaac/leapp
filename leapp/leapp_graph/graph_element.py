@@ -46,17 +46,27 @@ class LeappGraphElement():
         # dynamically generate i/o descriptions depending on need
         # Directly use the TensorDescription objects in self.inputs
         input_descriptions = [input.dict() for input in self.inputs]
-        # Resolve TensorDescription objects in input_formats to their string names
-        input_formats = CompactYamlList(
-            resolve_tensor_descriptions_to_names(self.input_formats))
+
+        # Resolve ParameterFormat objects in input_formats to their string names
+        # input_formats is a list of ParameterFormat objects, resolve each one
+        resolved_input_formats = [resolve_tensor_descriptions_to_names(param_format)
+                                  for param_format in self.input_formats]
+        input_formats = CompactYamlList(resolved_input_formats)
 
         # Directly use the TensorDescription objects in self.outputs
         output_descriptions = [output.dict() for output in self.outputs]
-        # Resolve TensorDescription objects in output_formats to their string names
-        output_formats = resolve_tensor_descriptions_to_names(
-            self.output_formats)
-        if len(output_formats) == 1:
-            output_formats = output_formats[0]
+
+        # Resolve ParameterFormat objects in output_formats to their string names
+        # output_formats is a list of ParameterFormat objects, resolve each one
+        resolved_output_formats = [resolve_tensor_descriptions_to_names(param_format)
+                                   for param_format in self.output_formats]
+
+        # Handle single vs multiple outputs
+        if len(resolved_output_formats) == 1:
+            output_formats = resolved_output_formats[0]
+        else:
+            output_formats = resolved_output_formats
+
         if isinstance(output_formats, list):
             output_formats = CompactYamlList(output_formats)
         elif isinstance(output_formats, dict):

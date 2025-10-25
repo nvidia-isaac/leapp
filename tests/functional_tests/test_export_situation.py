@@ -57,6 +57,54 @@ class TestExportSituation(LEAPPFunctionalTestBase):
         annotate.stop()
         annotate.compile_graph(visualize=False)
 
+    def test_export_nnModule_with_dict_list_io(self):
+
+        @annotate.method(export_with="torch")
+        def funcA(inputA: dict):
+            list_conversion = list(inputA.values())
+            return list_conversion
+
+        input = {'a': torch.tensor([1]), 'b': torch.tensor(
+            [2]), 'c': torch.tensor([3]), 'd': torch.tensor([4])}
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        expected_output = funcA(input)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+
+        self.verify_num_connections(annotate, nodes=1, inputs=4, outputs=4,
+                                    internal_connections=0)
+        self.verify_single_torchscript_model_expected_value(
+            [input], [expected_output], funcA.__name__)
+
+        model_info = self.inspect_torchscript_model(funcA.__name__)
+        self.assertEqual(len(model_info['inputs']), 2)  # self and inputA
+        self.assertEqual(len(model_info['outputs']), 1)  # list_conversion
+
+    def test_export_nnModule_with_large_nested_dict_io(self):
+        @annotate.method(export_with="torch")
+        def funcA(inputA: dict, inputB):
+            underlying_values = inputA[0]['nested']
+            list_conversion = list(underlying_values.values())
+            return_values = list_conversion + [inputB]
+            return {'return_values': [return_values]}
+
+        input = [[{'nested': {'a': torch.tensor([1]), 'b': torch.tensor(
+            [2]), 'c': torch.tensor([3]), 'd': torch.tensor([4])}}], torch.tensor([5])]
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        expected_output = funcA(*input)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+
+        self.verify_num_connections(annotate, nodes=1, inputs=5, outputs=5,
+                                    internal_connections=0)
+        self.verify_single_torchscript_model_expected_value(
+            input, [expected_output], funcA.__name__)
+
+        model_info = self.inspect_torchscript_model(funcA.__name__)
+        # self, inputA, and inputB
+        self.assertEqual(len(model_info['inputs']), 3)
+        self.assertEqual(len(model_info['outputs']), 1)  # return_values
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

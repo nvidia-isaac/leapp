@@ -229,7 +229,7 @@ class LeappGraph:
         return graph_inputs, graph_outputs
 
     def _reconcile_io_names(self, connections):
-        names_changed = True
+        names_changed = False
         for connection in connections:
             source = connection['source']
             targets = connection['targets']

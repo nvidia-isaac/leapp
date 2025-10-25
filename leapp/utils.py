@@ -25,7 +25,7 @@ import os
 import sys
 import collections.abc
 from dataclasses import dataclass
-from typing import Optional, Any, Dict
+from typing import Optional, Any, Dict, Tuple
 
 
 def extract_source_from_line_range(executed_lines, from_function, context_name):
@@ -222,6 +222,64 @@ class TensorDescription:
         return self.name
 
 
+@dataclass
+class ParameterFormat:
+    name: str
+    formatting: Any
+
+    def get_format_string(self, data: Any) -> Tuple[bool, str]:
+        if isinstance(data, list):
+            item_types_valid = len(set(type(item) for item in data)) == 1
+            if not item_types_valid:
+                return False, "INCONSISTENT LIST ITEM TYPES"
+            else:
+                success, child = self.get_format_string(data[0])
+                if not success:
+                    return False, "LIST CHILD FORMAT STRING NOT VALID"
+                else:
+                    return True, f"List[{child}]"
+        elif isinstance(data, dict):
+            key_types = set(type(key) for key in data.keys())
+            if len(key_types) > 1 or key_types != {str}:
+                return False, "INCONSISTENT DICT KEY TYPES"
+            value_types = set(type(value) for value in data.values())
+            if len(value_types) > 1:
+                return False, "INCONSISTENT DICT VALUE TYPES"
+
+            success, child = self.get_format_string(
+                list(data.values())[0])
+            if not success:
+                return False, "DICT CHILD FORMAT STRING NOT VALID"
+            else:
+                return True, f"Dict[str, {child}]"
+
+        elif isinstance(data, TensorDescription):
+            return True, type(data.value).__name__
+
+        else:
+            return False, "UNEXPECTED TYPE"
+
+    @property
+    def name_str(self) -> str:
+        """Return just the name as a string."""
+        return self.name
+
+    @property
+    def dtype(self) -> str:
+        """Return the dtype as a string."""
+        success, dtype = self.get_format_string(self.formatting)
+        if not success:
+            return None
+        return dtype
+
+    @property
+    def valid(self):
+        a = self.get_format_string(self.formatting)
+        if not a:
+            return False
+        return True
+
+
 def verify_data_exact_match(source_data, target_data):
     if type(source_data) is not type(target_data):
         return False
@@ -379,7 +437,7 @@ def describe_io_helper(data, name_str, dtype_notation):
     if isinstance(data, list):
         io_format = []
         for idx, item in enumerate(data):
-            child_name = ".".join([name_str, str(idx)])
+            child_name = "_".join([name_str, str(idx)])
             child_description, child_format = describe_io_helper(
                 item, child_name, dtype_notation)
             io_format.append(child_format)
@@ -388,7 +446,7 @@ def describe_io_helper(data, name_str, dtype_notation):
     elif isinstance(data, dict):
         io_format = {}
         for k, v in data.items():
-            child_name = ".".join([name_str, k])
+            child_name = "_".join([name_str, k])
             child_description, child_format = describe_io_helper(
                 v, child_name, dtype_notation)
             io_format[k] = child_format
@@ -430,7 +488,9 @@ def describe_io_helper(data, name_str, dtype_notation):
 def describe_io(name, data, dtype_notation="python"):
     data_description, io_format = describe_io_helper(
         data, name, dtype_notation)
-    return data_description, io_format
+    parameter_description = ParameterFormat(name=name, formatting=io_format)
+    # FRANK DEBUG
+    return data_description, parameter_description
 
 
 def _resolve_tensor_descriptions(io_format, extractor):
@@ -441,13 +501,16 @@ def _resolve_tensor_descriptions(io_format, extractor):
     applies the extractor function to any TensorDescription objects found.
 
     Args:
-        io_format: The object to recursively process (can be TensorDescription, list, dict, or any other type)
+        io_format: The object to recursively process (can be TensorDescription, ParameterFormat, list, dict, or any other type)
         extractor: A function that takes a TensorDescription and returns the desired value
 
     Returns:
         The processed object with TensorDescription objects replaced by extracted values
     """
-    if isinstance(io_format, TensorDescription):
+    if isinstance(io_format, ParameterFormat):
+        # For ParameterFormat, apply resolution to the formatting attribute
+        return _resolve_tensor_descriptions(io_format.formatting, extractor)
+    elif isinstance(io_format, TensorDescription):
         return extractor(io_format)
     elif isinstance(io_format, list):
         return [_resolve_tensor_descriptions(item, extractor) for item in io_format]
@@ -462,10 +525,11 @@ def resolve_tensor_descriptions_to_names(io_format):
     Recursively resolve TensorDescription objects to their string names.
 
     Args:
-        io_format: The object to recursively process
+        io_format: The object to recursively process (can be ParameterFormat, TensorDescription, list, dict, etc.)
 
     Returns:
-        The processed object with TensorDescription objects replaced by their string names
+        The processed object with TensorDescription objects replaced by their string names.
+        If a ParameterFormat is passed, returns the resolved formatting from within it.
     """
     return _resolve_tensor_descriptions(io_format, lambda td: td.name_str)
 
@@ -475,10 +539,11 @@ def resolve_tensor_descriptions_to_values(io_format):
     Recursively resolve TensorDescription objects to their values.
 
     Args:
-        io_format: The object to recursively process
+        io_format: The object to recursively process (can be ParameterFormat, TensorDescription, list, dict, etc.)
 
     Returns:
-        The processed object with TensorDescription objects replaced by their values
+        The processed object with TensorDescription objects replaced by their values.
+        If a ParameterFormat is passed, returns the resolved formatting from within it.
     """
     return _resolve_tensor_descriptions(io_format, lambda td: td.value)
 
@@ -492,7 +557,7 @@ def reconstruct_from_named_dict(named_dict, io_format, use_tag_first=True):
 
     Args:
         named_dict: Dictionary mapping names or tags to actual data values
-        io_format: The format structure returned by describe_io_helper (can be TensorDescription objects or strings)
+        io_format: The format structure (can be ParameterFormat, TensorDescription objects or strings)
         use_tag_first: If True, try to lookup by tag first, then by name. If False, use name only.
 
     Returns:
@@ -511,7 +576,10 @@ def reconstruct_from_named_dict(named_dict, io_format, use_tag_first=True):
         # reconstructed = {'a': new_tensor1, 'b': [new_tensor2, new_tensor3]}
     """
     def resolve(item):
-        if isinstance(item, TensorDescription):
+        if isinstance(item, ParameterFormat):
+            # For ParameterFormat, extract the formatting attribute
+            return resolve(item.formatting)
+        elif isinstance(item, TensorDescription):
             # Try to find the value in named_dict
             # First try by tag if it exists
             if item.tag is not None and item.tag in named_dict:
@@ -549,7 +617,7 @@ def flatten_to_named_dict(data, io_format, use_tag_first=True):
 
     Args:
         data: The nested data structure (can be tensor, list, dict, etc.)
-        io_format: The format structure (containing TensorDescription objects)
+        io_format: The format structure (can be ParameterFormat or containing TensorDescription objects)
         use_tag_first: If True, use tag as key if available, otherwise use name
 
     Returns:
@@ -569,7 +637,10 @@ def flatten_to_named_dict(data, io_format, use_tag_first=True):
     result = {}
 
     def flatten(data_item, format_item):
-        if isinstance(format_item, TensorDescription):
+        if isinstance(format_item, ParameterFormat):
+            # For ParameterFormat, extract the formatting attribute
+            flatten(data_item, format_item.formatting)
+        elif isinstance(format_item, TensorDescription):
             # Extract the key (tag or name)
             if use_tag_first and format_item.tag is not None:
                 key = format_item.tag
@@ -932,130 +1003,3 @@ def get_system_info():
     metadata['system information']['os'] = os.uname().sysname
 
     return metadata
-
-#########################################################
-# TorchScript Model Inspection
-#########################################################
-
-
-def inspect_torchscript_model(model):
-    """
-    Extract input and output information from a loaded TorchScript model.
-
-    Args:
-        model: A loaded torch.jit.ScriptModule
-
-    Returns:
-        dict: Dictionary containing:
-            - 'inputs': List of dicts with input information (name, type, shape)
-            - 'outputs': List of dicts with output information (name, type, shape)
-            - 'graph': The computation graph object
-            - 'code': String representation of the model's code
-    """
-    result = {
-        'inputs': [],
-        'outputs': [],
-        'graph': None,
-        'code': None
-    }
-
-    try:
-        # Get the computation graph
-        graph = model.graph
-        result['graph'] = graph
-
-        # Extract input information
-        inputs = list(graph.inputs())
-        for i, inp in enumerate(inputs):
-            input_info = {
-                'index': i,
-                'debug_name': inp.debugName(),
-                'type': str(inp.type()),
-            }
-
-            # Try to get shape information if it's a tensor
-            if hasattr(inp.type(), 'sizes'):
-                try:
-                    input_info['shape'] = list(inp.type().sizes())
-                except Exception:
-                    input_info['shape'] = None
-            else:
-                input_info['shape'] = None
-
-            result['inputs'].append(input_info)
-
-        # Extract output information
-        outputs = list(graph.outputs())
-        for i, out in enumerate(outputs):
-            output_info = {
-                'index': i,
-                'debug_name': out.debugName(),
-                'type': str(out.type()),
-            }
-
-            # Try to get shape information if it's a tensor
-            if hasattr(out.type(), 'sizes'):
-                try:
-                    output_info['shape'] = list(out.type().sizes())
-                except Exception:
-                    output_info['shape'] = None
-            else:
-                output_info['shape'] = None
-
-            result['outputs'].append(output_info)
-
-        # Get the code representation if available
-        if hasattr(model, 'code'):
-            result['code'] = model.code
-
-    except Exception as e:
-        print(f"Error inspecting TorchScript model: {e}")
-
-    return result
-
-
-def print_torchscript_model_info(model, verbose=True):
-    """
-    Pretty print information about a TorchScript model.
-
-    Args:
-        model: A loaded torch.jit.ScriptModule
-        verbose: If True, print the full graph representation
-    """
-    info = inspect_torchscript_model(model)
-
-    print("\n" + "="*60)
-    print("TorchScript Model Information")
-    print("="*60)
-
-    print("\n[Inputs]")
-    if not info['inputs']:
-        print("  No inputs found")
-    else:
-        for inp in info['inputs']:
-            print(f"  Input {inp['index']}:")
-            print(f"    Name: {inp['debug_name']}")
-            print(f"    Type: {inp['type']}")
-            if inp['shape']:
-                print(f"    Shape: {inp['shape']}")
-
-    print("\n[Outputs]")
-    if not info['outputs']:
-        print("  No outputs found")
-    else:
-        for out in info['outputs']:
-            print(f"  Output {out['index']}:")
-            print(f"    Name: {out['debug_name']}")
-            print(f"    Type: {out['type']}")
-            if out['shape']:
-                print(f"    Shape: {out['shape']}")
-
-    if verbose and info['graph']:
-        print("\n[Computation Graph]")
-        print(info['graph'])
-
-    if info['code']:
-        print("\n[Model Code]")
-        print(info['code'])
-
-    print("\n" + "="*60)

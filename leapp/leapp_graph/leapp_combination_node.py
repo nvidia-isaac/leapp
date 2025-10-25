@@ -58,18 +58,28 @@ class SubgraphNodeModel(torch.nn.Module):
                     raise ValueError(
                         f"Input {input_val.name} or {input_val.tag} not found in variable_dict")
 
-            # build the input format
-            inputs = reconstruct_from_named_dict(
-                input_value_dict, input_formats)
+            # build the input format - reconstruct each input parameter from its ParameterFormat
+            reconstructed_inputs = []
+            for param_format in input_formats:
+                reconstructed_input = reconstruct_from_named_dict(
+                    input_value_dict, param_format)
+                reconstructed_inputs.append(reconstructed_input)
+
             # run the model
-            outputs = getattr(self, name)(*inputs)
+            outputs = getattr(self, name)(*reconstructed_inputs)
+
             # flatten the outputs and commit to variable_dict
             if not isinstance(outputs, tuple):
                 # if output formats is a single value, convert for unity
                 outputs = [outputs]
             else:
                 outputs = list(outputs)
-            output_value_dict = flatten_to_named_dict(outputs, output_formats)
+
+            # Flatten each output based on its corresponding ParameterFormat
+            output_value_dict = {}
+            for output_idx, (output_data, param_format) in enumerate(zip(outputs, output_formats)):
+                flattened = flatten_to_named_dict(output_data, param_format)
+                output_value_dict.update(flattened)
             variable_dict.update(output_value_dict)
         outputs = []
         for output_name in self.output_names:

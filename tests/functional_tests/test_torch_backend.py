@@ -18,7 +18,6 @@ import unittest
 import torch
 from leapp import annotate
 from .base import LEAPPFunctionalTestBase
-import os
 
 
 class TestTorchBackend(LEAPPFunctionalTestBase):
@@ -42,10 +41,8 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         funcA(input_tensor)
         annotate.stop()
         annotate.compile_graph(visualize=False)
-        traced_model = torch.jit.load(os.path.join(
-            self.TEST_GRAPH_NAME, funcA.__name__+".pt"))
-        self.assertTrue(torch.allclose(
-            traced_model(input_tensor), expected_output))
+        self.verify_single_torchscript_model_expected_value(
+            [input_tensor], [expected_output], funcA.__name__)
 
     def test_torch_script_backend(self):
         @annotate.method(export_with="torch", use_trace=False)
@@ -59,10 +56,8 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         funcA(input_tensor)
         annotate.stop()
         annotate.compile_graph(visualize=False)
-        scripted_model = torch.jit.load(os.path.join(
-            self.TEST_GRAPH_NAME, funcA.__name__+".pt"))
-        self.assertTrue(torch.allclose(
-            scripted_model(input_tensor), expected_output))
+        self.verify_single_torchscript_model_expected_value(
+            [input_tensor], [expected_output], funcA.__name__)
 
 
 if __name__ == '__main__':

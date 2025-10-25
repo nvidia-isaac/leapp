@@ -35,12 +35,19 @@ class TorchExportBackend(ExportBackend):
 
     def _create_header_and_return_statement(self):
         # create header
+        # first validate that the input formats detected are valid
+        for parameter_description in self.node_context.input_formats:
+            if not parameter_description.valid:
+                raise ValueError(
+                    f"Invalid parameter format for {parameter_description.name_str} "
+                    f"when building function header for {self.node_context.name}:"
+                    "the parameter likely contains mixed types or nested structures with different types.")
         header_template = "def forward(self, {inputs}) -> {output_types}:\n"
         return_statement_template = "\nreturn {outputs}\n"
         inputs = ", ".join(
-            [f"{input.name_str}: {type(input.value).__name__}" for input in self.node_context.inputs])
+            [f"{parameter_description.name_str}: {parameter_description.dtype}" for parameter_description in self.node_context.input_formats])
         output_types = [
-            type(output.value).__name__ for output in self.node_context.outputs]
+            parameter_description.dtype for parameter_description in self.node_context.output_formats]
         if len(output_types) == 0:
             output_types = "None"
         elif len(output_types) == 1:
@@ -233,10 +240,12 @@ class TorchTraceExportBackend(TorchExportBackend):
                 "TorchTraceExportBackend does not support buffers, "
                 "consider using export_with='torch' without use_trace=True")
         m = self.create_module_from_source()
-        inputs = resolve_tensor_descriptions_to_values(
-            self.node_context.input_formats)
+        # input_formats is a list of ParameterFormat objects, resolve each one to get values
+        input_values = [resolve_tensor_descriptions_to_values(param_format)
+                        for param_format in self.node_context.input_formats]
 
-        self.compiled_model = torch.jit.trace(m, inputs, **self.backend_params)
+        self.compiled_model = torch.jit.trace(
+            m, input_values, **self.backend_params)
         if isinstance(m, torch.nn.Module) and hasattr(m, 'forward'):
             torch.jit.freeze(self.compiled_model.eval(),
                              preserved_attrs=m.saved_buffers)

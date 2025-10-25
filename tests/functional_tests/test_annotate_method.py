@@ -17,9 +17,7 @@
 import unittest
 import torch
 from leapp import annotate
-from leapp.utils import inspect_torchscript_model
 from .base import LEAPPFunctionalTestBase
-import os
 
 
 class TestAnnotateMethod(LEAPPFunctionalTestBase):
@@ -61,14 +59,13 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
         annotate.compile_graph(visualize=False)
         self.assertEqual(len(annotate.nodes), 1)
         self.assertEqual(len(annotate.nodes[funcA.__name__].inputs), 0)
-        model = torch.jit.load(os.path.join(
-            self.TEST_GRAPH_NAME, funcA.__name__+".pt"))
 
         expected_output = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
         # check if using default
-        self.assertTrue(torch.allclose(model(), expected_output))
+        self.verify_single_torchscript_model_expected_value(
+            [], [expected_output], funcA.__name__)
         # Or get structured data
-        model_info = inspect_torchscript_model(model)
+        model_info = self.inspect_torchscript_model(funcA.__name__)
         self.assertEqual(len(model_info['inputs']), 1)
         self.assertEqual(len(model_info['outputs']), 1)
 
@@ -84,9 +81,7 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
         annotate.compile_graph(visualize=False)
         self.assertEqual(len(annotate.nodes), 1)
         self.assertEqual(len(annotate.nodes[funcA.__name__].inputs), 1)
-        model = torch.jit.load(os.path.join(
-            self.TEST_GRAPH_NAME, funcA.__name__+".pt"))
-        model_info = inspect_torchscript_model(model)
+        model_info = self.inspect_torchscript_model(funcA.__name__)
         self.assertEqual(len(model_info['inputs']), 2)
         self.assertEqual(len(model_info['outputs']), 1)
 
@@ -106,14 +101,12 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
         annotate.compile_graph(visualize=False)
         self.assertEqual(len(annotate.nodes), 1)
         self.assertEqual(len(annotate.nodes[funcA.__name__].inputs), 2)
-        model = torch.jit.load(os.path.join(
-            self.TEST_GRAPH_NAME, funcA.__name__+".pt"))
-        model_info = inspect_torchscript_model(model)
+        model_info = self.inspect_torchscript_model(funcA.__name__)
         self.assertEqual(len(model_info['inputs']), 3)
         self.assertEqual(len(model_info['outputs']), 1)
 
-        self.assertTrue(torch.equal(
-            model(torch.tensor([1]), torch.tensor([1])), outputA))
+        self.verify_single_torchscript_model_expected_value(
+            [torch.tensor([1]), torch.tensor([1])], [outputA], funcA.__name__)
 
     def test_annotate_method_kwargs_out_of_order(self):
         """tests the situation where the user provides kwargs out of order"""
@@ -133,13 +126,11 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
         self.assertEqual(len(annotate.nodes[funcA.__name__].inputs), 3)
         input_format = annotate.detected_nodes[funcA.__name__]['formatting']['input_format']
         self.assertEqual(input_format, ['input1', 'input4', 'input5'])
-        model = torch.jit.load(os.path.join(
-            self.TEST_GRAPH_NAME, funcA.__name__+".pt"))
-        model_info = inspect_torchscript_model(model)
+        model_info = self.inspect_torchscript_model(funcA.__name__)
         self.assertEqual(len(model_info['inputs']), 4)
         self.assertEqual(len(model_info['outputs']), 1)
-        self.assertTrue(torch.equal(
-            model(torch.tensor([1]), torch.tensor([2]), torch.tensor([3])), outputA))
+        self.verify_single_torchscript_model_expected_value(
+            [torch.tensor([1]), torch.tensor([2]), torch.tensor([3])], [outputA], funcA.__name__)
 
     def test_annotate_method_with_multiple_unnamed_returns(self):
         """tests the situation where the function has multiple unnamed returns"""
@@ -156,9 +147,8 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
         self.assertEqual(len(annotate.nodes[funcA.__name__].inputs), 1)
         self.assertEqual(len(annotate.nodes[funcA.__name__].outputs), 3)
 
-        model = torch.jit.load(os.path.join(
-            self.TEST_GRAPH_NAME, funcA.__name__+".pt"))
-        self.assertEqual(model(torch.tensor([1])), (outputA, outputB, outputC))
+        self.verify_single_torchscript_model_expected_value(
+            [torch.tensor([1])], [outputA, outputB, outputC], funcA.__name__)
 
 
 if __name__ == '__main__':
