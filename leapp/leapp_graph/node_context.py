@@ -19,7 +19,7 @@ from leapp.utils import (
     extract_return_names,
     describe_io,
     safe_deepcopy,
-    get_atrribute_value_from_frame,
+    get_attribute_value_from_frame,
     tag_data,
     extract_source_from_line_range
 )
@@ -69,10 +69,11 @@ class NodeContext(LeappGraphElement):
 
         # model settings
         # overwrite backend depending on using trace
-        if use_trace:
-            self.backend = "torch-trace"
-        else:
-            self.backend = "torch-script"
+        if self.backend == "torch":
+            if use_trace:
+                self.backend = "torch-trace"
+            else:
+                self.backend = "torch-script"
         self.export_backend = self._setup_backend(self.backend, backend_params)
 
         # source code:
@@ -87,11 +88,16 @@ class NodeContext(LeappGraphElement):
         self.input_frame = None
         self.output_frame = None
         self.cached_buffer_values = {}
+        self.cached_constant_values = {}
 
         self.logger.info(f"Node context initialized: {self.name}")
 
     def compile_model(self):
-        self.compiled_model = self.export_backend.compile()
+        try:
+            self.compiled_model = self.export_backend.compile()
+        except Exception as e:
+            self.logger.error(f"Error compiling model: {e}")
+            raise e
 
     def compile_trace(self):
 
@@ -126,13 +132,15 @@ class NodeContext(LeappGraphElement):
                 param_names.index(param_name) < len(args)
             )
             if was_provided:
-                self._add_input(param_name, param_value)
+                self._add_input(param_name, param_name, param_value)
             else:
                 # this parameter uses the default value in the function header
                 self.default_kwargs[param_name] = param_value
 
     def inspect_function_outputs(self, func, result):
         # Store outputs using actual variable names from return statement
+        if result is None:
+            return  # no outputs to capture in function
         return_names = extract_return_names(func)
 
         if isinstance(result, tuple) and len(return_names) == len(result):
@@ -142,23 +150,25 @@ class NodeContext(LeappGraphElement):
                     output_name = return_names[i]
                 else:
                     output_name = f"output{i+1}"
-                self._add_output(output_name, result[i])
+                self._add_output(output_name, output_name, result[i])
         else:
             if not len(return_names) == 1:
                 raise Exception(
                     f"Error: {self.name} has {len(return_names)}"
-                    " outputs, but only one output is supported")
+                    " outputs, but only one output is detectd")
             tag_data(result, self.name + '/' + return_names[0] + '/')
-            self._add_output(return_names[0], result)
+            self._add_output(return_names[0], return_names[0], result)
+
+        # extract custom returns from the environment variables
 
     def _capture_specified_value_from_frame(self, variable_name, frame):
         # If variable_name matches *.* pattern, extract from nested objects in frame
         obj = None
         final_variable_name = variable_name
         if "." in variable_name:
-            obj, _ = get_atrribute_value_from_frame(frame, variable_name)
+            obj, final_variable_name = get_attribute_value_from_frame(
+                frame, variable_name)
             obj = safe_deepcopy(obj)
-            final_variable_name = variable_name.replace(".", "_")
         else:
             if variable_name in frame.f_locals:
                 obj = safe_deepcopy(frame.f_locals[variable_name])
@@ -175,7 +185,8 @@ class NodeContext(LeappGraphElement):
             for input_name in self._declared_inputs:
                 final_input_name, final_input_value = self._capture_specified_value_from_frame(
                     input_name, frame)
-                self._add_input(final_input_name, final_input_value)
+                self._add_input(final_input_name, input_name,
+                                final_input_value)
         except Exception as e:
             self.logger.error(f"Error capturing inputs from frame: {e}")
             raise e
@@ -183,47 +194,51 @@ class NodeContext(LeappGraphElement):
 
     def capture_outputs_from_frame(self, frame):
         for output_name in self._declared_outputs:
+            obj, _ = get_attribute_value_from_frame(frame, output_name)
             output_tag = self.name + '/' + output_name + '/'
-            if output_name in frame.f_locals:
-                value = frame.f_locals[output_name]
-                tag_data(value, output_tag)
-            elif output_name in frame.f_globals:
-                value = frame.f_globals[output_name]
-                tag_data(value, output_tag)
-            else:
-                raise Exception(
-                    f"Error: {output_name} is not in the frame")
+            tag_data(obj, output_tag)
 
         try:
             for output_name in self._declared_outputs:
                 final_output_name, final_output_value = self._capture_specified_value_from_frame(
                     output_name, frame)
-                self._add_output(final_output_name, final_output_value)
+                self._add_output(final_output_name,
+                                 output_name, final_output_value)
         except Exception as e:
             self.logger.error(f"Error capturing outputs from frame: {e}")
             raise e
         self.output_frame = frame
 
-    def _add_output(self, outout_name, output_value):
-        io_descriptions, output_format = describe_io(outout_name, output_value)
+    def _add_output(self, outout_name, raw_output_name, output_value):
+        io_descriptions, output_format = describe_io(
+            outout_name, raw_output_name, output_value)
         self.outputs.extend(io_descriptions)
         self.output_formats.append(output_format)
 
-    def _add_input(self, input_name, input_value):
-        io_descriptions, input_format = describe_io(input_name, input_value)
+    def _add_input(self, input_name, raw_input_name, input_value):
+        io_descriptions, input_format = describe_io(
+            input_name, raw_input_name, input_value)
         self.inputs.extend(io_descriptions)
         self.input_formats.append(input_format)
 
     def snapshot_buffer_values(self, frame):
         for buffer_name in self.register_buffers:
-            value, _ = get_atrribute_value_from_frame(
+            value, _ = get_attribute_value_from_frame(
                 frame, buffer_name)
-
             self._cache_buffer_value(buffer_name, value)
+
+        for constant_name in self.environment_constants:
+            value, _ = get_attribute_value_from_frame(
+                frame, constant_name)
+            self._cache_constant_value(constant_name, value)
 
     def _cache_buffer_value(self, buffer_name, value):
         if buffer_name not in self.cached_buffer_values:
             self.cached_buffer_values[buffer_name] = safe_deepcopy(value)
+
+    def _cache_constant_value(self, constant_name, value):
+        if constant_name not in self.cached_constant_values:
+            self.cached_constant_values[constant_name] = safe_deepcopy(value)
 
     def change_input_name(self, old_name, new_name):
         self.logger.warning(

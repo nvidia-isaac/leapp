@@ -92,7 +92,7 @@ class NoneExportBackend(ExportBackend):
 
         return loaded_model
 
-    def save(self, save_path: str) -> Tuple[str, str, str]:
+    def save(self, save_path: str, compiled_model=None) -> Tuple[str, str, str]:
         if "model_path" not in self.backend_params or self.backend_params['model_path'] is None:
             return None, None, None
         md5sum, sha256sum = self._verify_model_location_and_get_hash(

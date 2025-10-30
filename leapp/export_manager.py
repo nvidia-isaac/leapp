@@ -21,7 +21,7 @@ import inspect
 import yaml
 import os
 import time
-from .utils import CompactYamlList, CompactYamlDict, get_relative_path, get_system_info
+from .utils import CompactYamlList, CompactYamlDict, get_relative_path, get_system_info, verify_data_exact_match, mirror_all_tensor_tags
 from .logging import LeappLogger
 from leapp.leapp_graph.leapp_graph import LeappGraph
 from leapp.leapp_graph.node_context import NodeContext
@@ -103,12 +103,10 @@ class ExportManager:
         if self.intepret_graph:
             self.logger.warning("LEAPP graph interpretation is already enabled, "
                                 "calling start() again will reset the graph")
-            time.sleep(0.5)
             self.logger.warning("Resetting graph...")
             self._is_tracing = False
             self.current_node_name = None
             self.node_candidate = None
-            time.sleep(0.5)
         self.nodes = {}
         self.intepret_graph = True
 
@@ -440,9 +438,22 @@ class ExportManager:
                         f"****Tracing stopped for {node_context.name}****\n\n")
 
                 node_context.inspect_function_outputs(func, result)
+                # capture outputs from the frame for custom returns
+                if node_context.output_frame is not None:
+                    node_context.capture_outputs_from_frame(
+                        node_context.output_frame)
                 return result
             return wrapper
         return decorator
+
+    def mirror_leapp_tags(self, source, target):
+        if not self.intepret_graph:
+            return
+        if not verify_data_exact_match(source, target):
+            raise Exception(
+                f"Error: source and target do not match: {source} != {target}")
+
+        mirror_all_tensor_tags(source, target)
 
     def get_io_descriptions(self):
         self.logger.section(

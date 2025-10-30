@@ -93,9 +93,6 @@ class LeappGraphElement():
         return description
 
     def _setup_backend(self, backend, backend_params):
-        if self.backend is None:
-            raise ValueError(
-                "Error initializing graph element: Backend is not set")
         export_backend = None
         if self.backend is None:
             from leapp.backends.export_backend import NoneExportBackend

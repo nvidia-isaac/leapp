@@ -27,29 +27,33 @@ class SubgraphNodeModel(torch.nn.Module):
         super().__init__()
         self.input_names = input_names
         self.output_names = output_names
+        self.models = {}
         if (any(output_name is None for output_name in output_names)):
             raise ValueError("Unexpected untagged output in subgraph node")
         self.name_order = name_order
         self.io_configs = io_configs
         for idx, model in enumerate(models):
-            self.add_module(name_order[idx], model)
+            self.add_module(name_order[idx], model.eval())
+            self.models[name_order[idx]] = getattr(self, name_order[idx])
 
     def forward(self, *inputs):
         variable_dict = {}
         # initialize input_names
-        for idx, input_name in enumerate(self.input_names):
+        # TODO: we need to make the internal connections more robust
+        # TODO: to improve speed we need to preallocate all i/o tensors
+        for idx in range(len(self.input_names)):
+            input_name = self.input_names[idx]
             variable_dict[input_name] = inputs[idx]
 
-        for idx, name in enumerate(self.name_order):
+        for name in self.name_order:
             config = self.io_configs[name]
-            inputs = config['inputs']
-            outputs = config['outputs']
+            node_inputs = config['inputs']
+            # node_outputs = config['outputs']
             input_formats = config['input_formats']
             output_formats = config['output_formats']
-
             # extract input values from variable dict
             input_value_dict = {}
-            for input_val in inputs:
+            for input_val in node_inputs:
                 if input_val.name in variable_dict:
                     input_value_dict[input_val.name] = variable_dict[input_val.name]
                 elif input_val.tag in variable_dict:
@@ -57,7 +61,6 @@ class SubgraphNodeModel(torch.nn.Module):
                 else:
                     raise ValueError(
                         f"Input {input_val.name} or {input_val.tag} not found in variable_dict")
-
             # build the input format - reconstruct each input parameter from its ParameterFormat
             reconstructed_inputs = []
             for param_format in input_formats:
@@ -66,18 +69,18 @@ class SubgraphNodeModel(torch.nn.Module):
                 reconstructed_inputs.append(reconstructed_input)
 
             # run the model
-            outputs = getattr(self, name)(*reconstructed_inputs)
+            model_outputs = self.models[name](*reconstructed_inputs)
 
             # flatten the outputs and commit to variable_dict
-            if not isinstance(outputs, tuple):
+            if not isinstance(model_outputs, tuple):
                 # if output formats is a single value, convert for unity
-                outputs = [outputs]
+                model_outputs = [model_outputs]
             else:
-                outputs = list(outputs)
+                model_outputs = list(model_outputs)
 
             # Flatten each output based on its corresponding ParameterFormat
             output_value_dict = {}
-            for output_idx, (output_data, param_format) in enumerate(zip(outputs, output_formats)):
+            for output_idx, (output_data, param_format) in enumerate(zip(model_outputs, output_formats)):
                 flattened = flatten_to_named_dict(output_data, param_format)
                 output_value_dict.update(flattened)
             variable_dict.update(output_value_dict)
@@ -87,7 +90,15 @@ class SubgraphNodeModel(torch.nn.Module):
                 raise ValueError(
                     f"Output {output_name} not found in variable_dict")
             outputs.append(variable_dict[output_name])
+
         return tuple(outputs)
+
+    # def forward(self, *inputs):
+    #     for name in self.name_order:
+    #         model = self.models[name]
+    #         model_outputs = model(*inputs)
+    #         inputs = [model_outputs]
+    #         return model_outputs
 
 
 class SubgraphNodeContext(LeappGraphElement):
@@ -123,6 +134,9 @@ class SubgraphNodeContext(LeappGraphElement):
             self.compiled_model = torch.jit.trace(
                 combined_model, input_values)
             self.model_path = 'combined_model.pt'
+        else:
+            raise NotImplementedError(
+                f"Combination node for backend {self.get_backend()} is not implemented")
 
     def _get_graph_level_io(self, nodes: List[LeappGraphElement]):
         inputs = OrderedDict()
@@ -187,6 +201,10 @@ def get_subgraph_node(nodes: List[LeappGraphElement], logger, name):
             f"skipping combining {name} because not all nodes have the same backend")
         return None
     backend = node_backends[0]
+    # TODO: This is a temporary hack to get the combined model working.
+    # the real solution is to allow the backend to handle existing models
+    if not backend == 'torch':
+        return None
     node_index = nodes[0].node_index
     name_order = [node.name for node in nodes]
 

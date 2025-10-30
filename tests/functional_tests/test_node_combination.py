@@ -92,6 +92,36 @@ class TestNodeMerging(LEAPPFunctionalTestBase):
         self.verify_num_connections(annotate, nodes=1, inputs=1, outputs=1,
                                     internal_connections=0)
 
+    def test_combine_graph_with_feedback_automatically(self):
+
+        @annotate.method(export_with='torch')
+        def funcA(inputA: torch.Tensor, loop_back: torch.Tensor):
+            return inputA + loop_back
+
+        @annotate.method(export_with='torch')
+        def funcB(inputB: torch.Tensor):
+            return inputB * 2.0
+
+        @annotate.method(export_with='torch')
+        def funcC(inputC: torch.Tensor):
+            return inputC + 1.0
+
+        @annotate.method(export_with='torch')
+        def funcD(inputD: torch.Tensor):
+            return inputD/2.0
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        loop_back_input = torch.tensor([0.0, 0.0, 0.0])
+        for i in range(3):
+            out = funcA(torch.tensor([1.0, 1.0, 1.0]),
+                        loop_back_input)
+            outb1 = funcB(out)
+            loop_back_input = outb1.clone()
+            outc1 = funcC(outb1)
+            outd = funcD(outc1)
+        annotate.stop()
+        annotate.compile_graph(merge_nodes=MergeCfgEnum.AUTOMATIC)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

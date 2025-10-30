@@ -19,8 +19,8 @@ from leapp.backends.export_backend import ExportBackend
 import os
 import linecache
 import textwrap
-import ast
 import types
+import re
 from typing import Tuple, List, Dict
 from leapp.utils import (
     create_module,
@@ -46,6 +46,8 @@ class TorchExportBackend(ExportBackend):
         return_statement_template = "\nreturn {outputs}\n"
         inputs = ", ".join(
             [f"{parameter_description.name_str}: {parameter_description.dtype}" for parameter_description in self.node_context.input_formats])
+
+        # create output types
         output_types = [
             parameter_description.dtype for parameter_description in self.node_context.output_formats]
         if len(output_types) == 0:
@@ -57,11 +59,13 @@ class TorchExportBackend(ExportBackend):
         header = header_template.format(
             inputs=inputs, output_types=output_types)
 
-        outputs = ", ".join([output.name_str
-                            for output in self.node_context.outputs])
+        # only include outputs that are declared by user.
+        outputs = ", ".join([output.name_raw
+                            for output in self.node_context.output_formats
+                            if output.name_raw in self.node_context._declared_outputs])
         return_statement = return_statement_template.format(outputs=outputs)
 
-        return header, return_statement
+        return header, return_statement, outputs
 
     def _create_module_template(self):
         # if the function or snippet is a class method, we need to create a module that inherits
@@ -70,25 +74,8 @@ class TorchExportBackend(ExportBackend):
             parent_class = type(self.node_context.input_frame.f_locals['self'])
         else:
             parent_class = None
-
-        module_instance = create_module(self.node_context.name, parent_class)
-
-        # Set environment constants as instance attributes
-        for const_name in self.node_context.environment_constants:
-            if "self." in const_name or const_name == "self":
-                continue  # special case for any class variables, we already store all of them
-            elif const_name in self.node_context.input_frame.f_locals:
-                const_value = self.node_context.input_frame.f_locals[const_name]
-            elif const_name in self.node_context.input_frame.f_globals:
-                const_value = self.node_context.input_frame.f_globals[const_name]
-            else:
-                raise Exception(
-                    f"Error {self.node_context.name}: Environment constant {const_name} not found in input frame")
-
-            # Set as instance attribute - accessible as self.const_name
-            setattr(module_instance, const_name, const_value)
-            self.logger.debug(
-                f"Set instance attribute: {const_name} = {const_value}")
+        module_instance = create_module(
+            self.node_context.name, parent_class, self.node_context.cached_constant_values)
 
         # Set default values as instance attributes (from stored dictionary)
         for default_name, default_value in self.node_context.default_kwargs.items():
@@ -96,13 +83,20 @@ class TorchExportBackend(ExportBackend):
             setattr(module_instance, default_name, default_value)
             self.logger.debug(
                 f"Set instance attribute (default value): {default_name} = {default_value}")
+
+        # add buffers to the module
+        for buffer_name in self.node_context.register_buffers:
+            value = self.node_context.cached_buffer_values[buffer_name]
+            module_instance.add_buffer(buffer_name, value)
+
         # copy all the attributes from the original object to the module
         if 'self' in self.node_context.input_frame.f_locals:
             original_obj = self.node_context.input_frame.f_locals['self']
             for attr_name in dir(original_obj):
-                # we don't copy any private attributes or register buffers
+                # we don't copy any private attributes or register buffers or registered constants
                 if attr_name.startswith('__') or attr_name.endswith('__') or \
-                        f"self.{attr_name}" in self.node_context.register_buffers:
+                        f"self.{attr_name}" in self.node_context.register_buffers or \
+                        f"{attr_name}" in module_instance.__constant__:
                     continue
                 try:
                     value = getattr(original_obj, attr_name)
@@ -142,15 +136,47 @@ class TorchExportBackend(ExportBackend):
                 const_name=const_name)
         return data_patch_string
 
-    def _register_buffers_to_module(self, m):
-        for buffer_name in self.node_context.register_buffers:
-            value = self.node_context.cached_buffer_values[buffer_name]
-            m.add_buffer(buffer_name, value)
+    def _append_outputs_to_return_statements(self, source_code, outputs_str):
+        """
+        Append outputs_str to all return statements in the source code.
+
+        For example:
+        - 'return val' becomes 'return val, outputs_str'
+        - 'return' becomes 'return outputs_str'
+
+        Returns:
+            modified_code if return statements were found, False otherwise
+        """
+        if not outputs_str:
+            return source_code, 0
+
+        # Pattern to match return statements
+        # This matches 'return' followed by optional whitespace and everything until newline or comment
+        # Use list to allow modification in nested function
+        replacement_count = [0]
+
+        def replace_return(match):
+            replacement_count[0] += 1
+            indent = match.group(1)
+            return_value = match.group(2).strip()
+
+            if return_value:
+                # return has a value, append with comma
+                return f"{indent}return {return_value}, {outputs_str}"
+            else:
+                # return is empty, just add outputs_str
+                return f"{indent}return {outputs_str}"
+
+        # Match return statements: capture indentation and the return value
+        # Negative lookahead to avoid matching 'return' in strings
+        pattern = r'^(\s*)return(\s+[^\n]*)?$'
+        modified_code = re.sub(pattern, replace_return,
+                               source_code, flags=re.MULTILINE)
+
+        return modified_code, replacement_count[0]
 
     def create_module_from_source(self):
         m = self._create_module_template()
-
-        self._register_buffers_to_module(m)
 
         if self.node_context.input_frame is None or self.node_context.output_frame is None:
             raise Exception(
@@ -169,10 +195,17 @@ class TorchExportBackend(ExportBackend):
         else:
             self.logger.info(message)
 
-        header, return_statement = self._create_header_and_return_statement()
-        if self.node_context.from_function:
-            return_statement = ""
+        header, return_statement, outputs_str = self._create_header_and_return_statement()
         function_name = "forward"
+        if self.node_context.from_function:
+            # For functions, append outputs_str to all return statements
+            modified_source, replacement_count = self._append_outputs_to_return_statements(
+                source_code, outputs_str)
+            source_code = modified_source
+            if replacement_count != 0 or len(self.node_context._declared_outputs) == 0:
+                return_statement = ""
+            # if replacement count is 0, we use the artificial return statement created previously
+
         environment_constant_string = self._create_data_patching_string()
 
         # create function string
@@ -195,6 +228,7 @@ class TorchExportBackend(ExportBackend):
                 "Tuple": Tuple,
                 "List": List,
                 "Dict": Dict,
+                "NoneType": type(None),
             }
             if self.node_context.input_frame is not None:
                 namespace.update(self.node_context.input_frame.f_locals)
@@ -219,9 +253,19 @@ class TorchExportBackend(ExportBackend):
                     f"  - self.{buffer_name}: intialized as {getattr(m, buffer_name)}")
         return m
 
-    def save(self, save_path: str, compiled_model: torch.jit.ScriptModule = None) -> Tuple[str, str, str]:
-        if compiled_model is None:
-            compiled_model = self.compiled_model
+    def save(self, save_path: str, compiled_model: torch.jit.ScriptModule) -> Tuple[str, str, str]:
+        # Freeze the model before saving for optimization
+        if compiled_model is not None:
+            preserved_attrs = []
+            if hasattr(self, 'node_context') and hasattr(self.node_context, 'saved_buffers'):
+                preserved_attrs = self.node_context.saved_buffers
+
+            compiled_model = torch.jit.freeze(
+                compiled_model.eval(), preserved_attrs=preserved_attrs)
+        else:
+            self.logger.error(
+                "No compiled model found for {self.node_context.name}")
+
         path = os.path.join(save_path, f"{self.node_context.name}.pt")
         compiled_model.save(path)
         md5sum, sha256sum = self._verify_model_location_and_get_hash(path)
@@ -244,22 +288,17 @@ class TorchTraceExportBackend(TorchExportBackend):
         input_values = [resolve_tensor_descriptions_to_values(param_format)
                         for param_format in self.node_context.input_formats]
 
-        self.compiled_model = torch.jit.trace(
+        compiled_model = torch.jit.trace(
             m, input_values, **self.backend_params)
-        if isinstance(m, torch.nn.Module) and hasattr(m, 'forward'):
-            torch.jit.freeze(self.compiled_model.eval(),
-                             preserved_attrs=m.saved_buffers)
+        # Freezing moved to save() method to allow node combination
 
-        return self.compiled_model
+        return compiled_model
 
 
 class TorchScriptExportBackend(TorchExportBackend):
     def compile(self):
         m = self.create_module_from_source()
-        self.compiled_model = torch.jit.script(m, **self.backend_params)
+        compiled_model = torch.jit.script(m, **self.backend_params)
+        # Freezing moved to save() method to allow node combination
 
-        if isinstance(m, torch.nn.Module) and hasattr(m, 'forward'):
-            torch.jit.freeze(self.compiled_model.eval(),
-                             preserved_attrs=m.saved_buffers)
-
-        return self.compiled_model
+        return compiled_model

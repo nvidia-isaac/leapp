@@ -222,13 +222,43 @@ class TensorDescription:
         return self.name
 
 
+def _is_list_like(obj):
+    """Check if an object is list-like (has __iter__, __len__, __getitem__ but not dict-like)."""
+    if isinstance(obj, (str, bytes, torch.Tensor)):
+        return False  # strings are iterable but not list-like for our purposes
+    return (hasattr(obj, '__iter__') and
+            hasattr(obj, '__len__') and
+            hasattr(obj, '__getitem__') and
+            not hasattr(obj, 'keys'))
+
+
+def _is_dict_like(obj):
+    """Check if an object is dict-like (has keys, values, items, __getitem__)."""
+    return (hasattr(obj, 'keys') and
+            hasattr(obj, 'values') and
+            hasattr(obj, 'items') and
+            hasattr(obj, '__getitem__'))
+
+
 @dataclass
 class ParameterFormat:
     name: str
     formatting: Any
 
     def get_format_string(self, data: Any) -> Tuple[bool, str]:
-        if isinstance(data, list):
+
+        if isinstance(data, list) or _is_list_like(data):
+            # Warn if not a native list
+            if not isinstance(data, list):
+                type_name = type(data).__name__
+                print(
+                    f"Parameter '{self.name}' has list-like type '{type_name}' which will be "
+                    f"treated as 'list' in the generated function signature. This may cause "
+                    f"issues if the exact type is required.")
+
+            if len(data) == 0:
+                return True, "list"  # Empty list, can't determine child type
+
             item_types_valid = len(set(type(item) for item in data)) == 1
             if not item_types_valid:
                 return False, "INCONSISTENT LIST ITEM TYPES"
@@ -238,7 +268,19 @@ class ParameterFormat:
                     return False, "LIST CHILD FORMAT STRING NOT VALID"
                 else:
                     return True, f"List[{child}]"
-        elif isinstance(data, dict):
+
+        elif isinstance(data, dict) or _is_dict_like(data):
+            # Warn if not a native dict
+            if not isinstance(data, dict):
+                type_name = type(data).__name__
+                print(
+                    f"Parameter '{self.name}' has dict-like type '{type_name}' which will be "
+                    f"treated as 'dict' in the generated function signature. This may cause "
+                    f"issues if the exact type is required.")
+
+            if len(data) == 0:
+                return True, "dict"  # Empty dict, can't determine child type
+
             key_types = set(type(key) for key in data.keys())
             if len(key_types) > 1 or key_types != {str}:
                 return False, "INCONSISTENT DICT KEY TYPES"
@@ -262,6 +304,10 @@ class ParameterFormat:
     @property
     def name_str(self) -> str:
         """Return just the name as a string."""
+        return self.name.replace(".", "_")
+
+    @property
+    def name_raw(self) -> str:
         return self.name
 
     @property
@@ -281,10 +327,26 @@ class ParameterFormat:
 
 
 def verify_data_exact_match(source_data, target_data):
-    if type(source_data) is not type(target_data):
+    # Check if both are the same type (allow dict-like and list-like substitutions)
+    source_is_list_like = isinstance(
+        source_data, list) or _is_list_like(source_data)
+    target_is_list_like = isinstance(
+        target_data, list) or _is_list_like(target_data)
+    source_is_dict_like = isinstance(
+        source_data, dict) or _is_dict_like(source_data)
+    target_is_dict_like = isinstance(
+        target_data, dict) or _is_dict_like(target_data)
+
+    # If one is list-like and the other is not, they don't match
+    if source_is_list_like != target_is_list_like:
+        return False
+    # If one is dict-like and the other is not, they don't match
+    if source_is_dict_like != target_is_dict_like:
         return False
 
     if isinstance(source_data, torch.Tensor):
+        if not isinstance(target_data, torch.Tensor):
+            return False
         if source_data.shape != target_data.shape:
             return False
         if source_data.dtype != target_data.dtype:
@@ -294,14 +356,14 @@ def verify_data_exact_match(source_data, target_data):
         if not torch.equal(source_data, target_data):
             return False
 
-    elif isinstance(source_data, list):
+    elif source_is_list_like:
         if len(source_data) != len(target_data):
             return False
         for source_item, target_item in zip(source_data, target_data):
             if not verify_data_exact_match(source_item, target_item):
                 return False
-    elif isinstance(source_data, dict):
-        if source_data.keys() != target_data.keys():
+    elif source_is_dict_like:
+        if set(source_data.keys()) != set(target_data.keys()):
             return False
         for key, source_item in source_data.items():
             if not verify_data_exact_match(source_item, target_data[key]):
@@ -434,7 +496,13 @@ def map_from_torch_dtype(notation):
 
 def describe_io_helper(data, name_str, dtype_notation):
     data_description = []
-    if isinstance(data, list):
+    if isinstance(data, list) or _is_list_like(data):
+        if not isinstance(data, list):
+            type_name = type(data).__name__
+            print(
+                f"Input/Output '{name_str}' has list-like type '{type_name}' which will be "
+                f"treated as 'list'. Ensure the runtime can handle this substitution.")
+
         io_format = []
         for idx, item in enumerate(data):
             child_name = "_".join([name_str, str(idx)])
@@ -443,7 +511,13 @@ def describe_io_helper(data, name_str, dtype_notation):
             io_format.append(child_format)
             data_description.extend(child_description)
         return data_description, io_format
-    elif isinstance(data, dict):
+    elif isinstance(data, dict) or _is_dict_like(data):
+        if not isinstance(data, dict):
+            type_name = type(data).__name__
+            print(
+                f"Input/Output '{name_str}' has dict-like type '{type_name}' which will be "
+                f"treated as 'dict'. Ensure the runtime can handle this substitution.")
+
         io_format = {}
         for k, v in data.items():
             child_name = "_".join([name_str, k])
@@ -453,8 +527,8 @@ def describe_io_helper(data, name_str, dtype_notation):
             data_description.extend(child_description)
     elif isinstance(data, torch.Tensor):
         tag = None
-        if hasattr(data, 'export_manager_tag'):
-            tag = data.export_manager_tag
+        if hasattr(data, 'leapp_tag'):
+            tag = data.leapp_tag
 
         # Create TensorDescription dataclass instance
         tensor_desc = TensorDescription(
@@ -485,11 +559,11 @@ def describe_io_helper(data, name_str, dtype_notation):
     return data_description, io_format
 
 
-def describe_io(name, data, dtype_notation="python"):
+def describe_io(name, raw_name, data, dtype_notation="python"):
     data_description, io_format = describe_io_helper(
         data, name, dtype_notation)
-    parameter_description = ParameterFormat(name=name, formatting=io_format)
-    # FRANK DEBUG
+    parameter_description = ParameterFormat(
+        name=raw_name, formatting=io_format)
     return data_description, parameter_description
 
 
@@ -597,9 +671,9 @@ def reconstruct_from_named_dict(named_dict, io_format, use_tag_first=True):
                 return named_dict[item]
             raise KeyError(
                 f"Could not find data for key '{item}' in named_dict")
-        elif isinstance(item, list):
+        elif isinstance(item, list) or _is_list_like(item):
             return [resolve(sub_item) for sub_item in item]
-        elif isinstance(item, dict):
+        elif isinstance(item, dict) or _is_dict_like(item):
             return {key: resolve(value) for key, value in item.items()}
         else:
             # Return as-is for other types
@@ -650,9 +724,9 @@ def flatten_to_named_dict(data, io_format, use_tag_first=True):
             # Store the value
             result[key] = data_item
 
-        elif isinstance(format_item, list):
-            # Both should be lists
-            if not isinstance(data_item, list):
+        elif isinstance(format_item, list) or _is_list_like(format_item):
+            # Both should be lists or list-like
+            if not (isinstance(data_item, list) or _is_list_like(data_item)):
                 raise TypeError(
                     f"Format expects a list but data is {type(data_item)}")
             if len(data_item) != len(format_item):
@@ -663,9 +737,9 @@ def flatten_to_named_dict(data, io_format, use_tag_first=True):
             for data_sub, format_sub in zip(data_item, format_item):
                 flatten(data_sub, format_sub)
 
-        elif isinstance(format_item, dict):
-            # Both should be dicts
-            if not isinstance(data_item, dict):
+        elif isinstance(format_item, dict) or _is_dict_like(format_item):
+            # Both should be dicts or dict-like
+            if not (isinstance(data_item, dict) or _is_dict_like(data_item)):
                 raise TypeError(
                     f"Format expects a dict but data is {type(data_item)}")
             if set(data_item.keys()) != set(format_item.keys()):
@@ -770,7 +844,7 @@ def add_self_if_needed(header):
         return f"{before}self, {params}{after}"
 
 
-def get_atrribute_value_from_frame(frame, attr_name):
+def get_attribute_value_from_frame(frame, attr_name):
     if "." in attr_name:
         parts = attr_name.split(".")
         final_attr_name = parts[-1]
@@ -809,7 +883,7 @@ def get_atrribute_value_from_frame(frame, attr_name):
 #########################################################
 
 
-def create_module(name, parent_class):
+def create_module(name, parent_class, constant_attrs):
     if parent_class is None:
         bases = (torch.nn.Module,)
     elif isinstance(parent_class, torch.nn.Module) or issubclass(parent_class, torch.nn.Module):
@@ -817,18 +891,28 @@ def create_module(name, parent_class):
     else:
         bases = (torch.nn.Module, parent_class)
 
+    constants = {}
+    for name, value in constant_attrs.items():
+        if 'self.' in name:
+            name = name.split('self.')[1]
+        constants[name] = value
+
     def __init__(self, *args, **kwargs):
         # Initialize all parent classes
         super(ModuleTemplate, self).__init__(*args, **kwargs)
         self.saved_buffers = []
 
     def add_buffer(self, name, value):
-        # verify no duplicate buffer names
-        if name in self.saved_buffers:
-            raise ValueError(f"Buffer {name} already registered")
         # clean up the input name
         if 'self.' in name:
             name = name.split('self.')[1]
+        # verify no duplicate buffer names
+        if name in self.saved_buffers:
+            raise ValueError(
+                f"Buffer with name '{name}' was already registered")
+        if name in self.__constant__:
+            raise ValueError(
+                f"Buffer with name '{name}' was already registered as a constant")
         # clean up preexisting attributes
         if hasattr(self, name):
             delattr(self, name)
@@ -844,12 +928,22 @@ def create_module(name, parent_class):
         bases,            # Base classes tuple
         {
             '__init__': __init__,
+            '__constant__': list(constants.keys()),
             'add_buffer': add_buffer,
             'forward': forward,
         }
     )
 
-    return ModuleTemplate()
+    module_template = ModuleTemplate()
+
+    # add constants
+    for name, value in constants.items():
+        if not hasattr(module_template, name):
+            setattr(module_template, name, value)
+        else:
+            raise ValueError(
+                f"Invalid constant name {name} detected when setting the module template. The constant already exists in module template")
+    return module_template
 
 #########################################################
 # Tagged datatype
@@ -857,16 +951,16 @@ def create_module(name, parent_class):
 
 
 def tag_tensor(tensor, tag):
-    if hasattr(tensor, 'export_manager_tag'):
-        tensor.export_manager_tag = tag
+    if hasattr(tensor, 'leapp_tag'):
+        tensor.leapp_tag = tag
         return tensor
 
-    tensor.export_manager_tag = tag
+    tensor.leapp_tag = tag
     tensor.value = lambda: tensor
 
     if not hasattr(torch.Tensor, '_original_clone'):
         def clone_with_tags(self, *args, **kwargs):
-            """Clone tensor while preserving export_manager_tag and other custom attributes."""
+            """Clone tensor while preserving leapp_tag and other custom attributes."""
             cloned = self._original_clone(*args, **kwargs)
 
             # Copy all custom attributes
@@ -903,6 +997,21 @@ def tag_data(data, tag):
             f"\033[93mWarning: Untaggable datatype in i/o: {type(data)}\033[0m")
 
 
+def mirror_all_tensor_tags(source, target):
+    '''
+    Mirror all tensor tags from source to target.
+    '''
+    if isinstance(source, torch.Tensor) and isinstance(target, torch.Tensor):
+        if hasattr(source, 'leapp_tag'):
+            tag_tensor(target, source.leapp_tag)
+    elif isinstance(source, collections.abc.Mapping):
+        for key, value in source.items():
+            mirror_all_tensor_tags(value, target[key])
+    elif isinstance(source, collections.abc.Iterable):
+        for idx, item in enumerate(source):
+            mirror_all_tensor_tags(item, target[idx])
+
+
 def get_tagged_subclass(base_class, value, tag):
     if tag is None:
         return value
@@ -919,11 +1028,11 @@ def get_tagged_subclass(base_class, value, tag):
     # This works for list, dict, set, bytearray, and other mutable collections
     if base_class in (list, set, bytearray) or hasattr(value, '__dict__'):
         try:
-            value.export_manager_tag = tag
+            value.leapp_tag = tag
             # Add a method to get the original type (no lambda needed for identity)
             value.value = lambda: value
             return value  # Preserves original reference
-        except (AttributeError, TypeError) as e:
+        except (AttributeError, TypeError):
             # Fall back to subclassing if direct attribute assignment fails
             pass
 
@@ -931,16 +1040,16 @@ def get_tagged_subclass(base_class, value, tag):
         # bool is not subclassable; fall back to int while preserving bool semantics
         if base_class is bool:
             obj = int.__new__(cls, 1 if bool(value) else 0)
-            obj.export_manager_tag = tag
+            obj.leapp_tag = tag
             return obj
         obj = base_class.__new__(cls, value)
-        obj.export_manager_tag = tag
+        obj.leapp_tag = tag
         return obj
 
     def __init__(self, value, tag=None):
-        # Ensure base __init__ doesn't see the 'export_manager_tag' kwarg (important for dict)
+        # Ensure base __init__ doesn't see the 'leapp_tag' kwarg (important for dict)
         if base_class is bool:
-            # No-op; int.__init__ ignores args but don't forward export_manager_tag
+            # No-op; int.__init__ ignores args but don't forward leapp_tag
             return
         try:
             base_class.__init__(self, value)

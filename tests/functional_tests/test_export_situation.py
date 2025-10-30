@@ -105,6 +105,28 @@ class TestExportSituation(LEAPPFunctionalTestBase):
         self.assertEqual(len(model_info['inputs']), 3)
         self.assertEqual(len(model_info['outputs']), 1)  # return_values
 
+    def test_export_class_method_that_relies_on_dynamic_variable(self):
+        class moduleA():
+            def __init__(self):
+                self.idx = 0
+                self.stride = 3
+
+            @annotate.method(export_with="torch", environment_constants=['self.idx', 'self.stride'])
+            def get_subset(self, inputA: torch.Tensor):
+                retval = inputA[self.idx:self.idx+self.stride]
+                self.idx += self.stride
+                return retval
+        moduleA = moduleA()
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        subset = moduleA.get_subset(torch.tensor([1, 2, 3]))
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+
+        self.verify_num_connections(annotate, nodes=1, inputs=1, outputs=1,
+                                    internal_connections=0)
+        self.verify_single_torchscript_model_expected_value(
+            [torch.tensor([1, 2, 3])], [subset], moduleA.get_subset.__name__)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

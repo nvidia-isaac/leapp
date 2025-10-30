@@ -150,6 +150,93 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
         self.verify_single_torchscript_model_expected_value(
             [torch.tensor([1])], [outputA, outputB, outputC], funcA.__name__)
 
+    def test_annotate_method_with_custom_returns(self):
+        """tests the situation where the function has custom returns"""
+
+        class MockModule:
+            def __init__(self):
+                self.counter = torch.tensor([0])
+
+            @annotate.method(node_name="counter", export_with="torch", outputs=["self.counter"], register_buffers=["self.counter"])
+            def count(self):
+                self.counter += 1
+
+        mock_module = MockModule()
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        mock_module.count()
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+
+        self.assertEqual(len(annotate.nodes), 1)
+        self.assertEqual(len(annotate.nodes['counter'].inputs), 0)
+        self.assertEqual(len(annotate.nodes['counter'].outputs), 1)
+        self.assertEqual(
+            annotate.detected_nodes['counter']['outputs'][0]['type'], 'tensor')
+        self.verify_single_torchscript_model_expected_value(
+            [], [torch.tensor([1])], 'counter')
+
+    def test_annotate_method_with_mixed_returns(self):
+        """tests the situation where the function has both default and custom returns"""
+
+        class MockModule:
+            def __init__(self):
+                self.counter = torch.tensor([0])
+
+            @annotate.method(node_name="counter", export_with="torch", outputs=["self.counter"], register_buffers=["self.counter"])
+            def count(self, input: torch.Tensor):
+                self.counter += 1
+                retval = input*self.counter
+                return retval
+
+        mock_module = MockModule()
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        output = mock_module.count(torch.tensor([1]))
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+
+        self.assertEqual(len(annotate.nodes), 1)
+        self.assertEqual(len(annotate.nodes['counter'].inputs), 1)
+        self.assertEqual(len(annotate.nodes['counter'].outputs), 2)
+        self.assertEqual(
+            annotate.detected_nodes['counter']['outputs'][0]['type'], 'tensor')
+        self.verify_single_torchscript_model_expected_value(
+            [torch.tensor([1])], [output, torch.tensor([1])], 'counter')
+
+    def test_annotate_method_with_mixed_returns_in_multiple_locations(self):
+        """tests the situation where the function has both default and custom returns in multiple locations"""
+        class MockModule:
+            def __init__(self):
+                self.counter = torch.tensor([0])
+
+            @annotate.method(node_name="counter", export_with="torch", outputs=["self.counter"], register_buffers=["self.counter"])
+            def count(self, input: torch.Tensor):
+                self.counter += 1
+                if input.sum() > 0:
+                    return input*self.counter
+                else:
+                    retval = input+self.counter
+                    return retval
+
+        mock_module = MockModule()
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        output = mock_module.count(torch.tensor([1]))
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+
+        self.assertEqual(len(annotate.nodes), 1)
+        self.assertEqual(len(annotate.nodes['counter'].inputs), 1)
+        self.assertEqual(len(annotate.nodes['counter'].outputs), 2)
+        self.assertEqual(
+            annotate.detected_nodes['counter']['outputs'][0]['type'], 'tensor')
+        self.verify_single_torchscript_model_expected_value(
+            [torch.tensor([2])], [torch.tensor([2]), torch.tensor([1])], 'counter')
+
+        self.verify_single_torchscript_model_expected_value(
+            [torch.tensor([0])], [torch.tensor([1]), torch.tensor([1])], 'counter')
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

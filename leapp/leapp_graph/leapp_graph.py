@@ -257,7 +257,14 @@ class LeappGraph:
 
     def _merge_nodes_automatically(self):
         merged = 0
-        node_groups = []
+
+        # TODO: feedback connections should be allowed. the simply get converted to register buffers
+        # Build set of nodes involved in feedback connections
+        feedback_nodes = set()
+        for feedback_connection in self.feedback_connections:
+            feedback_nodes.add(feedback_connection['source']['node'])
+            for target in feedback_connection['targets']:
+                feedback_nodes.add(target['node'])
 
         node_groups = []
         connection_candidates = {}
@@ -266,16 +273,29 @@ class LeappGraph:
                 continue  # this connection is not a simple output to input connection
             source = connection['source']['node']
             target = connection['targets'][0]['node']
+
             if source not in connection_candidates:
                 connection_candidates[source] = []
-            elif target is not connection_candidates[source][0]:
+
+            # All connections from source must go to the same target
+            if connection_candidates[source] and target != connection_candidates[source][0]:
                 continue  # this connection is not a simple output to input connection
+
             connection_candidates[source].append(target)
 
         for source, connections in connection_candidates.items():
             target = connections[0]
+
+            # Exclude nodes that are involved in feedback connections
+            if source in feedback_nodes or target in feedback_nodes:
+                continue
+
             if len(connections) != len(target.inputs) or len(connections) != len(source.outputs):
                 continue  # this connection has unaccounted for inputs or outputs
+
+            # Only merge nodes with the same backend
+            if source.backend != target.backend:
+                continue
 
             valid_group = set([source, target])
             for node_group in node_groups:
@@ -295,13 +315,14 @@ class LeappGraph:
             subgraph_node = get_subgraph_node(
                 name=name, nodes=current_group_sorted, logger=self.logger)
 
-            # Remove all nodes in the group from self.nodes
-            for node in current_group_sorted:
-                self.node_name_map[node.name] = subgraph_node.name
-                del self.nodes[node.name]
-                merged += 1
+            if subgraph_node is not None:
+                # Remove all nodes in the group from self.nodes
+                for node in current_group_sorted:
+                    self.node_name_map[node.name] = subgraph_node.name
+                    del self.nodes[node.name]
+                    merged += 1
 
-            # Insert the subgraph node
-            self.nodes[subgraph_node.name] = subgraph_node
+                # Insert the subgraph node
+                self.nodes[subgraph_node.name] = subgraph_node
 
         return self.nodes, merged
