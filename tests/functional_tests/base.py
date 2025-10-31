@@ -215,6 +215,8 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
         outputs = model(*inputs)
         if not isinstance(outputs, tuple):
             outputs = (outputs,)
+        # if not isinstance(expected_outputs, tuple):
+        #     expected_outputs = (expected_outputs,)
         for output, expected_output in zip(outputs, expected_outputs):
             self.assertTrue(self.verify_data_exact_match(output, expected_output), "An output value does not match expected value: "
                             f"got {output} but expected {expected_output}")

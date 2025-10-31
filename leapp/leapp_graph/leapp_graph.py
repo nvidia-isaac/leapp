@@ -331,6 +331,8 @@ class LeappGraph:
             if subgraph_node is not None:
                 # Remove all nodes in the group from self.nodes
                 for node in current_group_sorted:
+                    self.logger.debug(
+                        f"Removing node {node.name} from nodes dictionary, current existing nodes: {list(self.nodes.keys())}")
                     self.node_name_map[node.name] = subgraph_node.name
                     del self.nodes[node.name]
                     merged += 1

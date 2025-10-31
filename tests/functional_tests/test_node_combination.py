@@ -57,12 +57,23 @@ class TestNodeMerging(LEAPPFunctionalTestBase):
         outb1, outb2 = funcB(out)
         outc1, outc2 = funcC(outb1)
         outd = funcD(outb2)
-        outd = funcE(outd)
+        oute = funcE(outd)
         annotate.stop()
         annotate.compile_graph(merge_nodes=MergeCfgEnum.AUTOMATIC)
 
         self.verify_num_connections(annotate, nodes=3, inputs=2, outputs=3,
                                     internal_connections=2)
+        expected_feedback_node_name1 = '-'.join(['funcA', 'funcB'])
+        expected_feedback_node_name2 = '-'.join(['funcD', 'funcE'])
+        expected_node_names = [
+            funcC.__name__, expected_feedback_node_name1, expected_feedback_node_name2]
+        for node_name in expected_node_names:
+            self.assertIn(node_name, list(annotate.nodes.keys()))
+        input_tensor = [torch.tensor(
+            [1.0, 1.0, 1.0]), torch.tensor([2.0, 2.0, 2.0])]
+        expected_output = funcB(funcA(*input_tensor))
+        self.verify_single_torchscript_model_expected_value(
+            input_tensor, expected_output, expected_feedback_node_name1)
 
     def test_combine_four_nodes_automatically(self):
         @annotate.method(export_with="torch")
@@ -81,16 +92,25 @@ class TestNodeMerging(LEAPPFunctionalTestBase):
         def funcD(inputD: torch.Tensor):
             return inputD*4.0
 
+        input_tensor = torch.tensor([1.0, 1.0, 1.0])
         annotate.start(name=self.TEST_GRAPH_NAME)
-        out = funcA(torch.tensor([1.0, 1.0, 1.0]))
+        out = funcA(input_tensor.clone().detach())
         outb1 = funcB(out)
         outc1 = funcC(outb1)
         outd = funcD(outc1)
         annotate.stop()
         annotate.compile_graph(merge_nodes=MergeCfgEnum.AUTOMATIC)
 
+        expected_output = outd
+        expected_name = "funcA-funcB-funcC-funcD"
+
         self.verify_num_connections(annotate, nodes=1, inputs=1, outputs=1,
                                     internal_connections=0)
+        self.assertEqual(len(annotate.nodes), 1)
+        self.assertEqual(list(annotate.nodes.keys())[0],
+                         expected_name)
+        self.verify_single_torchscript_model_expected_value(
+            [input_tensor], [expected_output], expected_name)
 
     def test_combine_graph_with_feedback_automatically(self):
 
@@ -109,11 +129,11 @@ class TestNodeMerging(LEAPPFunctionalTestBase):
         @annotate.method(export_with='torch')
         def funcD(inputD: torch.Tensor):
             return inputD/2.0
-
+        input_tensor = torch.tensor([1.0, 1.0, 1.0])
         annotate.start(name=self.TEST_GRAPH_NAME)
         loop_back_input = torch.tensor([0.0, 0.0, 0.0])
         for i in range(3):
-            out = funcA(torch.tensor([1.0, 1.0, 1.0]),
+            out = funcA(input_tensor.clone().detach(),
                         loop_back_input)
             outb1 = funcB(out)
             loop_back_input = outb1.clone()
@@ -121,6 +141,18 @@ class TestNodeMerging(LEAPPFunctionalTestBase):
             outd = funcD(outc1)
         annotate.stop()
         annotate.compile_graph(merge_nodes=MergeCfgEnum.AUTOMATIC)
+
+        self.verify_num_connections(annotate, nodes=3, inputs=1, outputs=1,
+                                    internal_connections=2, feedback_connections=1)
+
+        expected_feedback_node_name = '-'.join(['funcC', 'funcD'])
+        expected_node_names = [funcA.__name__,
+                               funcB.__name__, expected_feedback_node_name]
+        for node_name in expected_node_names:
+            self.assertIn(node_name, list(annotate.nodes.keys()))
+        expected_output = funcD(funcC(input_tensor.clone().detach()))
+        self.verify_single_torchscript_model_expected_value(
+            [input_tensor], [expected_output], expected_feedback_node_name)
 
 
 if __name__ == '__main__':
