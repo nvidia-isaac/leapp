@@ -41,49 +41,70 @@ Environment constants **must be accessible** in the local or global frame when t
 
 ### Special Case: Class Member Variables
 
-When working within a class, LEAPP automatically makes all member variables (self.*) available as constants:
+When working within a class, LEAPP automatically makes all member variables (self.*) available:
 
 ```python
-import torch
-from leapp import annotate
-
 class RobotProcessor:
     def __init__(self):
-        # These member variables are automatically available in annotated blocks
         self.pretrained_model = torch.jit.load("path/to/model.pt")
-        self.config_threshold = 0.7
         self.scaling_factor = 2.5
     
-    @annotate.method(export_with="torch", node_name="process_with_members")
+    @annotate.method(export_with="torch")
     def process_data(self, input_data):
-        """Process using class member variables."""
-        # All self.* variables are automatically available - no need to declare them!
+        # self.* variables are automatically available - no need to declare them!
         scaled = input_data * self.scaling_factor
-        predictions = self.pretrained_model(scaled)
-        
-        # Apply threshold from class member
-        return torch.where(predictions > self.config_threshold,
-                          predictions,
-                          torch.zeros_like(predictions))
+        return self.pretrained_model(scaled)
+```
+
+### Freezing Loop Variables: Capturing Changing Values
+
+Use `environment_constants` to **freeze variables that change over time** but should be treated as constants for each individual node. This is common when creating multiple nodes in a loop.
+
+**The Problem:** Without marking them as constants, tracing would capture the wrong (later) value of the variable.
+
+**The Solution:** Mark changing variables as `environment_constants` to freeze their value at node creation time.
+
+```python
+# Example: Splitting action tensor with changing index
+idx = 0
+for term_name, term in self.terms.items():
+    with annotate.block(
+        node_name=f"{term_name}_split",
+        inputs=["action"],
+        outputs=["term_actions"],
+        environment_constants=['idx'],  # Freeze idx at current iteration value
+        export_with="torch",
+        use_trace=True
+    ):
+        term_actions = action[:, idx : idx + term.action_dim]
     
-    def process_with_block(self, sensor_input):
-        with annotate.block("member_variable_processing",
-                            inputs=["sensor_input"],
-                            outputs=["result"],
-                            export_with="torch"):
-            # self.* variables are automatically available in blocks too!
-            # No need to declare them as environment_constants
-            normalized = sensor_input / self.scaling_factor
-            result = self.pretrained_model(normalized)
-        return result
+    idx += term.action_dim  # idx changes, but each node keeps its frozen value
+```
+
+**Also works with class members that change:**
+
+```python
+class DataSlicer:
+    def __init__(self):
+        self.idx = 0
+        self.stride = 3
+    
+    @annotate.method(export_with="torch", environment_constants=['self.idx', 'self.stride'])
+    def get_subset(self, inputA: torch.Tensor):
+        retval = inputA[self.idx:self.idx+self.stride]
+        self.idx += self.stride  # Changes after trace, but traced value is frozen
+        return retval
 ```
 
 **Key Points:**
-- Environment constants are captured at trace time and embedded in the exported model
+- Environment constants are captured at trace/export time and embedded in the exported model
 - **Variables must exist in scope BEFORE the annotation block is invoked** - LEAPP cannot capture variables that don't exist yet
+- **Two main use cases:**
+  1. **External dependencies**: Pre-trained models, configuration objects, constants that need to be captured
+  2. **Freezing changing values**: Loop variables, counters, or any value that changes but should be constant for a specific node
 - **Declare ALL external variables used in your call stack** - including those used in nested function calls
 - Use `environment_constants` for external variables not in self
-- **Class members (self.*) are automatically available** - no declaration needed
+- **Class members (self.*) are automatically available** - no declaration needed (but can be explicitly listed if you want to freeze their changing values)
 - The values must be serializable for the export format you're using
 
 ## Register Buffers: Persistent State in Modules

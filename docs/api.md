@@ -97,7 +97,7 @@ All parameters are optional keyword arguments (`**params`):
 - **`use_trace`** (bool): Whether to use `torch.jit.trace` for model compilation.
 - **`inputs`** (list[str]): Input specifications for the node.
 - **`outputs`** (list[str]): Output specifications for the node.
-- **`environment_constants`** (list[str]): External variables to capture as constants.
+- **`environment_constants`** (list[str]): External variables to capture as constants. Two main use cases: (1) capturing external dependencies like models or configs, (2) freezing variables that change over time (e.g., loop counters) to their value at node creation. See [Advanced Node Operations](1_advanced_nodes.md#environment-constants-referencing-external-data) for details.
 - **`register_buffers`** (list[str]): Buffers to register with the model (for mutable state).
 - **`enable_fp16`** (bool): Enable FP16 precision mode.
 - **`enable_cuda_graphs`** (bool): Enable CUDA graphs optimization.
@@ -138,7 +138,7 @@ with annotate.block(node_name: str, **kwargs):
   - `use_trace`: Use tracing for compilation
   - `inputs`: Input specifications (list of variable names)
   - `outputs`: Output specifications (list of variable names)
-  - `environment_constants`: External variables to capture
+  - `environment_constants`: External variables to capture as constants (also used to freeze changing variables like loop counters)
   - `register_buffers`: Buffers for mutable state
   - `enable_fp16`: Enable FP16 precision
   - `enable_cuda_graphs`: Enable CUDA graphs
