@@ -52,7 +52,6 @@ dependencies = [
     "matplotlib>=3.5.0",
     "networkx>=2.6",
     "PyYAML>=6.0",
-    "tensordict",
 ]
 
 [project.optional-dependencies]

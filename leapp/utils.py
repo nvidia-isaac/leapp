@@ -222,24 +222,6 @@ class TensorDescription:
         return self.name
 
 
-def _is_list_like(obj):
-    """Check if an object is list-like (has __iter__, __len__, __getitem__ but not dict-like)."""
-    if isinstance(obj, (str, bytes, torch.Tensor)):
-        return False  # strings are iterable but not list-like for our purposes
-    return (hasattr(obj, '__iter__') and
-            hasattr(obj, '__len__') and
-            hasattr(obj, '__getitem__') and
-            not hasattr(obj, 'keys'))
-
-
-def _is_dict_like(obj):
-    """Check if an object is dict-like (has keys, values, items, __getitem__)."""
-    return (hasattr(obj, 'keys') and
-            hasattr(obj, 'values') and
-            hasattr(obj, 'items') and
-            hasattr(obj, '__getitem__'))
-
-
 @dataclass
 class ParameterFormat:
     name: str
@@ -247,7 +229,7 @@ class ParameterFormat:
 
     def get_format_string(self, data: Any) -> Tuple[bool, str]:
 
-        if isinstance(data, list) or _is_list_like(data):
+        if isinstance(data, collections.abc.Sequence) and not isinstance(data, (str, bytes, torch.Tensor)):
             # Warn if not a native list
             if not isinstance(data, list):
                 type_name = type(data).__name__
@@ -269,7 +251,7 @@ class ParameterFormat:
                 else:
                     return True, f"List[{child}]"
 
-        elif isinstance(data, dict) or _is_dict_like(data):
+        elif isinstance(data, collections.abc.Mapping):
             # Warn if not a native dict
             if not isinstance(data, dict):
                 type_name = type(data).__name__
@@ -328,14 +310,12 @@ class ParameterFormat:
 
 def verify_data_exact_match(source_data, target_data):
     # Check if both are the same type (allow dict-like and list-like substitutions)
-    source_is_list_like = isinstance(
-        source_data, list) or _is_list_like(source_data)
-    target_is_list_like = isinstance(
-        target_data, list) or _is_list_like(target_data)
-    source_is_dict_like = isinstance(
-        source_data, dict) or _is_dict_like(source_data)
-    target_is_dict_like = isinstance(
-        target_data, dict) or _is_dict_like(target_data)
+    source_is_list_like = isinstance(source_data, collections.abc.Sequence) and not isinstance(
+        source_data, (str, bytes, torch.Tensor))
+    target_is_list_like = isinstance(target_data, collections.abc.Sequence) and not isinstance(
+        target_data, (str, bytes, torch.Tensor))
+    source_is_dict_like = isinstance(source_data, collections.abc.Mapping)
+    target_is_dict_like = isinstance(target_data, collections.abc.Mapping)
 
     # If one is list-like and the other is not, they don't match
     if source_is_list_like != target_is_list_like:
@@ -496,7 +476,7 @@ def map_from_torch_dtype(notation):
 
 def describe_io_helper(data, name_str, dtype_notation):
     data_description = []
-    if isinstance(data, list) or _is_list_like(data):
+    if isinstance(data, collections.abc.Sequence) and not isinstance(data, (str, bytes, torch.Tensor)):
         if not isinstance(data, list):
             type_name = type(data).__name__
             print(
@@ -511,7 +491,7 @@ def describe_io_helper(data, name_str, dtype_notation):
             io_format.append(child_format)
             data_description.extend(child_description)
         return data_description, io_format
-    elif isinstance(data, dict) or _is_dict_like(data):
+    elif isinstance(data, collections.abc.Mapping):
         if not isinstance(data, dict):
             type_name = type(data).__name__
             print(
@@ -671,9 +651,9 @@ def reconstruct_from_named_dict(named_dict, io_format, use_tag_first=True):
                 return named_dict[item]
             raise KeyError(
                 f"Could not find data for key '{item}' in named_dict")
-        elif isinstance(item, list) or _is_list_like(item):
+        elif isinstance(item, collections.abc.Sequence) and not isinstance(item, (str, bytes, torch.Tensor)):
             return [resolve(sub_item) for sub_item in item]
-        elif isinstance(item, dict) or _is_dict_like(item):
+        elif isinstance(item, collections.abc.Mapping):
             return {key: resolve(value) for key, value in item.items()}
         else:
             # Return as-is for other types
@@ -724,9 +704,9 @@ def flatten_to_named_dict(data, io_format, use_tag_first=True):
             # Store the value
             result[key] = data_item
 
-        elif isinstance(format_item, list) or _is_list_like(format_item):
+        elif isinstance(format_item, collections.abc.Sequence) and not isinstance(format_item, (str, bytes, torch.Tensor)):
             # Both should be lists or list-like
-            if not (isinstance(data_item, list) or _is_list_like(data_item)):
+            if not (isinstance(data_item, collections.abc.Sequence) and not isinstance(data_item, (str, bytes, torch.Tensor))):
                 raise TypeError(
                     f"Format expects a list but data is {type(data_item)}")
             if len(data_item) != len(format_item):
@@ -737,9 +717,9 @@ def flatten_to_named_dict(data, io_format, use_tag_first=True):
             for data_sub, format_sub in zip(data_item, format_item):
                 flatten(data_sub, format_sub)
 
-        elif isinstance(format_item, dict) or _is_dict_like(format_item):
+        elif isinstance(format_item, collections.abc.Mapping):
             # Both should be dicts or dict-like
-            if not (isinstance(data_item, dict) or _is_dict_like(data_item)):
+            if not isinstance(data_item, collections.abc.Mapping):
                 raise TypeError(
                     f"Format expects a dict but data is {type(data_item)}")
             if set(data_item.keys()) != set(format_item.keys()):
