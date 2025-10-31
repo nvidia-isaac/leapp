@@ -93,12 +93,38 @@ class SubgraphNodeModel(torch.nn.Module):
 
         return tuple(outputs)
 
-    # def forward(self, *inputs):
-    #     for name in self.name_order:
+    # def forward_fails(self, *inputs):
+    #     env_dict = TensorDict()
+    #     for idx in range(len(self.input_names)):
+    #         env_dict[self.name_order[0]] = inputs[idx]
+
+    #     with torch.no_grad():
+    #         for idx in range(len(self.name_order)):
+    #             name = self.name_order[idx]
+    #             model_inputs = []
+    #             model_inputs = env_dict[name]
+    #             print("frank debug: model_inputs: ", model_inputs)
+    #             print("frank debug: model_inputs id: ", id(model_inputs))
+    #             print("frank debug: model_inputs underlying data pointer: ",
+    #                   model_inputs[0].data_ptr())
+    #             model = self.models[name]
+    #             # Force a completely fresh execution context
+    #             torch.cuda.synchronize()  # ← Add this
+    #             torch.cuda.empty_cache()   # ← And this
+    #             model_outputs = model(model_inputs).detach().clone()
+    #             if idx+1 < len(self.name_order):
+    #                 env_dict[self.name_order[idx+1]] = model_outputs
+
+    #     return model_outputs
+
+    # def forward_works(self, *inputs):
+    #     inputs = [[inputs[0]]]
+    #     for idx in range(len(self.input_names)):
+    #         name = self.name_order[0]
     #         model = self.models[name]
-    #         model_outputs = model(*inputs)
-    #         inputs = [model_outputs]
-    #         return model_outputs
+    #         model_outputs = model(*inputs[-1])
+    #         inputs.append([model_outputs])
+    #     return inputs[-1]
 
 
 class SubgraphNodeContext(LeappGraphElement):
@@ -126,14 +152,17 @@ class SubgraphNodeContext(LeappGraphElement):
             self.node_execution_order, models, input_names, output_names, node_configs)
         input_values = [input_val.value for input_val in self.inputs]
 
+        # create the backend
         self.export_backend = self._setup_backend(self.backend, {})
-
         # TODO: This is a temporary hack to get the combined model working.
         # the real solution is to allow the backend to handle existing models
         if self.get_backend() == 'torch':
+            torch._C._jit_override_can_fuse_on_gpu(False)
+            torch._C._jit_override_can_fuse_on_cpu(False)
             self.compiled_model = torch.jit.trace(
                 combined_model, input_values)
-            self.model_path = 'combined_model.pt'
+            torch._C._jit_override_can_fuse_on_gpu(True)
+            torch._C._jit_override_can_fuse_on_cpu(True)
         else:
             raise NotImplementedError(
                 f"Combination node for backend {self.get_backend()} is not implemented")
@@ -207,7 +236,10 @@ def get_subgraph_node(nodes: List[LeappGraphElement], logger, name):
         return None
     node_index = nodes[0].node_index
     name_order = [node.name for node in nodes]
-
-    subgraph_node = SubgraphNodeContext(
-        nodes, name_order, node_index, name, backend)
+    try:
+        subgraph_node = SubgraphNodeContext(
+            nodes, name_order, node_index, name, backend)
+    except Exception as e:
+        logger.error(f"Error creating creating merged node {name}: {e}")
+        return None
     return subgraph_node

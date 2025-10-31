@@ -266,44 +266,51 @@ class LeappGraph:
             for target in feedback_connection['targets']:
                 feedback_nodes.add(target['node'])
 
-        node_groups = []
-        connection_candidates = {}
+        # first consolidate into a port agnostic graph
+        simplified_connections = {}
         for connection in self.connections:
-            if len(connection['targets']) != 1:
-                continue  # this connection is not a simple output to input connection
             source = connection['source']['node']
-            target = connection['targets'][0]['node']
+            targets = connection['targets']
+            if source not in simplified_connections:
+                simplified_connections[source] = set()
+            for target in targets:
+                simplified_connections[source].add(target['node'])
 
-            if source not in connection_candidates:
-                connection_candidates[source] = []
+        # build a representation of the in and out degrees of each node
+        # we are explicitly looking for chains of nodes that only connect to a single other node
+        in_degree = {node: 0 for node in self.nodes.values()}
+        out_degree = {node: 0 for node in self.nodes.values()}
+        for source, targets in simplified_connections.items():
+            out_degree[source] = len(targets)
+            for target in targets:
+                in_degree[target] += 1
+        possible_sources = set(
+            [node for node in self.nodes.values() if out_degree[node] == 1])
+        possible_targets = set(
+            [node for node in self.nodes.values() if in_degree[node] == 1])
 
-            # All connections from source must go to the same target
-            if connection_candidates[source] and target != connection_candidates[source][0]:
-                continue  # this connection is not a simple output to input connection
-
-            connection_candidates[source].append(target)
-
-        for source, connections in connection_candidates.items():
-            target = connections[0]
-
-            # Exclude nodes that are involved in feedback connections
-            if source in feedback_nodes or target in feedback_nodes:
+        connection_candidates = []
+        for source in possible_sources:
+            target_node = list(simplified_connections[source])[0]
+            if target_node not in possible_targets:
                 continue
-
-            if len(connections) != len(target.inputs) or len(connections) != len(source.outputs):
-                continue  # this connection has unaccounted for inputs or outputs
-
-            # Only merge nodes with the same backend
-            if source.backend != target.backend:
+            if source.get_backend() != target_node.get_backend():
                 continue
+            if source in feedback_nodes or target_node in feedback_nodes:
+                continue
+            connection_candidates.append(set([source, target_node]))
 
-            valid_group = set([source, target])
+        # join the connection candidates into groups if they can be chained together
+        node_groups = []
+        for connection_candidate in connection_candidates:
             for node_group in node_groups:
-                if valid_group.intersection(node_group):
-                    node_group.update(valid_group)
+                # if the connection is already in a group, they must be in a chain
+                if connection_candidate.intersection(node_group):
+                    node_group.update(connection_candidate)  # takes the union
                     break
             else:
-                node_groups.append(valid_group)
+                # otherwise it is a new group
+                node_groups.append(connection_candidate)
 
         for group in node_groups:
             current_group_sorted = sorted(
@@ -312,8 +319,14 @@ class LeappGraph:
             for node in current_group_sorted[1:]:
                 name += "-" + node.name
             self.logger.info("Creating merged node: " + name)
-            subgraph_node = get_subgraph_node(
-                name=name, nodes=current_group_sorted, logger=self.logger)
+            try:
+                subgraph_node = get_subgraph_node(
+                    name=name, nodes=current_group_sorted, logger=self.logger)
+            except Exception as e:
+                self.logger.error(
+                    f"Unexpected error creating merged node {name}: {e}")
+                self.logger.error(f"Skipping node merge for {name}")
+                continue
 
             if subgraph_node is not None:
                 # Remove all nodes in the group from self.nodes
