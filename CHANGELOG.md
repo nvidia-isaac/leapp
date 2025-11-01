@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SHA256 Model Verification**: Added SHA256 hashing for model verification and integrity checking
 - **Node Sequencing**: Now saves node sequencing information for better graph understanding
 - **YAML Metadata Field**: Added metadata field in YAML export files for storing export environment information
+- **Automatic Tag Duplication**: tensors have code injected in them that would also duplicate their tag if they were duplicated
 
 #### Developer Experience
 - **Better Logging**: Improved logging system with better formatting and information

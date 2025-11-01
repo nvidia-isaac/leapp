@@ -174,7 +174,7 @@ The function only has an effect when LEAPP is actively tracing. Outside of `anno
 
 You **don't** need to use this function when:
 
-- Using the PyTorch operations: `clone()` and `detach()`, or assignment that create new tensors
+- Using the PyTorch operations such as `clone()` and `detach()`, or assignment that create new tensors
 - LEAPP can automatically track data flow through normal operations
 - You're not manually duplicating data with in-place operations
 
@@ -185,6 +185,12 @@ detached = old_tensor.detach()   # LEAPP tracks this automatically
 copied = old_tensor              # Simple reference, no duplication
 new_tensor = [old_tensor]        # variable structure change but underlying tensor is not changed
 ```
+
+**LEAPP tags are automatically preserved through these operations:**
+- `.clone()` - Creates a copy with the same tags
+- `.detach()` - Detaches from computation graph, preserves tags
+- `.contiguous()` - Returns contiguous tensor, preserves tags
+- `.cpu()` / `.cuda()` - Device transfers, preserves tags
 
 You **shouldn't** use this function when:
 
