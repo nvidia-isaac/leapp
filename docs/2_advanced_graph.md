@@ -94,6 +94,107 @@ You must run the loop **at least twice** for LEAPP to detect feedback connection
 **⚠️ name matching not guaranteed**
 - When feedback loops are established, LEAPP does not attempt to reconcile the i/o names. The downstream framework would need to take this into consideration when reconnecting feedback loops.
 
+## Maintaining Tracing with `mirror_leapp_tags`
+
+When working with tensor data in LEAPP, proper tracing requires that LEAPP can track how data flows through your computational graph. However, sometimes you need to duplicate tensor data without using PyTorch's standard `clone()` or `detach()` methods - for example, when using in-place assignment operations like `tensor[:] = other_tensor`.
+
+In these cases, LEAPP's internal tags that track data provenance won't automatically transfer to the copied data. The `annotate.mirror_leapp_tags()` function solves this problem by explicitly transferring tracing tags from a source tensor to a target tensor.
+
+### When to Use `mirror_leapp_tags`
+
+Use `mirror_leapp_tags` when you:
+- Copy tensor data using in-place operations (e.g., `self._prev_action[:] = self._action`)
+- Need to maintain tracing continuity across manual data duplication
+- Want to ensure LEAPP recognizes that two tensors contain the same logical data
+
+### How It Works
+
+The `mirror_leapp_tags()` function performs two critical operations:
+
+1. **Verifies Data Equivalence**: First checks that the source and target tensors contain exactly the same values
+2. **Transfers Tags**: If verification passes, copies all LEAPP internal tracking tags from source to target
+
+If the data doesn't match, it logs an error and does nothing to prevent incorrect tracing.
+
+### Example: Using Preallocated Buffer
+
+A common use case is duplicating data into a preallocated buffer:
+
+```python
+import torch
+from leapp import annotate
+
+class DataProcessor:
+    def __init__(self):
+        self._buffer = torch.zeros(10)
+    
+    @annotate.method(export_with="torch")
+    def process(self, input_data: torch.Tensor):
+        # input_data comes from an upstream node and is tagged to trace graph connections
+        # Copy data using in-place assignment
+        self._buffer[:] = input_data
+        
+        # Mirror LEAPP tags to maintain proper tracing
+        annotate.mirror_leapp_tags(input_data, self._buffer)
+        
+        # Now use the buffer
+        result = self._buffer * 2.0
+        return result
+```
+
+### API Signature
+
+```python
+annotate.mirror_leapp_tags(source, target)
+```
+
+**Parameters:**
+- `source`: The tensor containing the original data and LEAPP tags
+- `target`: The tensor that should receive the tags (must have identical values to source)
+
+### Important Considerations
+
+**⚠️ Data Must Match Exactly**
+
+The function will log an error and do nothing if the values in source and target differ:
+
+```python
+source = torch.tensor([1.0, 2.0, 3.0])
+target = torch.tensor([1.0, 2.0, 4.0])  # Different value!
+
+# This will log an error and do nothing:
+annotate.mirror_leapp_tags(source, target)  # Error logged: source and target do not match
+```
+
+**⚠️ Only Works During Tracing**
+
+The function only has an effect when LEAPP is actively tracing. Outside of `annotate.start()` / `annotate.stop()` blocks, it will safely no-op.
+
+### When to not use `mirror_leapp_tags`
+
+You **don't** need to use this function when:
+
+- Using the PyTorch operations: `clone()` and `detach()`, or assignment that create new tensors
+- LEAPP can automatically track data flow through normal operations
+- You're not manually duplicating data with in-place operations
+
+```python
+# These don't need mirror_leapp_tags:
+new_tensor = old_tensor.clone()  # LEAPP tracks this automatically
+detached = old_tensor.detach()   # LEAPP tracks this automatically
+copied = old_tensor              # Simple reference, no duplication
+new_tensor = [old_tensor]        # variable structure change but underlying tensor is not changed
+```
+
+You **shouldn't** use this function when:
+
+- computation is performed such that the value of source and target are going to be **different**
+```python
+# These should be tracked as a node
+new_tensor = old_tensor+10       # computation performed
+new_tensor[:5] = old_tensor      # a subsection of new_tensor is replaced with old_tensor
+```
+
 ## Node Merging: Optimizing Graph Structure
 
 In many cases, it is advantageous to merge interconnected nodes to simplify the final graph structure. LEAPP can automatically merge nodes to create more efficient graph structures. This optimization combines multiple nodes into single computational units when it's safe to do so.
@@ -267,6 +368,7 @@ The generated YAML file will show this merged node as a single computational uni
 Understanding graph-level operations helps you build more sophisticated computational graphs:
 
 - **Feedback connections** capture cyclic behavior by running your graph multiple times during tracing
+- **Mirror LEAPP tags** (`annotate.mirror_leapp_tags()`) maintains proper tracing when duplicating tensor data with in-place operations
 - **Automatic node merging** optimizes completely sequential chains where all outputs go to a single target
 - Nodes with **branching outputs** or **multiple input sources** cannot be automatically merged
 - Choose merging strategies based on your performance needs and debugging requirements

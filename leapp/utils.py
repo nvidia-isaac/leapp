@@ -938,23 +938,47 @@ def tag_tensor(tensor, tag):
     tensor.leapp_tag = tag
     tensor.value = lambda: tensor
 
-    if not hasattr(torch.Tensor, '_original_clone'):
-        def clone_with_tags(self, *args, **kwargs):
-            """Clone tensor while preserving leapp_tag and other custom attributes."""
-            cloned = self._original_clone(*args, **kwargs)
+    # Helper function to copy custom attributes from source to target tensor
+    def _copy_custom_attrs(source, target):
+        """Copy all custom attributes from source tensor to target tensor."""
+        for attr_name in dir(source):
+            if not attr_name.startswith('_') and not hasattr(torch.Tensor, attr_name):
+                if hasattr(source, attr_name):
+                    setattr(target, attr_name, getattr(source, attr_name))
+        return target
 
-            # Copy all custom attributes
-            for attr_name in dir(self):
-                if not attr_name.startswith('_') and not hasattr(torch.Tensor, attr_name):
-                    if hasattr(self, attr_name):
-                        setattr(cloned, attr_name, getattr(self, attr_name))
+    # Helper function to create a monkey-patched method wrapper
+    def _make_wrapper(method_name, docstring):
+        """Create a wrapper function that preserves custom attributes."""
+        original_attr = f'_original_{method_name}'
 
-            return cloned
+        def wrapper(self, *args, **kwargs):
+            original_method = getattr(self, original_attr)
+            result = original_method(*args, **kwargs)
+            return _copy_custom_attrs(self, result)
 
-        # Monkey patch the clone method
-        torch.Tensor._original_clone = torch.Tensor.clone
-        torch.Tensor.clone = clone_with_tags
+        wrapper.__doc__ = docstring
+        return wrapper
 
+    # List of methods to monkey patch
+    methods_to_patch = [
+        ('clone', 'Clone tensor while preserving leapp_tag and other custom attributes.'),
+        ('detach', 'Detach tensor while preserving leapp_tag and other custom attributes.'),
+        ('contiguous', 'Make tensor contiguous while preserving leapp_tag and other custom attributes.'),
+        ('cpu', 'Move tensor to CPU while preserving leapp_tag and other custom attributes.'),
+        ('cuda', 'Move tensor to CUDA while preserving leapp_tag and other custom attributes.'),
+    ]
+
+    # Apply monkey patches
+    for method_name, docstring in methods_to_patch:
+        original_attr = f'_original_{method_name}'
+        if not hasattr(torch.Tensor, original_attr):
+            # Save original method
+            setattr(torch.Tensor, original_attr,
+                    getattr(torch.Tensor, method_name))
+            # Replace with wrapper
+            setattr(torch.Tensor, method_name,
+                    _make_wrapper(method_name, docstring))
     return tensor
 
 

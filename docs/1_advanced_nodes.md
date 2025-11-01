@@ -2,6 +2,61 @@
 
 This guide dives deeper into specific scenarios you might encounter when using LEAPP for complex nodes. Unlike the getting started guide, this focuses on particular situations rather than end-to-end examples.
 
+## Declaring Explicit Return Values
+
+Sometimes you need to export a function that modifies internal state but doesn't explicitly return those values in its signature. LEAPP allows you to declare return values using the `outputs` parameter in `@annotate.method()` or `annotate.block()`, even when those values aren't part of the original function's return statement.
+
+### Example: Exporting Internal State Variables
+
+Consider a method that processes actions and stores them in an internal buffer, but doesn't return anything:
+
+```python
+import torch
+from leapp import annotate
+
+class ActionProcessor:
+    def __init__(self, scale: float, offset: float):
+        self._scale = torch.tensor(scale)
+        self._offset = torch.tensor(offset)
+        self._raw_actions = torch.zeros(10)
+        self._processed_actions = torch.zeros(10)
+        self._clip = torch.tensor([[[-1.0, 1.0]]])
+        self.cfg = type('Config', (), {'clip': True})()
+    
+    @annotate.method(outputs=["self._processed_actions"], export_with="torch", use_trace=True)
+    def process_actions(self, actions: torch.Tensor):
+        # Store the raw actions
+        self._raw_actions[:] = actions
+        # Apply the affine transformations
+        self._processed_actions = self._raw_actions * self._scale + self._offset
+        # Clip actions
+        if self.cfg.clip is not None:
+            self._processed_actions = torch.clamp(
+                self._processed_actions, min=self._clip[:, :, 0], max=self._clip[:, :, 1]
+            )
+        # Note: No explicit return statement!
+```
+
+In this example:
+- The original `process_actions()` method has no return statement
+- By specifying `outputs=["self._processed_actions"]`, LEAPP will **internally modify** the function to create a return statement that returns `self._processed_actions`
+- The exported graph node will have `self._processed_actions` as an output that can be connected to other nodes
+
+### Use Cases
+
+This feature is particularly useful for:
+
+- **Stateful Classes**: Methods that update internal state variables without returning them
+- **In-Place Operations**: Functions that modify tensors in-place and store results internally
+- **Multi-Stage Processing**: Breaking down complex processing into methods that store intermediate results
+
+**⚠️ Important Notes:**
+
+- Output variables must be **assigned** within the annotated method/block
+- For class methods, `self.*` variables are automatically accessible (no need to declare in `environment_constants`)
+- The specified outputs must exist and be populated when the method completes execution
+- Output order in the list determines the return order in the exported function
+
 ## Environment Constants: Referencing External Data
 
 Sometimes you need to reference data from outside your annotated code block, such as pre-trained models, configuration objects, or constants. LEAPP's `environment_constants` parameter lets you explicitly declare these external dependencies.

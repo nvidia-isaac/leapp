@@ -303,13 +303,23 @@ class LeappGraph:
         # join the connection candidates into groups if they can be chained together
         node_groups = []
         for connection_candidate in connection_candidates:
+            # Find all groups that intersect with this connection candidate
+            matching_groups = []
+            non_matching_groups = []  # preserves other chains
+
             for node_group in node_groups:
-                # if the connection is already in a group, they must be in a chain
                 if connection_candidate.intersection(node_group):
-                    node_group.update(connection_candidate)  # takes the union
-                    break
+                    matching_groups.append(node_group)
+                else:
+                    non_matching_groups.append(node_group)
+
+            # Merge all matching groups together with the new connection candidate
+            if matching_groups:
+                merged_group = connection_candidate.union(*matching_groups)
+                node_groups = non_matching_groups
+                node_groups.append(merged_group)
             else:
-                # otherwise it is a new group
+                # No matches, add as a new group
                 node_groups.append(connection_candidate)
 
         for group in node_groups:

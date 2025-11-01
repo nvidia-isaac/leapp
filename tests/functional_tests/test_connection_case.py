@@ -77,6 +77,40 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
         self.verify_num_connections(annotate, nodes=4, inputs=1, outputs=1,
                                     internal_connections=3, feedback_connections=1)
 
+    def test_tensor_tag_presistence(self):
+        @annotate.method()
+        def funcA(inputA: torch.Tensor):
+            return inputA, inputA + 1
+
+        @annotate.method()
+        def funcB(inputB: torch.Tensor):
+            return inputB
+
+        @annotate.method()
+        def funcC(inputC: torch.Tensor):
+            return inputC
+
+        @annotate.method()
+        def funcD(inputD: torch.Tensor):
+            return inputD
+
+        @annotate.method()
+        def funcE(inputE: torch.Tensor, inputE2: torch.Tensor):
+            return inputE
+
+        annotate.start(name="test_graph")
+        out_funcA1, out_funcA2 = funcA(torch.tensor([1.0, 2.0, 3.0]))
+        out_funcB = funcB(out_funcA1.clone())
+        out_funcC = funcC(out_funcA2.detach())
+        out_funcD = funcD(out_funcC.contiguous())
+        funcE(out_funcD.cpu(), out_funcB.cuda())
+
+        annotate.stop()
+        annotate.compile_graph()
+
+        self.verify_num_connections(annotate, nodes=5, inputs=1, outputs=1,
+                                    internal_connections=5, feedback_connections=0)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

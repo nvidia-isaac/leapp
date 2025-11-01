@@ -449,11 +449,14 @@ class ExportManager:
     def mirror_leapp_tags(self, source, target):
         if not self.intepret_graph:
             return
-        if not verify_data_exact_match(source, target):
-            raise Exception(
-                f"Error: source and target do not match: {source} != {target}")
-
-        mirror_all_tensor_tags(source, target)
+        try:
+            if not verify_data_exact_match(source, target):
+                self.logger.error(
+                    f"Error: source and target do not match: {source} != {target}")
+            mirror_all_tensor_tags(source, target)
+        except Exception as e:
+            self.logger.error(f"Unexpected error mirroring LEAPP tags: {e}")
+            raise e
 
     def get_io_descriptions(self):
         self.logger.section(

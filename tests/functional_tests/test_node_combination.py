@@ -93,7 +93,7 @@ class TestNodeMerging(LEAPPFunctionalTestBase):
             return inputD*4.0
 
         input_tensor = torch.tensor([1.0, 1.0, 1.0])
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        annotate.start(name=self.TEST_GRAPH_NAME, verbose=True)
         out = funcA(input_tensor.clone().detach())
         outb1 = funcB(out)
         outc1 = funcC(outb1)

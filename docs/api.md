@@ -264,6 +264,32 @@ The method logs statistics including:
 
 ---
 
+## `annotate.mirror_leapp_tags()`
+
+Transfer LEAPP's internal tracing tags from one tensor to another when data is duplicated without using standard PyTorch operations like `clone()` or `detach()`.
+
+### Signature
+
+```python
+annotate.mirror_leapp_tags(source, target)
+```
+
+### Parameters
+
+- **`source`** (Tensor, required): The tensor containing the original data and LEAPP internal tags.
+- **`target`** (Tensor, required): The tensor that should receive the tags. Must contain exactly the same values as `source`.
+
+### Behavior
+
+1. **Verifies data equivalence**: Checks that `source` and `target` contain exactly the same values
+2. **Transfers tags**: If verification passes, copies all LEAPP internal tracking tags from `source` to `target`
+3. **Logs error on mismatch**: If data doesn't match exactly, logs an error and does nothing to prevent incorrect tracing
+
+
+- **See detailed guide**: For more information and use cases, see [Advanced Graph Operations](2_advanced_graph.md#maintaining-tracing-with-mirror_leapp_tags)
+
+---
+
 ## Complete API Workflow Example
 
 Here's a complete example demonstrating all API methods:
@@ -378,6 +404,6 @@ exports/complete_pipeline/
 ## See Also
 
 - [Getting Started Guide](0_getting_started.md) - Learn the basics of LEAPP
-- [Advanced Node Operations](1_advanced_nodes.md) - Environment constants, buffers, and IO reconciliation
-- [Advanced Graph Operations](2_advanced_graph.md) - Cycle detection and node merging
+- [Advanced Node Operations](1_advanced_nodes.md) - Advanced node tracing options
+- [Advanced Graph Operations](2_advanced_graph.md) - Advanced graph crafting operations
 
