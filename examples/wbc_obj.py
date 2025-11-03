@@ -185,7 +185,7 @@ def main():
 
 
 if __name__ == "__main__":
-    annotate.start(name="sample_wbc_obj")
+    annotate.start(name="sample_wbc_obj", verbose=True)
     main()
     annotate.stop()
 

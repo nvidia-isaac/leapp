@@ -194,7 +194,7 @@ def main():
 
 
 if __name__ == "__main__":
-    annotate.start("sample_wbc_graph")
+    annotate.start("sample_wbc_graph", verbose=True)
     main()
     annotate.stop()
     annotate.compile_graph()

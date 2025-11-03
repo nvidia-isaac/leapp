@@ -22,9 +22,10 @@ import re
 import textwrap
 import copy
 import os
+import sys
 import collections.abc
-from dataclasses import dataclass, field
-from typing import Optional, Any, Dict
+from dataclasses import dataclass
+from typing import Optional, Any, Dict, Tuple
 
 
 def extract_source_from_line_range(executed_lines, from_function, context_name):
@@ -67,21 +68,6 @@ def extract_source_from_line_range(executed_lines, from_function, context_name):
 
         try:
             tree = ast.parse(file_source)
-            target_line = min_line
-
-            def within(node):
-                node_start = getattr(node, 'lineno', None)
-                node_end = getattr(node, 'end_lineno', None)
-                if node_start is None:
-                    return False
-                if node_end is None:
-                    if getattr(node, 'body', None):
-                        last_child = node.body[-1]
-                        node_end = getattr(last_child, 'end_lineno', getattr(
-                            last_child, 'lineno', node_start))
-                    else:
-                        node_end = node_start
-                return node_start <= target_line <= node_end
 
             best_candidate = None
             best_start = -1
@@ -91,12 +77,27 @@ def extract_source_from_line_range(executed_lines, from_function, context_name):
             else:
                 wanted = (ast.With, ast.AsyncWith)
 
+            # Find the function that contains our line range
             for n in ast.walk(tree):
-                if isinstance(n, wanted) and within(n):
-                    cand_start = getattr(n, 'lineno', 0)
-                    if cand_start >= best_start and cand_start <= target_line:
-                        best_candidate = n
-                        best_start = cand_start
+                if isinstance(n, wanted):
+                    node_start = getattr(n, 'lineno', None)
+                    node_end = getattr(n, 'end_lineno', None)
+                    if node_start is None:
+                        continue
+                    if node_end is None:
+                        if getattr(n, 'body', None):
+                            last_child = n.body[-1]
+                            node_end = getattr(last_child, 'end_lineno', getattr(
+                                last_child, 'lineno', node_start))
+                        else:
+                            node_end = node_start
+
+                    # Check if this function overlaps with our line range
+                    # (handles decorators by checking if function def line or any body line is in range)
+                    if (min_line <= node_start <= max_line) or (node_start <= min_line <= node_end):
+                        if node_start > best_start:
+                            best_candidate = n
+                            best_start = node_start
 
             if best_candidate is not None and getattr(best_candidate, 'body', None):
                 body_start_line = getattr(
@@ -159,14 +160,13 @@ def extract_source_from_line_range(executed_lines, from_function, context_name):
             source_code = dedented_code.rstrip()
         else:
             source_code = ""
-        print(
-            f"Extracted code from file: {filename}, function: {executed_lines['function_name']}")
+        message = f"Extracted code from file: {filename}, function: {executed_lines['function_name']}"
 
     except Exception as e:
-        print(f"Error extracting source from line range: {e}")
+        message = f"Error extracting source from line range: {e}"
         source_code = ""
 
-    return source_code
+    return source_code, message
 
 
 class CompactYamlList(list):
@@ -222,11 +222,111 @@ class TensorDescription:
         return self.name
 
 
+@dataclass
+class ParameterFormat:
+    name: str
+    formatting: Any
+
+    def get_format_string(self, data: Any) -> Tuple[bool, str]:
+
+        if isinstance(data, collections.abc.Sequence) and not isinstance(data, (str, bytes, torch.Tensor)):
+            # Warn if not a native list
+            if not isinstance(data, list):
+                type_name = type(data).__name__
+                print(
+                    f"Parameter '{self.name}' has list-like type '{type_name}' which will be "
+                    f"treated as 'list' in the generated function signature. This may cause "
+                    f"issues if the exact type is required.")
+
+            if len(data) == 0:
+                return True, "list"  # Empty list, can't determine child type
+
+            item_types_valid = len(set(type(item) for item in data)) == 1
+            if not item_types_valid:
+                return False, "INCONSISTENT LIST ITEM TYPES"
+            else:
+                success, child = self.get_format_string(data[0])
+                if not success:
+                    return False, "LIST CHILD FORMAT STRING NOT VALID"
+                else:
+                    return True, f"List[{child}]"
+
+        elif isinstance(data, collections.abc.Mapping):
+            # Warn if not a native dict
+            if not isinstance(data, dict):
+                type_name = type(data).__name__
+                print(
+                    f"Parameter '{self.name}' has dict-like type '{type_name}' which will be "
+                    f"treated as 'dict' in the generated function signature. This may cause "
+                    f"issues if the exact type is required.")
+
+            if len(data) == 0:
+                return True, "dict"  # Empty dict, can't determine child type
+
+            key_types = set(type(key) for key in data.keys())
+            if len(key_types) > 1 or key_types != {str}:
+                return False, "INCONSISTENT DICT KEY TYPES"
+            value_types = set(type(value) for value in data.values())
+            if len(value_types) > 1:
+                return False, "INCONSISTENT DICT VALUE TYPES"
+
+            success, child = self.get_format_string(
+                list(data.values())[0])
+            if not success:
+                return False, "DICT CHILD FORMAT STRING NOT VALID"
+            else:
+                return True, f"Dict[str, {child}]"
+
+        elif isinstance(data, TensorDescription):
+            return True, type(data.value).__name__
+
+        else:
+            return False, "UNEXPECTED TYPE"
+
+    @property
+    def name_str(self) -> str:
+        """Return just the name as a string."""
+        return self.name.replace(".", "_")
+
+    @property
+    def name_raw(self) -> str:
+        return self.name
+
+    @property
+    def dtype(self) -> str:
+        """Return the dtype as a string."""
+        success, dtype = self.get_format_string(self.formatting)
+        if not success:
+            return None
+        return dtype
+
+    @property
+    def valid(self):
+        a = self.get_format_string(self.formatting)
+        if not a:
+            return False
+        return True
+
+
 def verify_data_exact_match(source_data, target_data):
-    if type(source_data) is not type(target_data):
+    # Check if both are the same type (allow dict-like and list-like substitutions)
+    source_is_list_like = isinstance(source_data, collections.abc.Sequence) and not isinstance(
+        source_data, (str, bytes, torch.Tensor))
+    target_is_list_like = isinstance(target_data, collections.abc.Sequence) and not isinstance(
+        target_data, (str, bytes, torch.Tensor))
+    source_is_dict_like = isinstance(source_data, collections.abc.Mapping)
+    target_is_dict_like = isinstance(target_data, collections.abc.Mapping)
+
+    # If one is list-like and the other is not, they don't match
+    if source_is_list_like != target_is_list_like:
+        return False
+    # If one is dict-like and the other is not, they don't match
+    if source_is_dict_like != target_is_dict_like:
         return False
 
     if isinstance(source_data, torch.Tensor):
+        if not isinstance(target_data, torch.Tensor):
+            return False
         if source_data.shape != target_data.shape:
             return False
         if source_data.dtype != target_data.dtype:
@@ -236,14 +336,14 @@ def verify_data_exact_match(source_data, target_data):
         if not torch.equal(source_data, target_data):
             return False
 
-    elif isinstance(source_data, list):
+    elif source_is_list_like:
         if len(source_data) != len(target_data):
             return False
         for source_item, target_item in zip(source_data, target_data):
             if not verify_data_exact_match(source_item, target_item):
                 return False
-    elif isinstance(source_data, dict):
-        if source_data.keys() != target_data.keys():
+    elif source_is_dict_like:
+        if set(source_data.keys()) != set(target_data.keys()):
             return False
         for key, source_item in source_data.items():
             if not verify_data_exact_match(source_item, target_data[key]):
@@ -376,27 +476,39 @@ def map_from_torch_dtype(notation):
 
 def describe_io_helper(data, name_str, dtype_notation):
     data_description = []
-    if isinstance(data, list):
+    if isinstance(data, collections.abc.Sequence) and not isinstance(data, (str, bytes, torch.Tensor)):
+        if not isinstance(data, list):
+            type_name = type(data).__name__
+            print(
+                f"Input/Output '{name_str}' has list-like type '{type_name}' which will be "
+                f"treated as 'list'. Ensure the runtime can handle this substitution.")
+
         io_format = []
         for idx, item in enumerate(data):
-            child_name = ".".join([name_str, str(idx)])
+            child_name = "_".join([name_str, str(idx)])
             child_description, child_format = describe_io_helper(
                 item, child_name, dtype_notation)
             io_format.append(child_format)
             data_description.extend(child_description)
         return data_description, io_format
-    elif isinstance(data, dict):
+    elif isinstance(data, collections.abc.Mapping):
+        if not isinstance(data, dict):
+            type_name = type(data).__name__
+            print(
+                f"Input/Output '{name_str}' has dict-like type '{type_name}' which will be "
+                f"treated as 'dict'. Ensure the runtime can handle this substitution.")
+
         io_format = {}
         for k, v in data.items():
-            child_name = ".".join([name_str, k])
+            child_name = "_".join([name_str, k])
             child_description, child_format = describe_io_helper(
                 v, child_name, dtype_notation)
             io_format[k] = child_format
             data_description.extend(child_description)
     elif isinstance(data, torch.Tensor):
         tag = None
-        if hasattr(data, 'export_manager_tag'):
-            tag = data.export_manager_tag
+        if hasattr(data, 'leapp_tag'):
+            tag = data.leapp_tag
 
         # Create TensorDescription dataclass instance
         tensor_desc = TensorDescription(
@@ -427,10 +539,12 @@ def describe_io_helper(data, name_str, dtype_notation):
     return data_description, io_format
 
 
-def describe_io(name, data, dtype_notation="python"):
+def describe_io(name, raw_name, data, dtype_notation="python"):
     data_description, io_format = describe_io_helper(
         data, name, dtype_notation)
-    return data_description, io_format
+    parameter_description = ParameterFormat(
+        name=raw_name, formatting=io_format)
+    return data_description, parameter_description
 
 
 def _resolve_tensor_descriptions(io_format, extractor):
@@ -441,13 +555,16 @@ def _resolve_tensor_descriptions(io_format, extractor):
     applies the extractor function to any TensorDescription objects found.
 
     Args:
-        io_format: The object to recursively process (can be TensorDescription, list, dict, or any other type)
+        io_format: The object to recursively process (can be TensorDescription, ParameterFormat, list, dict, or any other type)
         extractor: A function that takes a TensorDescription and returns the desired value
 
     Returns:
         The processed object with TensorDescription objects replaced by extracted values
     """
-    if isinstance(io_format, TensorDescription):
+    if isinstance(io_format, ParameterFormat):
+        # For ParameterFormat, apply resolution to the formatting attribute
+        return _resolve_tensor_descriptions(io_format.formatting, extractor)
+    elif isinstance(io_format, TensorDescription):
         return extractor(io_format)
     elif isinstance(io_format, list):
         return [_resolve_tensor_descriptions(item, extractor) for item in io_format]
@@ -462,10 +579,11 @@ def resolve_tensor_descriptions_to_names(io_format):
     Recursively resolve TensorDescription objects to their string names.
 
     Args:
-        io_format: The object to recursively process
+        io_format: The object to recursively process (can be ParameterFormat, TensorDescription, list, dict, etc.)
 
     Returns:
-        The processed object with TensorDescription objects replaced by their string names
+        The processed object with TensorDescription objects replaced by their string names.
+        If a ParameterFormat is passed, returns the resolved formatting from within it.
     """
     return _resolve_tensor_descriptions(io_format, lambda td: td.name_str)
 
@@ -475,12 +593,149 @@ def resolve_tensor_descriptions_to_values(io_format):
     Recursively resolve TensorDescription objects to their values.
 
     Args:
-        io_format: The object to recursively process
+        io_format: The object to recursively process (can be ParameterFormat, TensorDescription, list, dict, etc.)
 
     Returns:
-        The processed object with TensorDescription objects replaced by their values
+        The processed object with TensorDescription objects replaced by their values.
+        If a ParameterFormat is passed, returns the resolved formatting from within it.
     """
     return _resolve_tensor_descriptions(io_format, lambda td: td.value)
+
+
+def reconstruct_from_named_dict(named_dict, io_format, use_tag_first=True):
+    """
+    Reverse of describe_io_helper: reconstruct data structure from named dict and format.
+
+    Takes a dictionary mapping names/tags to actual data values and an io_format structure,
+    and reconstructs the original nested data structure.
+
+    Args:
+        named_dict: Dictionary mapping names or tags to actual data values
+        io_format: The format structure (can be ParameterFormat, TensorDescription objects or strings)
+        use_tag_first: If True, try to lookup by tag first, then by name. If False, use name only.
+
+    Returns:
+        The reconstructed data structure with the same shape as the original
+
+    Example:
+        # Original data
+        data = {'a': tensor1, 'b': [tensor2, tensor3]}
+
+        # Describe it
+        desc, fmt = describe_io_helper(data, "root", "python")
+
+        # Later reconstruct from a named dict
+        named = {'root.a': new_tensor1, 'root.b.0': new_tensor2, 'root.b.1': new_tensor3}
+        reconstructed = reconstruct_from_named_dict(named, fmt)
+        # reconstructed = {'a': new_tensor1, 'b': [new_tensor2, new_tensor3]}
+    """
+    def resolve(item):
+        if isinstance(item, ParameterFormat):
+            # For ParameterFormat, extract the formatting attribute
+            return resolve(item.formatting)
+        elif isinstance(item, TensorDescription):
+            # Try to find the value in named_dict
+            # First try by tag if it exists
+            if item.tag is not None and item.tag in named_dict:
+                return named_dict[item.tag]
+
+            # Then try by name
+            if item.name in named_dict:
+                return named_dict[item.name]
+
+            raise KeyError(
+                f"Could not find data for TensorDescription with name='{item.name}' and tag='{item.tag}' in named_dict")
+        elif isinstance(item, str):
+            # If it's a string, look it up directly in named_dict
+            if item in named_dict:
+                return named_dict[item]
+            raise KeyError(
+                f"Could not find data for key '{item}' in named_dict")
+        elif isinstance(item, collections.abc.Sequence) and not isinstance(item, (str, bytes, torch.Tensor)):
+            return [resolve(sub_item) for sub_item in item]
+        elif isinstance(item, collections.abc.Mapping):
+            return {key: resolve(value) for key, value in item.items()}
+        else:
+            # Return as-is for other types
+            return item
+
+    return resolve(io_format)
+
+
+def flatten_to_named_dict(data, io_format, use_tag_first=True):
+    """
+    Flatten a nested data structure to a dictionary using io_format as a guide.
+
+    This is the inverse of reconstruct_from_named_dict: given a nested data structure
+    and its corresponding format, it creates a flat dictionary mapping tags/names to values.
+
+    Args:
+        data: The nested data structure (can be tensor, list, dict, etc.)
+        io_format: The format structure (can be ParameterFormat or containing TensorDescription objects)
+        use_tag_first: If True, use tag as key if available, otherwise use name
+
+    Returns:
+        Dictionary mapping tags/names to actual values
+
+    Example:
+        # Original data
+        data = {'a': tensor1, 'b': [tensor2, tensor3]}
+
+        # Describe it to get format
+        desc, fmt = describe_io_helper(data, "root", "python")
+
+        # Flatten it back
+        flat = flatten_to_named_dict(data, fmt)
+        # flat = {'root.a': tensor1, 'root.b.0': tensor2, 'root.b.1': tensor3}
+    """
+    result = {}
+
+    def flatten(data_item, format_item):
+        if isinstance(format_item, ParameterFormat):
+            # For ParameterFormat, extract the formatting attribute
+            flatten(data_item, format_item.formatting)
+        elif isinstance(format_item, TensorDescription):
+            # Extract the key (tag or name)
+            if use_tag_first and format_item.tag is not None:
+                key = format_item.tag
+            else:
+                key = format_item.name
+
+            # Store the value
+            result[key] = data_item
+
+        elif isinstance(format_item, collections.abc.Sequence) and not isinstance(format_item, (str, bytes, torch.Tensor)):
+            # Both should be lists or list-like
+            if not (isinstance(data_item, collections.abc.Sequence) and not isinstance(data_item, (str, bytes, torch.Tensor))):
+                raise TypeError(
+                    f"Format expects a list but data is {type(data_item)}")
+            if len(data_item) != len(format_item):
+                raise ValueError(
+                    f"List length mismatch: data has {len(data_item)} items, "
+                    f"format expects {len(format_item)}")
+
+            for data_sub, format_sub in zip(data_item, format_item):
+                flatten(data_sub, format_sub)
+
+        elif isinstance(format_item, collections.abc.Mapping):
+            # Both should be dicts or dict-like
+            if not isinstance(data_item, collections.abc.Mapping):
+                raise TypeError(
+                    f"Format expects a dict but data is {type(data_item)}")
+            if set(data_item.keys()) != set(format_item.keys()):
+                raise ValueError(
+                    f"Dict keys mismatch: data has {set(data_item.keys())}, "
+                    f"format expects {set(format_item.keys())}")
+
+            for key in format_item.keys():
+                flatten(data_item[key], format_item[key])
+        else:
+            # For other types, we don't have a good way to extract a key
+            # This shouldn't normally happen if format was created by describe_io_helper
+            pass
+
+    flatten(data, io_format)
+    return result
 
 
 def safe_deepcopy(data):
@@ -493,41 +748,6 @@ def safe_deepcopy(data):
         return {k: safe_deepcopy(v) for k, v in data.items()}
     else:
         return copy.deepcopy(data)
-
-
-def build_function_header(text, name):
-    """
-    Extract function header from text and replace function name with the provided name.
-    Also inject 'self' as first parameter if not present.
-
-    Args:
-        text (str): Text containing one Python function
-        name (str): The name to use for the function
-
-    Returns:
-        str: Single-line function header with specified name and self as first parameter, or None if not found
-    """
-    # Find the function definition
-    match = re.search(r'def\s+([a-zA-Z_]\w*)\s*\(', text)
-    if not match:
-        return None
-
-    # Find the function header by balancing parentheses
-    start = match.start()
-    header_end = find_header_end(text, start)
-    if header_end is None:
-        return None
-
-    # Extract and clean the header
-    raw_header = text[start:header_end + 1]
-    clean_header = clean_header_to_single_line(raw_header)
-
-    # Replace the function name with the provided name
-    clean_header = re.sub(
-        r'def\s+[a-zA-Z_]\w*\s*\(', f'def {name}(', clean_header)
-
-    # Add self if not already present
-    return add_self_if_needed(clean_header) + '\n'
 
 
 def find_header_end(text, start_pos):
@@ -604,7 +824,7 @@ def add_self_if_needed(header):
         return f"{before}self, {params}{after}"
 
 
-def get_atrribute_value_from_frame(frame, attr_name):
+def get_attribute_value_from_frame(frame, attr_name):
     if "." in attr_name:
         parts = attr_name.split(".")
         final_attr_name = parts[-1]
@@ -643,11 +863,19 @@ def get_atrribute_value_from_frame(frame, attr_name):
 #########################################################
 
 
-def create_module(name, parent_class):
+def create_module(name, parent_class, constant_attrs):
     if parent_class is None:
         bases = (torch.nn.Module,)
+    elif isinstance(parent_class, torch.nn.Module) or issubclass(parent_class, torch.nn.Module):
+        bases = (parent_class,)
     else:
         bases = (torch.nn.Module, parent_class)
+
+    constants = {}
+    for name, value in constant_attrs.items():
+        if 'self.' in name:
+            name = name.split('self.')[1]
+        constants[name] = value
 
     def __init__(self, *args, **kwargs):
         # Initialize all parent classes
@@ -655,12 +883,16 @@ def create_module(name, parent_class):
         self.saved_buffers = []
 
     def add_buffer(self, name, value):
-        # verify no duplicate buffer names
-        if name in self.saved_buffers:
-            raise ValueError(f"Buffer {name} already registered")
         # clean up the input name
         if 'self.' in name:
             name = name.split('self.')[1]
+        # verify no duplicate buffer names
+        if name in self.saved_buffers:
+            raise ValueError(
+                f"Buffer with name '{name}' was already registered")
+        if name in self.__constant__:
+            raise ValueError(
+                f"Buffer with name '{name}' was already registered as a constant")
         # clean up preexisting attributes
         if hasattr(self, name):
             delattr(self, name)
@@ -676,12 +908,22 @@ def create_module(name, parent_class):
         bases,            # Base classes tuple
         {
             '__init__': __init__,
+            '__constant__': list(constants.keys()),
             'add_buffer': add_buffer,
             'forward': forward,
         }
     )
 
-    return ModuleTemplate()
+    module_template = ModuleTemplate()
+
+    # add constants
+    for name, value in constants.items():
+        if not hasattr(module_template, name):
+            setattr(module_template, name, value)
+        else:
+            raise ValueError(
+                f"Invalid constant name {name} detected when setting the module template. The constant already exists in module template")
+    return module_template
 
 #########################################################
 # Tagged datatype
@@ -689,30 +931,54 @@ def create_module(name, parent_class):
 
 
 def tag_tensor(tensor, tag):
-    if hasattr(tensor, 'export_manager_tag'):
-        tensor.export_manager_tag = tag
+    if hasattr(tensor, 'leapp_tag'):
+        tensor.leapp_tag = tag
         return tensor
 
-    tensor.export_manager_tag = tag
+    tensor.leapp_tag = tag
     tensor.value = lambda: tensor
 
-    if not hasattr(torch.Tensor, '_original_clone'):
-        def clone_with_tags(self, *args, **kwargs):
-            """Clone tensor while preserving export_manager_tag and other custom attributes."""
-            cloned = self._original_clone(*args, **kwargs)
+    # Helper function to copy custom attributes from source to target tensor
+    def _copy_custom_attrs(source, target):
+        """Copy all custom attributes from source tensor to target tensor."""
+        for attr_name in dir(source):
+            if not attr_name.startswith('_') and not hasattr(torch.Tensor, attr_name):
+                if hasattr(source, attr_name):
+                    setattr(target, attr_name, getattr(source, attr_name))
+        return target
 
-            # Copy all custom attributes
-            for attr_name in dir(self):
-                if not attr_name.startswith('_') and not hasattr(torch.Tensor, attr_name):
-                    if hasattr(self, attr_name):
-                        setattr(cloned, attr_name, getattr(self, attr_name))
+    # Helper function to create a monkey-patched method wrapper
+    def _make_wrapper(method_name, docstring):
+        """Create a wrapper function that preserves custom attributes."""
+        original_attr = f'_original_{method_name}'
 
-            return cloned
+        def wrapper(self, *args, **kwargs):
+            original_method = getattr(self, original_attr)
+            result = original_method(*args, **kwargs)
+            return _copy_custom_attrs(self, result)
 
-        # Monkey patch the clone method
-        torch.Tensor._original_clone = torch.Tensor.clone
-        torch.Tensor.clone = clone_with_tags
+        wrapper.__doc__ = docstring
+        return wrapper
 
+    # List of methods to monkey patch
+    methods_to_patch = [
+        ('clone', 'Clone tensor while preserving leapp_tag and other custom attributes.'),
+        ('detach', 'Detach tensor while preserving leapp_tag and other custom attributes.'),
+        ('contiguous', 'Make tensor contiguous while preserving leapp_tag and other custom attributes.'),
+        ('cpu', 'Move tensor to CPU while preserving leapp_tag and other custom attributes.'),
+        ('cuda', 'Move tensor to CUDA while preserving leapp_tag and other custom attributes.'),
+    ]
+
+    # Apply monkey patches
+    for method_name, docstring in methods_to_patch:
+        original_attr = f'_original_{method_name}'
+        if not hasattr(torch.Tensor, original_attr):
+            # Save original method
+            setattr(torch.Tensor, original_attr,
+                    getattr(torch.Tensor, method_name))
+            # Replace with wrapper
+            setattr(torch.Tensor, method_name,
+                    _make_wrapper(method_name, docstring))
     return tensor
 
 
@@ -735,6 +1001,21 @@ def tag_data(data, tag):
             f"\033[93mWarning: Untaggable datatype in i/o: {type(data)}\033[0m")
 
 
+def mirror_all_tensor_tags(source, target):
+    '''
+    Mirror all tensor tags from source to target.
+    '''
+    if isinstance(source, torch.Tensor) and isinstance(target, torch.Tensor):
+        if hasattr(source, 'leapp_tag'):
+            tag_tensor(target, source.leapp_tag)
+    elif isinstance(source, collections.abc.Mapping):
+        for key, value in source.items():
+            mirror_all_tensor_tags(value, target[key])
+    elif isinstance(source, collections.abc.Iterable):
+        for idx, item in enumerate(source):
+            mirror_all_tensor_tags(item, target[idx])
+
+
 def get_tagged_subclass(base_class, value, tag):
     if tag is None:
         return value
@@ -751,11 +1032,11 @@ def get_tagged_subclass(base_class, value, tag):
     # This works for list, dict, set, bytearray, and other mutable collections
     if base_class in (list, set, bytearray) or hasattr(value, '__dict__'):
         try:
-            value.export_manager_tag = tag
+            value.leapp_tag = tag
             # Add a method to get the original type (no lambda needed for identity)
             value.value = lambda: value
             return value  # Preserves original reference
-        except (AttributeError, TypeError) as e:
+        except (AttributeError, TypeError):
             # Fall back to subclassing if direct attribute assignment fails
             pass
 
@@ -763,16 +1044,16 @@ def get_tagged_subclass(base_class, value, tag):
         # bool is not subclassable; fall back to int while preserving bool semantics
         if base_class is bool:
             obj = int.__new__(cls, 1 if bool(value) else 0)
-            obj.export_manager_tag = tag
+            obj.leapp_tag = tag
             return obj
         obj = base_class.__new__(cls, value)
-        obj.export_manager_tag = tag
+        obj.leapp_tag = tag
         return obj
 
     def __init__(self, value, tag=None):
-        # Ensure base __init__ doesn't see the 'export_manager_tag' kwarg (important for dict)
+        # Ensure base __init__ doesn't see the 'leapp_tag' kwarg (important for dict)
         if base_class is bool:
-            # No-op; int.__init__ ignores args but don't forward export_manager_tag
+            # No-op; int.__init__ ignores args but don't forward leapp_tag
             return
         try:
             base_class.__init__(self, value)
@@ -823,3 +1104,15 @@ def get_relative_path(model_path, yaml_save_path):
     except ValueError:
         # If relative path calculation fails (e.g., different drives on Windows), keep absolute path
         return model_path
+
+
+def get_system_info():
+    import leapp
+    metadata = {'system information': {}}
+    metadata['system information']['leapp version'] = leapp.__version__
+    metadata['system information']['torch version'] = str(torch.__version__)
+    metadata['system information']['python version'] = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    metadata['system information']['cuda version'] = str(torch.version.cuda)
+    metadata['system information']['os'] = os.uname().sysname
+
+    return metadata

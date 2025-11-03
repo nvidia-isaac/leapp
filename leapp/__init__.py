@@ -25,16 +25,17 @@ various formats including PyTorch JIT, ONNX, and generate visualization and YAML
 """
 
 from .export_manager import ExportManager
-
+from .enums import MergeCfgEnum
 # Create a global annotate instance that's ready to use
 annotate = ExportManager()
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "Frank Lai"
 __email__ = "frlai@nvidia.com"
 
 __all__ = [
     "ExportManager",
+    "MergeCfgEnum",
     "annotate",
     "__version__",
 ]

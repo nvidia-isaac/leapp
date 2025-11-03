@@ -504,7 +504,7 @@ def main():
         test_image, test_odom, test_transform, goal_pose, route_transform = create_test_data(
             device=compass_model.device)
 
-        annotate.start(name="sample_compass_navigation_pipeline")
+        annotate.start(name="sample_compass_navigation_pipeline", verbose=True)
         # Run navigation pipeline
         print("Running navigation pipeline...")
         final_commands = compass_model.run_navigation_pipeline(
