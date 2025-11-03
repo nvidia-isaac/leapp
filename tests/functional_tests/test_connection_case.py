@@ -103,7 +103,8 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
         out_funcB = funcB(out_funcA1.clone())
         out_funcC = funcC(out_funcA2.detach())
         out_funcD = funcD(out_funcC.contiguous())
-        funcE(out_funcD.cpu(), out_funcB.cuda())
+        # not testing .cuda() because CI machine does not have a GPU
+        funcE(out_funcD.cpu(), out_funcB)
 
         annotate.stop()
         annotate.compile_graph()
