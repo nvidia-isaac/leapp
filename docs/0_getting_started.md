@@ -226,8 +226,7 @@ Additionally, you'll find the individual exported model files (`sensor_processor
 ## Next Steps
 
 Now that you understand the basics, you can:
-- Explore more complex pipelines in the `examples/` directory
-- Learn about advanced features like environment constants and custom backends
-- Integrate LEAPP into your existing robotics or AI pipelines
-
-The key insight is that LEAPP makes it easy to take your existing PyTorch code and turn it into exportable, deployable computational graphs with minimal code changes!
+- Explore more complex pipelines in the [examples](../examples/) directory
+- Learn about advanced features in [1_advanced_nodes.md](1_advanced_nodes.md) and [2_advanced_graph.md](2_advanced_graph.md)
+- Get detailed explination on the api at [api.md](api.md)
+- Integrate LEAPP into your existing pipelines

@@ -1,23 +1,44 @@
+#
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
 import abc
-from typing import Tuple
+from typing import Tuple, Any
 import os
 import hashlib
 import shutil
 
 
 class ExportBackend(abc.ABC):
-    def __init__(self, node_context, backend_params=None):
+    def __init__(self, node_context, logger, backend_params=None):
         self.node_context = node_context
+        self.logger = logger
         if backend_params is None:
             self.backend_params = {}
         else:
             self.backend_params = backend_params
 
-    def _verify_model_location_and_get_md5sum(self, model_path):
+    def _verify_model_location_and_get_hash(self, model_path):
         if not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model file not found at {model_path}")
-        md5sum = hashlib.md5(open(model_path, 'rb').read()).hexdigest()
-        return md5sum
+            self.logger.error(f"Model file not found at {model_path}")
+            return None, None
+        with open(model_path, 'rb') as f:
+            file_data = f.read()
+            md5sum = hashlib.md5(file_data).hexdigest()
+            sha256sum = hashlib.sha256(file_data).hexdigest()
+        return md5sum, sha256sum
 
     def _copy_model_to_path(self, model_path, save_path):
         if not os.path.exists(save_path):
@@ -46,28 +67,52 @@ class ExportBackend(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def __call__(self, save_path: str, func: callable, **kwargs) -> Tuple[str, str]:
+    def compile(self) -> Any:
         raise NotImplementedError
-        return None, None
+
+    @abc.abstractmethod
+    def save(self, save_path: str) -> Tuple[str, str, str]:
+        raise NotImplementedError
 
 
 class NoneExportBackend(ExportBackend):
-    def __call__(self, save_path: str, **kwargs) -> Tuple[str, str]:
-        if "model_path" not in self.backend_params:
-            print(
-                f"\033[33mNo model path provided for {self.node_context.name}, \033[0m")
-            print(
-                "\033[33mWARNING: if this is intentional, please provide a path to the correct model"
-                " in the generated yaml file. Otherwise, please manually fill in the backend parameters.\033[0m")
-            return None, None
+    def __call__(self) -> Any:
+        return self.compile()
 
-        md5sum = self._verify_model_location_and_get_md5sum(
+    def compile(self) -> Any:
+        if "model_path" not in self.backend_params:
+            self.logger.warning(
+                f"No model path provided for {self.node_context.name}")
+            self.logger.warning("if this is intentional, please provide a path to the correct model "
+                                "in the generated yaml file. Otherwise, please manually fill in the backend parameters.")
+            return None
+
+        # try to load the model if possible
+        loaded_model = self.load_model()
+
+        return loaded_model
+
+    def save(self, save_path: str, compiled_model=None) -> Tuple[str, str, str]:
+        if "model_path" not in self.backend_params or self.backend_params['model_path'] is None:
+            return None, None, None
+        md5sum, sha256sum = self._verify_model_location_and_get_hash(
             self.backend_params['model_path'])
         model_path = self.backend_params['model_path']
-        if "copy_original_model" in self.backend_params and self.backend_params['copy_original_model'] is False:
+
+        if "copy_original_model" in self.backend_params and self.backend_params['copy_original_model'] is True:
             model_path = self._copy_model_to_path(model_path, save_path)
 
-        return model_path, md5sum
+        return model_path, md5sum, sha256sum
+
+    def load_model(self):
+        backend_type = self.get_backed_model_type()
+        if backend_type == "torch":
+            import torch
+            return torch.jit.load(self.backend_params['model_path'])
+        else:
+            self.logger.warning(
+                f"LEAPP detected a {backend_type} model, but no load method is implemented for this backend")
+            return None
 
     def get_backed_model_type(self):
         if "model_path" not in self.backend_params:
@@ -75,15 +120,17 @@ class NoneExportBackend(ExportBackend):
 
         path = self.backend_params['model_path']
         suffix = path.split('.')[-1]
-        if suffix == 'pt' or suffix == 'pt2':
+        if suffix == 'pt':
             return "torch"
+        elif suffix == 'pt2':
+            return "torchscript2"
         elif suffix == 'onnx':
             return "onnx"
         elif suffix == 'cpp' or suffix == "cc":
             return "cpp"
         elif suffix == 'py':
             return "py"
-        elif suffix == 'engine':
+        elif suffix == 'engine' or suffix == 'plan':
             return 'trt'
         else:
             raise Exception(

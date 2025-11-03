@@ -20,13 +20,14 @@ import networkx as nx
 import matplotlib.patches as patches
 
 
-def visualize_graph(nodes, connections, inputs, outputs, save_path, graph_name):
+def visualize_graph(nodes, connections, feedback_connections, inputs, outputs, save_path, graph_name):
     """
     Visualize the computational graph showing nodes, connections, and dangling I/O.
 
     Args:
         nodes: Dict of node_name -> NodeContext objects
-        connections: Dict of "source_node/output" -> ["target_node/input", ...]
+        connections: List of connection dicts with 'source' and 'targets' keys
+        feedback_connections: List of feedback connection dicts with 'source' and 'targets' keys
         inputs: List of dangling graph inputs (not connected internally)
         outputs: List of dangling graph outputs (not connected internally) 
     """
@@ -64,19 +65,37 @@ def visualize_graph(nodes, connections, inputs, outputs, save_path, graph_name):
         # Add internal connections between computation nodes
     # First collect all connections between node pairs to combine labels
     node_pair_connections = {}
+    node_pair_feedback_connections = {}
 
-    for source_connection, targets in connections.items():
-        if '/' in source_connection:
-            source_node, source_output = source_connection.split('/', 1)
-            for target_connection in targets:
-                if '/' in target_connection:
-                    target_node, target_input = target_connection.split('/', 1)
-                    pair_key = (source_node, target_node)
-                    if pair_key not in node_pair_connections:
-                        node_pair_connections[pair_key] = []
-                    node_pair_connections[pair_key].append(source_output)
+    # Process forward connections
+    for connection in connections:
+        source = connection['source']
+        source_node = source['node'].name
+        source_output = source['node'].outputs[source['idx']].name_str
 
-    # Add edges with combined labels
+        for target in connection['targets']:
+            target_node = target['node'].name
+
+            pair_key = (source_node, target_node)
+            if pair_key not in node_pair_connections:
+                node_pair_connections[pair_key] = []
+            node_pair_connections[pair_key].append(source_output)
+
+    # Process feedback connections
+    for connection in feedback_connections:
+        source = connection['source']
+        source_node = source['node'].name
+        source_output = source['node'].outputs[source['idx']].name_str
+
+        for target in connection['targets']:
+            target_node = target['node'].name
+
+            pair_key = (source_node, target_node)
+            if pair_key not in node_pair_feedback_connections:
+                node_pair_feedback_connections[pair_key] = []
+            node_pair_feedback_connections[pair_key].append(source_output)
+
+    # Add edges with combined labels for forward connections
     for (source_node, target_node), outputs in node_pair_connections.items():
         if len(outputs) == 1:
             label = outputs[0]
@@ -87,6 +106,18 @@ def visualize_graph(nodes, connections, inputs, outputs, save_path, graph_name):
         G.add_edge(source_node, target_node,
                    label=label,
                    edge_type='internal')
+
+    # Add edges with combined labels for feedback connections
+    for (source_node, target_node), outputs in node_pair_feedback_connections.items():
+        if len(outputs) == 1:
+            label = outputs[0]
+        else:
+            # Combine multiple outputs into one label
+            label = '\n'.join(outputs)
+
+        G.add_edge(source_node, target_node,
+                   label=label,
+                   edge_type='feedback')
 
     def draw_graph_elements(G, pos, graph_name, show_hint=True):
         """Helper function to draw all graph elements with consistent styling."""
@@ -120,12 +151,34 @@ def visualize_graph(nodes, connections, inputs, outputs, save_path, graph_name):
             data=True) if d['edge_type'] == 'input']
         output_edges = [(u, v) for u, v, d in G.edges(
             data=True) if d['edge_type'] == 'output']
+        feedback_edges = [(u, v) for u, v, d in G.edges(
+            data=True) if d['edge_type'] == 'feedback']
+
+        # Separate feedback edges into self-loops and regular edges
+        feedback_self_loops = [(u, v) for u, v in feedback_edges if u == v]
+        feedback_regular = [(u, v) for u, v in feedback_edges if u != v]
 
         # Draw internal connections (solid lines) - thicker and more prominent
         nx.draw_networkx_edges(G, pos, edgelist=internal_edges,
                                edge_color='black', arrows=True,
                                arrowsize=25, width=2.5, arrowstyle='->',
                                min_source_margin=40, min_target_margin=40)
+
+        # Draw regular feedback connections (curved lines) - red theme with curvature
+        if feedback_regular:
+            nx.draw_networkx_edges(G, pos, edgelist=feedback_regular,
+                                   edge_color='red', arrows=True,
+                                   arrowsize=25, width=2.5, arrowstyle='->',
+                                   connectionstyle='arc3,rad=0.15',
+                                   min_source_margin=40, min_target_margin=40)
+
+        # Draw self-loop feedback connections with larger radius for better visibility
+        if feedback_self_loops:
+            nx.draw_networkx_edges(G, pos, edgelist=feedback_self_loops,
+                                   edge_color='red', arrows=True,
+                                   arrowsize=25, width=2.5, arrowstyle='->',
+                                   connectionstyle='angle3,angleA=45,angleB=135',
+                                   min_source_margin=40, min_target_margin=40)
 
         # Draw input connections (dashed lines) - green theme
         nx.draw_networkx_edges(G, pos, edgelist=input_edges,
@@ -153,15 +206,35 @@ def visualize_graph(nodes, connections, inputs, outputs, save_path, graph_name):
         nx.draw_networkx_labels(G, pos, labels, font_size=11,
                                 font_weight='bold')
 
-        # Add edge labels for internal connections with better positioning
+        # Add edge labels for internal and feedback connections with better positioning
         edge_labels = {}
+        self_loop_labels = {}
         for u, v, d in G.edges(data=True):
-            if d['edge_type'] == 'internal':
-                edge_labels[(u, v)] = d['label']
+            if d['edge_type'] == 'internal' or d['edge_type'] == 'feedback':
+                if u == v:  # Self-loop
+                    self_loop_labels[(u, v)] = d['label']
+                else:
+                    edge_labels[(u, v)] = d['label']
 
+        # Draw regular edge labels
         nx.draw_networkx_edge_labels(G, pos, edge_labels, font_size=9,
                                      font_weight='bold', alpha=0.8,
                                      bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8))
+
+        # Draw self-loop labels manually positioned above the loop
+        for (u, v), label in self_loop_labels.items():
+            node_pos = pos[u]
+            # Position label significantly above the node to clear the loop
+            label_x = node_pos[0]
+            label_y = node_pos[1] + 0.2  # Higher offset
+
+            plt.text(label_x, label_y, label,
+                     horizontalalignment='center',
+                     verticalalignment='center',
+                     fontsize=9,
+                     fontweight='bold',
+                     bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
+                               edgecolor='gray', alpha=0.9))
 
         # Create legend
         legend_elements = [
@@ -170,9 +243,11 @@ def visualize_graph(nodes, connections, inputs, outputs, save_path, graph_name):
             patches.Patch(color='lightcoral', label='Graph Outputs'),
             plt.Line2D([0], [0], color='black', linewidth=2,
                        label='Internal Connections'),
+            plt.Line2D([0], [0], color='red', linewidth=2,
+                       label='Feedback Connections'),
             plt.Line2D([0], [0], color='green', linewidth=1.5,
                        linestyle='--', label='Input Connections'),
-            plt.Line2D([0], [0], color='red', linewidth=1.5,
+            plt.Line2D([0], [0], color='darkred', linewidth=1.5,
                        linestyle='--', label='Output Connections')
         ]
 
@@ -189,7 +264,7 @@ def visualize_graph(nodes, connections, inputs, outputs, save_path, graph_name):
         plt.axis('off')
         plt.tight_layout()
 
-        return computation_nodes, input_nodes, output_nodes, internal_edges, input_edges, output_edges
+        return computation_nodes, input_nodes, output_nodes, internal_edges, feedback_edges, input_edges, output_edges
 
     # Create the visualization with better proportions
     plt.figure(figsize=(16, 8))
@@ -198,7 +273,7 @@ def visualize_graph(nodes, connections, inputs, outputs, save_path, graph_name):
     pos = nx.spring_layout(G)
 
     # Draw the graph using the helper function
-    computation_nodes, input_nodes, output_nodes, internal_edges, input_edges, output_edges = draw_graph_elements(
+    computation_nodes, input_nodes, output_nodes, internal_edges, feedback_edges, input_edges, output_edges = draw_graph_elements(
         # Show hint during initial interactive display
         G, pos, graph_name, show_hint=True)
 
@@ -209,8 +284,8 @@ def visualize_graph(nodes, connections, inputs, outputs, save_path, graph_name):
         """Find the closest node to the given coordinates."""
         min_dist = float('inf')
         closest_node = None
-        for node, (nx, ny) in pos.items():
-            dist = ((x - nx)**2 + (y - ny)**2)**0.5
+        for node, (node_x, node_y) in pos.items():
+            dist = ((x - node_x)**2 + (y - node_y)**2)**0.5
             if dist < min_dist and dist < threshold:
                 min_dist = dist
                 closest_node = node
