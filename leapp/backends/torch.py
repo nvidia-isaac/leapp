@@ -134,6 +134,17 @@ class TorchExportBackend(ExportBackend):
                 continue  # special case for any class variables, no rename required
             data_patch_string += data_patch_template.format(
                 const_name=const_name)
+
+        # Handle inputs where the name was transformed (e.g., "self.var1" -> "self_var1")
+        # Inject assignments to map from function parameters back to original names
+        for param_format in self.node_context.input_formats:
+            original_name = param_format.name_raw  # e.g., "self.var1"
+            # e.g., "self_var1" (after transformation)
+            param_name = param_format.name_str
+            if original_name != param_name:
+                # Inject assignment: self.var1 = self_var1
+                data_patch_string += f"{original_name} = {param_name}\n"
+
         return data_patch_string
 
     def _append_outputs_to_return_statements(self, source_code, outputs_str):
