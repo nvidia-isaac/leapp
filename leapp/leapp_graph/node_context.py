@@ -23,15 +23,16 @@ from leapp.utils import (
     tag_data,
     extract_source_from_line_range
 )
+from leapp._logging import _get_logger
 from .graph_element import LeappGraphElement
 import inspect
 
 
 class NodeContext(LeappGraphElement):
-    def __init__(self, name, node_index, from_function, logger=None, backend=None, use_trace=False,
+    def __init__(self, name, node_index, from_function, backend=None, use_trace=False,
                  backend_params=None, inputs=None, outputs=None, environment_constants=None,
                  register_buffers=None, enable_fp16=False, enable_cuda_graphs=False):
-        super().__init__(name, node_index, logger, backend)
+        super().__init__(name, node_index, backend)
         # input parameters
         # this variable is for temporary use only,
         # all data will be stored in self.inputs after the function is executed
@@ -90,13 +91,13 @@ class NodeContext(LeappGraphElement):
         self.cached_buffer_values = {}
         self.cached_constant_values = {}
 
-        self.logger.info(f"Node context initialized: {self.name}")
+        _get_logger().info(f"Node context initialized: {self.name}")
 
     def compile_model(self):
         try:
             self.compiled_model = self.export_backend.compile()
         except Exception as e:
-            self.logger.error(f"Error compiling model: {e}")
+            _get_logger().error(f"Error compiling model: {e}")
             raise e
 
     def compile_trace(self):
@@ -108,9 +109,9 @@ class NodeContext(LeappGraphElement):
             self.name
         )
         if self.executed_lines['source_code'] != "":
-            self.logger.info(message)
+            _get_logger().info(message)
         else:
-            self.logger.error(message)
+            _get_logger().error(message)
 
     def inspect_function_inputs(self, func, args, kwargs):
         # Get parameter names from function signature
@@ -188,7 +189,7 @@ class NodeContext(LeappGraphElement):
                 self._add_input(final_input_name, input_name,
                                 final_input_value)
         except Exception as e:
-            self.logger.error(f"Error capturing inputs from frame: {e}")
+            _get_logger().error(f"Error capturing inputs from frame: {e}")
             raise e
         self.input_frame = frame
 
@@ -205,7 +206,7 @@ class NodeContext(LeappGraphElement):
                 self._add_output(final_output_name,
                                  output_name, final_output_value)
         except Exception as e:
-            self.logger.error(f"Error capturing outputs from frame: {e}")
+            _get_logger().error(f"Error capturing outputs from frame: {e}")
             raise e
         self.output_frame = frame
 
@@ -241,7 +242,7 @@ class NodeContext(LeappGraphElement):
             self.cached_constant_values[constant_name] = safe_deepcopy(value)
 
     def change_input_name(self, old_name, new_name):
-        self.logger.warning(
+        _get_logger().warning(
             f"changing input name from {old_name} to {new_name} for model {self.name}")
         if old_name == new_name:
             return
@@ -255,7 +256,7 @@ class NodeContext(LeappGraphElement):
                 input.change_name(new_name)
 
     def change_output_name(self, old_name, new_name):
-        self.logger.warning(
+        _get_logger().warning(
             f"changing output name from {old_name} to {new_name} for model {self.name}")
         if old_name == new_name:
             return

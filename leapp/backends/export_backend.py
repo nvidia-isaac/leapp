@@ -20,11 +20,12 @@ import os
 import hashlib
 import shutil
 
+from leapp._logging import _get_logger
+
 
 class ExportBackend(abc.ABC):
-    def __init__(self, node_context, logger, backend_params=None):
+    def __init__(self, node_context, backend_params=None):
         self.node_context = node_context
-        self.logger = logger
         if backend_params is None:
             self.backend_params = {}
         else:
@@ -32,7 +33,7 @@ class ExportBackend(abc.ABC):
 
     def _verify_model_location_and_get_hash(self, model_path):
         if not os.path.exists(model_path):
-            self.logger.error(f"Model file not found at {model_path}")
+            _get_logger().error(f"Model file not found at {model_path}")
             return None, None
         with open(model_path, 'rb') as f:
             file_data = f.read()
@@ -81,9 +82,9 @@ class NoneExportBackend(ExportBackend):
 
     def compile(self) -> Any:
         if "model_path" not in self.backend_params:
-            self.logger.warning(
+            _get_logger().warning(
                 f"No model path provided for {self.node_context.name}")
-            self.logger.warning("if this is intentional, please provide a path to the correct model "
+            _get_logger().warning("if this is intentional, please provide a path to the correct model "
                                 "in the generated yaml file. Otherwise, please manually fill in the backend parameters.")
             return None
 
@@ -110,7 +111,7 @@ class NoneExportBackend(ExportBackend):
             import torch
             return torch.jit.load(self.backend_params['model_path'])
         else:
-            self.logger.warning(
+            _get_logger().warning(
                 f"LEAPP detected a {backend_type} model, but no load method is implemented for this backend")
             return None
 

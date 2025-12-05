@@ -20,9 +20,8 @@ import functools
 import inspect
 import yaml
 import os
-import time
 from .utils import CompactYamlList, CompactYamlDict, get_relative_path, get_system_info, verify_data_exact_match, mirror_all_tensor_tags
-from .logging import LeappLogger
+from ._logging import _get_logger
 from leapp.leapp_graph.leapp_graph import LeappGraph
 from leapp.leapp_graph.node_context import NodeContext
 from .enums import MergeCfgEnum
@@ -56,9 +55,6 @@ class ExportManager:
             self.current_node_name = None
             self.node_candidate = None
             self.nodes = {}
-
-            # logging
-            self.logger = LeappLogger(self)
 
             # Set up custom YAML representers before writing any YAML
             def represent_shape_list(dumper, data):
@@ -99,11 +95,11 @@ class ExportManager:
         self.SAVE_PATH = os.path.join(save_path, self.GRAPH_NAME)
         if not os.path.exists(self.SAVE_PATH):
             os.makedirs(self.SAVE_PATH)
-        self.logger.configure_logger(self.SAVE_PATH, verbose=verbose)
+        _get_logger().configure(self.SAVE_PATH, verbose=verbose)
         if self.intepret_graph:
-            self.logger.warning("LEAPP graph interpretation is already enabled, "
+            _get_logger().warning("LEAPP graph interpretation is already enabled, "
                                 "calling start() again will reset the graph")
-            self.logger.warning("Resetting graph...")
+            _get_logger().warning("Resetting graph...")
             self._is_tracing = False
             self.current_node_name = None
             self.node_candidate = None
@@ -155,7 +151,6 @@ class ExportManager:
         else:
             node_index = len(self.nodes)
         self.node_candidate = NodeContext(name, node_index, from_function,
-                                          logger=self.logger,
                                           backend=kwargs.get(
                                               "export_with", None),
                                           backend_params=kwargs.get(
@@ -322,7 +317,7 @@ class ExportManager:
 
         self.node_candidate.capture_inputs_from_frame(caller_frame)
 
-        self.logger.info(
+        _get_logger().info(
             f"****Tracing started for {self.current_node_name}****")
         # CRITICAL: Set up local tracing for the caller frame
 
@@ -351,7 +346,7 @@ class ExportManager:
         node_context = self.nodes[name]
 
         node_context.capture_outputs_from_frame(sys._getframe(1))
-        self.logger.info(
+        _get_logger().info(
             f"****Tracing stopped for {node_context.name}****\n\n")
 
     def method(self, **params):
@@ -403,7 +398,7 @@ class ExportManager:
                     raise Exception(
                         "Unexpected error when setting up new node context, current_node_name or node_candidate is None")
 
-                self.logger.info(f"****Tracing started for {name}****")
+                _get_logger().info(f"****Tracing started for {name}****")
                 self.node_candidate.inspect_function_inputs(
                     func, args, kwargs)
 
@@ -434,7 +429,7 @@ class ExportManager:
                         raise Exception(
                             f"Error: expected node {name} to be in nodes to be in nodes dictionary")
                     node_context = self.nodes[name]
-                    self.logger.info(
+                    _get_logger().info(
                         f"****Tracing stopped for {node_context.name}****\n\n")
 
                 node_context.inspect_function_outputs(func, result)
@@ -451,19 +446,19 @@ class ExportManager:
             return
         try:
             if not verify_data_exact_match(source, target):
-                self.logger.error(
+                _get_logger().error(
                     f"Error: source and target do not match: {source} != {target}")
             mirror_all_tensor_tags(source, target)
         except Exception as e:
-            self.logger.error(f"Unexpected error mirroring LEAPP tags: {e}")
+            _get_logger().error(f"Unexpected error mirroring LEAPP tags: {e}")
             raise e
 
     def get_io_descriptions(self):
-        self.logger.section(
+        _get_logger().section(
             f"Compiling graph parameters for {len(self.nodes)} nodes")
         models = {"models": {}}
         for node in self.nodes.values():
-            self.logger.info(f"Compiling parameters for {node.name}")
+            _get_logger().info(f"Compiling parameters for {node.name}")
             description = node.get_description()
             if 'parameters' in description and 'model_path' in description['parameters']:
                 # Convert model path to be relative to YAML file location
@@ -475,25 +470,25 @@ class ExportManager:
         return models
 
     def compile_models(self):
-        self.logger.section(f"Discovered {len(self.nodes)} nodes")
+        _get_logger().section(f"Discovered {len(self.nodes)} nodes")
         for node_context in self.nodes.values():
-            self.logger.section(f"Compiling {node_context.name}")
+            _get_logger().section(f"Compiling {node_context.name}")
             node_context.compile_model()
-            self.logger.info("Success\n")
+            _get_logger().info("Success\n")
 
     def save_models(self):
         if self.SAVE_PATH is None:
             raise Exception(
                 "Error: No save path provided, please provide a save path to export the graph")
-        self.logger.section(
+        _get_logger().section(
             f"Saving {len(self.nodes)} models to {self.SAVE_PATH}")
         if not os.path.exists(self.SAVE_PATH):
             os.makedirs(self.SAVE_PATH)
         for node_context in self.nodes.values():
-            self.logger.info(
+            _get_logger().info(
                 f"Saving {node_context.name}")
             node_context.save_model(self.SAVE_PATH)
-            self.logger.info("Success\n")
+            _get_logger().info("Success\n")
 
     #########################################################
     # graph compilation
@@ -542,7 +537,7 @@ class ExportManager:
         if not isinstance(merge_nodes, MergeCfgEnum):
             raise Exception(
                 f"Error: merge_nodes must be an instance of MergeCfgEnum, got {type(merge_nodes)}")
-        graph = LeappGraph(self.logger, self.nodes)
+        graph = LeappGraph(self.nodes)
         graph.merge_nodes(merge_nodes)
         pipeline = graph.get_full_pipeline_description()
 
@@ -554,17 +549,17 @@ class ExportManager:
             try:
                 graph.visualize(self.SAVE_PATH, self.GRAPH_NAME)
             except Exception as e:
-                self.logger.error(f"Error visualizing graph: {e}")
+                _get_logger().error(f"Error visualizing graph: {e}")
 
         internal_connections, total_edges = graph.get_graph_statistics()
 
         # Print graph statistics
-        self.logger.section("Graph Statistics")
-        self.logger.info(f"- Computation nodes: {len(self.nodes)}")
-        self.logger.info(f"- Dangling inputs: {len(graph.graph_inputs)}")
-        self.logger.info(f"- Dangling outputs: {len(graph.graph_outputs)}")
-        self.logger.info(f"- Internal connections: {internal_connections}")
-        self.logger.info(f"- Total edges: {total_edges}")
+        _get_logger().section("Graph Statistics")
+        _get_logger().info(f"- Computation nodes: {len(self.nodes)}")
+        _get_logger().info(f"- Dangling inputs: {len(graph.graph_inputs)}")
+        _get_logger().info(f"- Dangling outputs: {len(graph.graph_outputs)}")
+        _get_logger().info(f"- Internal connections: {internal_connections}")
+        _get_logger().info(f"- Total edges: {total_edges}")
 
         system_info = get_system_info()
         with open(os.path.join(self.SAVE_PATH, f"{self.GRAPH_NAME}.yaml"), "w") as f:

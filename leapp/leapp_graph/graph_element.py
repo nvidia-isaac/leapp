@@ -20,11 +20,10 @@ from leapp.utils import (CompactYamlList,
 
 
 class LeappGraphElement():
-    def __init__(self, name, node_index, logger=None, backend=None,
+    def __init__(self, name, node_index, backend=None,
                  enable_fp16=False, enable_cuda_graphs=False):
         self.name = name
         self.node_index = node_index
-        self.logger = logger
         self.enable_fp16 = enable_fp16
         self.enable_cuda_graphs = enable_cuda_graphs
 
@@ -97,19 +96,19 @@ class LeappGraphElement():
         if self.backend is None:
             from leapp.backends.export_backend import NoneExportBackend
             export_backend = NoneExportBackend(
-                self, self.logger, backend_params)
+                self, backend_params)
         elif self.backend == "torch":
             from leapp.backends.torch_export_backend import TorchExportBackend
             export_backend = TorchExportBackend(
-                self, self.logger, backend_params)
+                self, backend_params)
         elif self.backend == "torch-script":
             from leapp.backends.torch_export_backend import TorchScriptExportBackend
             export_backend = TorchScriptExportBackend(
-                self, self.logger, backend_params)
+                self, backend_params)
         elif self.backend == "torch-trace":
             from leapp.backends.torch_export_backend import TorchTraceExportBackend
             export_backend = TorchTraceExportBackend(
-                self, self.logger, backend_params)
+                self, backend_params)
         elif self.backend == "onnx":
             raise Exception("ONNX backend not implemented")
         elif self.backend == "cpp":
