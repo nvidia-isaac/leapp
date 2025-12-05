@@ -284,7 +284,7 @@ class TorchExportBackend(ExportBackend):
 
     def compile(self) -> torch.jit.ScriptModule:
         raise NotImplementedError(
-            "TorchExportBackend does not support compilation")
+            "TorchExportBackend does not support compilation, please use torch-script or torch-trace instead")
         return None
 
 

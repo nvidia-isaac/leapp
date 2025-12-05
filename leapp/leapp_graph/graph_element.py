@@ -99,15 +99,15 @@ class LeappGraphElement():
             export_backend = NoneExportBackend(
                 self, self.logger, backend_params)
         elif self.backend == "torch":
-            from leapp.backends.torch import TorchExportBackend
+            from leapp.backends.torch_export_backend import TorchExportBackend
             export_backend = TorchExportBackend(
                 self, self.logger, backend_params)
         elif self.backend == "torch-script":
-            from leapp.backends.torch import TorchScriptExportBackend
+            from leapp.backends.torch_export_backend import TorchScriptExportBackend
             export_backend = TorchScriptExportBackend(
                 self, self.logger, backend_params)
         elif self.backend == "torch-trace":
-            from leapp.backends.torch import TorchTraceExportBackend
+            from leapp.backends.torch_export_backend import TorchTraceExportBackend
             export_backend = TorchTraceExportBackend(
                 self, self.logger, backend_params)
         elif self.backend == "onnx":
@@ -120,7 +120,6 @@ class LeappGraphElement():
             raise Exception(
                 f"{self.name} Unexpected backend: {backend}, \n"
                 "please use one of the following: torch, onnx, cpp, py")
-
         return export_backend
 
     def save_model(self, save_path: str):
