@@ -132,6 +132,8 @@ Running `compile_graph()` generates:
 - PyYAML ≥ 6.0
 - matplotlib ≥ 3.5.0
 - networkx ≥ 2.6
+- onnx
+- onnxscript
 
 ## License
 

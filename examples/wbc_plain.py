@@ -151,7 +151,7 @@ def run_model(model, joint_pos, joint_vel, velocity_commands, lin_vel_I, ang_vel
                                     "processed_joint_pos", "joint_vel", "previous_actions"],
                             outputs=["actions"],
                             environment_constants=['model'],
-                            export_with="torch"):
+                            export_with="onnx", backend_params={"dynamo": False, "prescript": True}):
             concatenated_tensor = torch.cat([lin_vel_b, ang_vel_b,
                                             gravity_b, velocity_commands,
                                             processed_joint_pos, joint_vel, previous_actions])

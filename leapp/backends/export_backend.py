@@ -69,10 +69,21 @@ class ExportBackend(abc.ABC):
 
     @abc.abstractmethod
     def compile(self) -> Any:
+        '''
+        Compiles the model.
+
+        This function should return the compiled model. The resulting compiled model 
+        can be used in recombination with other models.
+        '''
         raise NotImplementedError
 
     @abc.abstractmethod
-    def save(self, save_path: str) -> Tuple[str, str, str]:
+    def save(self, save_path: str, compiled_model: Any) -> Tuple[str, str, str]:
+        '''
+        Save the compiled model to the given path
+
+        This function should apply all necessary optimizations
+        '''
         raise NotImplementedError
 
 
@@ -110,6 +121,9 @@ class NoneExportBackend(ExportBackend):
         if backend_type == "torch":
             import torch
             return torch.jit.load(self.backend_params['model_path'])
+        elif backend_type == "onnx":
+            import onnx
+            return onnx.load(self.backend_params['model_path'])
         else:
             _get_logger().warning(
                 f"LEAPP detected a {backend_type} model, but no load method is implemented for this backend")

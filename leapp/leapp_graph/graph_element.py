@@ -110,7 +110,9 @@ class LeappGraphElement():
             export_backend = TorchTraceExportBackend(
                 self, backend_params)
         elif self.backend == "onnx":
-            raise Exception("ONNX backend not implemented")
+            from leapp.backends.onnx_export_backend import ONNXExportBackend
+            export_backend = ONNXExportBackend(
+                self, backend_params)
         elif self.backend == "cpp":
             raise Exception("C++ backend not implemented")
         elif self.backend == "py":

@@ -57,7 +57,7 @@ class TorchTraceExportBackend(TorchExportBackend):
                 "TorchTraceExportBackend does not support buffers, "
                 "consider using export_with='torch' without use_trace=True")
         builder = ModuleBuilder(self.node_context)
-        m = builder.module_instance
+        m = builder.module_instance.eval()
         # input_formats is a list of ParameterFormat objects, resolve each one to get values
         input_values = [resolve_tensor_descriptions_to_values(param_format)
                         for param_format in self.node_context.input_formats]
@@ -72,7 +72,7 @@ class TorchTraceExportBackend(TorchExportBackend):
 class TorchScriptExportBackend(TorchExportBackend):
     def compile(self):
         builder = ModuleBuilder(self.node_context)
-        m = builder.module_instance
+        m = builder.module_instance.eval()
         compiled_model = torch.jit.script(m, **self.backend_params)
         # Freezing moved to save() method to allow node combination
 

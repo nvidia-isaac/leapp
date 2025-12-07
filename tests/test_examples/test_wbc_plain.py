@@ -29,7 +29,7 @@ class TestWBCPlain(BaseExampleTest):
 
         # Expected output files based on the sample_wbc_graph directory
         expected_files = [
-            'concatenate_and_run_model.pt',
+            'concatenate_and_run_model.onnx',
             'post_process_actions.pt',
             'process_joint_pos.pt',
             'process_odom.pt',

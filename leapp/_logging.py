@@ -64,6 +64,7 @@ class _LeappLogger:
         self.logger.setLevel(logging.DEBUG)  # Capture everything
         self.initialized = False
         self.console_handler = None
+        self.verbose = False
 
     def configure(self, savepath, verbose):
         """Configure the logger with file and console handlers."""
@@ -97,10 +98,14 @@ class _LeappLogger:
 
     def set_verbose(self, verbose):
         """Set verbose mode for console output."""
+        self.verbose = verbose
         if self.console_handler:
             # When verbose, show everything (DEBUG and above)
             self.console_handler.setLevel(
                 logging.DEBUG if verbose else logging.WARNING)
+
+    def is_verbose(self):
+        return self.verbose
 
     def debug(self, msg):
         """Log debug message (file only, not console even if verbose)."""
