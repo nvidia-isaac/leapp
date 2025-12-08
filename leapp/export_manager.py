@@ -20,12 +20,20 @@ import functools
 import inspect
 import yaml
 import os
-from .utils import CompactYamlList, CompactYamlDict, get_relative_path, get_system_info, verify_data_exact_match, mirror_all_tensor_tags
-from ._logging import _get_logger
-from leapp.leapp_graph.leapp_graph import LeappGraph
-from leapp.leapp_graph.node_context import NodeContext
-from .enums import MergeCfgEnum
+import torch
 
+from leapp._logging import _get_logger
+from leapp.leapp_graph.leapp_graph import LeappGraph
+from leapp.leapp_graph.functional_node import FunctionalNode
+from leapp.leapp_graph.traced_node import TracedTensorNode, TracedTensor
+from leapp.enums import MergeCfgEnum
+
+from .utils import (CompactYamlList, 
+                    CompactYamlDict, 
+                    get_relative_path, 
+                    get_system_info, 
+                    verify_data_exact_match, 
+                    mirror_all_tensor_tags)
 
 class ExportManager:
     _instance = None
@@ -69,6 +77,9 @@ class ExportManager:
 
             ExportManager._initialized = True
 
+    #########################################################
+    # flow control
+    #########################################################
     def start(self, name, save_path=".", verbose=False):
         """Initialize and start LEAPP graph interpretation.
 
@@ -135,9 +146,16 @@ class ExportManager:
         self.intepret_graph = False
 
     #########################################################
-    # node context setup
+    # node setup
     #########################################################
-    def _setup_new_node_context(self, name, from_function, **kwargs):
+    def get_node_index(self, name):
+        if name in self.nodes.keys():
+            # retracing inherits the node index of the original node
+            node_index = self.nodes[name].node_index
+        else:
+            node_index = len(self.nodes)
+        return node_index
+    def _setup_new_node(self, name, from_function, **kwargs):
         if self.current_node_name is not None or self.node_candidate is not None:
             self.current_node_name = name
             if self.node_candidate.name is not None:
@@ -145,12 +163,9 @@ class ExportManager:
             raise Exception(
                 f"Error when attempting to set up new trace for {name}. \n"
                 f"ExportManager is already tracing {self.current_node_name}")
-        if name in self.nodes.keys():
-            # retracing inherits the node index of the original node
-            node_index = self.nodes[name].node_index
-        else:
-            node_index = len(self.nodes)
-        self.node_candidate = NodeContext(name, node_index, from_function,
+
+        node_index = self.get_node_index(name)
+        self.node_candidate = FunctionalNode(name, node_index, from_function,
                                           backend=kwargs.get(
                                               "export_with", None),
                                           backend_params=kwargs.get(
@@ -164,11 +179,10 @@ class ExportManager:
                                           environment_constants=kwargs.get(
                                               "environment_constants", None),
                                           register_buffers=kwargs.get(
-                                              "register_buffers", None),
-                                          enable_fp16=kwargs.get(
-                                              "enable_fp16", False),
-                                          enable_cuda_graphs=kwargs.get("enable_cuda_graphs", False))
+                                              "register_buffers", None))
         self.current_node_name = name
+    
+    # def _setup_trace_context_node(self, name, from_function, **kwargs):
 
     #########################################################
     # Tracing
@@ -264,6 +278,53 @@ class ExportManager:
     #########################################################
     # annotation APIs
     #########################################################
+    def input_tensors(self, tensors: dict[str, torch.Tensor], node_name: str):
+        if not self.intepret_graph:
+            values = list(tensors.values())
+            return values[0] if len(values) == 1 else tuple(values)
+        
+        #TODO: if it is already traced we return and noop
+
+        if node_name in self.nodes.keys():
+            traced_tensors_node = None
+        else:
+            node_index = self.get_node_index(node_name)
+            traced_tensors_node = TracedTensorNode(node_name, node_index)
+        
+        traced_tensors = []
+        for tensor_name, tensor in tensors.items():
+            traced_tensor = traced_tensors_node.create_input(tensor, tensor_name)
+            traced_tensors.append(traced_tensor)
+        self.nodes[node_name] = traced_tensors_node
+        
+        return traced_tensors[0] if len(traced_tensors) == 1 else tuple(traced_tensors)
+    
+    def output_tensors(self, tensors: dict[str, TracedTensor], **kwargs):
+        if not self.intepret_graph:
+            return
+        names = []
+        for name, tensor in tensors.items():
+            if not isinstance(tensor, TracedTensor):
+                _get_logger().error(f"Error: tensor {name} is not a TracedTensor")
+                raise ValueError(f"Error: tensor {name} is not a TracedTensor")
+            names.append(tensor.context.name)
+        if not all(name == names[0] for name in names):
+            raise ValueError(f"Error: all tensors must have the same context name, got {set(names)}")
+        node_name = names[0]
+        if node_name not in self.nodes.keys():
+            _get_logger().error(f"Error: output tensors declared for node {node_name} but not found")
+            return
+        node_context = self.nodes[node_name]
+        if not node_context.is_tracing:
+            _get_logger().error(f"Error: output tensors called on a node {node_name} that is not currently tracing."
+                                " Please ensure one call only to output_tensors is made per node.")
+            return
+        
+        node_context.compile_trace(tensors, 
+                                   backend = kwargs.get("export_with", None), 
+                                   backend_params = kwargs.get("backend_params", {}))
+        return
+
     def block(self, node_name, **kwargs):
         """Create a context manager for tracing a block of code in the computational graph.
 
@@ -302,7 +363,7 @@ class ExportManager:
         """
         if not self.intepret_graph:
             return self
-        self._setup_new_node_context(node_name, from_function=False, **kwargs)
+        self._setup_new_node(node_name, from_function=False, **kwargs)
         return self
 
     def __enter__(self):
@@ -392,7 +453,7 @@ class ExportManager:
                 if not self.intepret_graph:
                     return func(*args, **kwargs)
 
-                self._setup_new_node_context(
+                self._setup_new_node(
                     name, from_function=True, **params)
                 if self.current_node_name is None or self.node_candidate is None:
                     raise Exception(
@@ -440,6 +501,10 @@ class ExportManager:
                 return result
             return wrapper
         return decorator
+    
+    #########################################################
+    # export flow control
+    #########################################################
 
     def mirror_leapp_tags(self, source, target):
         if not self.intepret_graph:

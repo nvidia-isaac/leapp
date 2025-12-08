@@ -18,7 +18,7 @@ def get_module_template(name, parent_class, constant_attrs):
 
     def __init__(self, *args, **kwargs):
         super(self.__class__, self).__init__(*args, **kwargs)
-        self.saved_buffers = []
+        self.saved_buffers = torch.jit.annotate(List[str], [])
 
     def add_buffer(self, name, value):
         if 'self.' in name:
@@ -52,9 +52,11 @@ def get_module_template(name, parent_class, constant_attrs):
     return module_instance
 
 class ModuleBuilder:
+
     def __init__(self, node_context):
         self.node_context = node_context
-
+    
+    def __call__(self):
         # validation
         if self.node_context.input_frame is None or self.node_context.output_frame is None:
             raise Exception(
@@ -100,6 +102,8 @@ class ModuleBuilder:
         _get_logger().debug("\n"+function_string)
         
         self._compile_forward_function(function_string)
+
+        return self.module_instance
     
     def _register_explicit_values(self):
         for constant_name, constant_value in self.node_context.cached_constant_values.items():

@@ -17,22 +17,21 @@
 
 from leapp.utils import (
     extract_return_names,
-    describe_io,
     safe_deepcopy,
     get_attribute_value_from_frame,
     tag_data,
     extract_source_from_line_range
 )
 from leapp._logging import _get_logger
-from .graph_element import LeappGraphElement
+from .leapp_node import LeappNode
 import inspect
 
 
-class NodeContext(LeappGraphElement):
+class FunctionalNode(LeappNode):
     def __init__(self, name, node_index, from_function, backend=None, use_trace=False,
-                 backend_params=None, inputs=None, outputs=None, environment_constants=None,
-                 register_buffers=None, enable_fp16=False, enable_cuda_graphs=False):
-        super().__init__(name, node_index, backend)
+                 backend_params=None, inputs=None, outputs=None, 
+                 environment_constants=None, register_buffers=None):
+        super().__init__(name, node_index)
         # input parameters
         # this variable is for temporary use only,
         # all data will be stored in self.inputs after the function is executed
@@ -64,18 +63,12 @@ class NodeContext(LeappGraphElement):
         overlap = self.register_buffers & self.environment_constants
         if overlap:
             raise ValueError(
-                f"NodeContext '{self.name}': The following names are present in both register_buffers and environment_constants: {overlap}. "
+                f"FunctionalNode '{self.name}': The following names are present in both register_buffers and environment_constants: {overlap}. "
                 "Please ensure there is no overlap between these two lists."
             )
 
         # model settings
-        # overwrite backend depending on using trace
-        if self.backend == "torch":
-            if use_trace:
-                self.backend = "torch-trace"
-            else:
-                self.backend = "torch-script"
-        self.export_backend = self._setup_backend(self.backend, backend_params)
+        self.setup_backend(backend, backend_params, use_trace)
 
         # source code:
         self.executed_lines = {
@@ -133,7 +126,7 @@ class NodeContext(LeappGraphElement):
                 param_names.index(param_name) < len(args)
             )
             if was_provided:
-                self._add_input(param_name, param_name, param_value)
+                self.add_input(param_name, param_name, param_value)
             else:
                 # this parameter uses the default value in the function header
                 self.default_kwargs[param_name] = param_value
@@ -151,14 +144,14 @@ class NodeContext(LeappGraphElement):
                     output_name = return_names[i]
                 else:
                     output_name = f"output{i+1}"
-                self._add_output(output_name, output_name, result[i])
+                self.add_output(output_name, output_name, result[i])
         else:
             if not len(return_names) == 1:
                 raise Exception(
                     f"Error: {self.name} has {len(return_names)}"
                     " outputs, but only one output is detectd")
             tag_data(result, self.name + '/' + return_names[0] + '/')
-            self._add_output(return_names[0], return_names[0], result)
+            self.add_output(return_names[0], return_names[0], result)
 
         # extract custom returns from the environment variables
 
@@ -186,7 +179,7 @@ class NodeContext(LeappGraphElement):
             for input_name in self._declared_inputs:
                 final_input_name, final_input_value = self._capture_specified_value_from_frame(
                     input_name, frame)
-                self._add_input(final_input_name, input_name,
+                self.add_input(final_input_name, input_name,
                                 final_input_value)
         except Exception as e:
             _get_logger().error(f"Error capturing inputs from frame: {e}")
@@ -203,24 +196,12 @@ class NodeContext(LeappGraphElement):
             for output_name in self._declared_outputs:
                 final_output_name, final_output_value = self._capture_specified_value_from_frame(
                     output_name, frame)
-                self._add_output(final_output_name,
+                self.add_output(final_output_name,
                                  output_name, final_output_value)
         except Exception as e:
             _get_logger().error(f"Error capturing outputs from frame: {e}")
             raise e
         self.output_frame = frame
-
-    def _add_output(self, outout_name, raw_output_name, output_value):
-        io_descriptions, output_format = describe_io(
-            outout_name, raw_output_name, output_value)
-        self.outputs.extend(io_descriptions)
-        self.output_formats.append(output_format)
-
-    def _add_input(self, input_name, raw_input_name, input_value):
-        io_descriptions, input_format = describe_io(
-            input_name, raw_input_name, input_value)
-        self.inputs.extend(io_descriptions)
-        self.input_formats.append(input_format)
 
     def snapshot_buffer_values(self, frame):
         for buffer_name in self.register_buffers:
@@ -240,31 +221,3 @@ class NodeContext(LeappGraphElement):
     def _cache_constant_value(self, constant_name, value):
         if constant_name not in self.cached_constant_values:
             self.cached_constant_values[constant_name] = safe_deepcopy(value)
-
-    def change_input_name(self, old_name, new_name):
-        _get_logger().warning(
-            f"changing input name from {old_name} to {new_name} for model {self.name}")
-        if old_name == new_name:
-            return
-        current_input_names = [input.name_str for input in self.inputs]
-        if new_name in current_input_names:
-            raise Exception(
-                f"Error requesting input name change for {self.name}/{old_name}:"
-                f" {new_name} is already in use")
-        for input in self.inputs:
-            if input.name_str == old_name:
-                input.change_name(new_name)
-
-    def change_output_name(self, old_name, new_name):
-        _get_logger().warning(
-            f"changing output name from {old_name} to {new_name} for model {self.name}")
-        if old_name == new_name:
-            return
-        current_output_names = [output.name_str for output in self.outputs]
-        if new_name in current_output_names:
-            raise Exception(
-                f"Error requesting output name change for {self.name}:"
-                f" {new_name} is already in use")
-        for output in self.outputs:
-            if output.name_str == old_name:
-                output.change_name(new_name)

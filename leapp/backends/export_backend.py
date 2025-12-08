@@ -19,8 +19,10 @@ from typing import Tuple, Any
 import os
 import hashlib
 import shutil
+from typing import Callable
 
 from leapp._logging import _get_logger
+from leapp.backends.module_builder import ModuleBuilder
 
 
 class ExportBackend(abc.ABC):
@@ -30,6 +32,11 @@ class ExportBackend(abc.ABC):
             self.backend_params = {}
         else:
             self.backend_params = backend_params
+        
+        self.module_builder = ModuleBuilder(node_context)
+    
+    def override_module_builder(self, module_builder: Callable):
+        self.module_builder = module_builder
 
     def _verify_model_location_and_get_hash(self, model_path):
         if not os.path.exists(model_path):

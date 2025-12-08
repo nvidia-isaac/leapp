@@ -82,8 +82,7 @@ class ONNXExportBackend(ExportBackend):
         return onnx_program
 
     def compile(self):
-        builder = ModuleBuilder(self.node_context)
-        m = builder.module_instance.eval()
+        m = self.module_builder().eval()
         if self.backend_params.get('prescript', False):
             m = torch.jit.script(m)
 

@@ -19,7 +19,7 @@ from leapp.utils import CompactYamlList
 from leapp.enums import MergeCfgEnum
 from leapp._logging import _get_logger
 from .graph_gui import visualize_graph
-from .leapp_combination_node import get_subgraph_node
+from .combined_node import get_combined_node
 
 
 class LeappGraph:
@@ -330,7 +330,7 @@ class LeappGraph:
                 name += "-" + node.name
             _get_logger().info("Creating merged node: " + name)
             try:
-                subgraph_node = get_subgraph_node(
+                combined_node = get_combined_node(
                     name=name, nodes=current_group_sorted)
             except Exception as e:
                 _get_logger().error(
@@ -338,16 +338,16 @@ class LeappGraph:
                 _get_logger().error(f"Skipping node merge for {name}")
                 continue
 
-            if subgraph_node is not None:
+            if combined_node is not None:
                 # Remove all nodes in the group from self.nodes
                 for node in current_group_sorted:
                     _get_logger().debug(
                         f"Removing node {node.name} from nodes dictionary, current existing nodes: {list(self.nodes.keys())}")
-                    self.node_name_map[node.name] = subgraph_node.name
+                    self.node_name_map[node.name] = combined_node.name
                     del self.nodes[node.name]
                     merged += 1
 
-                # Insert the subgraph node
-                self.nodes[subgraph_node.name] = subgraph_node
+                # Insert the combined node
+                self.nodes[combined_node.name] = combined_node
 
         return self.nodes, merged

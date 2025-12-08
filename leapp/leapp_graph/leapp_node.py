@@ -16,16 +16,17 @@
 #
 from leapp.utils import (CompactYamlList,
                          CompactYamlDict,
-                         resolve_tensor_descriptions_to_names)
+                         resolve_tensor_descriptions_to_names,
+                         describe_io,)
+from leapp.backends.export_backend import NoneExportBackend
+from leapp._logging import _get_logger
 
-
-class LeappGraphElement():
-    def __init__(self, name, node_index, backend=None,
-                 enable_fp16=False, enable_cuda_graphs=False):
+class LeappNode():
+    def __init__(self, name, node_index):
         self.name = name
         self.node_index = node_index
-        self.enable_fp16 = enable_fp16
-        self.enable_cuda_graphs = enable_cuda_graphs
+        self.enable_fp16 = False #legacy for holoinfer
+        self.enable_cuda_graphs = False #legacy for holoinfer
 
         # model settings
         self.compiled_model = None
@@ -33,7 +34,7 @@ class LeappGraphElement():
         self.md5sum = None
         self.sha256sum = None
         self.model_device = None
-        self.backend = backend
+        self.export_backend = NoneExportBackend(self, {})
 
         # i/o settings
         self.inputs = []
@@ -81,8 +82,8 @@ class LeappGraphElement():
             'device': self.model_device,
             'is_engine_path': self.is_engine_path(),
             'backend': self.get_backend(),
-            'enable_fp16': self.enable_fp16,
-            'enable_cuda_graphs': self.enable_cuda_graphs,
+            'enable_fp16': self.enable_fp16, #legacy for holoinfer
+            'enable_cuda_graphs': self.enable_cuda_graphs, #legacy for holoinfer
         }
         description['formatting'] = {
             'input_format': input_formats,
@@ -91,42 +92,51 @@ class LeappGraphElement():
 
         return description
 
-    def _setup_backend(self, backend, backend_params):
-        export_backend = None
-        if self.backend is None:
-            from leapp.backends.export_backend import NoneExportBackend
-            export_backend = NoneExportBackend(
+    def setup_backend(self, backend, backend_params, use_trace=False):
+        if backend == "torch":
+            if use_trace:
+                backend = "torch-trace"
+            else:
+                backend = "torch-script"
+        if backend is None:
+            self.export_backend = NoneExportBackend(
                 self, backend_params)
-        elif self.backend == "torch":
+        elif backend == "torch":
             from leapp.backends.torch_export_backend import TorchExportBackend
-            export_backend = TorchExportBackend(
+            self.export_backend = TorchExportBackend(
                 self, backend_params)
-        elif self.backend == "torch-script":
+        elif backend == "torch-script":
             from leapp.backends.torch_export_backend import TorchScriptExportBackend
-            export_backend = TorchScriptExportBackend(
+            self.export_backend = TorchScriptExportBackend(
                 self, backend_params)
-        elif self.backend == "torch-trace":
+        elif backend == "torch-trace":
             from leapp.backends.torch_export_backend import TorchTraceExportBackend
-            export_backend = TorchTraceExportBackend(
+            self.export_backend = TorchTraceExportBackend(
                 self, backend_params)
-        elif self.backend == "onnx":
+        elif backend == "onnx":
             from leapp.backends.onnx_export_backend import ONNXExportBackend
-            export_backend = ONNXExportBackend(
+            self.export_backend = ONNXExportBackend(
                 self, backend_params)
-        elif self.backend == "cpp":
+        elif backend == "cpp":
             raise Exception("C++ backend not implemented")
-        elif self.backend == "py":
+        elif backend == "py":
             raise Exception("Python backend not implemented")
         else:
             raise Exception(
                 f"{self.name} Unexpected backend: {backend}, \n"
                 "please use one of the following: torch, onnx, cpp, py")
-        return export_backend
 
     def save_model(self, save_path: str):
         self.model_path, self.md5sum, self.sha256sum = self.export_backend.save(
             save_path, self.compiled_model)
         self.model_device = 'cuda'
+
+    def compile_model(self):
+        try:
+            self.compiled_model = self.export_backend.compile()
+        except Exception as e:
+            _get_logger().error(f"Error compiling model {self.name}: {e}")
+            raise e
 
     def get_backend(self):
         return self.export_backend.get_backed_model_type()
@@ -141,7 +151,43 @@ class LeappGraphElement():
             raise Exception(
                 f"Error: {self.name} has no compiled model, please export the model first")
         return self.compiled_model
+    
+    def add_output(self, outout_name, raw_output_name, output_value):
+        io_descriptions, output_format = describe_io(
+            outout_name, raw_output_name, output_value)
+        self.outputs.extend(io_descriptions)
+        self.output_formats.append(output_format)
 
-    def compile_model(self):
-        raise NotImplementedError(
-            f"compile_model is not available for {self.name}")
+    def add_input(self, input_name, raw_input_name, input_value):
+        io_descriptions, input_format = describe_io(
+            input_name, raw_input_name, input_value)
+        self.inputs.extend(io_descriptions)
+        self.input_formats.append(input_format)
+    
+    def change_input_name(self, old_name, new_name):
+        _get_logger().warning(
+            f"changing input name from {old_name} to {new_name} for model {self.name}")
+        if old_name == new_name:
+            return
+        current_input_names = [input.name_str for input in self.inputs]
+        if new_name in current_input_names:
+            raise Exception(
+                f"Error requesting input name change for {self.name}/{old_name}:"
+                f" {new_name} is already in use")
+        for input in self.inputs:
+            if input.name_str == old_name:
+                input.change_name(new_name)
+
+    def change_output_name(self, old_name, new_name):
+        _get_logger().warning(
+            f"changing output name from {old_name} to {new_name} for model {self.name}")
+        if old_name == new_name:
+            return
+        current_output_names = [output.name_str for output in self.outputs]
+        if new_name in current_output_names:
+            raise Exception(
+                f"Error requesting output name change for {self.name}:"
+                f" {new_name} is already in use")
+        for output in self.outputs:
+            if output.name_str == old_name:
+                output.change_name(new_name)

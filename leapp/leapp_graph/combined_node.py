@@ -15,7 +15,7 @@
 # limitations under the License.
 #
 
-from .graph_element import LeappGraphElement
+from .leapp_node import LeappNode
 from collections import OrderedDict
 from typing import List
 import torch
@@ -23,14 +23,14 @@ from leapp.utils import CompactYamlList, reconstruct_from_named_dict, flatten_to
 from leapp._logging import _get_logger
 
 
-class SubgraphNodeModel(torch.nn.Module):
+class CombinedNodeModel(torch.nn.Module):
     def __init__(self, name_order: List[str], models, input_names, output_names, io_configs):
         super().__init__()
         self.input_names = input_names
         self.output_names = output_names
         self.models = {}
         if (any(output_name is None for output_name in output_names)):
-            raise ValueError("Unexpected untagged output in subgraph node")
+            raise ValueError("Unexpected untagged output in combined node")
         self.name_order = name_order
         self.io_configs = io_configs
         for idx, model in enumerate(models):
@@ -95,8 +95,8 @@ class SubgraphNodeModel(torch.nn.Module):
         return tuple(outputs)
 
 
-class SubgraphNodeContext(LeappGraphElement):
-    def __init__(self, nodes: List[LeappGraphElement],
+class CombinedNode(LeappNode):
+    def __init__(self, nodes: List[LeappNode],
                  node_index: int, name, backend):
         nodes_enable_fp16 = [node.enable_fp16 for node in nodes]
         nodes_enable_cuda_graphs = [node.enable_cuda_graphs for node in nodes]
@@ -105,8 +105,7 @@ class SubgraphNodeContext(LeappGraphElement):
         if not all(node_enable_cuda_graphs == nodes_enable_cuda_graphs[0] for node_enable_cuda_graphs in nodes_enable_cuda_graphs):
             raise ValueError("All nodes must have the same enable_cuda_graphs")
 
-        LeappGraphElement.__init__(
-            self, name, node_index, backend, nodes_enable_fp16[0], nodes_enable_cuda_graphs[0])
+        LeappNode.__init__(self, name, node_index)
 
         self.nodes = sorted(nodes, key=lambda node: node.node_index)
         self.node_execution_order = [node.name for node in nodes]
@@ -116,12 +115,12 @@ class SubgraphNodeContext(LeappGraphElement):
         input_names = [input.name for input in self.inputs]
         output_names = [output.tag for output in self.outputs]
         models = [node.get_compiled_model() for node in self.nodes]
-        combined_model = SubgraphNodeModel(
+        combined_model = CombinedNodeModel(
             self.node_execution_order, models, input_names, output_names, node_configs)
         input_values = [input_val.value for input_val in self.inputs]
 
         # create the backend
-        self.export_backend = self._setup_backend(self.backend, {})
+        self.setup_backend(backend, {})
         # TODO: This is a temporary hack to get the combined model working.
         # the real solution is to allow the backend to handle existing models
         if self.get_backend() == 'torch':
@@ -135,7 +134,7 @@ class SubgraphNodeContext(LeappGraphElement):
             raise NotImplementedError(
                 f"Combination node for backend {self.get_backend()} is not implemented")
 
-    def _get_graph_level_io(self, nodes: List[LeappGraphElement]):
+    def _get_graph_level_io(self, nodes: List[LeappNode]):
         inputs = OrderedDict()
         outputs = OrderedDict()
         for node in nodes:
@@ -169,7 +168,7 @@ class SubgraphNodeContext(LeappGraphElement):
                 [output.name for output in self.outputs])
         return description
 
-    def _get_per_node_io_formatting(self, nodes: List[LeappGraphElement]):
+    def _get_per_node_io_formatting(self, nodes: List[LeappNode]):
         node_configs = {}
         for node in nodes:
             # format
@@ -183,9 +182,9 @@ class SubgraphNodeContext(LeappGraphElement):
         return node_configs
 
 
-def get_subgraph_node(nodes: List[LeappGraphElement], name):
+def get_combined_node(nodes: List[LeappNode], name):
     '''
-    build a subgraph node from a list of nodes. This assumes the following:
+    build a combined node from a list of nodes. This assumes the following:
     1. All the nodes have the same backend
     2. All nodes can be connected by valid tags
     3. All nodes have undergone i/o reconciliation (input names and output names match)
@@ -205,9 +204,9 @@ def get_subgraph_node(nodes: List[LeappGraphElement], name):
     node_index = nodes[0].node_index
     name_order = [node.name for node in nodes]
     try:
-        subgraph_node = SubgraphNodeContext(
+        combined_node = CombinedNode(
             nodes, node_index, name, backend)
     except Exception as e:
         _get_logger().error(f"Error creating creating merged node {name}: {e}")
         return None
-    return subgraph_node
+    return combined_node
