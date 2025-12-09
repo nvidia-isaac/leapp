@@ -301,6 +301,18 @@ class TracedTensor:
         # Fall back to the underlying tensor's attribute
         attr = getattr(self._tensor, name, None)
         if attr is not None:
+            # If it's a callable method, wrap it to ensure it goes through __torch_function__
+            if callable(attr):
+                def wrapped_method(*args, **kwargs):
+                    # Call the method on the underlying tensor
+                    result = attr(*args, **kwargs)
+                    # If result is a tensor, wrap it in TracedTensor
+                    if isinstance(result, torch.Tensor):
+                        # Create a proxy node for this operation
+                        proxy = self._proxy._tracer.create_proxy('call_method', name, (self._proxy,) + args, kwargs)
+                        return self._new(result, proxy)
+                    return result
+                return wrapped_method
             return attr
 
         # Attribute not found
