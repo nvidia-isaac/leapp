@@ -83,3 +83,11 @@ exclude = ["tests*"]
 # Include all files specified in MANIFEST.in
 "*" = ["*.md", "*.txt", "LICENSE"]
 "leapp" = ["*.py"]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::UserWarning",
+    "ignore:The feature will be removed.*:DeprecationWarning:torch.onnx",
+    "ignore:The TorchScript type system doesn't support instance-level annotations:Warning",
+    "ignore:You are using the legacy TorchScript-based ONNX export:Warning",
+]

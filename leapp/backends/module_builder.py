@@ -8,6 +8,7 @@ from leapp._logging import _get_logger
 
 from typing import Tuple, List, Dict
 
+
 def get_module_template(name, parent_class, constant_attrs):
     if parent_class is None:
         bases = (torch.nn.Module,)
@@ -18,20 +19,22 @@ def get_module_template(name, parent_class, constant_attrs):
 
     def __init__(self, *args, **kwargs):
         super(self.__class__, self).__init__(*args, **kwargs)
-        self.saved_buffers = torch.jit.annotate(List[str], [])
+        self.saved_buffers: List[str] = []
 
     def add_buffer(self, name, value):
         if 'self.' in name:
             name = name.split('self.')[1]
         if name in self.saved_buffers:
-            raise ValueError(f"Buffer with name '{name}' was already registered")
+            raise ValueError(
+                f"Buffer with name '{name}' was already registered")
         if name in self.__constant__:
-            raise ValueError(f"Buffer with name '{name}' was already registered as a constant")
+            raise ValueError(
+                f"Buffer with name '{name}' was already registered as a constant")
         if hasattr(self, name):
             delattr(self, name)
         self.register_buffer(name, value)
         self.saved_buffers.append(name)
-        
+
     def forward(self):
         raise NotImplementedError("The forward method is not implemented.")
 
@@ -51,11 +54,12 @@ def get_module_template(name, parent_class, constant_attrs):
 
     return module_instance
 
+
 class ModuleBuilder:
 
     def __init__(self, node_context):
         self.node_context = node_context
-    
+
     def __call__(self):
         # validation
         if self.node_context.input_frame is None or self.node_context.output_frame is None:
@@ -74,7 +78,7 @@ class ModuleBuilder:
         # setup the module with required attributes from the environment
         self._register_explicit_values()
         self._duplicate_attributes()
-        
+
         # extract the body of the function
         body = self._extract_source_code()
         header, return_statement, outputs_str = self._create_header_and_return_statement()
@@ -86,7 +90,7 @@ class ModuleBuilder:
             if replacement_count != 0 or len(self.node_context._declared_outputs) == 0:
                 return_statement = ""
             # if replacement count is 0, we use the artificial return statement created previously
-        
+
         # modifications to the body of the function
         prepended_conditioning = self._create_data_patching_string()
 
@@ -100,18 +104,19 @@ class ModuleBuilder:
         function_string = header + indented_function_body
 
         _get_logger().debug("\n"+function_string)
-        
+
         self._compile_forward_function(function_string)
 
         return self.module_instance
-    
+
     def _register_explicit_values(self):
         for constant_name, constant_value in self.node_context.cached_constant_values.items():
             if 'self.' in constant_name:
                 constant_name = constant_name.split('self.')[1]
             setattr(self.module_instance, constant_name, constant_value)
             self.module_instance.__constant__.append(constant_name)
-            _get_logger().debug(f"Set instance attribute (constant value): {constant_name} = {constant_value}")
+            _get_logger().debug(
+                f"Set instance attribute (constant value): {constant_name} = {constant_value}")
         # Set default values as instance attributes (from stored dictionary)
         for default_name, default_value in self.node_context.default_kwargs.items():
             # Set as instance attribute - accessible as self.default_name
@@ -123,7 +128,7 @@ class ModuleBuilder:
         for buffer_name in self.node_context.register_buffers:
             value = self.node_context.cached_buffer_values[buffer_name]
             self.module_instance.add_buffer(buffer_name, value)
-        
+
         if len(self.module_instance.saved_buffers) > 0:
             _get_logger().info("Created the following buffers:")
             for buffer_name in self.module_instance.saved_buffers:
@@ -131,16 +136,16 @@ class ModuleBuilder:
                     f"  - self.{buffer_name}: intialized as {getattr(self.module_instance, buffer_name)}")
 
     def _duplicate_attributes(self):
-                # copy all the attributes from the original object to the module
+        # copy all the attributes from the original object to the module
         if 'self' in self.node_context.input_frame.f_locals:
             original_obj = self.node_context.input_frame.f_locals['self']
             for attr_name in dir(original_obj):
                 # we don't copy any private attributes or register buffers or registered constants
                 if attr_name.startswith('__') or attr_name.endswith('__') or \
-                    f"self.{attr_name}" in self.node_context.register_buffers or \
-                    f"{attr_name}" in self.module_instance.__constant__:
+                        f"self.{attr_name}" in self.node_context.register_buffers or \
+                        f"{attr_name}" in self.module_instance.__constant__:
                     continue
-                    
+
                 try:
                     value = getattr(original_obj, attr_name)
                     _get_logger().debug(f"Setting attribute: {attr_name}")
@@ -158,12 +163,13 @@ class ModuleBuilder:
                     elif not callable(value):
                         self.module_instance.__dict__[attr_name] = value
                     elif callable(value):
-                        bound_method = types.MethodType(value, self.module_instance)
+                        bound_method = types.MethodType(
+                            value, self.module_instance)
                         setattr(self.module_instance, attr_name, bound_method)
                 except Exception as e:
                     _get_logger().error(
                         f"Error setting attribute {attr_name}: {e}")
-                        
+
     def _extract_source_code(self):
         executed_lines = self.node_context.executed_lines
 
@@ -287,10 +293,12 @@ class ModuleBuilder:
                 source_code = dedented_code.rstrip()
             else:
                 source_code = ""
-            _get_logger().info(f"Extracted code from file: {filename}, function: {executed_lines['function_name']}")
+            _get_logger().info(
+                f"Extracted code from file: {filename}, function: {executed_lines['function_name']}")
 
         except Exception as e:
-            _get_logger().error(f"Error extracting source from line range: {e}")
+            _get_logger().error(
+                f"Error extracting source from line range: {e}")
             source_code = ""
 
         if source_code == "":
@@ -298,7 +306,7 @@ class ModuleBuilder:
                 f"No source code found for {self.node_context.name}")
 
         return source_code
-    
+
     def _create_header_and_return_statement(self):
         # create header
         # first validate that the input formats detected are valid
@@ -332,7 +340,7 @@ class ModuleBuilder:
         return_statement = return_statement_template.format(outputs=outputs)
 
         return header, return_statement, outputs
-    
+
     def _append_outputs_to_return_statements(self, source_code, outputs_str):
         if not outputs_str:
             return source_code, 0
@@ -361,7 +369,7 @@ class ModuleBuilder:
                                source_code, flags=re.MULTILINE)
 
         return modified_code, replacement_count[0]
-    
+
     def _create_data_patching_string(self):
         data_patch_template = "{const_name} = self.{const_name}\n"
         data_patch_string = ""
@@ -385,7 +393,6 @@ class ModuleBuilder:
                 data_patch_string += f"{original_name} = {param_name}\n"
 
         return data_patch_string
-    
 
     def _compile_forward_function(self, function_string):
         filename = f'generated_{self.node_context.name}_function'
@@ -415,7 +422,9 @@ class ModuleBuilder:
         lines = [line + '\n' for line in function_string.splitlines()]
         linecache.cache[filename] = (
             len(function_string), None, lines, filename)
-        self.module_instance.forward = types.MethodType(forward, self.module_instance)
+        self.module_instance.forward = types.MethodType(
+            forward, self.module_instance)
+
 
 if __name__ == "__main__":
     module_builder = ModuleBuilder("TestModule", None, {})

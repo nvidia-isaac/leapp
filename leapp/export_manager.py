@@ -307,7 +307,7 @@ class ExportManager:
             if not isinstance(tensor, TracedTensor):
                 _get_logger().error(f"Error: tensor {name} is not a TracedTensor")
                 raise ValueError(f"Error: tensor {name} is not a TracedTensor")
-            names.append(tensor.context.name)
+            names.append(tensor.context)
         if not all(name == names[0] for name in names):
             raise ValueError(f"Error: all tensors must have the same context name, got {set(names)}")
         node_name = names[0]
