@@ -57,7 +57,6 @@ class ONNXExportBackend(ExportBackend):
         input_values = tuple([resolve_tensor_descriptions_to_values(param_format)
                               for param_format in self.node_context.input_formats])
 
-        m = torch.jit.script(m)
         with tempfile.TemporaryDirectory() as tmpdir:
             save_path = os.path.join(tmpdir, "model.onnx")
             torch.onnx.export(
@@ -83,7 +82,7 @@ class ONNXExportBackend(ExportBackend):
 
     def compile(self):
         m = self.module_builder().eval()
-        if self.backend_params.get('prescript', False):
+        if self.backend_params.get('prescript', False): #TODO: make this conditional upon use_trace
             m = torch.jit.script(m)
 
         if self.backend_params.get('dynamo', True):

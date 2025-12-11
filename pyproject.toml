@@ -53,6 +53,7 @@ dependencies = [
     "networkx>=2.6",
     "PyYAML>=6.0",
     "onnx>=1.19.0",
+    "onnxruntime>=1.20.0",
     "onnxscript>=0.1.0",
 ]
 

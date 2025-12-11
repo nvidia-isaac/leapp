@@ -25,15 +25,17 @@ import torch
 from leapp._logging import _get_logger
 from leapp.leapp_graph.leapp_graph import LeappGraph
 from leapp.leapp_graph.functional_node import FunctionalNode
-from leapp.leapp_graph.traced_node import TracedTensorNode, TracedTensor
+from leapp.leapp_graph.traced_node import TracedTensorNode
+from leapp.leapp_graph.traced_tensor import TracedTensor
 from leapp.enums import MergeCfgEnum
 
-from .utils import (CompactYamlList, 
-                    CompactYamlDict, 
-                    get_relative_path, 
-                    get_system_info, 
-                    verify_data_exact_match, 
+from .utils import (CompactYamlList,
+                    CompactYamlDict,
+                    get_relative_path,
+                    get_system_info,
+                    verify_data_exact_match,
                     mirror_all_tensor_tags)
+
 
 class ExportManager:
     _instance = None
@@ -109,7 +111,7 @@ class ExportManager:
         _get_logger().configure(self.SAVE_PATH, verbose=verbose)
         if self.intepret_graph:
             _get_logger().warning("LEAPP graph interpretation is already enabled, "
-                                "calling start() again will reset the graph")
+                                  "calling start() again will reset the graph")
             _get_logger().warning("Resetting graph...")
             self._is_tracing = False
             self.current_node_name = None
@@ -155,6 +157,7 @@ class ExportManager:
         else:
             node_index = len(self.nodes)
         return node_index
+
     def _setup_new_node(self, name, from_function, **kwargs):
         if self.current_node_name is not None or self.node_candidate is not None:
             self.current_node_name = name
@@ -166,22 +169,22 @@ class ExportManager:
 
         node_index = self.get_node_index(name)
         self.node_candidate = FunctionalNode(name, node_index, from_function,
-                                          backend=kwargs.get(
-                                              "export_with", None),
-                                          backend_params=kwargs.get(
-                                              "backend_params", None),
-                                          use_trace=kwargs.get(
-                                              "use_trace", False),
-                                          inputs=kwargs.get(
-                                              "inputs", None),
-                                          outputs=kwargs.get(
-                                              "outputs", None),
-                                          environment_constants=kwargs.get(
-                                              "environment_constants", None),
-                                          register_buffers=kwargs.get(
-                                              "register_buffers", None))
+                                             backend=kwargs.get(
+                                                 "export_with", None),
+                                             backend_params=kwargs.get(
+                                                 "backend_params", None),
+                                             use_trace=kwargs.get(
+                                                 "use_trace", False),
+                                             inputs=kwargs.get(
+                                                 "inputs", None),
+                                             outputs=kwargs.get(
+                                                 "outputs", None),
+                                             environment_constants=kwargs.get(
+                                                 "environment_constants", None),
+                                             register_buffers=kwargs.get(
+                                                 "register_buffers", None))
         self.current_node_name = name
-    
+
     # def _setup_trace_context_node(self, name, from_function, **kwargs):
 
     #########################################################
@@ -282,48 +285,56 @@ class ExportManager:
         if not self.intepret_graph:
             values = list(tensors.values())
             return values[0] if len(values) == 1 else tuple(values)
-        
-        #TODO: if it is already traced we return and noop
+
+        # TODO: if it is already traced we return and noop
 
         if node_name in self.nodes.keys():
-            traced_tensors_node = None
+            traced_tensors_node = self.nodes[node_name]
         else:
             node_index = self.get_node_index(node_name)
             traced_tensors_node = TracedTensorNode(node_name, node_index)
-        
+
         traced_tensors = []
         for tensor_name, tensor in tensors.items():
-            traced_tensor = traced_tensors_node.create_input(tensor, tensor_name)
+            traced_tensor = traced_tensors_node.create_input(
+                tensor, tensor_name)
             traced_tensors.append(traced_tensor)
         self.nodes[node_name] = traced_tensors_node
-        
+
         return traced_tensors[0] if len(traced_tensors) == 1 else tuple(traced_tensors)
-    
+
     def output_tensors(self, tensors: dict[str, TracedTensor], **kwargs):
         if not self.intepret_graph:
             return
         names = []
         for name, tensor in tensors.items():
             if not isinstance(tensor, TracedTensor):
-                _get_logger().error(f"Error: tensor {name} is not a TracedTensor")
+                _get_logger().error(
+                    f"Error: tensor {name} is not a TracedTensor")
                 raise ValueError(f"Error: tensor {name} is not a TracedTensor")
             names.append(tensor.context)
         if not all(name == names[0] for name in names):
-            raise ValueError(f"Error: all tensors must have the same context name, got {set(names)}")
+            raise ValueError(
+                f"Error: all tensors must have the same context name, got {set(names)}")
         node_name = names[0]
         if node_name not in self.nodes.keys():
-            _get_logger().error(f"Error: output tensors declared for node {node_name} but not found")
+            _get_logger().error(
+                f"Error: output tensors declared for node {node_name} but not found")
             return
         node_context = self.nodes[node_name]
         if not node_context.is_tracing:
             _get_logger().error(f"Error: output tensors called on a node {node_name} that is not currently tracing."
                                 " Please ensure one call only to output_tensors is made per node.")
             return
+
+        node_context.compile_trace(tensors,
+                                   backend=kwargs.get("export_with", None),
+                                   backend_params=kwargs.get("backend_params", {}))
         
-        node_context.compile_trace(tensors, 
-                                   backend = kwargs.get("export_with", None), 
-                                   backend_params = kwargs.get("backend_params", {}))
-        return
+        if len(tensors) == 1:
+            return tensors.values()[0]
+        else:
+            return tuple(tensors.values())
 
     def block(self, node_name, **kwargs):
         """Create a context manager for tracing a block of code in the computational graph.
@@ -462,20 +473,8 @@ class ExportManager:
                 _get_logger().info(f"****Tracing started for {name}****")
                 self.node_candidate.inspect_function_inputs(
                     func, args, kwargs)
-
-                func_code = func.__code__
-                self.node_candidate.executed_lines['filename'] = func_code.co_filename
-                self.node_candidate.executed_lines['function_name'] = func_code.co_name
-
-                # Get the line range of the function
-                func_lines, start_line = inspect.getsourcelines(func)
-                self.node_candidate.executed_lines['min_line'] = start_line
-                self.node_candidate.executed_lines['max_line'] = start_line + \
-                    len(func_lines) - 1
-
-                # Initialize the lines set with all function lines
-                self.node_candidate.executed_lines['lines'] = set(
-                    range(start_line, start_line + len(func_lines)))
+                
+                self.node_candidate.compile_trace_for_function(func) #TODO 0.3: refactor this
 
                 self._start_tracing(sys._getframe(1), self._trace_function)
 
@@ -501,7 +500,7 @@ class ExportManager:
                 return result
             return wrapper
         return decorator
-    
+
     #########################################################
     # export flow control
     #########################################################

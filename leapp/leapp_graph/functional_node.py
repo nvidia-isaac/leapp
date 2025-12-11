@@ -19,7 +19,6 @@ from leapp.utils import (
     extract_return_names,
     safe_deepcopy,
     get_attribute_value_from_frame,
-    tag_data,
     extract_source_from_line_range
 )
 from leapp._logging import _get_logger
@@ -29,7 +28,7 @@ import inspect
 
 class FunctionalNode(LeappNode):
     def __init__(self, name, node_index, from_function, backend=None, use_trace=False,
-                 backend_params=None, inputs=None, outputs=None, 
+                 backend_params=None, inputs=None, outputs=None,
                  environment_constants=None, register_buffers=None):
         super().__init__(name, node_index)
         # input parameters
@@ -94,7 +93,6 @@ class FunctionalNode(LeappNode):
             raise e
 
     def compile_trace(self):
-
         # Extract source code when tracing stops
         self.executed_lines['source_code'], message = extract_source_from_line_range(
             self.executed_lines,
@@ -105,6 +103,24 @@ class FunctionalNode(LeappNode):
             _get_logger().info(message)
         else:
             _get_logger().error(message)
+        self.model_captured = True
+    
+    def compile_trace_for_function(self, func):
+        func_code = func.__code__
+        self.executed_lines['filename'] = func_code.co_filename
+        self.executed_lines['function_name'] = func_code.co_name
+
+        # Get the line range of the function
+        func_lines, start_line = inspect.getsourcelines(func)
+        self.executed_lines['min_line'] = start_line
+        self.executed_lines['max_line'] = start_line + \
+            len(func_lines) - 1
+
+        # Initialize the lines set with all function lines
+        self.executed_lines['lines'] = set(
+            range(start_line, start_line + len(func_lines)))
+        
+        self.model_captured = True
 
     def inspect_function_inputs(self, func, args, kwargs):
         # Get parameter names from function signature
@@ -139,7 +155,7 @@ class FunctionalNode(LeappNode):
 
         if isinstance(result, tuple) and len(return_names) == len(result):
             for i in range(len(result)):
-                tag_data(result[i], self.name + '/' + return_names[i] + '/')
+                self.tag_data(result[i], return_names[i])
                 if i < len(return_names):
                     output_name = return_names[i]
                 else:
@@ -150,7 +166,7 @@ class FunctionalNode(LeappNode):
                 raise Exception(
                     f"Error: {self.name} has {len(return_names)}"
                     " outputs, but only one output is detectd")
-            tag_data(result, self.name + '/' + return_names[0] + '/')
+            self.tag_data(result, return_names[0])
             self.add_output(return_names[0], return_names[0], result)
 
         # extract custom returns from the environment variables
@@ -180,24 +196,22 @@ class FunctionalNode(LeappNode):
                 final_input_name, final_input_value = self._capture_specified_value_from_frame(
                     input_name, frame)
                 self.add_input(final_input_name, input_name,
-                                final_input_value)
+                               final_input_value)
         except Exception as e:
             _get_logger().error(f"Error capturing inputs from frame: {e}")
             raise e
         self.input_frame = frame
 
     def capture_outputs_from_frame(self, frame):
-        for output_name in self._declared_outputs:
-            obj, _ = get_attribute_value_from_frame(frame, output_name)
-            output_tag = self.name + '/' + output_name + '/'
-            tag_data(obj, output_tag)
-
         try:
             for output_name in self._declared_outputs:
+                obj, _ = get_attribute_value_from_frame(frame, output_name)
+                self.tag_data(obj, output_name)
+
                 final_output_name, final_output_value = self._capture_specified_value_from_frame(
                     output_name, frame)
                 self.add_output(final_output_name,
-                                 output_name, final_output_value)
+                                output_name, final_output_value)
         except Exception as e:
             _get_logger().error(f"Error capturing outputs from frame: {e}")
             raise e

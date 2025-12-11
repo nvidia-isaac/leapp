@@ -14,21 +14,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
+import collections
+
+import torch
 from leapp.utils import (CompactYamlList,
                          CompactYamlDict,
                          resolve_tensor_descriptions_to_names,
-                         describe_io,)
+                         describe_io,
+                         tag_tensor,)
+from leapp.leapp_graph.traced_tensor import TracedTensor
 from leapp.backends.export_backend import NoneExportBackend
 from leapp._logging import _get_logger
+
 
 class LeappNode():
     def __init__(self, name, node_index):
         self.name = name
         self.node_index = node_index
-        self.enable_fp16 = False #legacy for holoinfer
-        self.enable_cuda_graphs = False #legacy for holoinfer
+        self.enable_fp16 = False  # legacy for holoinfer
+        self.enable_cuda_graphs = False  # legacy for holoinfer
 
         # model settings
+        self.model_captured = False
         self.compiled_model = None
         self.model_path = None
         self.md5sum = None
@@ -42,6 +49,11 @@ class LeappNode():
         self.input_formats = []
         self.output_formats = []
 
+    @property
+    def captured(self):
+        # this is defaulted to False. the compile_trace method should set this to true
+        return self.model_captured
+    
     def get_description(self):
         # dynamically generate i/o descriptions depending on need
         # Directly use the TensorDescription objects in self.inputs
@@ -82,8 +94,8 @@ class LeappNode():
             'device': self.model_device,
             'is_engine_path': self.is_engine_path(),
             'backend': self.get_backend(),
-            'enable_fp16': self.enable_fp16, #legacy for holoinfer
-            'enable_cuda_graphs': self.enable_cuda_graphs, #legacy for holoinfer
+            'enable_fp16': self.enable_fp16,  # legacy for holoinfer
+            'enable_cuda_graphs': self.enable_cuda_graphs,  # legacy for holoinfer
         }
         description['formatting'] = {
             'input_format': input_formats,
@@ -151,7 +163,26 @@ class LeappNode():
             raise Exception(
                 f"Error: {self.name} has no compiled model, please export the model first")
         return self.compiled_model
-    
+
+    def tag_data(self, tensor, tag):
+        # the tag is the name of the tensor, with the node name prepended
+        tag = self.name + '/' + tag + '/'
+
+        if isinstance(tensor, torch.Tensor):
+            if isinstance(tensor, TracedTensor):
+                tensor = tensor.tensor
+            tag_tensor(tensor, tag)
+        elif isinstance(tensor, collections.abc.Mapping):
+            for key, value in tensor.items():
+                self.tag_data(value, tag + "[" + key + "]")
+        elif isinstance(tensor, collections.abc.Iterable) and not isinstance(tensor, (str, bytes)) and not hasattr(tensor, '__array__'):
+            # This catches lists, tuples, sets, etc. but excludes strings, bytes, and numpy arrays
+            for idx, item in enumerate(tensor):
+                self.tag_data(item, tag + "[" + str(idx) + "]")
+        else:
+            print(
+                f"\033[93mWarning: Untaggable datatype in i/o: {type(tensor)}\033[0m")
+
     def add_output(self, outout_name, raw_output_name, output_value):
         io_descriptions, output_format = describe_io(
             outout_name, raw_output_name, output_value)
@@ -163,7 +194,7 @@ class LeappNode():
             input_name, raw_input_name, input_value)
         self.inputs.extend(io_descriptions)
         self.input_formats.append(input_format)
-    
+
     def change_input_name(self, old_name, new_name):
         _get_logger().warning(
             f"changing input name from {old_name} to {new_name} for model {self.name}")
@@ -191,3 +222,6 @@ class LeappNode():
         for output in self.outputs:
             if output.name_str == old_name:
                 output.change_name(new_name)
+    
+    def compile_trace(self):
+        raise NotImplementedError(f"compile_trace not implemented for {self.__class__.__name__}")

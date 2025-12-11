@@ -9,7 +9,8 @@ import onnxruntime as ort
 import torch
 import warnings
 
-from leapp.leapp_graph.traced_node import TracedTensorNode, TracedTensor
+from leapp.leapp_graph.traced_node import TracedTensorNode
+from leapp.leapp_graph.traced_tensor import TracedTensor
 
 Tensor = torch.Tensor | TracedTensor
 
