@@ -25,7 +25,7 @@ def visualize_graph(nodes, connections, feedback_connections, inputs, outputs, s
     Visualize the computational graph showing nodes, connections, and dangling I/O.
 
     Args:
-        nodes: Dict of node_name -> FunctionalNode objects
+        nodes: Dict of node_name -> FunctionDecoratorNode objects
         connections: List of connection dicts with 'source' and 'targets' keys
         feedback_connections: List of feedback connection dicts with 'source' and 'targets' keys
         inputs: List of dangling graph inputs (not connected internally)

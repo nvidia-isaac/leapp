@@ -24,9 +24,10 @@ import torch
 
 from leapp._logging import _get_logger
 from leapp.leapp_graph.leapp_graph import LeappGraph
-from leapp.leapp_graph.functional_node import FunctionalNode
+from leapp.leapp_graph.function_decorator_node import FunctionDecoratorNode
 from leapp.leapp_graph.traced_node import TracedTensorNode
 from leapp.leapp_graph.traced_tensor import TracedTensor
+from leapp.leapp_graph.block_context_node import BlockContextNode
 from leapp.enums import MergeCfgEnum
 
 from .utils import (CompactYamlList,
@@ -168,21 +169,39 @@ class ExportManager:
                 f"ExportManager is already tracing {self.current_node_name}")
 
         node_index = self.get_node_index(name)
-        self.node_candidate = FunctionalNode(name, node_index, from_function,
-                                             backend=kwargs.get(
-                                                 "export_with", None),
-                                             backend_params=kwargs.get(
-                                                 "backend_params", None),
-                                             use_trace=kwargs.get(
-                                                 "use_trace", False),
-                                             inputs=kwargs.get(
-                                                 "inputs", None),
-                                             outputs=kwargs.get(
-                                                 "outputs", None),
-                                             environment_constants=kwargs.get(
-                                                 "environment_constants", None),
-                                             register_buffers=kwargs.get(
-                                                 "register_buffers", None))
+        
+        if from_function:
+            self.node_candidate = FunctionDecoratorNode(name, node_index,
+                                                 backend=kwargs.get(
+                                                     "export_with", None),
+                                                 backend_params=kwargs.get(
+                                                     "backend_params", None),
+                                                 use_trace=kwargs.get(
+                                                     "use_trace", False),
+                                                 inputs=kwargs.get(
+                                                     "inputs", None),
+                                                 outputs=kwargs.get(
+                                                     "outputs", None),
+                                                 environment_constants=kwargs.get(
+                                                     "environment_constants", None),
+                                                 register_buffers=kwargs.get(
+                                                     "register_buffers", None))
+        else:
+            self.node_candidate = BlockContextNode(name, node_index,
+                                                   backend=kwargs.get(
+                                                       "export_with", None),
+                                                   backend_params=kwargs.get(
+                                                       "backend_params", None),
+                                                   use_trace=kwargs.get(
+                                                       "use_trace", False),
+                                                   inputs=kwargs.get(
+                                                       "inputs", None),
+                                                   outputs=kwargs.get(
+                                                       "outputs", None),
+                                                   environment_constants=kwargs.get(
+                                                       "environment_constants", None),
+                                                   register_buffers=kwargs.get(
+                                                       "register_buffers", None))
         self.current_node_name = name
 
     # def _setup_trace_context_node(self, name, from_function, **kwargs):
@@ -269,7 +288,6 @@ class ExportManager:
                             f"New node data: {new_node_data}")
 
                 self.nodes[node_name] = node_context
-                self.nodes[node_name].compile_trace()
 
             finally:
                 # Always reset tracing state, even if an exception occurred
@@ -415,7 +433,9 @@ class ExportManager:
 
         self._stop_tracing(self.current_node_name, self.node_candidate)
 
+
         node_context = self.nodes[name]
+        node_context.compile_trace()
 
         node_context.capture_outputs_from_frame(sys._getframe(1))
         _get_logger().info(
@@ -473,9 +493,10 @@ class ExportManager:
                 _get_logger().info(f"****Tracing started for {name}****")
                 self.node_candidate.inspect_function_inputs(
                     func, args, kwargs)
-                
-                self.node_candidate.compile_trace_for_function(func) #TODO 0.3: refactor this
+                # tracing requires max and min lines to be configured already so this needs to be run before tracing
+                self.node_candidate.compile_trace(func) #TODO 0.3: refactor this
 
+                # this tracing step captures the input and output frames
                 self._start_tracing(sys._getframe(1), self._trace_function)
 
                 try:

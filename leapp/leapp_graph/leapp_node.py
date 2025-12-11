@@ -223,5 +223,5 @@ class LeappNode():
             if output.name_str == old_name:
                 output.change_name(new_name)
     
-    def compile_trace(self):
+    def compile_trace(self, *args):
         raise NotImplementedError(f"compile_trace not implemented for {self.__class__.__name__}")

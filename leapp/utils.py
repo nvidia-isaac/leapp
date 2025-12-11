@@ -28,13 +28,12 @@ from dataclasses import dataclass
 from typing import Optional, Any, Dict, Tuple
 
 
-def extract_source_from_line_range(executed_lines, from_function, context_name):
+def extract_source_from_line_range(executed_lines, context_name):
     """
     Extract source code from a traced line range.
 
     Args:
         executed_lines: Dictionary with keys 'filename', 'min_line', 'max_line', 'function_name'
-        from_function: Boolean indicating if the source is from a function
         context_name: Name of the context/node for logging purposes
 
     Returns:
@@ -72,10 +71,7 @@ def extract_source_from_line_range(executed_lines, from_function, context_name):
             best_candidate = None
             best_start = -1
 
-            if from_function:
-                wanted = (ast.FunctionDef, ast.AsyncFunctionDef)
-            else:
-                wanted = (ast.With, ast.AsyncWith)
+            wanted = (ast.With, ast.AsyncWith)
 
             # Find the function that contains our line range
             for n in ast.walk(tree):
