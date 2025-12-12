@@ -40,7 +40,7 @@ from .utils import (CompactYamlList,
 class ExportManager:
     _instance = None
     _initialized = False
-    _is_tracing = False
+    _is_active = False
 
     #########################################################
     # initialization
@@ -62,8 +62,7 @@ class ExportManager:
             self.intepret_graph = False
 
             # tracetime variables
-            self.current_node_name = None
-            self.node_candidate = None
+            self._is_tracing = False
             self.nodes = {}
 
             # Set up custom YAML representers before writing any YAML
@@ -113,9 +112,8 @@ class ExportManager:
             _get_logger().warning("LEAPP graph interpretation is already enabled, "
                                   "calling start() again will reset the graph")
             _get_logger().warning("Resetting graph...")
+            self._is_active = False
             self._is_tracing = False
-            self.current_node_name = None
-            self.node_candidate = None
         self.nodes = {}
         self.intepret_graph = True
 
@@ -140,9 +138,9 @@ class ExportManager:
             - This method should only be called after start() has been called.
             - Ensure all active tracing operations are completed before calling stop().
         """
-        if ExportManager._is_tracing:
+        if ExportManager._is_active:
             raise Exception("ExportManager is currently tracing")
-            ExportManager._is_tracing = False
+            ExportManager._is_active = False
         if not self.intepret_graph:
             raise Exception("ExportManager graph interpretation is disabled")
         self.intepret_graph = False
@@ -157,31 +155,29 @@ class ExportManager:
         else:
             node_index = len(self.nodes)
         return node_index
+
     def _verify_no_active_function_tracing(self):
-        if self.current_node_name is not None or self.node_candidate is not None:
-            current_node_name = self.current_node_name
-            if self.node_candidate is not None:
-                current_node_name = self.node_candidate.name
+        if self._is_tracing:
             _get_logger().error(
-                f"Error when attempting to set up new trace\n"  
-                f"ExportManager is already tracing {current_node_name}")
+                "Error when attempting to set up new trace\n"
+                "ExportManager is already tracing")
             raise Exception("Error when attempting to set up new trace")
 
     def _setup_new_node(self, name, node_class, **kwargs):
         self._verify_no_active_function_tracing()
         node_index = self.get_node_index(name)
 
-        node = node_class(name, node_index, 
-                        backend=kwargs.get("export_with", None),
-                        backend_params=kwargs.get("backend_params", None),
-                        use_trace=kwargs.get("use_trace", False),
-                        inputs=kwargs.get("inputs", None),
-                        outputs=kwargs.get("outputs", None),
-                        environment_constants=kwargs.get("environment_constants", None),
-                        register_buffers=kwargs.get("register_buffers", None))
-        
-        self.node_candidate = node
-        self.current_node_name = name
+        node = node_class(name, node_index,
+                          backend=kwargs.get("export_with", None),
+                          backend_params=kwargs.get("backend_params", None),
+                          use_trace=kwargs.get("use_trace", False),
+                          inputs=kwargs.get("inputs", None),
+                          outputs=kwargs.get("outputs", None),
+                          environment_constants=kwargs.get(
+                              "environment_constants", None),
+                          register_buffers=kwargs.get("register_buffers", None))
+
+        self._is_tracing = True
         return node, name
 
     # def _setup_trace_context_node(self, name, from_function, **kwargs):
@@ -191,18 +187,18 @@ class ExportManager:
     #########################################################
 
     def _start_tracing(self, frame, trace_function):
-        if self.current_node_name is None:
+        if not self._is_tracing:
             raise Exception("Error: No node context found")
 
-        if ExportManager._is_tracing:
+        if ExportManager._is_active:
             raise Exception("ExportManager is already tracing")
-        ExportManager._is_tracing = True
+        ExportManager._is_active = True
         """Start the trace function."""
         frame.f_trace = trace_function
         sys.settrace(trace_function)
 
     def _stop_tracing(self, node_name, node_context):
-        if ExportManager._is_tracing:
+        if ExportManager._is_active:
             """Stop the trace function."""
             sys.settrace(None)
 
@@ -228,10 +224,8 @@ class ExportManager:
 
             finally:
                 # Always reset tracing state, even if an exception occurred
-                ExportManager._is_tracing = False
-                # reset the current node name and node candidate
-                self.current_node_name = None
-                self.node_candidate = None
+                ExportManager._is_active = False
+                self._is_tracing = False
 
     #########################################################
     # annotation APIs
@@ -288,7 +282,7 @@ class ExportManager:
         node_context.compile_trace(tensors,
                                    backend=kwargs.get("export_with", None),
                                    backend_params=kwargs.get("backend_params", {}))
-        
+
         if len(tensors) == 1:
             return tensors.values()[0]
         else:
@@ -332,21 +326,22 @@ class ExportManager:
         """
         if not self.intepret_graph:
             return self  # no-op context manager
-        
-        node_context, name = self._setup_new_node(node_name, BlockContextNode, **kwargs)
+
+        node_context, name = self._setup_new_node(
+            node_name, BlockContextNode, **kwargs)
         export_manager = self
         skip_file = __file__.split('/')[-1]
 
         class BlockTraceContext:
             """Context manager for tracing a block of code."""
-            
+
             def __enter__(self):
                 caller_frame = sys._getframe(1)
-                
+
                 node_context.capture_inputs_from_frame(caller_frame)
-                
+
                 _get_logger().info(f"****Tracing started for {name}****")
-                
+
                 # Set up local tracing for the caller frame
                 if hasattr(caller_frame, 'f_trace_lines'):
                     caller_frame.f_trace_lines = True
@@ -354,31 +349,32 @@ class ExportManager:
                 node_context.executed_lines['function_name'] = caller_frame.f_code.co_name
                 node_context.executed_lines['min_line'] = caller_frame.f_lineno
                 node_context.executed_lines['max_line'] = caller_frame.f_lineno
-                
+
                 trace_fn = node_context.create_trace_function(skip_file)
                 export_manager._start_tracing(caller_frame, trace_fn)
                 return self
-            
+
             def __exit__(self, exc_type, exc_value, traceback):
                 export_manager._stop_tracing(name, node_context)
-                
+
                 node_context.compile_trace()
                 node_context.capture_outputs_from_frame(sys._getframe(1))
-                _get_logger().info(f"****Tracing stopped for {node_context.name}****\n\n")
-        
+                _get_logger().info(
+                    f"****Tracing stopped for {node_context.name}****\n\n")
+
         return BlockTraceContext()
 
     def method(self, **params):
         """Create a decorator for tracing functions/methods in the computational graph.
 
         This method returns a decorator that wraps functions to trace their execution,
-        capturing inputs, outputs, and execution details to create nodes in the LEAPP 
+        capturing inputs, outputs, and execution details to create nodes in the LEAPP
         computational graph. The decorated function becomes a traceable node that can
         be connected with other nodes in the graph.
 
         Args:
             **params: Configuration parameters for the node. Supported options include:
-                - node_name (str): Custom name for the node. If not provided, uses the 
+                - node_name (str): Custom name for the node. If not provided, uses the
                   function's name.
                 - export_with: Backend to use for exporting the model.
                 - backend_params: Parameters for the export backend.
@@ -411,19 +407,18 @@ class ExportManager:
                 if not self.intepret_graph:
                     return func(*args, **kwargs)
 
-                node_candidate, current_node_name = self._setup_new_node(name, FunctionDecoratorNode, **params)
-                if current_node_name is None or node_candidate is None:
-                    raise Exception(
-                        "Unexpected error when setting up new node context, current_node_name or node_candidate is None")
+                node_context, node_name = self._setup_new_node(
+                    name, FunctionDecoratorNode, **params)
 
                 _get_logger().info(f"****Tracing started for {name}****")
-                node_candidate.inspect_function_inputs(
+                node_context.inspect_function_inputs(
                     func, args, kwargs)
                 # tracing requires max and min lines to be configured already so this needs to be run before tracing
-                node_candidate.compile_trace(func)
+                node_context.compile_trace(func)
 
                 # this tracing step captures the input and output frames
-                trace_fn = node_candidate.create_trace_function(__file__.split('/')[-1])
+                trace_fn = node_context.create_trace_function(
+                    __file__.split('/')[-1])
                 self._start_tracing(sys._getframe(1), trace_fn)
 
                 try:
@@ -432,7 +427,7 @@ class ExportManager:
                     raise e
                 finally:
                     self._stop_tracing(
-                        current_node_name, node_candidate)
+                        node_name, node_context)
                     if name not in self.nodes.keys():
                         _get_logger().error(
                             f"Error: Tracing stopped for {name} but node not found in nodes dictionary")
