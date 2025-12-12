@@ -278,9 +278,9 @@ class TracedTensor:
             if torch_func is not None and callable(torch_func):
                 def inplace_method(*args, **kwargs):
                     if not self.is_tracing:
-                        # Just call the in-place method on the tensor
+                        # Just call the in-place method on the tensor and return raw tensor
                         getattr(self._tensor, name)(*args, **kwargs)
-                        return self
+                        return self._tensor
 
                     # Record as functional operation
                     result = torch_func(self, *args, **kwargs)
@@ -406,7 +406,7 @@ class TracedTensor:
         """In-place addition (+=)."""
         if not self.is_tracing:
             self._tensor += other
-            return self
+            return self._tensor
 
         # Record as functional operation in graph
         result = torch.add(self, other)
@@ -421,7 +421,7 @@ class TracedTensor:
         """In-place subtraction (-=)."""
         if not self.is_tracing:
             self._tensor -= other
-            return self
+            return self._tensor
 
         result = torch.sub(self, other)
         self._tensor = result.tensor
@@ -432,7 +432,7 @@ class TracedTensor:
         """In-place multiplication (*=)."""
         if not self.is_tracing:
             self._tensor *= other
-            return self
+            return self._tensor
 
         result = torch.mul(self, other)
         self._tensor = result.tensor
@@ -443,7 +443,7 @@ class TracedTensor:
         """In-place division (/=)."""
         if not self.is_tracing:
             self._tensor /= other
-            return self
+            return self._tensor
 
         result = torch.div(self, other)
         self._tensor = result.tensor
@@ -454,7 +454,7 @@ class TracedTensor:
         """In-place power (**=)."""
         if not self.is_tracing:
             self._tensor **= other
-            return self
+            return self._tensor
 
         result = torch.pow(self, other)
         self._tensor = result.tensor
@@ -465,7 +465,7 @@ class TracedTensor:
         """In-place matrix multiplication (@=)."""
         if not self.is_tracing:
             self._tensor @= other
-            return self
+            return self._tensor
 
         result = torch.matmul(self, other)
         self._tensor = result.tensor

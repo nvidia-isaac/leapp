@@ -984,23 +984,30 @@ class TestTracedTensor(unittest.TestCase):
         result = ctx.compiled_graph_module(torch.tensor([1.0, 2.0, 3.0]))
         self.assertTrue(torch.allclose(result, expected))
 
-    def test_inplace_after_compile_returns_same_object(self):
-        """Test that in-place operations work after compile."""
+    def test_inplace_after_compile_returns_raw_tensor(self):
+        """Test that in-place operations return raw tensor after compile.
+
+        After compilation (when tracing stops), operations on TracedTensor
+        should return raw torch.Tensor so downstream code doesn't know
+        it was ever traced.
+        """
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
         y = x * 2
 
         ctx.compile_trace({'y': y})
 
-        # After compilation, in-place ops should still work
-        original_id = id(x)
-        x += 1
+        # After compilation, in-place ops should return raw tensor
+        result = x
+        result += 1
 
-        # Should return the same object
-        self.assertEqual(id(x), original_id)
-        # Should have updated value
+        # Should return a raw torch.Tensor, not TracedTensor
+        self.assertIsInstance(result, torch.Tensor)
+        self.assertNotIsInstance(result, TracedTensor)
+
+        # Should have correct computed value
         expected = torch.tensor([2.0, 3.0, 4.0])
-        self.assertTrue(torch.allclose(x.tensor, expected))
+        self.assertTrue(torch.allclose(result, expected))
 
     # ==================== Advanced Indexing Tests ====================
 
