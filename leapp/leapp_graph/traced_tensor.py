@@ -152,7 +152,7 @@ class TracedTensor:
                     f"Solutions:\n"
                     f"  1. Use the regular (non-scripted) nn.Module instead during tracing\n"
                     f"  2. Extract and call the underlying operations directly\n"
-                    f"  3. Compile the traced graph first (it will work), but note you cannot script it afterward"
+                    f"  3. break the chain by calling output_tensors first then annotate the scripted module usage with other LEAPP api"
                 )
                 raise ValueError(
                     f"TorchScript modules cannot be used with TracedTensor during tracing. Detected call to: {func_type_name}")

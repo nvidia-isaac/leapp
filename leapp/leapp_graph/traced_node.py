@@ -7,8 +7,8 @@ from leapp.leapp_graph.traced_tensor import TracedTensor
 
 
 class TracedTensorNode(LeappNode):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, name, node_index, *args, **kwargs):
+        super().__init__(name, node_index)
         """Initialize a shared tracing context."""
         self.graph = fx.Graph()
         self.tracer = fx.Tracer()
@@ -16,8 +16,11 @@ class TracedTensorNode(LeappNode):
         self.tracer.root = torch.nn.Module()
         self.tracer.tensor_attrs = {}
 
-        self.is_tracing = True
         self.compiled_graph_module = None
+
+    @property
+    def is_tracing(self) -> bool:
+        return not self._model_captured
 
     def compile_trace(self, tensors: dict[str, "TracedTensor"], backend=None, backend_params={}):
         if any(not isinstance(tensor, TracedTensor) for tensor in tensors.values()):
@@ -33,9 +36,6 @@ class TracedTensorNode(LeappNode):
         _get_logger().debug(
             f"Compiled graph module for {self.name}: {self.compiled_graph_module.graph}")
         self.setup_backend(backend, backend_params)
-
-        # this will also set the flag that stops all tensors in this node from being traced
-        self.is_tracing = False
 
     def setup_backend(self, backend=None, backend_params={}):
         super().setup_backend(backend, backend_params)

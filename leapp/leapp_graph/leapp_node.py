@@ -34,25 +34,28 @@ class LeappNode():
         # Only wrap if this class defines its own __init__
         if '__init__' in cls.__dict__:
             original_init = cls.__init__
+
             @functools.wraps(original_init)
             def wrapped_init(self, *args, **kwargs):
                 original_init(self, *args, **kwargs)
                 # Only log if this is the actual class being instantiated
                 # (not a parent's __init__ being called via super())
                 if type(self) is cls:
-                    _get_logger().info(f"Node context initialized: {self.name}")
+                    _get_logger().info(
+                        f"Node context initialized: {self.name}")
             cls.__init__ = wrapped_init
-        
-        # Wrap compile_trace to set model_captured = True after execution
+
+        # Wrap compile_trace to set _model_captured = True after execution
         if 'compile_trace' in cls.__dict__:
             original_compile_trace = cls.compile_trace
+
             @functools.wraps(original_compile_trace)
             def wrapped_compile_trace(self, *args, **kwargs):
                 result = original_compile_trace(self, *args, **kwargs)
-                self.model_captured = True
+                self._model_captured = True
                 return result
             cls.compile_trace = wrapped_compile_trace
-        
+
     def __init__(self, name, node_index):
         self.name = name
         self.node_index = node_index
@@ -60,7 +63,7 @@ class LeappNode():
         self.enable_cuda_graphs = False  # legacy for holoinfer
 
         # model settings
-        self.model_captured = False
+        self._model_captured = False
         self.compiled_model = None
         self.model_path = None
         self.md5sum = None
@@ -77,8 +80,8 @@ class LeappNode():
     @property
     def captured(self):
         # this is defaulted to False. the compile_trace method should set this to true
-        return self.model_captured
-    
+        return self._model_captured
+
     def get_description(self):
         # dynamically generate i/o descriptions depending on need
         # Directly use the TensorDescription objects in self.inputs
@@ -247,6 +250,7 @@ class LeappNode():
         for output in self.outputs:
             if output.name_str == old_name:
                 output.change_name(new_name)
-    
+
     def compile_trace(self, *args):
-        raise NotImplementedError(f"compile_trace not implemented for {self.__class__.__name__}")
+        raise NotImplementedError(
+            f"compile_trace not implemented for {self.__class__.__name__}")

@@ -24,6 +24,7 @@ import torch
 from leapp._logging import _get_logger
 from leapp.leapp_graph.leapp_graph import LeappGraph
 from leapp.leapp_graph.function_decorator_node import FunctionDecoratorNode
+from leapp.leapp_graph.leapp_node import LeappNode
 from leapp.leapp_graph.traced_node import TracedTensorNode
 from leapp.leapp_graph.traced_tensor import TracedTensor
 from leapp.leapp_graph.block_context_node import BlockContextNode
@@ -39,8 +40,9 @@ from .utils import (CompactYamlList,
 
 class ExportManager:
     _instance = None
-    _initialized = False
-    _is_active = False
+    _initialized = False  # True after singleton __init__ completes
+    _interpret_graph = False  # True between start() and stop() - enables graph interpretation
+    _is_active_function_tracing = False  # True while sys.settrace is active for a node
 
     #########################################################
     # initialization
@@ -58,11 +60,7 @@ class ExportManager:
             self.GRAPH_NAME = "my_graph"
             self.SAVE_PATH = None
 
-            # tracetime settings
-            self.intepret_graph = False
-
             # tracetime variables
-            self._is_tracing = False
             self.nodes = {}
 
             # Set up custom YAML representers before writing any YAML
@@ -108,14 +106,13 @@ class ExportManager:
         if not os.path.exists(self.SAVE_PATH):
             os.makedirs(self.SAVE_PATH)
         _get_logger().configure(self.SAVE_PATH, verbose=verbose)
-        if self.intepret_graph:
+        if ExportManager._interpret_graph:
             _get_logger().warning("LEAPP graph interpretation is already enabled, "
                                   "calling start() again will reset the graph")
             _get_logger().warning("Resetting graph...")
-            self._is_active = False
-            self._is_tracing = False
+            ExportManager._is_active_function_tracing = False
         self.nodes = {}
-        self.intepret_graph = True
+        ExportManager._interpret_graph = True
 
     def stop(self):
         """Stop LEAPP graph interpretation and disable tracing.
@@ -138,12 +135,11 @@ class ExportManager:
             - This method should only be called after start() has been called.
             - Ensure all active tracing operations are completed before calling stop().
         """
-        if ExportManager._is_active:
+        if ExportManager._is_active_function_tracing:
             raise Exception("ExportManager is currently tracing")
-            ExportManager._is_active = False
-        if not self.intepret_graph:
+        if not ExportManager._interpret_graph:
             raise Exception("ExportManager graph interpretation is disabled")
-        self.intepret_graph = False
+        ExportManager._interpret_graph = False
 
     #########################################################
     # node setup
@@ -157,13 +153,13 @@ class ExportManager:
         return node_index
 
     def _verify_no_active_function_tracing(self):
-        if self._is_tracing:
+        if ExportManager._is_active_function_tracing:
             _get_logger().error(
                 "Error when attempting to set up new trace\n"
                 "ExportManager is already tracing")
             raise Exception("Error when attempting to set up new trace")
 
-    def _setup_new_node(self, name, node_class, **kwargs):
+    def _setup_new_node(self, name, node_class: LeappNode, **kwargs):
         self._verify_no_active_function_tracing()
         node_index = self.get_node_index(name)
 
@@ -177,28 +173,22 @@ class ExportManager:
                               "environment_constants", None),
                           register_buffers=kwargs.get("register_buffers", None))
 
-        self._is_tracing = True
         return node, name
-
-    # def _setup_trace_context_node(self, name, from_function, **kwargs):
 
     #########################################################
     # Tracing
     #########################################################
 
     def _start_tracing(self, frame, trace_function):
-        if not self._is_tracing:
-            raise Exception("Error: No node context found")
-
-        if ExportManager._is_active:
+        if ExportManager._is_active_function_tracing:
             raise Exception("ExportManager is already tracing")
-        ExportManager._is_active = True
+        ExportManager._is_active_function_tracing = True
         """Start the trace function."""
         frame.f_trace = trace_function
         sys.settrace(trace_function)
 
     def _stop_tracing(self, node_name, node_context):
-        if ExportManager._is_active:
+        if ExportManager._is_active_function_tracing:
             """Stop the trace function."""
             sys.settrace(None)
 
@@ -224,69 +214,83 @@ class ExportManager:
 
             finally:
                 # Always reset tracing state, even if an exception occurred
-                ExportManager._is_active = False
-                self._is_tracing = False
+                ExportManager._is_active_function_tracing = False
 
     #########################################################
     # annotation APIs
     #########################################################
     def input_tensors(self, tensors: dict[str, torch.Tensor], node_name: str):
         self._verify_no_active_function_tracing()
-        if not self.intepret_graph:
+        if not ExportManager._interpret_graph:
             values = list(tensors.values())
             return values[0] if len(values) == 1 else tuple(values)
-
-        # TODO: if it is already traced we return and noop
 
         if node_name in self.nodes.keys():
             traced_tensors_node = self.nodes[node_name]
         else:
-            node_index = self.get_node_index(node_name)
-            # self._setup_new_node(node_name, TracedTensorNode)
-            traced_tensors_node = TracedTensorNode(node_name, node_index)
+            traced_tensors_node, node_name = self._setup_new_node(
+                node_name, TracedTensorNode)
+            self.nodes[node_name] = traced_tensors_node
 
+        # we run create tensors regardless to validate the inputs
         traced_tensors = []
         for tensor_name, tensor in tensors.items():
             traced_tensor = traced_tensors_node.create_input(
                 tensor, tensor_name)
             traced_tensors.append(traced_tensor)
-        self.nodes[node_name] = traced_tensors_node
 
+        # if the node is not tracing, we return the raw tensors
+        if not traced_tensors_node.is_tracing:
+            values = list(tensors.values())
+            return values[0] if len(values) == 1 else tuple(values)
+
+        #if node is tracing we return the traced tensors
         return traced_tensors[0] if len(traced_tensors) == 1 else tuple(traced_tensors)
 
     def output_tensors(self, tensors: dict[str, TracedTensor], **kwargs):
         self._verify_no_active_function_tracing()
-        if not self.intepret_graph:
-            return
-        names = []
+        if not ExportManager._interpret_graph:
+            values = list(tensors.values())
+            return values[0] if len(values) == 1 else tuple(values)
+
+        # validate if valid input is given to this function
+        # if none of the tensors are traced, we assume tracing is not active and return the raw tensors
+        if all(not isinstance(tensor, TracedTensor) for tensor in tensors.values()):
+            return tuple(tensors.values())
+
+        # if there is a mix of traced and raw tensors, we error
+        context_names = []
         for name, tensor in tensors.items():
             if not isinstance(tensor, TracedTensor):
                 _get_logger().error(
                     f"Error: tensor {name} is not a TracedTensor")
-                raise ValueError(f"Error: tensor {name} is not a TracedTensor")
-            names.append(tensor.context)
-        if not all(name == names[0] for name in names):
-            raise ValueError(
-                f"Error: all tensors must have the same context name, got {set(names)}")
-        node_name = names[0]
+                raise Exception(
+                    "Error: exeption detected in output_tensors declaration")
+            context_names.append(tensor.context)
+        if not all(name == context_names[0] for name in context_names):
+            _get_logger().error(
+                f"Error: all tensors must have the same context name, got {set(context_names)}")
+            raise Exception(
+                "Error: exeption detected in output_tensors declaration")
+        node_name = context_names[0]
         if node_name not in self.nodes.keys():
             _get_logger().error(
-                f"Error: output tensors declared for node {node_name} but not found")
-            return
+                f"Error: output tensors declared for node {node_name} but not registered to the ExportManager")
+            raise Exception(
+                "Error: exeption detected in output_tensors declaration")
         node_context = self.nodes[node_name]
         if not node_context.is_tracing:
             _get_logger().error(f"Error: output tensors called on a node {node_name} that is not currently tracing."
                                 " Please ensure one call only to output_tensors is made per node.")
-            return
+            raise Exception(
+                "Error: exeption detected in output_tensors declaration")
 
         node_context.compile_trace(tensors,
                                    backend=kwargs.get("export_with", None),
                                    backend_params=kwargs.get("backend_params", {}))
 
-        if len(tensors) == 1:
-            return tensors.values()[0]
-        else:
-            return tuple(tensors.values())
+        raw_tensors = list(tensor.tensor for tensor in tensors.values())
+        return raw_tensors[0] if len(raw_tensors) == 1 else tuple(raw_tensors)
 
     def block(self, node_name, **kwargs):
         """Create a context manager for tracing a block of code in the computational graph.
@@ -324,7 +328,7 @@ class ExportManager:
             - Graph interpretation must be enabled via start() before using this method.
             - The traced code block should not contain nested block() or method() annotations.
         """
-        if not self.intepret_graph:
+        if not ExportManager._interpret_graph:
             return self  # no-op context manager
 
         node_context, name = self._setup_new_node(
@@ -404,7 +408,7 @@ class ExportManager:
 
             @functools.wraps(func)
             def wrapper(*args, **kwargs):
-                if not self.intepret_graph:
+                if not ExportManager._interpret_graph:
                     return func(*args, **kwargs)
 
                 node_context, node_name = self._setup_new_node(
@@ -450,7 +454,7 @@ class ExportManager:
     #########################################################
 
     def mirror_leapp_tags(self, source, target):
-        if not self.intepret_graph:
+        if not ExportManager._interpret_graph:
             return
         try:
             if not verify_data_exact_match(source, target):
