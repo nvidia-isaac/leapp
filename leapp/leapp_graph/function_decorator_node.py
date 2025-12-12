@@ -53,6 +53,35 @@ class FunctionDecoratorNode(BlockContextNode):
         self.executed_lines['lines'] = set(
             range(start_line, start_line + len(func_lines)))
 
+    def create_trace_function(self, skip_file):
+        """Create and return the trace function for function decorator tracing.
+        
+        Args:
+            skip_file: Filename to skip when tracing (e.g., export_manager.py)
+        
+        Returns:
+            A trace function suitable for use with sys.settrace
+        """
+        def trace_function(frame, event, arg):
+            if event == 'call':
+                code = frame.f_code
+                # Skip tracing the specified file
+                if code.co_filename.split('/')[-1] == skip_file:
+                    return trace_function
+
+                # Save frame if function is within the traced function's line range
+                if (code.co_filename == self.executed_lines['filename'] and
+                        self.executed_lines['min_line'] <= frame.f_lineno <= self.executed_lines['max_line']):
+                    if self.input_frame is None:
+                        self.input_frame = frame  # we will only store input frame once
+                        # store buffer values upon entering the function
+                        self.snapshot_buffer_values(frame)
+                    # Keep on updating output frame
+                    self.output_frame = frame
+
+            return trace_function
+        return trace_function
+
     def inspect_function_inputs(self, func, args, kwargs):
         # Get parameter names from function signature
         sig = inspect.signature(func)

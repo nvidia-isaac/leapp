@@ -101,6 +101,36 @@ class BlockContextNode(LeappNode):
         else:
             _get_logger().error(message)
 
+    def create_trace_function(self, skip_file):
+        """Create and return the trace function for block context tracing.
+        
+        Args:
+            skip_file: Filename to skip when tracing (e.g., export_manager.py)
+        
+        Returns:
+            A trace function suitable for use with sys.settrace
+        """
+        def trace_code_snippet(frame, event, arg):
+            # Skip tracing the specified file
+            code = frame.f_code
+            if code.co_filename.split('/')[-1] == skip_file:
+                return trace_code_snippet
+
+            # Capture line events to determine the range of executed code
+            if event == 'line':
+                # Only track lines from the same file as the first line
+                if (self.executed_lines['filename'] == code.co_filename and 
+                    self.executed_lines['function_name'] == code.co_name):
+                    self.executed_lines['lines'].add(frame.f_lineno)
+                    self.executed_lines['min_line'] = min(
+                        self.executed_lines['min_line'], frame.f_lineno)
+                    self.snapshot_buffer_values(frame)
+                    self.executed_lines['max_line'] = max(
+                        self.executed_lines['max_line'], frame.f_lineno)
+
+            return trace_code_snippet
+        return trace_code_snippet
+
     def _capture_specified_value_from_frame(self, variable_name, frame):
         # If variable_name matches *.* pattern, extract from nested objects in frame
         obj = None
