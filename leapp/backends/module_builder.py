@@ -54,6 +54,9 @@ def get_module_template(name, parent_class, constant_attrs):
 
     return module_instance
 
+# def build_input_from_raw_tensors(raw_tensors, input_formats):
+#     def builder_function(self, )
+
 
 class ModuleBuilder:
 

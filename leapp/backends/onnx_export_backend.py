@@ -1,28 +1,11 @@
 import torch
-from torch.onnx import ONNXProgram
 from typing import Tuple
-from leapp.backends.export_backend import ExportBackend
-from leapp.backends.module_builder import ModuleBuilder
+from leapp.backends.export_backend import ExportBackend, SimplifiedONNXProgram
 from leapp.utils import resolve_tensor_descriptions_to_values
 from leapp._logging import _get_logger
 import os
 import onnx
 import tempfile
-
-
-class SimplifiedONNXProgram:
-    """Wrapper for ONNX models exported via legacy torch.onnx.export"""
-
-    def __init__(self, onnx_model):
-        self.model_proto = onnx_model
-
-    def save(self, destination, include_initializers=True, keep_initializers_as_inputs=False):
-        """Save the ONNX model to disk"""
-        onnx.save(self.model_proto, destination)
-
-    def __call__(self, *args):
-        raise NotImplementedError(
-            "SimplifiedONNXProgram does not support __call__")
 
 
 class ONNXExportBackend(ExportBackend):

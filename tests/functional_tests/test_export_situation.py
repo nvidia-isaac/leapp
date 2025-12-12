@@ -155,6 +155,38 @@ class TestExportSituation(LEAPPFunctionalTestBase):
         self.verify_single_torchscript_model_expected_value(
             [input1, input2], [output], "concatenate")
 
+    def test_export_block_with_complex_class_variables_as_inputs(self):
+        class moduleA():
+            def __init__(self):
+                self.var1 = None
+                self.var2 = None
+
+            def concatenate_vars(self):
+                with annotate.block(node_name="concatenate", export_with="torch",
+                                    inputs=["self.var1", "self.var2"], outputs=["result"]):
+                    # Stack list of tensors before summing (TorchScript compatible)
+                    value1 = torch.sum(torch.stack(self.var1))
+                    # Convert dict values to list, then stack (TorchScript compatible)
+                    value2 = torch.sum(torch.stack(list(self.var2.values())))
+                    result = torch.stack([value1, value2])
+                return result
+
+            def update_vars(self, var1, var2):
+                self.var1 = var1
+                self.var2 = var2
+
+        input1 = [torch.tensor([1]), torch.tensor([2])]
+        input2 = {'a': torch.tensor([2]), 'b': torch.tensor([3])}
+        module = moduleA()
+        annotate.start(name=self.TEST_GRAPH_NAME, verbose=True)
+        module.update_vars(input1, input2)
+        output = module.concatenate_vars()
+        annotate.stop()
+        annotate.compile_graph()
+
+        self.verify_single_torchscript_model_expected_value(
+            [input1, input2], [output], "concatenate")
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

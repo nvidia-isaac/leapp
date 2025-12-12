@@ -367,6 +367,11 @@ class ExportManager:
                     f"****Tracing stopped for {node_context.name}****\n\n")
 
         return BlockTraceContext()
+    
+    def __enter__(self):
+        return self
+    def __exit__(self, exc_type, exc_value, traceback):
+        return
 
     def method(self, **params):
         """Create a decorator for tracing functions/methods in the computational graph.
