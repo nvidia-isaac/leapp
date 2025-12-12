@@ -315,7 +315,7 @@ class ExportManager:
                 - enable_cuda_graphs: Enable CUDA graphs optimization.
 
         Returns:
-            ExportManager: Self reference for use as a context manager with 'with' statement.
+            BlockTraceContext: A context manager for tracing the block.
 
         Example:
             ```python
@@ -331,56 +331,42 @@ class ExportManager:
             - The traced code block should not contain nested block() or method() annotations.
         """
         if not self.intepret_graph:
-            return self
-        self._setup_new_node(node_name, BlockContextNode, **kwargs)
-        return self
+            return self  # no-op context manager
+        
+        node_context, name = self._setup_new_node(node_name, BlockContextNode, **kwargs)
+        export_manager = self
+        skip_file = __file__.split('/')[-1]
 
-    def __enter__(self):
-        """Enter context manager - called when entering 'with' block."""
-        if not self.intepret_graph:
-            return
-        if self.current_node_name is None or self.node_candidate is None:
-            raise Exception(
-                "Unexpected error when setting up new node context, current_node_name or node_candidate is None")
-
-        caller_frame = sys._getframe(1)  # Get the caller's frame
-
-        self.node_candidate.capture_inputs_from_frame(caller_frame)
-
-        _get_logger().info(
-            f"****Tracing started for {self.current_node_name}****")
-        # CRITICAL: Set up local tracing for the caller frame
-
-        if hasattr(caller_frame, 'f_trace_lines'):
-            caller_frame.f_trace_lines = True
-        self.node_candidate.executed_lines['filename'] = caller_frame.f_code.co_filename
-        self.node_candidate.executed_lines['function_name'] = caller_frame.f_code.co_name
-        self.node_candidate.executed_lines['min_line'] = caller_frame.f_lineno
-        self.node_candidate.executed_lines['max_line'] = caller_frame.f_lineno
-
-        trace_fn = self.node_candidate.create_trace_function(__file__.split('/')[-1])
-        self._start_tracing(caller_frame, trace_fn)
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        if not self.intepret_graph:
-            return
-
-        if self.current_node_name is None or self.node_candidate is None:
-            raise Exception(
-                "Unexpected error when completing tracing, current_node_name or node_candidate is None")
-
-        name = self.current_node_name
-
-        self._stop_tracing(self.current_node_name, self.node_candidate)
-
-
-        node_context = self.nodes[name]
-        node_context.compile_trace()
-
-        node_context.capture_outputs_from_frame(sys._getframe(1))
-        _get_logger().info(
-            f"****Tracing stopped for {node_context.name}****\n\n")
+        class BlockTraceContext:
+            """Context manager for tracing a block of code."""
+            
+            def __enter__(self):
+                caller_frame = sys._getframe(1)
+                
+                node_context.capture_inputs_from_frame(caller_frame)
+                
+                _get_logger().info(f"****Tracing started for {name}****")
+                
+                # Set up local tracing for the caller frame
+                if hasattr(caller_frame, 'f_trace_lines'):
+                    caller_frame.f_trace_lines = True
+                node_context.executed_lines['filename'] = caller_frame.f_code.co_filename
+                node_context.executed_lines['function_name'] = caller_frame.f_code.co_name
+                node_context.executed_lines['min_line'] = caller_frame.f_lineno
+                node_context.executed_lines['max_line'] = caller_frame.f_lineno
+                
+                trace_fn = node_context.create_trace_function(skip_file)
+                export_manager._start_tracing(caller_frame, trace_fn)
+                return self
+            
+            def __exit__(self, exc_type, exc_value, traceback):
+                export_manager._stop_tracing(name, node_context)
+                
+                node_context.compile_trace()
+                node_context.capture_outputs_from_frame(sys._getframe(1))
+                _get_logger().info(f"****Tracing stopped for {node_context.name}****\n\n")
+        
+        return BlockTraceContext()
 
     def method(self, **params):
         """Create a decorator for tracing functions/methods in the computational graph.
