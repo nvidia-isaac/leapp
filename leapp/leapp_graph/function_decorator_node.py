@@ -30,9 +30,7 @@ class FunctionDecoratorNode(BlockContextNode):
         super().__init__(name, node_index, backend, use_trace, backend_params, inputs, outputs, environment_constants, register_buffers)
         # node settings
         self.from_function = True
-
-        _get_logger().info(f"Node context initialized: {self.name}")
-
+        
     def compile_model(self):
         try:
             self.compiled_model = self.export_backend.compile()
@@ -54,8 +52,6 @@ class FunctionDecoratorNode(BlockContextNode):
         # Initialize the lines set with all function lines
         self.executed_lines['lines'] = set(
             range(start_line, start_line + len(func_lines)))
-        
-        self.model_captured = True
 
     def inspect_function_inputs(self, func, args, kwargs):
         # Get parameter names from function signature

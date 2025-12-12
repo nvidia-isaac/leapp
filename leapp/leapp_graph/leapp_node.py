@@ -25,9 +25,34 @@ from leapp.utils import (CompactYamlList,
 from leapp.leapp_graph.traced_tensor import TracedTensor
 from leapp.backends.export_backend import NoneExportBackend
 from leapp._logging import _get_logger
+import functools
 
 
 class LeappNode():
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        # Only wrap if this class defines its own __init__
+        if '__init__' in cls.__dict__:
+            original_init = cls.__init__
+            @functools.wraps(original_init)
+            def wrapped_init(self, *args, **kwargs):
+                original_init(self, *args, **kwargs)
+                # Only log if this is the actual class being instantiated
+                # (not a parent's __init__ being called via super())
+                if type(self) is cls:
+                    _get_logger().info(f"Node context initialized: {self.name}")
+            cls.__init__ = wrapped_init
+        
+        # Wrap compile_trace to set model_captured = True after execution
+        if 'compile_trace' in cls.__dict__:
+            original_compile_trace = cls.compile_trace
+            @functools.wraps(original_compile_trace)
+            def wrapped_compile_trace(self, *args, **kwargs):
+                result = original_compile_trace(self, *args, **kwargs)
+                self.model_captured = True
+                return result
+            cls.compile_trace = wrapped_compile_trace
+        
     def __init__(self, name, node_index):
         self.name = name
         self.node_index = node_index

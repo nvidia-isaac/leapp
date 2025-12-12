@@ -82,7 +82,6 @@ class BlockContextNode(LeappNode):
         self.cached_buffer_values = {}
         self.cached_constant_values = {}
 
-        _get_logger().info(f"Node context initialized: {self.name}")
 
     def compile_model(self):
         try:
@@ -101,7 +100,6 @@ class BlockContextNode(LeappNode):
             _get_logger().info(message)
         else:
             _get_logger().error(message)
-        self.model_captured = True
 
     def _capture_specified_value_from_frame(self, variable_name, frame):
         # If variable_name matches *.* pattern, extract from nested objects in frame

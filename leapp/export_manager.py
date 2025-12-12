@@ -17,7 +17,6 @@
 
 import sys
 import functools
-import inspect
 import yaml
 import os
 import torch
@@ -159,7 +158,7 @@ class ExportManager:
             node_index = len(self.nodes)
         return node_index
 
-    def _setup_new_node(self, name, from_function, **kwargs):
+    def _setup_new_node(self, name, node_class, **kwargs):
         if self.current_node_name is not None or self.node_candidate is not None:
             self.current_node_name = name
             if self.node_candidate.name is not None:
@@ -169,39 +168,16 @@ class ExportManager:
                 f"ExportManager is already tracing {self.current_node_name}")
 
         node_index = self.get_node_index(name)
+
+        self.node_candidate = node_class(name, node_index, 
+                                        backend=kwargs.get("export_with", None),
+                                        backend_params=kwargs.get("backend_params", None),
+                                        use_trace=kwargs.get("use_trace", False),
+                                        inputs=kwargs.get("inputs", None),
+                                        outputs=kwargs.get("outputs", None),
+                                        environment_constants=kwargs.get("environment_constants", None),
+                                        register_buffers=kwargs.get("register_buffers", None))
         
-        if from_function:
-            self.node_candidate = FunctionDecoratorNode(name, node_index,
-                                                 backend=kwargs.get(
-                                                     "export_with", None),
-                                                 backend_params=kwargs.get(
-                                                     "backend_params", None),
-                                                 use_trace=kwargs.get(
-                                                     "use_trace", False),
-                                                 inputs=kwargs.get(
-                                                     "inputs", None),
-                                                 outputs=kwargs.get(
-                                                     "outputs", None),
-                                                 environment_constants=kwargs.get(
-                                                     "environment_constants", None),
-                                                 register_buffers=kwargs.get(
-                                                     "register_buffers", None))
-        else:
-            self.node_candidate = BlockContextNode(name, node_index,
-                                                   backend=kwargs.get(
-                                                       "export_with", None),
-                                                   backend_params=kwargs.get(
-                                                       "backend_params", None),
-                                                   use_trace=kwargs.get(
-                                                       "use_trace", False),
-                                                   inputs=kwargs.get(
-                                                       "inputs", None),
-                                                   outputs=kwargs.get(
-                                                       "outputs", None),
-                                                   environment_constants=kwargs.get(
-                                                       "environment_constants", None),
-                                                   register_buffers=kwargs.get(
-                                                       "register_buffers", None))
         self.current_node_name = name
 
     # def _setup_trace_context_node(self, name, from_function, **kwargs):
@@ -310,6 +286,7 @@ class ExportManager:
             traced_tensors_node = self.nodes[node_name]
         else:
             node_index = self.get_node_index(node_name)
+            # self._setup_new_node(node_name, TracedTensorNode)
             traced_tensors_node = TracedTensorNode(node_name, node_index)
 
         traced_tensors = []
@@ -392,7 +369,7 @@ class ExportManager:
         """
         if not self.intepret_graph:
             return self
-        self._setup_new_node(node_name, from_function=False, **kwargs)
+        self._setup_new_node(node_name, BlockContextNode, **kwargs)
         return self
 
     def __enter__(self):
@@ -485,7 +462,7 @@ class ExportManager:
                     return func(*args, **kwargs)
 
                 self._setup_new_node(
-                    name, from_function=True, **params)
+                    name, FunctionDecoratorNode, **params)
                 if self.current_node_name is None or self.node_candidate is None:
                     raise Exception(
                         "Unexpected error when setting up new node context, current_node_name or node_candidate is None")
@@ -494,7 +471,7 @@ class ExportManager:
                 self.node_candidate.inspect_function_inputs(
                     func, args, kwargs)
                 # tracing requires max and min lines to be configured already so this needs to be run before tracing
-                self.node_candidate.compile_trace(func) #TODO 0.3: refactor this
+                self.node_candidate.compile_trace(func)
 
                 # this tracing step captures the input and output frames
                 self._start_tracing(sys._getframe(1), self._trace_function)
