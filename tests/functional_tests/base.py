@@ -102,23 +102,81 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
 
             # Extract output information
             outputs = list(graph.outputs())
-            for i, out in enumerate(outputs):
-                output_info = {
-                    'index': i,
-                    'debug_name': out.debugName(),
-                    'type': str(out.type()),
-                }
-
-                # Try to get shape information if it's a tensor
-                if hasattr(out.type(), 'sizes'):
-                    try:
-                        output_info['shape'] = list(out.type().sizes())
-                    except Exception:
-                        output_info['shape'] = None
+            
+            # Check if the output is a single tuple - if so, unwrap it
+            if len(outputs) == 1:
+                output_type = outputs[0].type()
+                # Check if it's a tuple type by looking at the string representation
+                type_str = str(output_type)
+                if type_str.startswith('Tuple[') or type_str.startswith('('):
+                    # It's a tuple - unwrap it by getting the element types
+                    if hasattr(output_type, 'elements'):
+                        # This is a TupleType, get the individual elements
+                        tuple_elements = output_type.elements()
+                        for i, elem_type in enumerate(tuple_elements):
+                            output_info = {
+                                'index': i,
+                                'debug_name': f'tuple_element_{i}',
+                                'type': str(elem_type),
+                            }
+                            
+                            # Try to get shape information if it's a tensor
+                            if hasattr(elem_type, 'sizes'):
+                                try:
+                                    output_info['shape'] = list(elem_type.sizes())
+                                except Exception:
+                                    output_info['shape'] = None
+                            else:
+                                output_info['shape'] = None
+                            
+                            result['outputs'].append(output_info)
+                    else:
+                        # Fallback: treat as single output
+                        output_info = {
+                            'index': 0,
+                            'debug_name': outputs[0].debugName(),
+                            'type': type_str,
+                            'shape': None
+                        }
+                        result['outputs'].append(output_info)
                 else:
-                    output_info['shape'] = None
+                    # Not a tuple, process normally
+                    for i, out in enumerate(outputs):
+                        output_info = {
+                            'index': i,
+                            'debug_name': out.debugName(),
+                            'type': str(out.type()),
+                        }
 
-                result['outputs'].append(output_info)
+                        # Try to get shape information if it's a tensor
+                        if hasattr(out.type(), 'sizes'):
+                            try:
+                                output_info['shape'] = list(out.type().sizes())
+                            except Exception:
+                                output_info['shape'] = None
+                        else:
+                            output_info['shape'] = None
+
+                        result['outputs'].append(output_info)
+            else:
+                # Multiple outputs, process normally
+                for i, out in enumerate(outputs):
+                    output_info = {
+                        'index': i,
+                        'debug_name': out.debugName(),
+                        'type': str(out.type()),
+                    }
+
+                    # Try to get shape information if it's a tensor
+                    if hasattr(out.type(), 'sizes'):
+                        try:
+                            output_info['shape'] = list(out.type().sizes())
+                        except Exception:
+                            output_info['shape'] = None
+                    else:
+                        output_info['shape'] = None
+
+                    result['outputs'].append(output_info)
 
             # Get the code representation if available
             if hasattr(model, 'code'):
@@ -208,15 +266,44 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
 
         return True
 
+    def _flatten_to_tensors(self, data):
+        """
+        Recursively flatten nested structures (lists, dicts) into a flat list of tensors.
+        Uses the same traversal order as describe_io_helper.
+        """
+        tensors = []
+        
+        def _flatten(item):
+            if isinstance(item, torch.Tensor):
+                tensors.append(item)
+            elif isinstance(item, dict):
+                for value in item.values():
+                    _flatten(value)
+            elif isinstance(item, (list, tuple)):
+                for elem in item:
+                    _flatten(elem)
+        
+        _flatten(data)
+        return tensors
+
     def verify_single_torchscript_model_expected_value(self, inputs, expected_outputs, model_name, model_path=None):
         if model_path is None:
             model_path = self.TEST_GRAPH_NAME
         model = torch.jit.load(os.path.join(model_path, f"{model_name}.pt"))
-        outputs = model(*inputs)
+        
+        # Flatten all inputs since models now expect flat tensor arguments
+        flat_inputs = []
+        for inp in inputs:
+            flat_inputs.extend(self._flatten_to_tensors(inp))
+        flat_expected_outputs = []
+        for out in expected_outputs:
+            flat_expected_outputs.extend(self._flatten_to_tensors(out))
+        flat_expected_outputs = tuple(flat_expected_outputs)
+        outputs = model(*flat_inputs)
+        # import pdb; pdb.set_trace()
         if not isinstance(outputs, tuple):
             outputs = (outputs,)
-        # if not isinstance(expected_outputs, tuple):
-        #     expected_outputs = (expected_outputs,)
-        for output, expected_output in zip(outputs, expected_outputs):
+
+        for output, expected_output in zip(outputs, flat_expected_outputs):
             self.assertTrue(self.verify_data_exact_match(output, expected_output), "An output value does not match expected value: "
                             f"got {output} but expected {expected_output}")

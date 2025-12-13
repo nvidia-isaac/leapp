@@ -39,12 +39,16 @@ def get_module_template(name, parent_class, constant_attrs):
         raise NotImplementedError("The forward method is not implemented.")
 
     # Create the class dynamically using type()
+    # Note: _core is intentionally not included here - it's dynamically bound
+    # as an instance method in _compile_forward_function to avoid TorchScript
+    # picking up a wrong signature from the class definition.
     ModuleTemplate = type(
         name,
         bases,
         {
             '__init__': __init__,
             'add_buffer': add_buffer,
+            # '_core' : intentionally not included here - it's dynamically bound
             'forward': forward,
             '__constant__': list(),
         }
@@ -53,10 +57,6 @@ def get_module_template(name, parent_class, constant_attrs):
     module_instance = ModuleTemplate()
 
     return module_instance
-
-# def build_input_from_raw_tensors(raw_tensors, input_formats):
-#     def builder_function(self, )
-
 
 class ModuleBuilder:
 
@@ -84,7 +84,10 @@ class ModuleBuilder:
 
         # extract the body of the function
         body = self._extract_source_code()
-        header, return_statement, outputs_str = self._create_header_and_return_statement()
+        core_header, prepended_conditioning, return_statement, outputs_str = self._create_core_header_and_return()
+        forward_header, forward_body, forward_return_statement = self._create_forward_header_and_body()
+        
+        #TODO: this can be removed once we are sure that the new method works with self. returns
         if self.node_context.from_function:
             # For functions, append outputs_str to all return statements
             modified_source, replacement_count = self._append_outputs_to_return_statements(
@@ -94,17 +97,17 @@ class ModuleBuilder:
                 return_statement = ""
             # if replacement count is 0, we use the artificial return statement created previously
 
-        # modifications to the body of the function
-        prepended_conditioning = self._create_data_patching_string()
+        # stitch the _core function together:
+        final_core_body = prepended_conditioning + body + return_statement
+        indented_core_body = textwrap.indent(final_core_body, '    ')
+        core_function_string = core_header + indented_core_body
 
-        # stitch the function together:
-        function_body = prepended_conditioning + body + return_statement
+        final_forward_body = forward_body + forward_return_statement
+        indented_forward_body = textwrap.indent(final_forward_body, '    ')
+        forward_function_string = forward_header + indented_forward_body
 
-        # Add 4-space indentation to all lines of function body
-        indented_function_body = textwrap.indent(function_body, '    ')
-
-        # add the headder
-        function_string = header + indented_function_body
+        # combine _core and forward functions
+        function_string = core_function_string + "\n" + forward_function_string
 
         _get_logger().debug("\n"+function_string)
 
@@ -310,39 +313,85 @@ class ModuleBuilder:
 
         return source_code
 
-    def _create_header_and_return_statement(self):
-        # create header
-        # first validate that the input formats detected are valid
-        for parameter_description in self.node_context.input_formats:
-            if not parameter_description.valid:
-                raise ValueError(
-                    f"Invalid parameter format for {parameter_description.name_str} "
-                    f"when building function header for {self.node_context.name}:"
-                    "the parameter likely contains mixed types or nested structures with different types.")
-        header_template = "def forward(self, {inputs}) -> {output_types}:\n"
-        return_statement_template = "\nreturn {outputs}\n"
-        inputs = ", ".join(
-            [f"{parameter_description.name_str}: {parameter_description.dtype}" for parameter_description in self.node_context.input_formats])
-
-        # create output types
+    def _create_core_header_and_return(self):
+        """Create header, body prepend (data patching), and return statement for _core function."""
+        # Output type annotation for _core
         output_types = [
             parameter_description.dtype for parameter_description in self.node_context.output_formats]
         if len(output_types) == 0:
-            output_types = "None"
+            output_types_str = "None"
         elif len(output_types) == 1:
-            output_types = output_types[0]
+            output_types_str = output_types[0]
         else:
-            output_types = f"Tuple[{', '.join(output_types)}]"
-        header = header_template.format(
-            inputs=inputs, output_types=output_types)
+            output_types_str = f"Tuple[{', '.join(output_types)}]"
+        
+        # Core function needs type annotations for TorchScript
+        core_inputs = ', '.join([f"{input_val.name_str}: {input_val.dtype}" 
+                                  for input_val in self.node_context.input_formats])
+        header = f"def _core(self, {core_inputs}) -> {output_types_str}:\n"
+
+        # Build data patching string (prepended to core body)
+        prepended_conditioning = ""
+        
+        # Handle input name transformations (e.g., "name_str" -> "name_raw")
+        for input in self.node_context.input_formats:
+            if input.name_raw != input.name_str:
+                prepended_conditioning += f"{input.name_raw} = {input.name_str}\n"
+
+        # Handle constants, buffers, and default kwargs
+        targets = self.node_context.environment_constants | self.node_context.register_buffers | set(
+            self.node_context.default_kwargs.keys())
+        for const_name in targets:
+            if "self." in const_name or const_name == "self":
+                continue  # special case for any class variables, no rename required
+            prepended_conditioning += f"{const_name} = self.{const_name}\n"
 
         # only include outputs that are declared by user.
         outputs = ", ".join([output.name_raw
                             for output in self.node_context.output_formats
                             if output.name_raw in self.node_context._declared_outputs])
-        return_statement = return_statement_template.format(outputs=outputs)
+        return_statement = f"\nreturn {outputs}\n" if outputs else ""
 
-        return header, return_statement, outputs
+        return header, prepended_conditioning, return_statement, outputs
+
+    def _create_forward_header_and_body(self):
+        """Create header and body for forward function."""
+        # Forward function accepts flat tensor inputs (no type annotations)
+        forward_input_names = ", ".join(
+            [tensor_desc.name for tensor_desc in self.node_context.inputs])
+        
+        header = f"def forward(self, {forward_input_names}):\n"
+
+        prepended_conditioning = ""
+        # Handle input packing: convert flat tensor inputs to expected nested structures
+        for param_format in self.node_context.input_formats:
+            packing_expr = param_format.packed_tensor_expr
+            if packing_expr:
+                prepended_conditioning += packing_expr + "\n"
+        
+        appended_conditioning = ""
+        for param_format in self.node_context.output_formats:
+            appended_conditioning += param_format.unpacked_tensor_expr + "\n"
+
+        # Build forward function body with explicit unpacking
+        core_output_names = [output.name_str for output in self.node_context.output_formats]
+        core_input_names = [input.name_str for input in self.node_context.input_formats]
+        core_input_names_str = ', '.join(core_input_names)
+        forward_output_names = [output.name for output in self.node_context.outputs]
+
+        if len(core_output_names) == 0:
+            body = f"self._core({core_input_names_str})\n"
+        elif len(core_output_names) == 1:
+            body = f"{core_output_names[0]} = self._core({core_input_names_str})\n"
+            return_statement = f"return {forward_output_names[0]}\n"
+        else:
+            output_names_str = ", ".join(core_output_names)
+            forward_output_names_str = ", ".join(forward_output_names)
+            body = f"({output_names_str}) = self._core({core_input_names_str})\n"
+            return_statement = f"return {forward_output_names_str}\n"
+
+        body = prepended_conditioning + body + appended_conditioning
+        return header, body, return_statement
 
     def _append_outputs_to_return_statements(self, source_code, outputs_str):
         if not outputs_str:
@@ -373,32 +422,8 @@ class ModuleBuilder:
 
         return modified_code, replacement_count[0]
 
-    def _create_data_patching_string(self):
-        data_patch_template = "{const_name} = self.{const_name}\n"
-        data_patch_string = ""
-        targets = self.node_context.environment_constants | self.node_context.register_buffers | set(
-            self.node_context.default_kwargs.keys())
-
-        for const_name in targets:
-            if "self." in const_name or const_name == "self":
-                continue  # special case for any class variables, no rename required
-            data_patch_string += data_patch_template.format(
-                const_name=const_name)
-
-        # Handle inputs where the name was transformed (e.g., "self.var1" -> "self_var1")
-        # Inject assignments to map from function parameters back to original names
-        for param_format in self.node_context.input_formats:
-            original_name = param_format.name_raw  # e.g., "self.var1"
-            # e.g., "self_var1" (after transformation)
-            param_name = param_format.name_str
-            if original_name != param_name:
-                # Inject assignment: self.var1 = self_var1
-                data_patch_string += f"{original_name} = {param_name}\n"
-
-        return data_patch_string
-
     def _compile_forward_function(self, function_string):
-        filename = f'generated_{self.node_context.name}_function'
+        filename = f'generated_{self.node_context.name}_{id(self.module_instance)}_function'
         try:
             code = compile(function_string, filename, "exec")
 
@@ -420,13 +445,17 @@ class ModuleBuilder:
             _get_logger().error(function_string)
             raise e
 
+        _core = namespace['_core']
         forward = namespace['forward']
 
         lines = [line + '\n' for line in function_string.splitlines()]
         linecache.cache[filename] = (
             len(function_string), None, lines, filename)
-        self.module_instance.forward = types.MethodType(
-            forward, self.module_instance)
+        
+        # Set methods on the class (not instance) so TorchScript can recognize them
+        module_class = type(self.module_instance)
+        module_class._core = _core
+        module_class.forward = forward
 
 
 if __name__ == "__main__":

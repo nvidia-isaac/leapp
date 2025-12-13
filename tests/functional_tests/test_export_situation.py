@@ -77,7 +77,7 @@ class TestExportSituation(LEAPPFunctionalTestBase):
             [input], [expected_output], funcA.__name__)
 
         model_info = self.inspect_torchscript_model(funcA.__name__)
-        self.assertEqual(len(model_info['inputs']), 2)  # self and inputA
+        self.assertEqual(len(model_info['inputs']), 5)  # self + 4 flat tensors (inputA_a, inputA_b, inputA_c, inputA_d)
         self.assertEqual(len(model_info['outputs']), 1)  # list_conversion
 
     def test_export_nnModule_with_large_nested_dict_io(self):
@@ -101,8 +101,8 @@ class TestExportSituation(LEAPPFunctionalTestBase):
             input, [expected_output], funcA.__name__)
 
         model_info = self.inspect_torchscript_model(funcA.__name__)
-        # self, inputA, and inputB
-        self.assertEqual(len(model_info['inputs']), 3)
+        # self + 5 flat tensors (inputA contains 4 nested tensors + inputB is 1 tensor)
+        self.assertEqual(len(model_info['inputs']), 6)
         self.assertEqual(len(model_info['outputs']), 1)  # return_values
 
     def test_export_class_method_that_relies_on_dynamic_variable(self):
@@ -186,6 +186,48 @@ class TestExportSituation(LEAPPFunctionalTestBase):
 
         self.verify_single_torchscript_model_expected_value(
             [input1, input2], [output], "concatenate")
+
+    def test_export_dict_and_list_bidirectional_io(self):
+        """Test function that takes dict and list inputs, returns list and dict outputs"""
+        @annotate.method(export_with="torch")
+        def test_complex_io(input: dict, input_2: list):
+            dictionary_output = {}
+            for idx, value in enumerate(input_2):
+                dictionary_output[str(idx)] = value
+            return [value for value in input.values()], dictionary_output
+
+        input_dict = {
+            'a': torch.tensor([1]),
+            'b': torch.tensor([2]),
+            'c': torch.tensor([3]),
+            'd': torch.tensor([4]),
+        }
+        input_list = [torch.tensor([5]), torch.tensor([6]), torch.tensor([7]), torch.tensor([8])]
+
+        annotate.start(name=self.TEST_GRAPH_NAME, verbose=True)
+        expected_output = test_complex_io(input_dict, input_list)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+
+        # Verify graph statistics: 1 node, 8 dangling inputs, 8 dangling outputs, 0 internal connections
+        self.verify_num_connections(annotate, nodes=1, inputs=8, outputs=8,
+                                    internal_connections=0)
+        
+        # Verify the model produces the correct output
+        self.verify_single_torchscript_model_expected_value(
+            [input_dict, input_list], [expected_output], test_complex_io.__name__)
+
+        # Verify model structure: forward should have 8 flat tensor inputs + self
+        model_info = self.inspect_torchscript_model(test_complex_io.__name__)
+        self.assertEqual(len(model_info['inputs']), 9)  # self + 4 dict tensors + 4 list tensors
+        self.assertEqual(len(model_info['outputs']), 8)  # list output + dict output
+
+        # Verify output structure
+        output_list, output_dict = expected_output
+        self.assertEqual(len(output_list), 4)
+        self.assertEqual(len(output_dict), 4)
+        self.assertTrue(all(isinstance(v, torch.Tensor) for v in output_list))
+        self.assertTrue(all(isinstance(v, torch.Tensor) for v in output_dict.values()))
 
 
 if __name__ == '__main__':

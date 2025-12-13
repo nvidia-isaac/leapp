@@ -48,7 +48,6 @@ class TorchExportBackend(ExportBackend):
             "TorchExportBackend does not support compilation, please use torch-script or torch-trace instead")
         return None
 
-
 class TorchTraceExportBackend(TorchExportBackend):
     def compile(self):
         if not len(self.node_context.register_buffers) == 0:

@@ -84,7 +84,7 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
             backend_params={"dynamo": False, "prescript": True},
             environment_constants=["traced_model"]
         )
-        def funcA(inputA: torch.Tensor, threshold: float):
+        def funcA(inputA: torch.Tensor, threshold: torch.Tensor):
             # Apply the traced model
             output = traced_model(inputA)
             # Conditional flow: threshold with torch.where
@@ -92,7 +92,7 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
             return result
 
         input_tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
-        threshold = 0.5
+        threshold = torch.tensor(0.5, dtype=torch.float32)
 
         annotate.start(name=self.TEST_GRAPH_NAME)
         funcA(input_tensor, threshold)

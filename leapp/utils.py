@@ -281,7 +281,8 @@ class ParameterFormat:
 
     @property
     def name_str(self) -> str:
-        """Return just the name as a string."""
+        """Return just the name as a string. 
+        will do some modifications to me the vairable compliant with python"""
         return self.name.replace(".", "_")
 
     @property
@@ -302,6 +303,94 @@ class ParameterFormat:
         if not a:
             return False
         return True
+
+    @property
+    def tensor_expr_in_order(self) -> list[str]: #TODO: use this to replace reference to the tensor descriptions.
+        """
+        Generate a list of tensor expressions in the order of the nested structure.
+        """
+        def _generate_expr(format_item) -> list[str]:
+            if isinstance(format_item, ParameterFormat):
+                return _generate_expr(format_item.formatting)
+            elif isinstance(format_item, TensorDescription):
+                return [format_item.name_str]
+            elif isinstance(format_item, list):
+                return [_generate_expr(item) for item in format_item]
+            elif isinstance(format_item, dict):
+                return [_generate_expr(value) for value in format_item.values()]
+            else:
+                return []
+        return _generate_expr(self.formatting)
+
+    @property
+    def packed_tensor_expr(self) -> str:
+        """
+        Generate a packing assignment expression for this parameter.
+        
+        Converts flat tensor inputs into the expected nested structure.
+        Handles nested structures (lists, dicts).
+        
+        Returns:
+            Assignment string like "inputA = [inputA_0, inputA_1]". 
+            Empty string if no packing needed.
+        """
+        def _generate_expr(format_item) -> str:
+            if isinstance(format_item, ParameterFormat):
+                return _generate_expr(format_item.formatting)
+            elif isinstance(format_item, TensorDescription):
+                return format_item.name_str
+            elif isinstance(format_item, list):
+                elements = [_generate_expr(item) for item in format_item]
+                return "[" + ", ".join(elements) + "]"
+            elif isinstance(format_item, dict):
+                items = [f'"{k}": {_generate_expr(v)}' for k, v in format_item.items()]
+                return "{" + ", ".join(items) + "}"
+            else:
+                return "None"
+        
+        reconstruction = _generate_expr(self.formatting)
+        
+        # Skip trivial assignments where name == expression
+        if self.name_str == reconstruction:
+            return ""
+        
+        return f"{self.name_str} = {reconstruction}"
+
+    @property
+    def unpacked_tensor_expr(self) -> str:
+        """
+        Generate unpacking assignment expressions that extract flat tensors from
+        a nested structure, using accessor paths.
+        
+        This is the inverse of packed_tensor_expr.
+        
+        Handles:
+        - List unpacking (e.g., "inputA_0 = inputA[0]", "inputA_1 = inputA[1]")
+        - Dict unpacking (e.g., 'state_pose = state["pose"]')
+        - Nested structures (e.g., 'nested_0_0 = nested[0][0]')
+        
+        Returns:
+            Newline-separated assignment strings. Empty string if no unpacking needed.
+        """
+        def _generate_unpacking(format_item, accessor_path: str, assignments: list):
+            if isinstance(format_item, ParameterFormat):
+                _generate_unpacking(format_item.formatting, accessor_path, assignments)
+            elif isinstance(format_item, TensorDescription):
+                tensor_name = format_item.name_str
+                if tensor_name != accessor_path:
+                    assignments.append(f"{tensor_name} = {accessor_path}")
+            elif isinstance(format_item, list):
+                for idx, item in enumerate(format_item):
+                    child_path = f"{accessor_path}[{idx}]"
+                    _generate_unpacking(item, child_path, assignments)
+            elif isinstance(format_item, dict):
+                for key, value in format_item.items():
+                    child_path = f'{accessor_path}["{key}"]'
+                    _generate_unpacking(value, child_path, assignments)
+        
+        assignments = []
+        _generate_unpacking(self.formatting, self.name_str, assignments)
+        return "\n".join(assignments)
 
 
 def verify_data_exact_match(source_data, target_data):
