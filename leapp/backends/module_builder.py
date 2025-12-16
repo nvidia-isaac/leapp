@@ -383,14 +383,21 @@ class ModuleBuilder:
             body = f"self._core({core_input_names_str})\n"
         elif len(core_output_names) == 1:
             body = f"{core_output_names[0]} = self._core({core_input_names_str})\n"
-            return_statement = f"return {forward_output_names[0]}\n"
         else:
             output_names_str = ", ".join(core_output_names)
-            forward_output_names_str = ", ".join(forward_output_names)
             body = f"({output_names_str}) = self._core({core_input_names_str})\n"
-            return_statement = f"return {forward_output_names_str}\n"
 
         body = prepended_conditioning + body + appended_conditioning
+        
+        # Build return statement based on the actual number of forward outputs (after unpacking)
+        if len(forward_output_names) == 0:
+            return_statement = ""
+        elif len(forward_output_names) == 1:
+            return_statement = f"return {forward_output_names[0]}\n"
+        else:
+            forward_output_names_str = ", ".join(forward_output_names)
+            return_statement = f"return {forward_output_names_str}\n"
+        
         return header, body, return_statement
 
     def _append_outputs_to_return_statements(self, source_code, outputs_str):
