@@ -3,6 +3,7 @@ import operator
 import torch
 from torch.fx.proxy import Proxy
 from leapp._logging import _get_logger
+from leapp.tracing_lock import TracingLock
 
 
 class TracedTensor:
@@ -30,6 +31,7 @@ class TracedTensor:
         self._name = name
         self._context = context
         self._proxy = proxy
+        self._global_tracing_lock = TracingLock()
 
     @property
     def tensor(self) -> torch.Tensor:
@@ -60,6 +62,26 @@ class TracedTensor:
     def is_tracing(self) -> bool:
         """Get the tracing status of the TracedTensorNode that owns this tensor."""
         return self._context.is_tracing
+    
+    def validate_status(self):
+        if not self.is_tracing:
+            return False
+        if self.is_tracing and self._global_tracing_lock.is_active:
+            _get_logger().error(
+                f"Error: detected active TracedTensor {self._name} from node {self.context} inside of a traced function.\n"
+                f"\n"
+                f"This happens when you have an active TracedTensor and it is being used for computation inside of a traced function/block."
+                f"\n"
+                f"You must call annotate.output_tensors() to finalize the TracedTensor node first"
+            )
+            raise Exception(
+                f"Cannot use TracedTensor inside of a traced function/block. "
+                f"Call annotate.output_tensors() first or use .tensor to get the underlying tensor."
+            )
+            return False
+        
+        return True
+        
 
     def _new(self, tensor: torch.Tensor, proxy: Proxy = None) -> "TracedTensor":
         """Create a new TracedTensor in the same context.
@@ -136,42 +158,6 @@ class TracedTensor:
             # Fallback to default behavior if no TracedTensor found
             return NotImplemented
 
-        # Check if we're trying to call a TorchScript module/method
-        # This will fail when trying to script the graph later
-        if traced_tensor.is_tracing:
-            func_type_name = type(func).__name__
-            func_module = type(func).__module__ if hasattr(
-                type(func), '__module__') else ''
-
-            # Detect TorchScript ScriptMethod, ScriptModule, or RecursiveScriptModule
-            if 'ScriptMethod' in func_type_name or 'ScriptModule' in func_type_name:
-                _get_logger().error(
-                    f"TorchScript modules cannot be used with TracedTensor during tracing.\n"
-                    f"Detected call to: {func_type_name}\n"
-                    f"Issue: The FX graph will contain references to TorchScript objects that cannot be scripted later.\n"
-                    f"Solutions:\n"
-                    f"  1. Use the regular (non-scripted) nn.Module instead during tracing\n"
-                    f"  2. Extract and call the underlying operations directly\n"
-                    f"  3. break the chain by calling output_tensors first then annotate the scripted module usage with other LEAPP api"
-                )
-                raise ValueError(
-                    f"TorchScript modules cannot be used with TracedTensor during tracing. Detected call to: {func_type_name}")
-
-            # Also check if the function comes from torch.jit module
-            if func_module.startswith('torch.jit') or func_module.startswith('torch._C'):
-                # Check if it's actually a ScriptMethod by trying to access __self__
-                if hasattr(func, '__self__') and hasattr(func.__self__, '__class__'):
-                    self_class_name = func.__self__.__class__.__name__
-                    if 'Script' in self_class_name:
-                        _get_logger().error(
-                            f"TorchScript modules cannot be used with TracedTensor during tracing.\n"
-                            f"Detected: {func} from {self_class_name}\n"
-                            f"The compiled FX graph will contain TorchScript references that prevent scripting.\n"
-                            f"Use the original nn.Module instead of the scripted version during tracing."
-                        )
-                        raise ValueError(
-                            f"TorchScript modules cannot be used with TracedTensor during tracing. Detected call to: {func}")
-
         # Helper to recursively unwrap TracedTensors
         def unwrap_traced_tensor(obj):
             if isinstance(obj, TracedTensor):
@@ -186,12 +172,51 @@ class TracedTensor:
         real_args = tuple(unwrap_traced_tensor(arg) for arg in args)
         real_kwargs = {k: unwrap_traced_tensor(v) for k, v in kwargs.items()}
 
-        # Execute the actual operation
+        # ================== EXECUTE THE ACTUAL OPERATION ==================
         tensor_out = func(*real_args, **real_kwargs)
+        # ================== END OF EXECUTE THE ACTUAL OPERATION ===========
+
 
         # Skip tracing if context is not tracing - return raw tensors
-        if not traced_tensor.is_tracing:
+        if not traced_tensor.validate_status():
             return tensor_out
+
+        # Check if we're trying to call a TorchScript module/method
+        # This will fail when trying to script the graph later
+        # We check this here (after confirming we're tracing) to avoid unnecessary
+        # type introspection when not recording to the graph
+        func_type_name = type(func).__name__
+        func_module = type(func).__module__ if hasattr(
+            type(func), '__module__') else ''
+
+        # Detect TorchScript ScriptMethod, ScriptModule, or RecursiveScriptModule
+        if 'ScriptMethod' in func_type_name or 'ScriptModule' in func_type_name:
+            _get_logger().error(
+                f"TorchScript modules cannot be used with TracedTensor during tracing.\n"
+                f"Detected call to: {func_type_name}\n"
+                f"Issue: The FX graph will contain references to TorchScript objects that cannot be scripted later.\n"
+                f"Solutions:\n"
+                f"  1. Use the regular (non-scripted) nn.Module instead during tracing\n"
+                f"  2. Extract and call the underlying operations directly\n"
+                f"  3. break the chain by calling output_tensors first then annotate the scripted module usage with other LEAPP api"
+            )
+            raise ValueError(
+                f"TorchScript modules cannot be used with TracedTensor during tracing. Detected call to: {func_type_name}")
+
+        # Also check if the function comes from torch.jit module
+        if func_module.startswith('torch.jit') or func_module.startswith('torch._C'):
+            # Check if it's actually a ScriptMethod by trying to access __self__
+            if hasattr(func, '__self__') and hasattr(func.__self__, '__class__'):
+                self_class_name = func.__self__.__class__.__name__
+                if 'Script' in self_class_name:
+                    _get_logger().error(
+                        f"TorchScript modules cannot be used with TracedTensor during tracing.\n"
+                        f"Detected: {func} from {self_class_name}\n"
+                        f"The compiled FX graph will contain TorchScript references that prevent scripting.\n"
+                        f"Use the original nn.Module instead of the scripted version during tracing."
+                    )
+                    raise ValueError(
+                        f"TorchScript modules cannot be used with TracedTensor during tracing. Detected call to: {func}")
 
         # Helper to recursively extract proxies
         def extract_proxy(obj):
@@ -314,7 +339,7 @@ class TracedTensor:
                     # If result is a tensor, wrap it in TracedTensor
                     if isinstance(result, torch.Tensor):
                         # Skip tracing if context is not tracing - return raw tensor
-                        if not self.is_tracing:
+                        if not self.validate_status():
                             return result
                         # Create a proxy node for this operation
                         proxy = self._proxy._tracer.create_proxy(
@@ -559,7 +584,7 @@ class TracedTensor:
         result_tensor = self._tensor[key]
 
         # Skip tracing if context is not tracing - return raw tensor
-        if not self.is_tracing:
+        if not self.validate_status():
             return result_tensor
 
         proxy_out = self._context.tracer.create_proxy(
@@ -600,7 +625,7 @@ class TracedTensor:
         result_tensor = self._tensor.to(*args, **kwargs)
 
         # Skip tracing if context is not tracing - return raw tensor
-        if not self.is_tracing:
+        if not self.validate_status():
             return result_tensor
 
         # For type conversions, we track it as an operation

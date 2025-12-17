@@ -209,16 +209,21 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             self.assertIn("attempting to set up new trace", str(e).lower())
     
     def test_reentrant_tracing_using_traced_tensors(self): #TODO: these both need to fail
-        annotate.start(name=self.TEST_GRAPH_NAME)
-        tensors = annotate.input_tensors({'inputA': torch.tensor([1.0, 2.0, 3.0])}, 'func')
-        tensors += 100
-        input = torch.tensor([1.0, 2.0, 3.0])
-        @annotate.method()
-        def inner_func(inputA: torch.Tensor):
-            return inputA + tensors
-        output_tensors = inner_func(input)
-        output_tensors = annotate.output_tensors({'outputA': output_tensors}, export_with="torch")
-        annotate.stop()
+        try:
+            annotate.start(name=self.TEST_GRAPH_NAME)
+            tensors = annotate.input_tensors({'inputA': torch.tensor([1.0, 2.0, 3.0])}, 'func')
+            tensors += 100
+            input = torch.tensor([1.0, 2.0, 3.0])
+            @annotate.method()
+            def inner_func(inputA: torch.Tensor):
+                return inputA + tensors
+            output_tensors = inner_func(input)
+            output_tensors = annotate.output_tensors({'outputA': output_tensors}, export_with="torch")
+            annotate.stop()
+            self.fail("Expected an exception")
+        except Exception as e:
+            self.assertIn("Cannot use TracedTensor", str(e))
+            self.assertIn("Call annotate.output_tensors() first", str(e))
     
     def test_passing_traced_tensor_to_method(self):
         try:
@@ -235,7 +240,6 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         except Exception as e:
             error_msg = str(e)
             self.assertIn("Cannot use TracedTensor", error_msg)
-            self.assertIn("inner_func", error_msg)
             self.assertIn("Call annotate.output_tensors() first", error_msg)
 
 
