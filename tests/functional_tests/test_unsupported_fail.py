@@ -18,7 +18,6 @@ import unittest
 import torch
 from leapp import annotate
 from .base import LEAPPFunctionalTestBase
-import shutil
 
 
 class TestUnsupportedFail(LEAPPFunctionalTestBase):
@@ -101,6 +100,62 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         except Exception as e:
             self.assertEqual(str(e),
                              "Error requesting input name change for funcC/input: detections is already in use")
+
+    def test_mirror_leapp_tags_data_mismatch(self):
+        """Test mirror_leapp_tags with various data mismatch scenarios"""
+        @annotate.method(export_with="torch")
+        def funcA(inputA: torch.Tensor):
+            return inputA * 2.0
+
+        @annotate.method(export_with="torch")
+        def funcB(inputA: torch.Tensor):
+            return inputA, inputA + 1.0
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        
+        # Test 1: Tensors with at least one element that is not equal
+        # This should log an error but not raise an exception
+        out_funcA = funcA(torch.tensor([1.0, 2.0, 3.0]))
+        wrong_buffer = torch.tensor([1.0, 2.0, 4.0])  # Last element is wrong
+        try:
+            annotate.mirror_leapp_tags(out_funcA, wrong_buffer)  # Logs error, doesn't raise
+            self.fail("Expected an exception")
+        except Exception as e:
+            self.assertIn("source and target do not match", str(e))
+        
+        # Test 2: List of tensors with one element wrong
+        # This should log an error but not raise an exception
+        out1, out2 = funcB(torch.tensor([1.0, 2.0, 3.0]))
+        source_list = [out1, out2]
+        target_list = [out1.clone(), torch.tensor([1.0, 2.0, 99.0])]  # Second tensor is wrong
+        try:
+            annotate.mirror_leapp_tags(source_list, target_list)  # Logs error, doesn't raise
+            self.fail("Expected an exception")
+        except Exception as e:
+            self.assertIn("source and target do not match", str(e))
+        
+        # Test 3: Lists with different number of elements
+        # This will cause an exception because mirror_all_tensor_tags will crash
+        source_list2 = [out1, out2]
+        target_list2 = [out1.clone()]  # Missing one element
+        try:
+            annotate.mirror_leapp_tags(source_list2, target_list2)
+            self.fail("Expected an exception")
+        except Exception as e:
+            # Should get "unexpected error" due to index out of bounds
+            self.assertIn("unexpected error", str(e))
+        
+        # Test 4: Dicts with different keys
+        # This should log an error but not raise an exception
+        source_dict = {'a': out_funcA, 'b': out_funcA + 1.0}
+        target_dict = {'a': out_funcA.clone(), 'c': (out_funcA + 1.0).clone()}  # 'b' vs 'c'
+        try:
+            annotate.mirror_leapp_tags(source_dict, target_dict)  # Logs error, doesn't raise
+            self.fail("Expected an exception")
+        except Exception as e:
+            self.assertIn("source and target do not match", str(e))
+        
+        annotate.stop()
 
 
 if __name__ == '__main__':

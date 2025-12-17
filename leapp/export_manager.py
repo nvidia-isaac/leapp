@@ -465,10 +465,11 @@ class ExportManager:
             if not verify_data_exact_match(source, target):
                 _get_logger().error(
                     f"Error: source and target do not match: {source} != {target}")
+                raise Exception("Error: source and target do not match")
             mirror_all_tensor_tags(source, target)
         except Exception as e:
             _get_logger().error(f"Unexpected error mirroring LEAPP tags: {e}")
-            raise e
+            raise Exception(f"Error: unexpected error mirroring LEAPP tags: {e}")
 
     def get_io_descriptions(self):
         _get_logger().section(
