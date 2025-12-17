@@ -300,7 +300,6 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
             flat_expected_outputs.extend(self._flatten_to_tensors(out))
         flat_expected_outputs = tuple(flat_expected_outputs)
         outputs = model(*flat_inputs)
-        # import pdb; pdb.set_trace()
         if not isinstance(outputs, tuple):
             outputs = (outputs,)
 
