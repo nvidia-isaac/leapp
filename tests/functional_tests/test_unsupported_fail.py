@@ -223,7 +223,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             self.fail("Expected an exception")
         except Exception as e:
             self.assertIn("Cannot use TracedTensor", str(e))
-            self.assertIn("Call annotate.output_tensors() first", str(e))
+            self.assertIn("Call output_tensors() first", str(e))
     
     def test_passing_traced_tensor_to_method(self):
         try:
@@ -240,7 +240,104 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         except Exception as e:
             error_msg = str(e)
             self.assertIn("Cannot use TracedTensor", error_msg)
-            self.assertIn("Call annotate.output_tensors() first", error_msg)
+            self.assertIn("Call output_tensors() first", error_msg)
+    
+    def test_cross_context_traced_tensor_usage(self):
+        """Basic test: addition of two TracedTensors from different contexts."""
+        try:
+            annotate.start(name=self.TEST_GRAPH_NAME)
+            tensor1 = annotate.input_tensors({'inputA': torch.tensor([1.0, 2.0, 3.0])}, 'func1')
+            tensor2 = annotate.input_tensors({'inputB': torch.tensor([1.0, 2.0, 3.0])}, 'func2')
+            output_tensors = tensor1 + tensor2
+            output_tensors = annotate.output_tensors({'outputA': output_tensors}, export_with="torch")
+            annotate.stop()
+            self.fail("Expected an exception")
+        except Exception as e:
+            self.assertIn("Cannot mix multiple active TracedTensors from different contexts", str(e))
+            self.assertIn("Call output_tensors() to finalize one of the TracedTensor nodes first", str(e))
+
+    def test_cross_context_torch_cat_list(self):
+        """Test torch.cat with a list containing TracedTensors from different contexts."""
+        try:
+            annotate.start(name=self.TEST_GRAPH_NAME)
+            tensor1 = annotate.input_tensors({'inputA': torch.tensor([1.0, 2.0, 3.0])}, 'func1')
+            tensor2 = annotate.input_tensors({'inputB': torch.tensor([4.0, 5.0, 6.0])}, 'func2')
+            # torch.cat takes a list of tensors - should detect cross-context in the list
+            output_tensors = torch.cat([tensor1, tensor2], dim=0)
+            annotate.stop()
+            self.fail("Expected an exception for cross-context torch.cat")
+        except Exception as e:
+            self.assertIn("Cannot mix multiple active TracedTensors from different contexts", str(e))
+
+    def test_cross_context_torch_stack(self):
+        """Test torch.stack with tensors from different contexts."""
+        try:
+            annotate.start(name=self.TEST_GRAPH_NAME)
+            tensor1 = annotate.input_tensors({'inputA': torch.tensor([1.0, 2.0, 3.0])}, 'func1')
+            tensor2 = annotate.input_tensors({'inputB': torch.tensor([4.0, 5.0, 6.0])}, 'func2')
+            # torch.stack also takes a list
+            output_tensors = torch.stack([tensor1, tensor2], dim=0)
+            annotate.stop()
+            self.fail("Expected an exception for cross-context torch.stack")
+        except Exception as e:
+            self.assertIn("Cannot mix multiple active TracedTensors from different contexts", str(e))
+
+    def test_cross_context_matmul(self):
+        """Test matrix multiplication with TracedTensors from different contexts."""
+        try:
+            annotate.start(name=self.TEST_GRAPH_NAME)
+            tensor1 = annotate.input_tensors({'inputA': torch.tensor([[1.0, 2.0], [3.0, 4.0]])}, 'func1')
+            tensor2 = annotate.input_tensors({'inputB': torch.tensor([[5.0, 6.0], [7.0, 8.0]])}, 'func2')
+            # Matrix multiplication with two explicit args
+            output_tensors = torch.matmul(tensor1, tensor2)
+            annotate.stop()
+            self.fail("Expected an exception for cross-context torch.matmul")
+        except Exception as e:
+            self.assertIn("Cannot mix multiple active TracedTensors from different contexts", str(e))
+
+    def test_cross_context_torch_add_with_alpha(self):
+        """Test torch.add with alpha kwarg - mixing contexts in positional args."""
+        try:
+            annotate.start(name=self.TEST_GRAPH_NAME)
+            tensor1 = annotate.input_tensors({'inputA': torch.tensor([1.0, 2.0, 3.0])}, 'func1')
+            tensor2 = annotate.input_tensors({'inputB': torch.tensor([4.0, 5.0, 6.0])}, 'func2')
+            # torch.add(input, other, alpha=1) - tests kwargs handling
+            output_tensors = torch.add(tensor1, tensor2, alpha=2.0)
+            annotate.stop()
+            self.fail("Expected an exception for cross-context torch.add with alpha")
+        except Exception as e:
+            self.assertIn("Cannot mix multiple active TracedTensors from different contexts", str(e))
+
+    def test_cross_context_three_contexts(self):
+        """Test detection with three different contexts mixed together."""
+        try:
+            annotate.start(name=self.TEST_GRAPH_NAME)
+            tensor1 = annotate.input_tensors({'inputA': torch.tensor([1.0, 2.0, 3.0])}, 'func1')
+            tensor2 = annotate.input_tensors({'inputB': torch.tensor([4.0, 5.0, 6.0])}, 'func2')
+            tensor3 = annotate.input_tensors({'inputC': torch.tensor([7.0, 8.0, 9.0])}, 'func3')
+            # Mix all three contexts
+            output_tensors = torch.cat([tensor1, tensor2, tensor3], dim=0)
+            annotate.stop()
+            self.fail("Expected an exception for three cross-contexts")
+        except Exception as e:
+            self.assertIn("Cannot mix multiple active TracedTensors from different contexts", str(e))
+
+    def test_cross_context_torch_where(self):
+        """Test torch.where with condition, x, y from different contexts."""
+        try:
+            annotate.start(name=self.TEST_GRAPH_NAME)
+            # condition from one context
+            cond_tensor = annotate.input_tensors({'cond': torch.tensor([True, False, True])}, 'cond_ctx')
+            # x from another context
+            x_tensor = annotate.input_tensors({'x': torch.tensor([1.0, 2.0, 3.0])}, 'x_ctx')
+            # y is a regular tensor (should be fine)
+            y_tensor = torch.tensor([10.0, 20.0, 30.0])
+            # torch.where(condition, x, y) - two TracedTensors from different contexts
+            output_tensors = torch.where(cond_tensor, x_tensor, y_tensor)
+            annotate.stop()
+            self.fail("Expected an exception for cross-context torch.where")
+        except Exception as e:
+            self.assertIn("Cannot mix multiple active TracedTensors from different contexts", str(e))
 
 
 if __name__ == '__main__':

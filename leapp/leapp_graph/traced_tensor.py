@@ -62,25 +62,6 @@ class TracedTensor:
     def is_tracing(self) -> bool:
         """Get the tracing status of the TracedTensorNode that owns this tensor."""
         return self._context.is_tracing
-    
-    def validate_status(self):
-        if not self.is_tracing:
-            return False
-        if self.is_tracing and self._global_tracing_lock.is_active:
-            _get_logger().error(
-                f"Error: detected active TracedTensor {self._name} from node {self.context} inside of a traced function.\n"
-                f"\n"
-                f"This happens when you have an active TracedTensor and it is being used for computation inside of a traced function/block."
-                f"\n"
-                f"You must call annotate.output_tensors() to finalize the TracedTensor node first"
-            )
-            raise Exception(
-                f"Cannot use TracedTensor inside of a traced function/block. "
-                f"Call annotate.output_tensors() first or use .tensor to get the underlying tensor."
-            )
-            return False
-        
-        return True
         
 
     def _new(self, tensor: torch.Tensor, proxy: Proxy = None) -> "TracedTensor":
@@ -125,6 +106,85 @@ class TracedTensor:
                     )
         return func
 
+    @staticmethod
+    # Find the first TracedTensor in args (including nested in lists/tuples)
+    def find_traced_tensor(obj):
+        if isinstance(obj, TracedTensor):
+            return obj
+        elif isinstance(obj, (list, tuple)):
+            for item in obj:
+                result = TracedTensor.find_traced_tensor(item)
+                if result is not None:
+                    return result
+        return None
+    
+    # Helper to recursively unwrap TracedTensors
+    @staticmethod
+    def unwrap_traced_tensor(obj):
+        if isinstance(obj, TracedTensor):
+            return obj.tensor
+        elif isinstance(obj, (list, tuple)):
+            return type(obj)(TracedTensor.unwrap_traced_tensor(item) for item in obj)
+        elif isinstance(obj, dict):
+            return {k: TracedTensor.unwrap_traced_tensor(v) for k, v in obj.items()}
+        return obj
+
+    @staticmethod
+    def find_all_contexts(obj, contexts=None):
+        """Recursively find all unique context names."""
+        if contexts is None:
+            contexts = set()
+        if isinstance(obj, TracedTensor) and obj.is_tracing:
+            contexts.add(obj.context)
+        elif isinstance(obj, (list, tuple)):
+            for item in obj:
+                TracedTensor.find_all_contexts(item, contexts)
+        elif isinstance(obj, dict):
+            for v in obj.values():
+                TracedTensor.find_all_contexts(v, contexts)
+        return contexts
+    
+    def validate_status(self, args = None, kwargs = None):
+        if not self.is_tracing:
+            return False
+        if self.is_tracing and self._global_tracing_lock.is_active:
+            _get_logger().error(
+                f"Error: detected active TracedTensor {self._name} from node {self.context} inside of a traced function.\n"
+                f"\n"
+                f"This happens when you have an active TracedTensor and it is being used for computation inside of a traced function/block."
+                f"\n"
+                f"You must call output_tensors() to finalize the TracedTensor node first"
+            )
+            raise Exception(
+                "Cannot use TracedTensor inside of a traced function/block. "
+                "Call output_tensors() first to finalize the TracedTensor node"
+            )
+        
+        contexts = set()
+        if args is not None:
+            for arg in args:
+                contexts = TracedTensor.find_all_contexts(arg, contexts)
+        if kwargs is not None:
+            for kwarg in kwargs.values():
+                contexts = TracedTensor.find_all_contexts(kwarg, contexts)
+
+        if len(contexts) > 1:
+            _get_logger().error(
+                f"Error: detected multiple TracedTensor contexts: {contexts} inside of a traced function.\n"
+                "\n"
+                "This happens when you mix multiple active TracedTensors from different contexts inside of a traced function/block."
+                "\n"
+                "You can call output_tensors() to finalize one of the TracedTensor nodes first "
+                "or combine both nodes into a single node by calling input_tensors() with the same node name"
+            )
+            raise Exception(
+                "Cannot mix multiple active TracedTensors from different contexts inside of a traced function/block. "
+                "Call output_tensors() to finalize one of the TracedTensor nodes first"
+                "or combine both nodes into a single node by calling input_tensors() with the same node name"
+            )
+        return True
+
+
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
         """Intercept torch operations to record them in the graph.
@@ -136,18 +196,7 @@ class TracedTensor:
         if kwargs is None:
             kwargs = {}
 
-        # Find the first TracedTensor in args (including nested in lists/tuples)
-        def find_traced_tensor(obj):
-            if isinstance(obj, TracedTensor):
-                return obj
-            elif isinstance(obj, (list, tuple)):
-                for item in obj:
-                    result = find_traced_tensor(item)
-                    if result is not None:
-                        return result
-            return None
-
-        traced_tensor = find_traced_tensor(args)
+        traced_tensor = TracedTensor.find_traced_tensor(args)
 
         # Convert method descriptors to function equivalents for TorchScript compatibility
         # Pass context if we have a traced_tensor for better error messages
@@ -158,19 +207,10 @@ class TracedTensor:
             # Fallback to default behavior if no TracedTensor found
             return NotImplemented
 
-        # Helper to recursively unwrap TracedTensors
-        def unwrap_traced_tensor(obj):
-            if isinstance(obj, TracedTensor):
-                return obj.tensor
-            elif isinstance(obj, (list, tuple)):
-                return type(obj)(unwrap_traced_tensor(item) for item in obj)
-            elif isinstance(obj, dict):
-                return {k: unwrap_traced_tensor(v) for k, v in obj.items()}
-            return obj
 
         # Extract real tensors for actual computation
-        real_args = tuple(unwrap_traced_tensor(arg) for arg in args)
-        real_kwargs = {k: unwrap_traced_tensor(v) for k, v in kwargs.items()}
+        real_args = tuple(TracedTensor.unwrap_traced_tensor(arg) for arg in args)
+        real_kwargs = {k: TracedTensor.unwrap_traced_tensor(v) for k, v in kwargs.items()}
 
         # ================== EXECUTE THE ACTUAL OPERATION ==================
         tensor_out = func(*real_args, **real_kwargs)
@@ -178,7 +218,7 @@ class TracedTensor:
 
 
         # Skip tracing if context is not tracing - return raw tensors
-        if not traced_tensor.validate_status():
+        if not traced_tensor.validate_status(args, kwargs):
             return tensor_out
 
         # Check if we're trying to call a TorchScript module/method

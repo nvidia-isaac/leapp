@@ -149,18 +149,18 @@ class BlockContextNode(LeappNode):
             path = variable_name
         if isinstance(data, TracedTensor) and data.is_tracing:
             _get_logger().error(
-                f"Cannot use TracedTensor as input to annotate.block() or annotate.method() '{self.name}'.\n"
+                f"Cannot use TracedTensor as input to block() or method() '{self.name}'.\n"
                 f"Variable '{variable_name}' (at {path}) contains an active TracedTensor"
                 f"from node '{data.context}'.\n"
                 f"\n"
-                f"This happens when you try to use a TracedTensor created by annotate.input_tensors() "
-                f"as input to code inside annotate.block().\n"
+                f"This happens when you try to use a TracedTensor created by input_tensors() "
+                f"as input to code inside block().\n"
                 f"\n"
-                f"You must call annotate.output_tensors() to finalize the TracedTensor node first"
+                f"You must call output_tensors() to finalize the TracedTensor node first"
             )
             raise Exception(
-                f"Cannot use TracedTensor '{path}' as input to annotate.block() or annotate.method() '{self.name}'. "
-                f"Call annotate.output_tensors() first or use .tensor to get the underlying tensor."
+                f"Cannot use TracedTensor '{path}' as input to block() or method() '{self.name}'. "
+                f"Call output_tensors() first or use .tensor to get the underlying tensor."
             )
         elif isinstance(data, (list, tuple)):
             for i, item in enumerate(data):
