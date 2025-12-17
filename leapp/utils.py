@@ -26,6 +26,7 @@ import sys
 import collections.abc
 from dataclasses import dataclass
 from typing import Optional, Any, Dict, Tuple
+from leapp.leapp_graph.traced_tensor import TracedTensor
 
 
 def extract_source_from_line_range(executed_lines, context_name):
@@ -824,8 +825,12 @@ def flatten_to_named_dict(data, io_format, use_tag_first=True):
 
 
 def safe_deepcopy(data):
+    # this is used to deepcopy a complex data structure.
+    # running safe deepcopy also unwraps the TracedTensor to the underlying tensor.
     if isinstance(data, torch.Tensor):
         return data.clone()
+    elif isinstance(data, TracedTensor):
+        return data.tensor.clone()
 
     elif isinstance(data, list):
         return [safe_deepcopy(item) for item in data]

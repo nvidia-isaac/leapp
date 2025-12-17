@@ -21,7 +21,8 @@ from leapp.utils import (
     extract_source_from_line_range
 )
 from leapp._logging import _get_logger
-from .leapp_node import LeappNode
+from leapp.leapp_graph.leapp_node import LeappNode
+from leapp.leapp_graph.traced_tensor import TracedTensor
 
 
 class BlockContextNode(LeappNode):
@@ -130,25 +131,65 @@ class BlockContextNode(LeappNode):
 
             return trace_code_snippet
         return trace_code_snippet
+    
+    def _check_for_active_traced_tensors(self, data, variable_name, path=None):
+        """Recursively check if data contains any TracedTensor instances.
+        
+        Args:
+            data: The data structure to check
+            path: Current path in the data structure (for error messages)
+            
+        Returns:
+            tuple: (found, traced_tensor, location) where:
+                - found: True if TracedTensor was found
+                - traced_tensor: The TracedTensor instance found (or None)
+                - location: String describing where it was found
+        """
+        if not path:
+            path = variable_name
+        if isinstance(data, TracedTensor) and data.is_tracing:
+            _get_logger().error(
+                f"Cannot use TracedTensor as input to annotate.block() or annotate.method() '{self.name}'.\n"
+                f"Variable '{variable_name}' (at {path}) contains an active TracedTensor"
+                f"from node '{data.context}'.\n"
+                f"\n"
+                f"This happens when you try to use a TracedTensor created by annotate.input_tensors() "
+                f"as input to code inside annotate.block().\n"
+                f"\n"
+                f"You must call annotate.output_tensors() to finalize the TracedTensor node first"
+            )
+            raise Exception(
+                f"Cannot use TracedTensor '{path}' as input to annotate.block() or annotate.method() '{self.name}'. "
+                f"Call annotate.output_tensors() first or use .tensor to get the underlying tensor."
+            )
+        elif isinstance(data, (list, tuple)):
+            for i, item in enumerate(data):
+                self._check_for_active_traced_tensors(
+                    item, f"{path}[{i}]" if path else f"[{i}]")
+        elif isinstance(data, dict):
+            for key, value in data.items():
+                self._check_for_active_traced_tensors(
+                    value, f"{path}['{key}']" if path else f"['{key}']")
 
     def _capture_specified_value_from_frame(self, variable_name, frame):
         # If variable_name matches *.* pattern, extract from nested objects in frame
-        obj = None
         final_variable_name = variable_name
         if "." in variable_name:
             obj, final_variable_name = get_attribute_value_from_frame(
                 frame, variable_name)
-            obj = safe_deepcopy(obj)
         else:
             if variable_name in frame.f_locals:
-                obj = safe_deepcopy(frame.f_locals[variable_name])
+                obj = frame.f_locals[variable_name]
             elif variable_name in frame.f_globals:
-                obj = safe_deepcopy(frame.f_globals[variable_name])
+                obj = frame.f_globals[variable_name]
             else:
                 raise Exception(
                     f"Variable '{variable_name}' not found in frame locals or globals")
 
-        return final_variable_name, obj
+        self._check_for_active_traced_tensors(obj, variable_name)
+        obj = safe_deepcopy(obj)
+
+        return final_variable_name, safe_deepcopy(obj)
 
     def capture_inputs_from_frame(self, frame):
         try:

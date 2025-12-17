@@ -157,6 +157,87 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         
         annotate.stop()
 
+    def test_reentrant_tracing_block_inside_method(self):
+        """Test that re-entrant tracing is properly rejected.
+        
+        Attempting to use annotate.block inside a function decorated with
+        annotate.method should fail because the tracing lock is already acquired.
+        """
+        @annotate.method()
+        def outer_func(inputA: torch.Tensor):
+            # This should fail - trying to start a block while already tracing
+            with annotate.block("inner_block"):
+                result = inputA * 2.0
+            return result
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        
+        try:
+            outer_func(torch.tensor([1.0, 2.0, 3.0]))
+            annotate.stop()
+            self.fail("Expected an exception for re-entrant tracing")
+        except Exception as e:
+            annotate.stop()
+            # The error should mention that tracing is already active
+            self.assertIn("attempting to set up new trace", str(e).lower())
+
+    def test_reentrant_tracing_method_inside_method(self):
+        """Test that nested method decorators are properly rejected.
+        
+        Calling one @annotate.method from within another should fail
+        because the tracing lock is already acquired.
+        """
+        @annotate.method()
+        def inner_func(inputA: torch.Tensor):
+            return inputA * 2.0
+
+        @annotate.method()
+        def outer_func(inputA: torch.Tensor):
+            # This should fail - calling another annotated method while tracing
+            result = inner_func(inputA)
+            return result
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        
+        try:
+            outer_func(torch.tensor([1.0, 2.0, 3.0]))
+            annotate.stop()
+            self.fail("Expected an exception for re-entrant tracing")
+        except Exception as e:
+            annotate.stop()
+            # The error should mention that we're trying to set up a new trace
+            self.assertIn("attempting to set up new trace", str(e).lower())
+    
+    def test_reentrant_tracing_using_traced_tensors(self): #TODO: these both need to fail
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        tensors = annotate.input_tensors({'inputA': torch.tensor([1.0, 2.0, 3.0])}, 'func')
+        tensors += 100
+        input = torch.tensor([1.0, 2.0, 3.0])
+        @annotate.method()
+        def inner_func(inputA: torch.Tensor):
+            return inputA + tensors
+        output_tensors = inner_func(input)
+        output_tensors = annotate.output_tensors({'outputA': output_tensors}, export_with="torch")
+        annotate.stop()
+    
+    def test_passing_traced_tensor_to_method(self):
+        try:
+            @annotate.method()
+            def inner_func(inputA: torch.Tensor):
+                return inputA + 5
+            annotate.start(name=self.TEST_GRAPH_NAME)
+            tensors = annotate.input_tensors({'inputA': torch.tensor([1.0, 2.0, 3.0])}, 'func')
+            tensors += 100
+            output_tensors = inner_func(tensors)
+            output_tensors = annotate.output_tensors({'outputA': output_tensors}, export_with="torch")
+            annotate.stop()
+            self.fail("Expected an exception")
+        except Exception as e:
+            error_msg = str(e)
+            self.assertIn("Cannot use TracedTensor", error_msg)
+            self.assertIn("inner_func", error_msg)
+            self.assertIn("Call annotate.output_tensors() first", error_msg)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

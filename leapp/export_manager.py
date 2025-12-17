@@ -29,6 +29,7 @@ from leapp.leapp_graph.traced_node import TracedTensorNode
 from leapp.leapp_graph.traced_tensor import TracedTensor
 from leapp.leapp_graph.block_context_node import BlockContextNode
 from leapp.enums import MergeCfgEnum
+from leapp.tracing_lock import TracingLock
 
 from .utils import (CompactYamlList,
                     CompactYamlDict,
@@ -42,7 +43,6 @@ class ExportManager:
     _instance = None
     _initialized = False  # True after singleton __init__ completes
     _interpret_graph = False  # True between start() and stop() - enables graph interpretation
-    _is_active_function_tracing = False  # True while sys.settrace is active for a node
 
     #########################################################
     # initialization
@@ -110,7 +110,7 @@ class ExportManager:
             _get_logger().warning("LEAPP graph interpretation is already enabled, "
                                   "calling start() again will reset the graph")
             _get_logger().warning("Resetting graph...")
-            ExportManager._is_active_function_tracing = False
+            TracingLock().reset()
         self.nodes = {}
         ExportManager._interpret_graph = True
 
@@ -135,7 +135,7 @@ class ExportManager:
             - This method should only be called after start() has been called.
             - Ensure all active tracing operations are completed before calling stop().
         """
-        if ExportManager._is_active_function_tracing:
+        if TracingLock().is_active:
             raise Exception("ExportManager is currently tracing")
         if not ExportManager._interpret_graph:
             raise Exception("ExportManager graph interpretation is disabled")
@@ -153,7 +153,7 @@ class ExportManager:
         return node_index
 
     def _verify_no_active_function_tracing(self):
-        if ExportManager._is_active_function_tracing:
+        if TracingLock().is_active:
             _get_logger().error(
                 "Error when attempting to set up new trace\n"
                 "ExportManager is already tracing")
@@ -180,15 +180,13 @@ class ExportManager:
     #########################################################
 
     def _start_tracing(self, frame, trace_function):
-        if ExportManager._is_active_function_tracing:
-            raise Exception("ExportManager is already tracing")
-        ExportManager._is_active_function_tracing = True
         """Start the trace function."""
+        TracingLock().acquire()
         frame.f_trace = trace_function
         sys.settrace(trace_function)
 
     def _stop_tracing(self, node_name, node_context):
-        if ExportManager._is_active_function_tracing:
+        if TracingLock().is_active:
             """Stop the trace function."""
             sys.settrace(None)
 
@@ -214,7 +212,7 @@ class ExportManager:
 
             finally:
                 # Always reset tracing state, even if an exception occurred
-                ExportManager._is_active_function_tracing = False
+                TracingLock().release()
 
     #########################################################
     # annotation APIs

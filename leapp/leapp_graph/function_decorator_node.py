@@ -93,6 +93,7 @@ class FunctionDecoratorNode(BlockContextNode):
         bound_args.apply_defaults()
 
         for param_name, param_value in bound_args.arguments.items():
+            self._check_for_active_traced_tensors(param_value, param_name)
             if param_name == 'self':
                 continue
             # Check if this parameter was explicitly provided or is using default
