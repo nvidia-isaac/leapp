@@ -238,5 +238,75 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
             [torch.tensor([0])], [torch.tensor([1]), torch.tensor([1])], 'counter')
 
 
+class TestAnnotateTensor(LEAPPFunctionalTestBase):
+
+    def test_annotate_tensor_single(self):
+        annotate.start(name=self.TEST_GRAPH_NAME, verbose=True)
+        tensor1 = annotate.input_tensors(
+            {'input1': torch.tensor([1.0, 2.0, 3.0])}, 'func1')
+        tensor1 = tensor1 + 1.0
+        tensor1 = tensor1 - 2.0
+        tensor1 = tensor1 * 3.0
+        tensor1 = tensor1 / 4.0
+        tensor1 = tensor1.matmul(torch.tensor(
+            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]))
+        tensor1 = annotate.output_tensors(
+            {'output1': tensor1}, export_with="torch")
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=1, outputs=1, internal_connections=0)
+        self.verify_single_torchscript_model_expected_value(
+            [torch.tensor([1.0, 2.0, 3.0])], [tensor1], 'func1')
+
+    def test_annotate_tensor_with_dict_io(self):
+        annotate.start(name=self.TEST_GRAPH_NAME, verbose=True)
+        input_dict = {'input1': torch.tensor([1.0, 2.0, 3.0])}
+        input_dict = annotate.input_tensors(
+            {'input_dict': input_dict}, 'func1')
+        input_dict['input1'] = input_dict['input1'].matmul(torch.tensor(
+            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]))
+        annotate.output_tensors(input_dict, export_with="torch")
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=1, outputs=1, internal_connections=0)
+
+    def test_annotate_tensor_with_list_io(self):
+        annotate.start(name=self.TEST_GRAPH_NAME, verbose=True)
+        tensor_list = [torch.tensor([1.0, 2.0, 3.0]),
+                       torch.tensor([4.0, 5.0, 6.0])]
+        tensor_list = annotate.input_tensors(
+            {'tensor_list': tensor_list}, 'func1')
+        tensor_list[0] = tensor_list[0].matmul(torch.tensor(
+            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]))
+        tensor_list[1] = tensor_list[1].matmul(torch.tensor(
+            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]))
+        annotate.output_tensors(tensor_list, export_with="torch")
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=2, outputs=2, internal_connections=0)
+
+    def test_annotate_tensor_sequential_context(self):
+        annotate.start(name=self.TEST_GRAPH_NAME, verbose=True)
+        tensor1 = annotate.input_tensors(
+            {'input1': torch.tensor([1.0, 2.0, 3.0])}, 'func1')
+        tensor2 = tensor1 + 1.0
+        annotate.output_tensors({'output1': tensor2}, export_with="torch")
+        tensor2 = annotate.input_tensors({'input2': tensor2}, 'func2')
+        tensor3 = tensor2 + 2.0
+        annotate.output_tensors({'output2': tensor3}, export_with="torch")
+        tensor3 = annotate.input_tensors({'input3': tensor3}, 'func3')
+        tensor4 = tensor3 + 3.0
+        annotate.output_tensors({'output3': tensor4}, export_with="torch")
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+
+        self.verify_num_connections(
+            annotate, nodes=3, inputs=1, outputs=1, internal_connections=2)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

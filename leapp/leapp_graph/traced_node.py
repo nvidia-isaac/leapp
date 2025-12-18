@@ -24,11 +24,12 @@ class TracedTensorNode(LeappNode):
         return not self._model_captured
 
     def compile_trace(self, tensors: dict[str, "TracedTensor"], backend=None, backend_params={}):
-        if any(not isinstance(tensor, TracedTensor) for tensor in tensors.values()):
-            _get_logger().error(
-                f"Error: Call to compile_trace for {self.name} using non-TracedTensors")
-            raise ValueError("Error in TracedTensorNode")
-        
+        # No longer checking this because upstream will validate
+        # if any(not isinstance(tensor, TracedTensor) for tensor in tensors.values()):
+        #     _get_logger().error(
+        #         f"Error: Call to compile_trace for {self.name} using non-TracedTensors")
+        #     raise ValueError("Error in TracedTensorNode")
+
         unwrapped_tensors = []
         for name, tensor in tensors.items():
             unwrapped_tensors.append(self.create_output(tensor, name))
@@ -38,9 +39,13 @@ class TracedTensorNode(LeappNode):
             self.tracer.root, self.graph)
         _get_logger().debug(
             f"Compiled graph module for {self.name}: {self.compiled_graph_module.graph}")
-        _get_logger().debug(f"Graph module inputs: {[resolve_tensor_descriptions_to_names(input) for input in self.input_formats]}")
-        _get_logger().debug(f"Graph module outputs: {[resolve_tensor_descriptions_to_names(output) for output in self.output_formats]}")
+        _get_logger().debug(
+            f"Graph module inputs: {[resolve_tensor_descriptions_to_names(input) for input in self.input_formats]}")
+        _get_logger().debug(
+            f"Graph module outputs: {[resolve_tensor_descriptions_to_names(output) for output in self.output_formats]}")
         self.setup_backend(backend, backend_params)
+
+        return unwrapped_tensors[0] if len(unwrapped_tensors) == 1 else tuple(unwrapped_tensors)
 
     def setup_backend(self, backend=None, backend_params={}):
         super().setup_backend(backend, backend_params)
@@ -51,25 +56,28 @@ class TracedTensorNode(LeappNode):
 
         self.export_backend.override_module_builder(
             lambda: self.compiled_graph_module)
-    
+
     def _create_io_helper(self, data, name: str, to_traced: bool):
         if isinstance(data, dict):
             new_data = {}
             for key, value in data.items():
                 child_name = "_".join([name, key])
-                new_data[key] = self._create_io_helper(value, child_name, to_traced)
+                new_data[key] = self._create_io_helper(
+                    value, child_name, to_traced)
             return new_data
         elif isinstance(data, list):
             new_data = []
             for idx, value in enumerate(data):
                 child_name = "_".join([name, str(idx)])
-                new_data[idx] = self._create_io_helper(value, child_name, to_traced)
+                new_data.append(self._create_io_helper(
+                    value, child_name, to_traced))
             return new_data
         elif isinstance(data, tuple):
             new_data = []
             for idx, value in enumerate(data):
                 child_name = "_".join([name, str(idx)])
-                data[idx] = self._create_io_helper(value, child_name, to_traced)
+                new_data.append(self._create_io_helper(
+                    value, child_name, to_traced))
             return tuple(new_data)
         elif isinstance(data, TracedTensor):
             tensor_val = data.tensor
@@ -85,11 +93,11 @@ class TracedTensorNode(LeappNode):
                 if not data.is_tracing:
                     _get_logger().warning(f"Warning: when creating outputs for {self.name}, \
                                             detected data {name} is a TracedTensor but is not tracing")
-                    
+
                 return tensor_val
 
         elif isinstance(data, torch.Tensor):
-            if to_traced: # convert the tensor to a TracedTensor
+            if to_traced:  # convert the tensor to a TracedTensor
                 """ Future warp support
                     if isinstance(tensor, wp.array):
                         tensor = wp.to_torch(tensor)
@@ -103,10 +111,9 @@ class TracedTensorNode(LeappNode):
                 return data
 
         else:
-            _get_logger().error(f"Error: when creating inputs for {self.name}, detected data {name} is {type(data).__name__}"\
-                                  " which is not a dict, list, tuple, or torch.Tensor")
+            _get_logger().error(f"Error: when creating inputs for {self.name}, detected data {name} is {type(data).__name__}"
+                                " which is not a dict, list, tuple, or torch.Tensor")
             raise ValueError("Error in TracedTensorNode")
-            
 
     def create_input(self, data, name: str) -> "TracedTensor":
         """Create a TrackedTensor as an input to this context.
@@ -118,7 +125,6 @@ class TracedTensorNode(LeappNode):
         Returns:
             TracedTensor: A traced tensor in this context
         """
-
         self.add_input(name, name, data)
         traced_data = self._create_io_helper(data, name, to_traced=True)
         return traced_data

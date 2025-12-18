@@ -306,7 +306,8 @@ class ParameterFormat:
         return True
 
     @property
-    def tensor_expr_in_order(self) -> list[str]: #TODO: use this to replace reference to the tensor descriptions.
+    # TODO: use this to replace reference to the tensor descriptions.
+    def tensor_expr_in_order(self) -> list[str]:
         """
         Generate a list of tensor expressions in the order of the nested structure.
         """
@@ -327,10 +328,10 @@ class ParameterFormat:
     def packed_tensor_expr(self) -> str:
         """
         Generate a packing assignment expression for this parameter.
-        
+
         Converts flat tensor inputs into the expected nested structure.
         Handles nested structures (lists, dicts).
-        
+
         Returns:
             Assignment string like "inputA = [inputA_0, inputA_1]". 
             Empty string if no packing needed.
@@ -344,17 +345,18 @@ class ParameterFormat:
                 elements = [_generate_expr(item) for item in format_item]
                 return "[" + ", ".join(elements) + "]"
             elif isinstance(format_item, dict):
-                items = [f'"{k}": {_generate_expr(v)}' for k, v in format_item.items()]
+                items = [
+                    f'"{k}": {_generate_expr(v)}' for k, v in format_item.items()]
                 return "{" + ", ".join(items) + "}"
             else:
                 return "None"
-        
+
         reconstruction = _generate_expr(self.formatting)
-        
+
         # Skip trivial assignments where name == expression
         if self.name_str == reconstruction:
             return ""
-        
+
         return f"{self.name_str} = {reconstruction}"
 
     @property
@@ -362,20 +364,21 @@ class ParameterFormat:
         """
         Generate unpacking assignment expressions that extract flat tensors from
         a nested structure, using accessor paths.
-        
+
         This is the inverse of packed_tensor_expr.
-        
+
         Handles:
         - List unpacking (e.g., "inputA_0 = inputA[0]", "inputA_1 = inputA[1]")
         - Dict unpacking (e.g., 'state_pose = state["pose"]')
         - Nested structures (e.g., 'nested_0_0 = nested[0][0]')
-        
+
         Returns:
             Newline-separated assignment strings. Empty string if no unpacking needed.
         """
         def _generate_unpacking(format_item, accessor_path: str, assignments: list):
             if isinstance(format_item, ParameterFormat):
-                _generate_unpacking(format_item.formatting, accessor_path, assignments)
+                _generate_unpacking(format_item.formatting,
+                                    accessor_path, assignments)
             elif isinstance(format_item, TensorDescription):
                 tensor_name = format_item.name_str
                 if tensor_name != accessor_path:
@@ -388,7 +391,7 @@ class ParameterFormat:
                 for key, value in format_item.items():
                     child_path = f'{accessor_path}["{key}"]'
                     _generate_unpacking(value, child_path, assignments)
-        
+
         assignments = []
         _generate_unpacking(self.formatting, self.name_str, assignments)
         return "\n".join(assignments)
@@ -560,6 +563,22 @@ def map_from_torch_dtype(notation):
         raise ValueError(f"Unsupported notation: {notation}")
 
 
+def flatten_io_structure(data, name_str):
+    flat_data = {}
+    if isinstance(data, collections.abc.Sequence) and not isinstance(data, (str, bytes, torch.Tensor)):
+        for idx, item in enumerate(data):
+            child_name = f"{name_str}_{idx}" if name_str else str(idx)
+            flat_data.update(flatten_io_structure(item, child_name))
+    elif isinstance(data, collections.abc.Mapping):
+        for key, value in data.items():
+            child_name = f"{name_str}_{key}" if name_str else key
+            flat_data.update(flatten_io_structure(value, child_name))
+    elif isinstance(data, torch.Tensor) or isinstance(data, TracedTensor):
+        flat_data[name_str] = data
+
+    return flat_data
+
+
 def describe_io_helper(data, name_str, dtype_notation):
     data_description = []
     if isinstance(data, collections.abc.Sequence) and not isinstance(data, (str, bytes, torch.Tensor)):
@@ -571,7 +590,7 @@ def describe_io_helper(data, name_str, dtype_notation):
 
         io_format = []
         for idx, item in enumerate(data):
-            child_name = "_".join([name_str, str(idx)])
+            child_name = f"{name_str}_{idx}" if name_str else str(idx)
             child_description, child_format = describe_io_helper(
                 item, child_name, dtype_notation)
             io_format.append(child_format)
@@ -586,7 +605,7 @@ def describe_io_helper(data, name_str, dtype_notation):
 
         io_format = {}
         for k, v in data.items():
-            child_name = "_".join([name_str, k])
+            child_name = f"{name_str}_{k}" if name_str else k
             child_description, child_format = describe_io_helper(
                 v, child_name, dtype_notation)
             io_format[k] = child_format
@@ -609,6 +628,8 @@ def describe_io_helper(data, name_str, dtype_notation):
         # Return as a list containing the dataclass (for now, keep compatibility)
         data_description = [tensor_desc]
         io_format = tensor_desc  # Plain string
+    elif isinstance(data, TracedTensor):
+        return describe_io_helper(data.tensor, name_str, dtype_notation)
     else:
         # For non-tensor data types
         data_desc = TensorDescription(
@@ -838,6 +859,7 @@ def safe_deepcopy(data):
         return {k: safe_deepcopy(v) for k, v in data.items()}
     else:
         return copy.deepcopy(data)
+
 
 def get_attribute_value_from_frame(frame, attr_name):
     if "." in attr_name:

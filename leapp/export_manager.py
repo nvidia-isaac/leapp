@@ -20,6 +20,7 @@ import functools
 import yaml
 import os
 import torch
+from typing import Any
 
 from leapp._logging import _get_logger
 from leapp.leapp_graph.leapp_graph import LeappGraph
@@ -36,13 +37,15 @@ from .utils import (CompactYamlList,
                     get_relative_path,
                     get_system_info,
                     verify_data_exact_match,
-                    mirror_all_tensor_tags)
+                    mirror_all_tensor_tags,
+                    flatten_io_structure)
 
 
 class ExportManager:
     _instance = None
     _initialized = False  # True after singleton __init__ completes
-    _interpret_graph = False  # True between start() and stop() - enables graph interpretation
+    # True between start() and stop() - enables graph interpretation
+    _interpret_graph = False
 
     #########################################################
     # initialization
@@ -217,8 +220,13 @@ class ExportManager:
     #########################################################
     # annotation APIs
     #########################################################
-    def input_tensors(self, tensors: dict[str, torch.Tensor], node_name: str):
+    def input_tensors(self, tensors, node_name: str):
         self._verify_no_active_function_tracing()
+        if not isinstance(tensors, dict):
+            _get_logger().warning(f"Warning: no tensor name provided for input_tensors call in node {node_name}\n"
+                                  "Assuming default tensor name")
+            tensors = {'tensor': tensors}
+
         if not ExportManager._interpret_graph:
             values = list(tensors.values())
             return values[0] if len(values) == 1 else tuple(values)
@@ -231,6 +239,8 @@ class ExportManager:
             self.nodes[node_name] = traced_tensors_node
 
         # we run create tensors regardless to validate the inputs
+        # we need to handle input tensors more carefully than outputs because
+        # we need to ensure the inputs are returned in the original structure
         traced_tensors = []
         for tensor_name, tensor in tensors.items():
             traced_tensor = traced_tensors_node.create_input(
@@ -242,35 +252,41 @@ class ExportManager:
             values = list(tensors.values())
             return values[0] if len(values) == 1 else tuple(values)
 
-        #if node is tracing we return the traced tensors
+        # if node is tracing we return the traced tensors
         return traced_tensors[0] if len(traced_tensors) == 1 else tuple(traced_tensors)
 
-    def output_tensors(self, tensors: dict[str, TracedTensor], **kwargs):
+    def output_tensors(self, tensors, **kwargs):
         self._verify_no_active_function_tracing()
+        if not isinstance(tensors, dict):
+            _get_logger().warning("Warning: no tensor name provided for output_tensors call\n"
+                                  "Assuming default tensor name")
+            tensors = {'tensor': tensors}
+
         if not ExportManager._interpret_graph:
             values = list(tensors.values())
             return values[0] if len(values) == 1 else tuple(values)
 
-        # validate if valid input is given to this function
-        # if none of the tensors are traced, we assume tracing is not active and return the raw tensors
-        if all(not isinstance(tensor, TracedTensor) for tensor in tensors.values()):
+        flattened_tensors = flatten_io_structure(tensors, '')
+        types = set(type(tensor) for tensor in flattened_tensors.values())
+        context_names = set(
+            tensor.context for tensor in flattened_tensors.values())
+
+        if all([type is torch.Tensor for type in types]):
             return tuple(tensors.values())
 
-        # if there is a mix of traced and raw tensors, we error
-        context_names = []
-        for name, tensor in tensors.items():
-            if not isinstance(tensor, TracedTensor):
-                _get_logger().error(
-                    f"Error: tensor {name} is not a TracedTensor")
-                raise Exception(
-                    "Error: exeption detected in output_tensors declaration")
-            context_names.append(tensor.context)
-        if not all(name == context_names[0] for name in context_names):
+        if not all([type is TracedTensor for type in types]):
             _get_logger().error(
-                f"Error: all tensors must have the same context name, got {set(context_names)}")
+                f"Error: detected the following types when expected all outputs to be TracedTensors: {types}")
             raise Exception(
                 "Error: exeption detected in output_tensors declaration")
-        node_name = context_names[0]
+
+        if len(context_names) > 1:
+            _get_logger().error(
+                f"Error: detected multiple context names when expected all outputs to have the same context name: {context_names}")
+            raise Exception(
+                "Error: exeption detected in output_tensors declaration")
+
+        node_name = list(context_names)[0]
         if node_name not in self.nodes.keys():
             _get_logger().error(
                 f"Error: output tensors declared for node {node_name} but not registered to the ExportManager")
@@ -282,13 +298,10 @@ class ExportManager:
                                 " Please ensure one call only to output_tensors is made per node.")
             raise Exception(
                 "Error: exeption detected in output_tensors declaration")
-
-        node_context.compile_trace(tensors,
+        node_context.compile_trace(flattened_tensors,
                                    backend=kwargs.get("export_with", None),
                                    backend_params=kwargs.get("backend_params", {}))
-
-        raw_tensors = list(tensor.tensor for tensor in tensors.values())
-        return raw_tensors[0] if len(raw_tensors) == 1 else tuple(raw_tensors)
+        return tuple(tensors.values())
 
     def block(self, node_name, **kwargs):
         """Create a context manager for tracing a block of code in the computational graph.
@@ -365,9 +378,10 @@ class ExportManager:
                     f"****Tracing stopped for {node_context.name}****\n\n")
 
         return BlockTraceContext()
-    
+
     def __enter__(self):
         return self
+
     def __exit__(self, exc_type, exc_value, traceback):
         return
 
@@ -467,7 +481,8 @@ class ExportManager:
             mirror_all_tensor_tags(source, target)
         except Exception as e:
             _get_logger().error(f"Unexpected error mirroring LEAPP tags: {e}")
-            raise Exception(f"Error: unexpected error mirroring LEAPP tags: {e}")
+            raise Exception(
+                f"Error: unexpected error mirroring LEAPP tags: {e}")
 
     def get_io_descriptions(self):
         _get_logger().section(
