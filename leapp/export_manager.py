@@ -221,16 +221,10 @@ class ExportManager:
     # annotation APIs
     #########################################################
     def input_tensors(self, tensors, node_name: str):
-        self._verify_no_active_function_tracing()
-        # TODO: this is still confusing. we need to make it more explicit.
-        if not isinstance(tensors, dict):
-            _get_logger().warning(f"Warning: no tensor name provided for input_tensors call in node {node_name}\n"
-                                  "Assuming default tensor name")
-            tensors = {'tensor': tensors}
-
         if not ExportManager._interpret_graph:
             values = list(tensors.values())
             return values[0] if len(values) == 1 else tuple(values)
+        self._verify_no_active_function_tracing()
 
         if node_name in self.nodes.keys():
             traced_tensors_node = self.nodes[node_name]
@@ -238,8 +232,26 @@ class ExportManager:
             traced_tensors_node, node_name = self._setup_new_node(
                 node_name, TracedTensorNode)
             self.nodes[node_name] = traced_tensors_node
+        
+        # TODO: this is still confusing. we need to make it more explicit.
+        tensors_changed = False
+        if not isinstance(tensors, dict):
+            tensors_changed = True
+            tensors = {'tensor': tensors}
 
-        # we run create tensors regardless to validate the inputs
+        # reason this is convoluted is to mirror the scheme in output_tensors
+        if tensors_changed:
+            _get_logger().warning(f"Warning: no tensor name provided for input_tensors call in node {node_name}\n"
+                        "Assuming default tensor name")
+
+        # if the node is not tracing, we return the raw tensors
+        if not traced_tensors_node.is_tracing:
+            values = list(tensors.values())
+            return values[0] if len(values) == 1 else tuple(values)
+
+            # TODO: need a scheme to update tags. in the future that scheme will be expanded to check
+            # the inputs and outputs for type equivalence. 
+
         # we need to handle input tensors more carefully than outputs because
         # we need to ensure the inputs are returned in the original structure
         traced_tensors = []
@@ -248,58 +260,55 @@ class ExportManager:
                 tensor, tensor_name)
             traced_tensors.append(traced_tensor)
 
-        # if the node is not tracing, we return the raw tensors
-        if not traced_tensors_node.is_tracing:
-            values = list(tensors.values())
-            return values[0] if len(values) == 1 else tuple(values)
-
         # if node is tracing we return the traced tensors
         return traced_tensors[0] if len(traced_tensors) == 1 else tuple(traced_tensors)
 
-    def output_tensors(self, tensors, **kwargs):
+    def output_tensors(self, tensors, node_name: str, **kwargs):
+        if not ExportManager._interpret_graph:
+            return
         self._verify_no_active_function_tracing()
+
+        if node_name in self.nodes.keys():
+            traced_tensors_node = self.nodes[node_name]
+        else:
+            _get_logger().error(
+                f"Error: output tensors called for node {node_name} but not registered to the ExportManager")
+            raise Exception(
+                "Error: exeption detected in output_tensors declaration")
+        
+        tensors_changed = False
         if not isinstance(tensors, dict):
-            _get_logger().warning("Warning: no tensor name provided for output_tensors call\n"
-                                  "Assuming default tensor name")
+            tensors_changed = True
             tensors = {'tensor': tensors}
 
-        if not ExportManager._interpret_graph:
-            values = list(tensors.values())
-            return values[0] if len(values) == 1 else tuple(values)
-
         flattened_tensors = flatten_io_structure(tensors, '')
-        types = set(type(tensor) for tensor in flattened_tensors.values())
-        context_names = set(
-            tensor.context for tensor in flattened_tensors.values())
-
-        if all([type is torch.Tensor for type in types]):
+        
+        if not traced_tensors_node.is_tracing:
+            # tag regardless of tracing status
+            traced_tensors_node.tag_data(flattened_tensors, node_name)
             return
+
+        if tensors_changed:
+            _get_logger().warning(f"Warning: no tensor name provided for input_tensors call in node {node_name}\n"
+                        "Assuming default tensor name")
+
+        types = set(type(tensor) for tensor in flattened_tensors.values())
 
         if not all([type is TracedTensor for type in types]):
             _get_logger().error(
                 f"Error: detected the following types when expected all outputs to be TracedTensors: {types}")
             raise Exception(
                 "Error: exeption detected in output_tensors declaration")
-
-        if len(context_names) > 1:
+    
+        context_names = set([tensor.context for tensor in flattened_tensors.values()])
+        if not len(context_names) == 1 and context_names.pop() != traced_tensors_node.name:
             _get_logger().error(
-                f"Error: detected multiple context names when expected all outputs to have the same context name: {context_names}")
+                f"Error: expected all context names to match the node name: {node_name}"
+                f" but detected the following context names: {context_names}")
             raise Exception(
                 "Error: exeption detected in output_tensors declaration")
-
-        node_name = list(context_names)[0]
-        if node_name not in self.nodes.keys():
-            _get_logger().error(
-                f"Error: output tensors declared for node {node_name} but not registered to the ExportManager")
-            raise Exception(
-                "Error: exeption detected in output_tensors declaration")
-        node_context = self.nodes[node_name]
-        if not node_context.is_tracing:
-            _get_logger().error(f"Error: output tensors called on a node {node_name} that is not currently tracing."
-                                " Please ensure one call only to output_tensors is made per node.")
-            raise Exception(
-                "Error: exeption detected in output_tensors declaration")
-        node_context.compile_trace(flattened_tensors,
+        
+        traced_tensors_node.compile_trace(flattened_tensors,
                                    backend=kwargs.get("export_with", None),
                                    backend_params=kwargs.get("backend_params", {}))
 

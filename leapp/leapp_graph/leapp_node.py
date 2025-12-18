@@ -239,7 +239,20 @@ class LeappNode():
             input_name, raw_input_name, input_value)
         self._validate_and_add_to_list(io_descriptions, self.inputs, self.name)
         self.input_formats.append(input_format)
-
+    
+    def validate_io_and_update_tags(self, io_name, raw_io_name, io_value, current_io_list):
+        '''
+        this is used for rerunning the the tracing. each time we run it we 
+        we want to validate that the inputs are consistent with the previous run
+        and also update tags for feedback detection.   
+        '''
+        io_descriptions, input_format = describe_io()
+    
+    def validate_input_and_update_tags(self, input_name, raw_input_name, input_value):
+        self.validate_io_and_update_tags(input_name, raw_input_name, input_value, self.inputs)
+    def validate_output_and_update_tags(self, output_name, raw_output_name, output_value):
+        self.validate_io_and_update_tags(output_name, raw_output_name, output_value, self.outputs)
+    
     def change_input_name(self, old_name, new_name):
         _get_logger().warning(
             f"changing input name from {old_name} to {new_name} for model {self.name}")

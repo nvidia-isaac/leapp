@@ -218,7 +218,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             def inner_func(inputA: torch.Tensor):
                 return inputA + tensors
             output_tensors = inner_func(input)
-            annotate.output_tensors({'outputA': output_tensors}, export_with="torch")
+            annotate.output_tensors({'outputA': output_tensors}, 'func', export_with="torch")
             annotate.stop()
             self.fail("Expected an exception")
         except Exception as e:
@@ -234,7 +234,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             tensors = annotate.input_tensors({'inputA': torch.tensor([1.0, 2.0, 3.0])}, 'func')
             tensors += 100
             output_tensors = inner_func(tensors)
-            annotate.output_tensors({'outputA': output_tensors}, export_with="torch")
+            annotate.output_tensors({'outputA': output_tensors}, 'func', export_with="torch")
             annotate.stop()
             self.fail("Expected an exception")
         except Exception as e:
@@ -249,7 +249,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             tensor1 = annotate.input_tensors({'inputA': torch.tensor([1.0, 2.0, 3.0])}, 'func1')
             tensor2 = annotate.input_tensors({'inputB': torch.tensor([1.0, 2.0, 3.0])}, 'func2')
             output_tensors = tensor1 + tensor2
-            annotate.output_tensors({'outputA': output_tensors}, export_with="torch")
+            annotate.output_tensors({'outputA': output_tensors}, 'func1', export_with="torch")
             annotate.stop()
             self.fail("Expected an exception")
         except Exception as e:
@@ -348,7 +348,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
                 tensor1 += i
                 output_tensors.append(tensor1)
 
-            annotate.output_tensors({'outputs': output_tensors}, export_with="torch")
+            annotate.output_tensors({'outputs': output_tensors}, 'func_combined', export_with="torch")
 
             annotate.stop()
             annotate.compile_graph(visualize=False)
