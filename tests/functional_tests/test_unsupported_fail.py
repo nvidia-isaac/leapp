@@ -218,7 +218,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             def inner_func(inputA: torch.Tensor):
                 return inputA + tensors
             output_tensors = inner_func(input)
-            output_tensors = annotate.output_tensors({'outputA': output_tensors}, export_with="torch")
+            annotate.output_tensors({'outputA': output_tensors}, export_with="torch")
             annotate.stop()
             self.fail("Expected an exception")
         except Exception as e:
@@ -234,7 +234,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             tensors = annotate.input_tensors({'inputA': torch.tensor([1.0, 2.0, 3.0])}, 'func')
             tensors += 100
             output_tensors = inner_func(tensors)
-            output_tensors = annotate.output_tensors({'outputA': output_tensors}, export_with="torch")
+            annotate.output_tensors({'outputA': output_tensors}, export_with="torch")
             annotate.stop()
             self.fail("Expected an exception")
         except Exception as e:
@@ -249,7 +249,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             tensor1 = annotate.input_tensors({'inputA': torch.tensor([1.0, 2.0, 3.0])}, 'func1')
             tensor2 = annotate.input_tensors({'inputB': torch.tensor([1.0, 2.0, 3.0])}, 'func2')
             output_tensors = tensor1 + tensor2
-            output_tensors = annotate.output_tensors({'outputA': output_tensors}, export_with="torch")
+            annotate.output_tensors({'outputA': output_tensors}, export_with="torch")
             annotate.stop()
             self.fail("Expected an exception")
         except Exception as e:
@@ -338,7 +338,25 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             self.fail("Expected an exception for cross-context torch.where")
         except Exception as e:
             self.assertIn("Cannot mix multiple active TracedTensors from different contexts", str(e))
+    
+    def test_annotate_multiple_parallel_inputs_with_same_name(self):
+        try:
+            annotate.start(name=self.TEST_GRAPH_NAME)
+            output_tensors = []
+            for i in range(10):
+                tensor1 = annotate.input_tensors({'input': torch.tensor([1.0, 2.0, 3.0])}, 'func_combined')
+                tensor1 += i
+                output_tensors.append(tensor1)
 
+            annotate.output_tensors({'outputs': output_tensors}, export_with="torch")
+
+            annotate.stop()
+            annotate.compile_graph(visualize=False)
+            self.fail("Expected an exception")
+
+        except Exception as e:
+            self.assertIn("Duplicate name ", str(e))
+            self.assertIn("Each input/output must have a unique name", str(e))
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

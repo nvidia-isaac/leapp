@@ -222,6 +222,7 @@ class ExportManager:
     #########################################################
     def input_tensors(self, tensors, node_name: str):
         self._verify_no_active_function_tracing()
+        # TODO: this is still confusing. we need to make it more explicit.
         if not isinstance(tensors, dict):
             _get_logger().warning(f"Warning: no tensor name provided for input_tensors call in node {node_name}\n"
                                   "Assuming default tensor name")
@@ -272,7 +273,7 @@ class ExportManager:
             tensor.context for tensor in flattened_tensors.values())
 
         if all([type is torch.Tensor for type in types]):
-            return tuple(tensors.values())
+            return
 
         if not all([type is TracedTensor for type in types]):
             _get_logger().error(
@@ -301,7 +302,6 @@ class ExportManager:
         node_context.compile_trace(flattened_tensors,
                                    backend=kwargs.get("export_with", None),
                                    backend_params=kwargs.get("backend_params", {}))
-        return tuple(tensors.values())
 
     def block(self, node_name, **kwargs):
         """Create a context manager for tracing a block of code in the computational graph.

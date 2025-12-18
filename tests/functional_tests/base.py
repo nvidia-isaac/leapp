@@ -27,6 +27,11 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
     def tearDown(self):
         if os.path.exists(self.TEST_GRAPH_NAME):
             shutil.rmtree(self.TEST_GRAPH_NAME)
+    
+    def verify_all_models_exist(self, *model_names):
+        for model_name in model_names:
+            self.assertTrue(os.path.exists(os.path.join(self.TEST_GRAPH_NAME, f"{model_name}.pt")),
+                            f"Model {model_name} does not exist")
 
     def verify_num_connections(self, leapp_annotation, nodes=None, inputs=None, outputs=None,
                                internal_connections=None, feedback_connections=None):

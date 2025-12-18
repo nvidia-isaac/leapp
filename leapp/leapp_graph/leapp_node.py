@@ -211,16 +211,33 @@ class LeappNode():
             print(
                 f"\033[93mWarning: Untaggable datatype in i/o: {type(tensor)}\033[0m")
 
+    @staticmethod
+    def _validate_and_add_to_list(descriptions, current_io_list, node_name):
+        existing_names = set([io.name_str for io in current_io_list])
+        for description in descriptions:
+            if description.name_str in existing_names:
+                _get_logger().error(
+                    f"Duplicate i/o name '{description.name_str}' in node '{node_name}'. \n"
+                    f"Currently existing names: {existing_names}\n"
+                    f"Each input/output in the same node must have a unique name."
+                )
+                raise Exception(
+                    f"Duplicate name '{description.name_str}' in node '{node_name}'. "
+                    f"Each input/output must have a unique name."
+                )
+            existing_names.add(description.name_str)
+            current_io_list.append(description)
+
     def add_output(self, outout_name, raw_output_name, output_value):
         io_descriptions, output_format = describe_io(
             outout_name, raw_output_name, output_value)
-        self.outputs.extend(io_descriptions)
+        self._validate_and_add_to_list(io_descriptions, self.outputs, self.name)
         self.output_formats.append(output_format)
 
     def add_input(self, input_name, raw_input_name, input_value):
         io_descriptions, input_format = describe_io(
             input_name, raw_input_name, input_value)
-        self.inputs.extend(io_descriptions)
+        self._validate_and_add_to_list(io_descriptions, self.inputs, self.name)
         self.input_formats.append(input_format)
 
     def change_input_name(self, old_name, new_name):
