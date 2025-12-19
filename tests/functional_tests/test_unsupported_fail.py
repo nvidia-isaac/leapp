@@ -358,5 +358,30 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             self.assertIn("Duplicate name ", str(e))
             self.assertIn("Each input/output must have a unique name", str(e))
 
+    def test_output_tensors_with_non_traced_tensor(self):
+        """Test that passing non-TracedTensors to output_tensors raises the correct error.
+        
+        This happens when the user doesn't use the returned TracedTensors from input_tensors()
+        in their computations.
+        """
+        try:
+            annotate.start(name=self.TEST_GRAPH_NAME)
+            
+            # Get traced tensors but don't use them
+            traced_input = annotate.input_tensors({'input': torch.tensor([1.0, 2.0, 3.0])}, 'func')
+            
+            # Create a completely new tensor (not derived from traced_input)
+            # This is the user error - they should be using traced_input
+            untraced_output = torch.tensor([4.0, 5.0, 6.0])
+            
+            # This should fail because untraced_output is not a TracedTensor
+            annotate.output_tensors({'output': untraced_output}, 'func', export_with="torch")
+            
+            annotate.stop()
+            self.fail("Expected an exception")
+            
+        except Exception as e:
+            self.assertIn("Error: exeption detected in output_tensors declaration", str(e))
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

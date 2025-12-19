@@ -299,7 +299,10 @@ class ExportManager:
 
         if not all([type is TracedTensor for type in types]):
             _get_logger().error(
-                f"Error: detected the following types when expected all outputs to be TracedTensors: {types}")
+                f"Error: detected the following types when expected all outputs to be TracedTensors: {types}\n"
+                "**This could happen if you are not using TracedTensors in your computations.**\n" 
+                "Please verify if you are using the returned wrapped tensors from input_tensors() to "
+                "correctly trace your computations.")
             raise Exception(
                 "Error: exeption detected in output_tensors declaration")
     
