@@ -244,8 +244,10 @@ class ExportManager:
             _get_logger().warning(f"Warning: no tensor name provided for input_tensors call in node {node_name}\n"
                         "Assuming default tensor name")
 
-        # if the node is not tracing, we return the raw tensors
+        # if the node is not tracing, we validate the inputs only and return the raw tensors
         if not traced_tensors_node.is_tracing:
+            for tensor_name, tensor in tensors.items():
+                traced_tensors_node.validate_input_and_update_tags(tensor_name, tensor_name, tensor)
             values = list(tensors.values())
             return values[0] if len(values) == 1 else tuple(values)
 
@@ -285,7 +287,8 @@ class ExportManager:
         
         if not traced_tensors_node.is_tracing:
             # tag regardless of tracing status
-            traced_tensors_node.tag_data(flattened_tensors, node_name)
+            for tensor_name, tensor in flattened_tensors.items():
+                traced_tensors_node.tag_data(tensor, tensor_name)
             return
 
         if tensors_changed:

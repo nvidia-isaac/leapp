@@ -239,6 +239,13 @@ class LeappNode():
             input_name, raw_input_name, input_value)
         self._validate_and_add_to_list(io_descriptions, self.inputs, self.name)
         self.input_formats.append(input_format)
+
+    @staticmethod
+    def get_io_description_by_name(name, io_list):
+        for io_description in io_list:
+            if io_description.name_str == name:
+                return io_description
+        return None
     
     def validate_io_and_update_tags(self, io_name, raw_io_name, io_value, current_io_list):
         '''
@@ -246,12 +253,42 @@ class LeappNode():
         we want to validate that the inputs are consistent with the previous run
         and also update tags for feedback detection.   
         '''
-        io_descriptions, input_format = describe_io()
+        io_descriptions, _ = describe_io(io_name, raw_io_name, io_value)
+        for io_description in io_descriptions:
+            existing_io_description = LeappNode.get_io_description_by_name(io_description.name_str, current_io_list)
+            if existing_io_description is None:
+                _get_logger().error(
+                    f"Error: Reentering {self.name} with new i/o {io_description.name_str} but failed to find it in the current i/o list.\n"
+                    f"available i/o names: {[io.name_str for io in current_io_list]}"
+                )
+                raise Exception("Validation error when reentering node")
+            elif existing_io_description.tag is None:
+                # THIS STEP UPDATES THE TAG FOR FEEDBACK DETECTION
+                existing_io_description.tag = io_description.tag
+            elif existing_io_description.tag != io_description.tag:
+                _get_logger().error(
+                    f"Error: Reentering {self.name} with new i/o {io_description.name_str} \n"
+                    f"but the tag has changed from {existing_io_description.tag} to {io_description.tag}.\n"
+                    f"This can happen if some dynamic behavior is not captured by the annotations"
+                )
+                raise Exception("Validation error when reentering node")
+            
+            existing_io_description_dict = existing_io_description.dict()
+            current_io_description_dict = io_description.dict()
+
+            if not all([existing_io_description_dict[key] == current_io_description_dict[key] for key in existing_io_description_dict.keys()]):
+                _get_logger().error(
+                    f"Error: Reentering {self.name} with new i/o {io_description.name_str} \n"
+                    f"but the description has changed from {existing_io_description_dict} to {current_io_description_dict}.\n"
+                    f"This can happen if some dynamic behavior is not captured by the annotations"
+                )
+                raise Exception("Validation error when reentering node")
     
     def validate_input_and_update_tags(self, input_name, raw_input_name, input_value):
         self.validate_io_and_update_tags(input_name, raw_input_name, input_value, self.inputs)
     def validate_output_and_update_tags(self, output_name, raw_output_name, output_value):
         self.validate_io_and_update_tags(output_name, raw_output_name, output_value, self.outputs)
+    
     
     def change_input_name(self, old_name, new_name):
         _get_logger().warning(

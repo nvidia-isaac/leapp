@@ -49,8 +49,10 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
             self.assertEqual(outputs, total_outputs,
                              "Number of outputs do not match")
         if internal_connections is not None:
-            self.assertEqual(internal_connections, len(
-                leapp_annotation.detected_pipeline['data_flow']), "Number of internal connections do not match")
+            num_connections = 0
+            for _, targets in leapp_annotation.detected_pipeline['data_flow'].items():
+                num_connections += len(targets)
+            self.assertEqual(internal_connections, num_connections, "Number of internal connections do not match")
         if feedback_connections is not None:
             self.assertEqual(feedback_connections, len(
                 leapp_annotation.detected_pipeline['feedback_flow']), "Number of feedback connections do not match")

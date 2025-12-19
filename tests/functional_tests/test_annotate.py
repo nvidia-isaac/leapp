@@ -401,6 +401,306 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
         self.verify_num_connections(
             annotate, nodes=1, inputs=1, outputs=1, internal_connections=0)
         self.verify_all_models_exist('func1')
+    
+
+    def test_annotate_traced_tensors_with_feedback(self):
+        '''two traced tensor nodes.
+        the first one has 2 inputs 1 output which feeds into the second one. 
+        the output of the second one going into one of the inputs of the first one'''
+        
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        
+        # Initialize feedback tensor (will be updated each iteration)
+        feedback_tensor = torch.tensor([0.0, 0.0, 0.0])
+        
+        for i in range(20):
+            # func1: 2 inputs (input1 and feedback from func2), 1 output
+            input1, feedback_tensor = annotate.input_tensors({
+                'input1': torch.tensor([1.0, 2.0, 3.0]),
+                'feedback_in': feedback_tensor
+            }, 'func1')
+            output1 = input1 + feedback_tensor
+            annotate.output_tensors({'output1': output1}, 'func1', export_with="torch")
+            
+            # func2: takes output from func1, produces output that feeds back to func1
+            input2 = annotate.input_tensors({'input2': output1}, 'func2')
+            output2 = input2 * 2.0
+            annotate.output_tensors({'output2': output2}, 'func2', export_with="torch")
+            
+            # Update feedback tensor for next iteration
+            feedback_tensor = output2
+        
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        
+        # 2 nodes, 1 external input (input1), 1 external output (output2)
+        # 1 internal connection (func1 -> func2)
+        # 1 feedback connection (func2 -> func1)
+        self.verify_num_connections(
+            annotate, nodes=2, inputs=1, outputs=0, 
+            internal_connections=1, feedback_connections=1)
+        self.verify_all_models_exist('func1', 'func2')
+
+    def test_annotate_traced_tensors_three_node_chain_with_feedback(self):
+        '''Three node chain where the last node feeds back to the first.
+        func1 -> func2 -> func3 -> (feedback to func1)'''
+        
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        
+        feedback_tensor = torch.tensor([0.0, 0.0, 0.0])
+        
+        for i in range(10):
+            # func1: external input + feedback from func3
+            input1, fb = annotate.input_tensors({
+                'input1': torch.tensor([1.0, 2.0, 3.0]),
+                'feedback': feedback_tensor
+            }, 'func1')
+            out1 = input1 + fb
+            annotate.output_tensors({'out1': out1}, 'func1', export_with="torch")
+            
+            # func2: middle of the chain
+            in2 = annotate.input_tensors({'in2': out1}, 'func2')
+            out2 = in2 * 2.0
+            annotate.output_tensors({'out2': out2}, 'func2', export_with="torch")
+            
+            # func3: end of chain, output feeds back to func1
+            in3 = annotate.input_tensors({'in3': out2}, 'func3')
+            out3 = in3 - 1.0
+            annotate.output_tensors({'out3': out3}, 'func3', export_with="torch")
+            
+            feedback_tensor = out3
+        
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        
+        # 3 nodes, 1 external input, 0 external outputs (all internal/feedback)
+        # 2 internal connections (func1->func2, func2->func3)
+        # 1 feedback connection (func3->func1)
+        self.verify_num_connections(
+            annotate, nodes=3, inputs=1, outputs=0,
+            internal_connections=2, feedback_connections=1)
+        self.verify_all_models_exist('func1', 'func2', 'func3')
+
+    def test_annotate_traced_tensors_with_complex_nested_io(self):
+        '''Single node with complex nested dict/list IO run multiple times'''
+        
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        
+        for i in range(10):
+            # Complex nested input structure
+            tensor_list, single_tensor = annotate.input_tensors({
+                'tensor_list': [
+                    torch.tensor([1.0, 2.0, 3.0]),
+                    torch.tensor([4.0, 5.0, 6.0])
+                ],
+                'single_tensor': torch.tensor([7.0, 8.0, 9.0])
+            }, 'complex_node')
+            
+            # Process the nested inputs
+            list_sum = tensor_list[0] + tensor_list[1]
+            combined = list_sum + single_tensor
+            
+            # Complex nested output structure
+            annotate.output_tensors({
+                    'sum': list_sum,
+                    'combined': combined}, 'complex_node', export_with="torch")
+        
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        
+        # 1 node, 3 flattened inputs, 2 flattened outputs
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=3, outputs=2, internal_connections=0)
+        self.verify_all_models_exist('complex_node')
+
+    def test_annotate_traced_tensors_diamond_with_feedback(self):
+        '''Diamond pattern: func1 splits into func2a and func2b, 
+        which merge at func3. func3 feeds back to func1.
+        
+              -> func2a ->
+        func1              func3 -> (feedback to func1)
+              -> func2b ->
+        '''
+        
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        
+        feedback_tensor = torch.tensor([0.0, 0.0, 0.0])
+        
+        for i in range(10):
+            # func1: source node with feedback
+            in1, fb = annotate.input_tensors({
+                'input': torch.tensor([1.0, 2.0, 3.0]),
+                'feedback': feedback_tensor
+            }, 'func1')
+            out1 = in1 + fb
+            annotate.output_tensors({'out': out1}, 'func1', export_with="torch")
+            
+            # func2a: first parallel branch
+            in2a = annotate.input_tensors({'input2a': out1}, 'func2a')
+            out2a = in2a * 2.0
+            annotate.output_tensors({'out': out2a}, 'func2a', export_with="torch")
+            
+            # func2b: second parallel branch
+            in2b = annotate.input_tensors({'input2b': out1}, 'func2b')
+            out2b = in2b * 3.0
+            annotate.output_tensors({'out': out2b}, 'func2b', export_with="torch")
+            
+            # func3: merge node, output feeds back
+            in3a, in3b = annotate.input_tensors({
+                'in_a': out2a,
+                'in_b': out2b
+            }, 'func3')
+            out3 = in3a + in3b
+            annotate.output_tensors({'out': out3}, 'func3', export_with="torch")
+            
+            feedback_tensor = out3
+        
+        annotate.stop()
+        annotate.compile_graph(visualize=True)
+
+        # 4 nodes, 1 external input
+        # 3 internal connections (func1->func2a, func1->func2b, func2a->func3, func2b->func3)
+        # Actually func2a->func3 and func2b->func3 are 2 separate connections
+        # 1 feedback connection (func3->func1)
+        self.verify_num_connections(
+            annotate, nodes=4, inputs=1, outputs=0,
+            internal_connections=4, feedback_connections=1)
+        self.verify_all_models_exist('func1', 'func2a', 'func2b', 'func3')
+
+    def test_annotate_traced_tensors_two_independent_feedback_loops(self):
+        '''Two independent feedback loops running in parallel.
+        Loop A: funcA1 -> funcA2 -> (feedback to funcA1)
+        Loop B: funcB1 -> funcB2 -> (feedback to funcB1)
+        '''
+        
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        
+        feedback_a = torch.tensor([0.0, 0.0, 0.0])
+        feedback_b = torch.tensor([0.0, 0.0, 0.0])
+        
+        for i in range(10):
+            # Loop A
+            inA1, fbA = annotate.input_tensors({
+                'input': torch.tensor([1.0, 2.0, 3.0]),
+                'feedback': feedback_a
+            }, 'funcA1')
+            outA1 = inA1 + fbA
+            annotate.output_tensors({'out': outA1}, 'funcA1', export_with="torch")
+            
+            inA2 = annotate.input_tensors({'inputA2': outA1}, 'funcA2')
+            outA2 = inA2 * 2.0
+            annotate.output_tensors({'out': outA2}, 'funcA2', export_with="torch")
+            feedback_a = outA2
+            
+            # Loop B (independent)
+            inB1, fbB = annotate.input_tensors({
+                'input': torch.tensor([4.0, 5.0, 6.0]),
+                'feedback': feedback_b
+            }, 'funcB1')
+            outB1 = inB1 - fbB
+            annotate.output_tensors({'out': outB1}, 'funcB1', export_with="torch")
+            
+            inB2 = annotate.input_tensors({'inputB2': outB1}, 'funcB2')
+            outB2 = inB2 / 2.0
+            annotate.output_tensors({'out': outB2}, 'funcB2', export_with="torch")
+            feedback_b = outB2
+        
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        
+        # 4 nodes, 2 external inputs (one per loop)
+        # 2 internal connections (funcA1->funcA2, funcB1->funcB2)
+        # 2 feedback connections (funcA2->funcA1, funcB2->funcB1)
+        self.verify_num_connections(
+            annotate, nodes=4, inputs=2, outputs=0,
+            internal_connections=2, feedback_connections=2)
+        self.verify_all_models_exist('funcA1', 'funcA2', 'funcB1', 'funcB2')
+
+    def test_annotate_traced_tensors_nested_dict_multiple_runs(self):
+        '''Test nested dict input structure with multiple iterations.
+        This tests that validation correctly handles nested structures on reentry.'''
+        
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        
+        for i in range(10):
+            # Nested dict input - {'group': {'a': tensor, 'b': tensor}}
+            inputs = annotate.input_tensors({
+                'group': {
+                    'x': torch.tensor([1.0, 2.0, 3.0]),
+                    'y': torch.tensor([4.0, 5.0, 6.0])
+                }
+            }, 'nested_node')
+            
+            # Access nested structure
+            result = inputs['x'] + inputs['y']
+            
+            annotate.output_tensors({'result': result}, 'nested_node', export_with="torch")
+        
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        
+        # 1 node, 2 flattened inputs (group_x, group_y), 1 output
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=2, outputs=1, internal_connections=0)
+        self.verify_all_models_exist('nested_node')
+
+    def test_annotate_traced_tensors_nested_list_multiple_runs(self):
+        '''Test nested list input structure with multiple iterations.'''
+        
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        
+        for i in range(10):
+            # List input that gets flattened
+            tensor_list = annotate.input_tensors({
+                'tensors': [
+                    torch.tensor([1.0, 2.0, 3.0]),
+                    torch.tensor([4.0, 5.0, 6.0]),
+                    torch.tensor([7.0, 8.0, 9.0])
+                ]
+            }, 'list_node')
+            
+            # Access list elements
+            result = tensor_list[0] + tensor_list[1] + tensor_list[2]
+            
+            annotate.output_tensors({'result': result}, 'list_node', export_with="torch")
+        
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        
+        # 1 node, 3 flattened inputs, 1 output
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=3, outputs=1, internal_connections=0)
+        self.verify_all_models_exist('list_node')
+
+    def test_annotate_traced_tensors_mixed_nested_structure_multiple_runs(self):
+        '''Test mixed nested structure (dict containing list) with multiple iterations.'''
+        
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        
+        for i in range(10):
+            # Mixed nested: dict with both list and scalar tensor
+            inputs = annotate.input_tensors({
+                'batch': [
+                    torch.tensor([1.0, 2.0]),
+                    torch.tensor([3.0, 4.0])
+                ],
+                'scale': torch.tensor([2.0])
+            }, 'mixed_node')
+            
+            # Access mixed structure - inputs should be (list, tensor) tuple
+            batch_list, scale = inputs
+            result = (batch_list[0] + batch_list[1]) * scale
+            
+            annotate.output_tensors({'result': result}, 'mixed_node', export_with="torch")
+        
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        
+        # 1 node, 3 flattened inputs (batch_0, batch_1, scale), 1 output
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=3, outputs=1, internal_connections=0)
+        self.verify_all_models_exist('mixed_node')
+
 
 class TestAnnotateMixed(LEAPPFunctionalTestBase):
     def test_mixing_annotated_tensors_and_method_nodes(self):
