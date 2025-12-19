@@ -157,17 +157,6 @@ class CombinedNode(LeappNode):
 
         return list(inputs.values()), list(outputs.values())
 
-    def get_description(self):
-        description = super().get_description()
-        description['formatting']['input_format'] = CompactYamlList(
-            [input.name for input in self.inputs])
-        if len(self.outputs) == 1:
-            description['formatting']['output_format'] = self.outputs[0].name
-        else:
-            description['formatting']['output_format'] = CompactYamlList(
-                [output.name for output in self.outputs])
-        return description
-
     def _get_per_node_io_formatting(self, nodes: List[LeappNode]):
         node_configs = {}
         for node in nodes:

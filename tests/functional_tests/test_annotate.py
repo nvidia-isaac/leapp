@@ -125,7 +125,7 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
         annotate.compile_graph(visualize=False)
         self.assertEqual(len(annotate.nodes), 1)
         self.assertEqual(len(annotate.nodes[funcA.__name__].inputs), 3)
-        input_format = annotate.detected_nodes[funcA.__name__]['formatting']['input_format']
+        input_format = [input['name'] for input in annotate.detected_nodes[funcA.__name__]['inputs']]
         self.assertEqual(input_format, ['input1', 'input4', 'input5'])
         model_info = self.inspect_torchscript_model(funcA.__name__)
         self.assertEqual(len(model_info['inputs']), 4)

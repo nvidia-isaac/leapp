@@ -127,10 +127,10 @@ class LeappNode():
             'enable_fp16': self.enable_fp16,  # legacy for holoinfer
             'enable_cuda_graphs': self.enable_cuda_graphs,  # legacy for holoinfer
         }
-        description['formatting'] = {
-            'input_format': input_formats,
-            'output_format': output_formats,
-        }
+        # description['formatting'] = {
+        #     'input_format': input_formats,
+        #     'output_format': output_formats,
+        # }
 
         return description
 
