@@ -173,8 +173,24 @@ class TracedTensorNode(LeappNode):
 
         # Erase nodes in reverse order to avoid issues with dependencies
         for node in reversed(nodes_to_remove):
+            if node.op == "placeholder":
+                input_description = LeappNode.get_io_description_by_name(node.name, self.inputs)
+                if input_description is None:
+                    _get_logger().error(f"Error: when building the graph module for {self.name}")
+                self.trimmed_inputs.add(input_description.name_str)
+
             if len(node.users) == 0:
                 self.graph.erase_node(node)
+        
+        if len(self.trimmed_inputs) > 0:
+            _get_logger().warning(f"Warning: when building the graph module for {self.name}, "
+                                  "detected the following inputs are not used in the computation or directly returned as output: "
+                                  f"{self.trimmed_inputs} \n"
+                                  "For clarity and efficiency, consider removing these inputs")
+            
+            # Remove trimmed inputs from self.inputs
+            self.inputs = [inp for inp in self.inputs if inp.name_str not in self.trimmed_inputs]
+
 
         # Check if graph already has an output node
         has_output = any(node.op == "output" for node in self.graph.nodes)

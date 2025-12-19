@@ -98,6 +98,15 @@ class TracedTensor:
                 torch_func = getattr(torch, func_name, None)
                 if torch_func is not None and callable(torch_func):
                     return torch_func
+                
+                # Handle in-place operations (e.g., add_ -> torch.add)
+                # In-place methods end with '_' but torch.* functions don't
+                if func_name.endswith('_') and len(func_name) > 1:
+                    base_name = func_name[:-1]  # Remove trailing underscore
+                    torch_func = getattr(torch, base_name, None)
+                    if torch_func is not None and callable(torch_func):
+                        return torch_func
+                
                 # Log warning if we couldn't find the equivalent torch function
                 if context is not None:
                     _get_logger().warning(

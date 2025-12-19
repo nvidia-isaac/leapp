@@ -382,6 +382,54 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
             annotate, nodes=1, inputs=10, outputs=10, internal_connections=0)
         self.verify_all_models_exist('func_combined')
     
+    def test_annotate_node_with_trimmed_inputs(self):
+        '''test the situation where the node has inputs that are not used in the computation'''
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        for i in range(10):
+            tensor1 = annotate.input_tensors({'input1': torch.tensor([1.0, 2.0, 3.0])}, 'func1')
+            tensor2 = annotate.input_tensors({'input2': torch.tensor([4.0, 5.0, 6.0])}, 'func1')
+            tensor3 = tensor1 + 20
+            annotate.output_tensors({'output1': tensor3}, 'func1', export_with="torch")
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+
+        result = self.inspect_torchscript_model('func1')
+        self.assertTrue('input2' not in result['inputs'], "input2 should be trimmed from the model")
+        self.assertTrue(len(result['inputs']) == 2, "Unexpected number of inputs in the model")
+        self.assertTrue(len(result['outputs']) == 1, "Unexpected number of outputs in the model")
+
+        self.verify_all_models_exist('func1')
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=1, outputs=1, internal_connections=0)
+    
+    def test_annotate_node_with_many_trimmed_inputs(self):
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        for i in range(5):
+            inputs = [torch.tensor([float(i), float(i+1), float(i+2)], dtype=torch.float32) for i in range(20)]
+            inputs = annotate.input_tensors({'inputs': inputs}, 'func1')
+            
+            # Start with first traced input, then accumulate (keeps output in traced graph)
+            output = torch.zeros(3, dtype=torch.float32)
+            for i in range(0, 15):
+                output = output + inputs[i]
+            
+            annotate.output_tensors({'output': output}, 'func1', export_with="torch")
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+
+        result = self.inspect_torchscript_model('func1')
+        self.assertEqual(len(result['inputs']), 16, "Unexpected number of inputs in the model")
+        self.assertEqual(len(result['outputs']), 1, "Unexpected number of outputs in the model")
+
+        self.verify_all_models_exist('func1')
+        # 15 inputs used (inputs 0-14), 5 trimmed (inputs 15-19)
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=15, outputs=1, internal_connections=0)
+        
+        inputs = [torch.tensor([float(i), float(i+1), float(i+2)], dtype=torch.float32) for i in range(15)]
+        self.verify_single_torchscript_model_expected_value(
+            [inputs], [output], 'func1')
+    
     def test_annotate_multiple_runs(self):
         annotate.start(name=self.TEST_GRAPH_NAME)
 

@@ -76,6 +76,8 @@ class LeappNode():
         self.outputs = []
         self.input_formats = []
         self.output_formats = []
+        # trimmed inputs are inputs that are not used in the computation or directly returned as output
+        self.trimmed_inputs = set()
 
     @property
     def captured(self):
@@ -255,6 +257,9 @@ class LeappNode():
         '''
         io_descriptions, _ = describe_io(io_name, raw_io_name, io_value)
         for io_description in io_descriptions:
+            if io_description.name_str in self.trimmed_inputs:
+                # we skip validation for inputs that are not used in the model
+                continue
             existing_io_description = LeappNode.get_io_description_by_name(io_description.name_str, current_io_list)
             if existing_io_description is None:
                 _get_logger().error(
