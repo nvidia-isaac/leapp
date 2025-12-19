@@ -30,7 +30,10 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
     
     def verify_all_models_exist(self, *model_names):
         for model_name in model_names:
-            self.assertTrue(os.path.exists(os.path.join(self.TEST_GRAPH_NAME, f"{model_name}.pt")),
+            model_exists = False
+            model_exists |= os.path.exists(os.path.join(self.TEST_GRAPH_NAME, f"{model_name}.pt"))
+            model_exists |= os.path.exists(os.path.join(self.TEST_GRAPH_NAME, f"{model_name}.onnx"))
+            self.assertTrue(model_exists,
                             f"Model {model_name} does not exist")
 
     def verify_num_connections(self, leapp_annotation, nodes=None, inputs=None, outputs=None,

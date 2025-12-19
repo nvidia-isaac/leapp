@@ -488,6 +488,8 @@ class ExportManager:
     def mirror_leapp_tags(self, source, target):
         if not ExportManager._interpret_graph:
             return
+        if TracingLock().is_active:
+            raise Exception("Error: detected calling mirror_leapp_tags while tracing a function/block. this function is only valid outside of nodes")
         try:
             if not verify_data_exact_match(source, target):
                 _get_logger().error(

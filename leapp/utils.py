@@ -405,6 +405,10 @@ def verify_data_exact_match(source_data, target_data):
         target_data, (str, bytes, torch.Tensor))
     source_is_dict_like = isinstance(source_data, collections.abc.Mapping)
     target_is_dict_like = isinstance(target_data, collections.abc.Mapping)
+    if isinstance(source_data, TracedTensor):
+        source_data = source_data.tensor
+    if isinstance(target_data, TracedTensor):
+        target_data = target_data.tensor
 
     # If one is list-like and the other is not, they don't match
     if source_is_list_like != target_is_list_like:
@@ -974,6 +978,10 @@ def mirror_all_tensor_tags(source, target):
     '''
     Mirror all tensor tags from source to target.
     '''
+    if isinstance(source, TracedTensor):
+        source = source.tensor
+    if isinstance(target, TracedTensor):
+        target = target.tensor
     if isinstance(source, torch.Tensor) and isinstance(target, torch.Tensor):
         if hasattr(source, 'leapp_tag'):
             tag_tensor(target, source.leapp_tag)
