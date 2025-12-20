@@ -12,7 +12,7 @@ A Python package for tracing and exporting computational graphs from PyTorch cod
 - 🔧 **BYOM (Bring Your Own Model)**: Works with preexported models - simply load and integrate your existing trained models
 - 📊 **Automatic Graph Visualization**: Generate graph diagrams
 - 📝 **YAML Specifications**: Complete graph metadata for deployment
-- 🧩 **Flexible API**: Use decorators or context managers
+- 🧩 **Flexible API**: Annotate functions, code snippets, or even individual tensors
 - 🤖 **Policy Pipelines**: Designed for complex multi-component policies that conain pre and post processing
 - ⚡ **Lightweight**: Minimal code insertions to capture entire compute graphs
 
@@ -38,9 +38,10 @@ This demonstrates a complete robotics control pipeline that processes sensor dat
 
 ## Usage
 
-LEAPP provides two clear methods for marking nodes in your computational graph:
+LEAPP provides three methods for marking nodes in your computational graph:
 - **Decorators**: Use `@annotate.method()` to mark entire functions/methods as nodes
 - **Context Managers**: Use `with annotate.block()` to mark code blocks as nodes
+- **Traced Tensors**: Use `annotate.input_tensors()` and `annotate.output_tensors()` to programmatically define nodes by tracking tensor operations
 
 ### Method 1: Decorator Pattern
 
@@ -92,6 +93,47 @@ annotate.stop()
 annotate.compile_graph()
 ```
 
+### Method 3: Traced Tensors Pattern
+
+TracedTensors provide the most flexible approach, allowing you to programmatically capture tensor operations without decorators or context managers. This is especially useful for dynamic workflows or when integrating with existing code.
+
+```python
+import torch
+from leapp import annotate
+
+annotate.start(name="my_graph")
+
+# Create traced inputs - returns TracedTensor objects that record operations
+joint_pos, joint_vel = annotate.input_tensors({
+    'joint_pos': torch.randn(12),
+    'joint_vel': torch.randn(12)
+}, 'preprocessing')
+
+# Perform operations - all ops are automatically traced
+normalized_pos = joint_pos / 3.14
+normalized_vel = joint_vel / 10.0
+combined = torch.cat([normalized_pos, normalized_vel])
+
+# Mark outputs and specify export format
+annotate.output_tensors({
+    'features': combined
+}, 'preprocessing', export_with="torch")
+
+# Chain to another node - traced tensors automatically connect nodes
+features = annotate.input_tensors({'features': combined}, 'inference')
+predictions = features @ torch.randn(24, 3)  # Simple linear transform
+annotate.output_tensors({'predictions': predictions}, 'inference', export_with="onnx")
+
+annotate.stop()
+annotate.compile_graph()
+```
+
+**Key features of Traced Tensors:**
+- Supports complex nested inputs (dicts, lists, tuples of tensors)
+- Automatically prunes unused inputs from the exported model
+- Works seamlessly with `@annotate.method()` and `annotate.block()` in the same graph
+- Supports both PyTorch and ONNX export backends
+
 ## API Reference
 
 ### ExportManager
@@ -109,6 +151,8 @@ from leapp import annotate  # Singleton, export manager
 #### Annotations
 - `method(**params)`: Decorator for functions/methods
 - `block(name, **params)`: Context manager for code blocks
+- `input_tensors(tensors_dict, node_name)`: Create traced tensor inputs for a node
+- `output_tensors(tensors_dict, node_name, **params)`: Mark traced tensor outputs and finalize a node
 
 #### Annotations Parameters
 - `node_name`: name of the node to generate

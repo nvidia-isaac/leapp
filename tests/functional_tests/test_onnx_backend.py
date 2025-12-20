@@ -172,6 +172,14 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
         conv_model = ConvModel().eval()
         example_input = torch.randn(1, 1, 8, 8, dtype=torch.float32)
         traced_conv = torch.jit.trace(conv_model, example_input)
+        
+        # Check if LLVM backend is available
+        try:
+            traced_conv(example_input)
+        except RuntimeError as e:
+            if "LLVM Backend not found" in str(e):
+                pytest.skip("LLVM Backend not available")
+            raise
 
         @annotate.method(
             export_with="onnx",
