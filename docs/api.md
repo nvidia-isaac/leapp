@@ -196,6 +196,7 @@ traced_tensors = annotate.input_tensors(tensors: dict, node_name: str)
 
 ### Notes
 
+- **Backend limitation**: Traced tensor nodes currently only support `export_with="torch"` with TorchScript export (`use_trace=False`). ONNX export is not yet supported.
 - Graph interpretation must be enabled via `start()` before calling
 - TracedTensors support most PyTorch tensor operations
 - Cannot mix TracedTensors from different node contexts in a single operation
@@ -221,8 +222,8 @@ annotate.output_tensors(tensors: dict, node_name: str, **kwargs)
 - **`node_name`** (str, required): The node name. Must match the name used in the corresponding `input_tensors()` call.
 
 - **`**kwargs`**: Export configuration options:
-  - **`export_with`** (str): Backend for exporting (e.g., `"torch"`, `"onnx"`). Required for compilation.
-  - **`backend_params`** (dict): Backend-specific parameters (e.g., `{"dynamo": False}` for ONNX)
+  - **`export_with`** (str): Backend for exporting. **Currently only `"torch"` is supported** for traced tensor nodes.
+  - **`backend_params`** (dict): Backend-specific parameters.
 
 ### Behavior
 
@@ -234,6 +235,7 @@ annotate.output_tensors(tensors: dict, node_name: str, **kwargs)
 
 ### Notes
 
+- **Backend limitation**: Traced tensor nodes currently only support `export_with="torch"` with `use_trace=False` (TorchScript). ONNX export is not yet supported for traced tensor nodes.
 - Must be called after `input_tensors()` with the same `node_name`
 - All output tensors must be derived from the corresponding input TracedTensors
 - Unused inputs are automatically detected and removed from the exported model

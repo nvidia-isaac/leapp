@@ -273,112 +273,24 @@ def main():
     annotate.compile_graph()
 ```
 
+### How LEAPP Handles Nested Structures
 
-### Debugging IO Reconciliation
+When LEAPP detects a complex nested data structure (dicts, lists, tuples) as an input or output, it automatically:
 
-When you see the warning about IO names being changed:
+1. **Flattens the structure**: Each individual tensor within the nested structure is extracted and tracked separately. For example, `state_dict['sensors']['lidar']` becomes a distinct input named `state_dict_sensors_lidar`.
 
-1. **Check the generated YAML** to see what names LEAPP assigned
-2. **Look at the error message** - it often shows the generated forward method signature
-3. **Ensure consistency** between:
-   - Function parameter names
-   - Declared input/output names in blocks
-   - Actual variable usage in your code
+2. **Generates an auto-interface**: LEAPP automatically generates wrapper code that:
+   - **On input**: Accepts flat individual tensors and reconstructs them into the nested structure that your original code expects
+   - **On output**: Takes the nested structure returned by your code and unpacks it into flat individual tensors
 
-## Using Pre-Compiled Models: Export Without a Backend
+3. **Tracks connections at tensor level**: This flattening enables LEAPP to track data flow connections between nodes at the individual tensor level, not just at the parameter level.
 
-Sometimes you have a pre-compiled model (e.g., a ONNX model, or TensorRT engine) that you want to include in your LEAPP graph without recompiling it, or there is a section of code that you want to add to the graph and provide the model details offline. LEAPP supports this use case by allowing you to set `export_with=None`.
+**The result**: All exported nodes have simple, flat tensor interfaces (no complex nested structures), while your original code continues to work with nested structures naturally. This guarantees:
+- Consistent tensor-level connection tracking across all nodes
+- Compatibility with deployment frameworks that expect flat tensor inputs/outputs
+- Clear visibility into exactly which tensors flow between which nodes
 
-### When to Use This Approach
-
-Use this when you have:
-- Pre-compiled models from external sources
-- Models that were optimized with custom compilation pipelines
-- Legacy models that you want to integrate into your graph
-- Models that require special compilation flags or tools not supported by LEAPP's backends
-
-### Basic Usage
-
-Instead of providing a backend name like `"torch"` or `"onnx"`, you can set `export_with=None` and specify the model path in `backend_params`:
-
-```python
-import torch
-from leapp import annotate
-
-def use_precompiled_model():
-    annotate.start(name="precompiled_example")
-    
-    # Some input data
-    input_data = torch.randn(1, 10)
-    
-    # Reference a pre-compiled model without recompiling
-    with annotate.block("precompiled_inference",
-                        inputs=["input_data"],
-                        outputs=["predictions"],
-                        export_with=None,
-                        backend_params={"model_path": "/path/to/model.pt"}):
-        # Load and use the pre-compiled model
-        model = torch.jit.load("/path/to/model.pt")
-        predictions = model(input_data)
-    
-    annotate.stop()
-    annotate.compile_graph()
-    return predictions
-```
-
-### Backend Parameters for None Export
-
-When using `export_with=None`, the following `backend_params` are available:
-
-- **`model_path`** (optional): Path to the pre-compiled model file. If the model path is not provided a warning will be printed and the model is expected to be manually filled in at a later time.
-- **`copy_original_model`** (optional): If `True`, copies the model file to the LEAPP output directory. If `False` (default), the YAML will reference the original path.
-
-```python
-@annotate.method(
-    export_with=None,
-    backend_params={
-        "model_path": "/models/my_optimized_model.pt",
-        "copy_original_model": True  # Copy model to output directory
-    }
-)
-def inference_with_precompiled(data):
-    model = torch.jit.load("/models/my_optimized_model.pt")
-    return model(data)
-```
-
-### Important Considerations
-
-**⚠️ No Compilation or Validation**
-
-When using `export_with=None`:
-- LEAPP does **not** compile or modify the model
-- LEAPP does **not** validate that the model exists during tracing
-- The model path is only verified during `compile_graph()` when generating the YAML
-
-**⚠️ Input/Output Shape Tracing**
-
-LEAPP still traces the input and output shapes based on the actual data flowing through your code. Make sure:
-- The tensor shapes you use during tracing match what your pre-compiled model expects
-- You provide representative data shapes for accurate graph generation
-
-**⚠️ Model Path in Generated YAML**
-
-If `copy_original_model=False` (default):
-- The YAML will contain the original absolute path to the model
-- Ensure the model is accessible at that path in your deployment environment
-- Consider using relative paths or environment variables for portability
-
-If `copy_original_model=True`:
-- The model is copied to the LEAPP output directory
-- The YAML references the copied model
-- This increases output directory size but improves portability
-
-### Best Practices
-
-1. **Use absolute paths during development**: Makes debugging easier
-2. **Copy models for deployment**: Set `copy_original_model=True` for production bundles
-3. **Verify model compatibility**: Ensure your pre-compiled model's input/output shapes match the traced shapes
-4. **Document model provenance**: Add comments explaining where the pre-compiled model came from and how it was created
+For example, in the code above, the `process_robot_state` node's exported model will have 4 separate tensor inputs (`state_dict_position`, `state_dict_velocity`, `state_dict_sensors_lidar`, `state_dict_sensors_camera`) rather than a single complex dictionary input.
 
 ## IO Reconciliation Pitfalls
 
@@ -453,6 +365,20 @@ annotate.stop()
 annotate.compile_graph() #failure on this line
 
 ```
+
+
+### Debugging IO Reconciliation
+
+When you see the warning about IO names being changed:
+
+1. **Check the generated YAML** to see what names LEAPP assigned
+2. **Look at the error message** - it often shows the generated forward method signature
+3. **Ensure consistency** between:
+   - Function parameter names
+   - Declared input/output names in blocks
+   - Actual variable usage in your code
+
+   
 ## Summary
 
 Diving deeper into LEAPP reveals its flexibility in handling complex situations:
