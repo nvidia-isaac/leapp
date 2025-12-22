@@ -162,6 +162,51 @@ class DataSlicer:
 - **Class members (self.*) are automatically available** - no declaration needed (but can be explicitly listed if you want to freeze their changing values)
 - The values must be serializable for the export format you're using
 
+## Distributed input_tensors: Marking a node with a diverse source
+
+The `input_tensors` and `output_tensors` API provides a high degree of freedom when marking node bounds. While each node can only have 1 call to `output_tensors`, there can be as many calls as needed to `input_tensors`. This is crucial for capturing a node with inputs from multiple sources spanning different functions or files.
+
+```python
+import torch
+from leapp import annotate
+
+def get_lidar_data(env):
+    # imagine this function is bound to some object that data from the environment
+    # some environment setup this is not tracable because it involves the environment
+    lidar_data = env.get('lidar_data')
+    #reference the same node name
+    lidar_data = annotate.input_tensors({'lidar_data': lidar_data}, 'sensor_fusion') 
+    return lidar_data
+
+def get_camera_features(env):
+    # imagine this function is bound to some object that data from the environment
+    # some environment setup this is not tracable because it involves the environment
+    camera_features = env.get('camera_features')
+    #reference the same node name
+    camera_features = annotate.input_tensors({'camera_features': camera_features}, 'sensor_fusion')
+    return camera_features
+
+def run_pipeline():
+    annotate.start(name="distributed_inputs_example")
+    model_inputs = []
+    for feature in preconfigured_features:
+        # pulls data from get_lidar_data and get_camera_data
+        # possibly does some other processing before returning
+        model_inputs.append(feature.get(feature)) 
+    
+    # all operatons for all the nodes in features are captured
+    concatenated = torch.cat(features)
+    # Single output call closes the node. both inputs are now part of the same node
+    annotate.output_tensors({'model_input', concatenated}, 'sensor_fusion', export_with='torch')
+    
+    output = model(concatenated)
+    
+    annotate.stop()
+    annotate.compile_graph()
+```
+
+Both `input_tensors` calls reference the same node name (`'sensor_fusion'`), so they're combined into a single node with two inputs despite being in seperate locations.
+
 ## Register Buffers: Persistent State in Modules
 
 Register buffers are persistent tensors that are part of a module's state but are not parameters (they don't require gradients). They're useful for maintaining running statistics, normalization factors, or any persistent state across forward passes.
@@ -207,7 +252,7 @@ class RobotController:
         return normalized_data
 ```
 
-**Important:** Register buffers behave similarly to PyTorch's `register_buffer()` method. For more details on PyTorch buffers, see [the official documentation](https://docs.pytorch.org/docs/stable/generated/torch.nn.Module.html#torch.nn.Module.register_buffer).
+**Important:** Register buffers ueses PyTorch's `register_buffer()` method. For more details on PyTorch buffers, see [the official documentation](https://docs.pytorch.org/docs/stable/generated/torch.nn.Module.html#torch.nn.Module.register_buffer).
 
 **Key Differences:**
 - `environment_constants`: Values frozen at export time, won't change
