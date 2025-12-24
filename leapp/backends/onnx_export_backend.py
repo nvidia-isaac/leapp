@@ -1,7 +1,6 @@
 import torch
 from typing import Tuple
 from leapp.backends.export_backend import ExportBackend, SimplifiedONNXProgram
-from leapp.utils import resolve_tensor_descriptions_to_values
 from leapp._logging import _get_logger
 import os
 import onnx
@@ -13,17 +12,17 @@ class ONNXExportBackend(ExportBackend):
         return "onnx"
 
     def compile_dynamo(self, m):
-        input_values = tuple([resolve_tensor_descriptions_to_values(param_format)
-                              for param_format in self.node_context.input_formats])
+        # Get flat tensor values directly from inputs (not input_formats which preserves nested structure)
+        input_values = tuple([tensor_desc.value for tensor_desc in self.node_context.inputs])
         onnx_program = torch.onnx.export(
             m,
             input_values,
             None,  # no need to save the model
             dynamo=True,
             input_names=[
-                param_format.name for param_format in self.node_context.input_formats],
+                tensor_desc.name for tensor_desc in self.node_context.inputs],
             output_names=[
-                param_format.name for param_format in self.node_context.output_formats],
+                tensor_desc.name for tensor_desc in self.node_context.outputs],
 
             verify=self.backend_params.get('verify', True),
             optimize=self.backend_params.get('optimize', True),
@@ -37,8 +36,8 @@ class ONNXExportBackend(ExportBackend):
         return onnx_program
 
     def compile_torchscript(self, m):
-        input_values = tuple([resolve_tensor_descriptions_to_values(param_format)
-                              for param_format in self.node_context.input_formats])
+        # Get flat tensor values directly from inputs (not input_formats which preserves nested structure)
+        input_values = tuple([tensor_desc.value for tensor_desc in self.node_context.inputs])
 
         with tempfile.TemporaryDirectory() as tmpdir:
             save_path = os.path.join(tmpdir, "model.onnx")
@@ -48,9 +47,9 @@ class ONNXExportBackend(ExportBackend):
                 save_path,
                 dynamo=False,
                 input_names=[
-                    param_format.name for param_format in self.node_context.input_formats],
+                    tensor_desc.name for tensor_desc in self.node_context.inputs],
                 output_names=[
-                    param_format.name for param_format in self.node_context.output_formats],
+                    tensor_desc.name for tensor_desc in self.node_context.outputs],
 
                 verbose=_get_logger().is_verbose(),
                 report=self.backend_params.get('report', False),

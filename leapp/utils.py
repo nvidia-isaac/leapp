@@ -27,6 +27,7 @@ import collections.abc
 from dataclasses import dataclass
 from typing import Optional, Any, Dict, Tuple
 from leapp.leapp_graph.traced_tensor import TracedTensor
+from leapp._logging import _get_logger
 
 
 def extract_source_from_line_range(executed_lines, context_name):
@@ -540,9 +541,10 @@ def extract_return_names(func):
         return ["output1"]
 
 
-def map_from_torch_dtype(notation):
+def map_from_torch_dtype(notation, dtype):
     if notation == "prefix":
-        return {
+        map = {
+            #common dtypes
             torch.float64: "kFloat64",
             torch.float32: "kFloat32",
             torch.float16: "kFloat16",
@@ -551,9 +553,13 @@ def map_from_torch_dtype(notation):
             torch.uint8: "kUInt8",
             torch.int8: "kInt8",
             torch.bool: "kBool",
+
+            # other dtypes
+            torch.bfloat16: "kBFloat16",
         }
     elif notation == "python":
-        return {
+        map = {
+            #common dtypes
             torch.float64: "float64",
             torch.float32: "float32",
             torch.float16: "float16",
@@ -562,9 +568,17 @@ def map_from_torch_dtype(notation):
             torch.uint8: "uint8",
             torch.int8: "int8",
             torch.bool: "bool",
+
+            # other dtypes
+            torch.bfloat16: "bfloat16",
         }
     else:
         raise ValueError(f"Unsupported notation: {notation}")
+    
+    if dtype not in map:
+        raise ValueError(f"{dtype} tensors detected but not supported for export.")
+    
+    return map[dtype]
 
 
 def flatten_io_structure(data, name_str):
@@ -588,7 +602,7 @@ def describe_io_helper(data, name_str, dtype_notation):
     if isinstance(data, collections.abc.Sequence) and not isinstance(data, (str, bytes, torch.Tensor)):
         if not isinstance(data, list):
             type_name = type(data).__name__
-            print(
+            _get_logger().warning(
                 f"Input/Output '{name_str}' has list-like type '{type_name}' which will be "
                 f"treated as 'list'. Ensure the runtime can handle this substitution.")
 
@@ -603,7 +617,7 @@ def describe_io_helper(data, name_str, dtype_notation):
     elif isinstance(data, collections.abc.Mapping):
         if not isinstance(data, dict):
             type_name = type(data).__name__
-            print(
+            _get_logger().warning(
                 f"Input/Output '{name_str}' has dict-like type '{type_name}' which will be "
                 f"treated as 'dict'. Ensure the runtime can handle this substitution.")
 
@@ -622,7 +636,7 @@ def describe_io_helper(data, name_str, dtype_notation):
         # Create TensorDescription dataclass instance
         tensor_desc = TensorDescription(
             name=name_str,
-            dtype=map_from_torch_dtype(dtype_notation)[data.dtype],
+            dtype=map_from_torch_dtype(dtype_notation, data.dtype),
             shape=CompactYamlList(data.shape),
             type="tensor",
             tag=tag,

@@ -429,6 +429,469 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
         annotate.compile_graph(visualize=False)
         self.verify_all_models_exist('reduction_ops')
 
+    def test_onnx_dict_inputs_to_list_outputs(self):
+        """Test ONNX export with dict-like inputs and list-like outputs.
+        
+        This tests that the ONNX exporter correctly handles:
+        - Flattening dict inputs into individual tensor inputs
+        - Packing multiple outputs into a list
+        """
+
+        @annotate.method(export_with="onnx")
+        def dict_to_list(inputs: dict):
+            a = inputs['a']
+            b = inputs['b']
+            # Return as a list of outputs
+            sum_result = a + b
+            diff_result = a - b
+            return [sum_result, diff_result]
+
+        input_dict = {
+            'a': torch.randn(3, 4, dtype=torch.float32),
+            'b': torch.randn(3, 4, dtype=torch.float32),
+        }
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        dict_to_list(input_dict)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('dict_to_list')
+
+    def test_onnx_list_inputs_to_dict_outputs(self):
+        """Test ONNX export with list-like inputs and dict-like outputs.
+        
+        This tests that the ONNX exporter correctly handles:
+        - Flattening list inputs into individual tensor inputs
+        - Unpacking dict outputs into individual tensors
+        """
+
+        @annotate.method(export_with="onnx")
+        def list_to_dict(inputs: list):
+            a = inputs[0]
+            b = inputs[1]
+            # Return as a dict of outputs
+            return {
+                'sum': a + b,
+                'product': a * b,
+            }
+
+        input_list = [
+            torch.randn(3, 4, dtype=torch.float32),
+            torch.randn(3, 4, dtype=torch.float32),
+        ]
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        list_to_dict(input_list)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('list_to_dict')
+
+    def test_onnx_nested_dict_input(self):
+        """Test ONNX export with deeply nested dict input structure."""
+
+        @annotate.method(export_with="onnx")
+        def process_nested_dict(nested: dict):
+            # Access deeply nested values
+            a = nested['level1']['a']
+            b = nested['level1']['b']
+            c = nested['level2']['c']
+            return a + b + c
+
+        nested_input = {
+            'level1': {
+                'a': torch.randn(3, 4, dtype=torch.float32),
+                'b': torch.randn(3, 4, dtype=torch.float32),
+            },
+            'level2': {
+                'c': torch.randn(3, 4, dtype=torch.float32),
+            }
+        }
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        process_nested_dict(nested_input)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('process_nested_dict')
+
+    def test_onnx_nested_list_input(self):
+        """Test ONNX export with nested list input structure."""
+
+        @annotate.method(export_with="onnx")
+        def process_nested_list(nested: list):
+            # Access nested list values
+            a = nested[0][0]
+            b = nested[0][1]
+            c = nested[1][0]
+            return a * b + c
+
+        nested_input = [
+            [torch.randn(3, 4, dtype=torch.float32), torch.randn(3, 4, dtype=torch.float32)],
+            [torch.randn(3, 4, dtype=torch.float32)],
+        ]
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        process_nested_list(nested_input)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('process_nested_list')
+
+    def test_onnx_mixed_dict_list_input(self):
+        """Test ONNX export with mixed dict and list inputs."""
+
+        @annotate.method(export_with="onnx")
+        def process_mixed_inputs(dict_input: dict, list_input: list):
+            a = dict_input['a']
+            b = dict_input['b']
+            c = list_input[0]
+            d = list_input[1]
+            return a + b, c * d
+
+        dict_input = {
+            'a': torch.randn(3, 4, dtype=torch.float32),
+            'b': torch.randn(3, 4, dtype=torch.float32),
+        }
+        list_input = [
+            torch.randn(3, 4, dtype=torch.float32),
+            torch.randn(3, 4, dtype=torch.float32),
+        ]
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        process_mixed_inputs(dict_input, list_input)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('process_mixed_inputs')
+
+    def test_onnx_nested_list_output(self):
+        """Test ONNX export with nested list output structure."""
+
+        @annotate.method(export_with="onnx")
+        def create_nested_list_output(x: torch.Tensor):
+            # Create nested list output
+            return [[x[0:1], x[1:2]], [x[2:3], x[3:4]]]
+
+        input_tensor = torch.randn(4, 4, dtype=torch.float32)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        create_nested_list_output(input_tensor)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('create_nested_list_output')
+
+    def test_onnx_dict_of_lists_output(self):
+        """Test ONNX export with dict containing list values as output."""
+
+        @annotate.method(export_with="onnx")
+        def create_dict_of_lists(x: torch.Tensor):
+            return {
+                'group_a': [x[0:1], x[1:2]],
+                'group_b': [x[2:3], x[3:4]],
+            }
+
+        input_tensor = torch.randn(4, 4, dtype=torch.float32)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        create_dict_of_lists(input_tensor)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('create_dict_of_lists')
+
+    def test_onnx_list_of_dicts_output(self):
+        """Test ONNX export with list containing dict values as output."""
+
+        @annotate.method(export_with="onnx")
+        def create_list_of_dicts(x: torch.Tensor):
+            return [
+                {'a': x[0:1], 'b': x[1:2]},
+                {'a': x[2:3], 'b': x[3:4]},
+            ]
+
+        input_tensor = torch.randn(4, 4, dtype=torch.float32)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        create_list_of_dicts(input_tensor)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('create_list_of_dicts')
+
+    def test_onnx_mixed_return_types(self):
+        """Test ONNX export with mixed return types: tensor, list, and dict."""
+
+        @annotate.method(export_with="onnx")
+        def mixed_outputs(x: torch.Tensor):
+            single = x[0:1]
+            list_out = [x[1:2], x[2:3]]
+            dict_out = {'a': x[3:4], 'b': x[4:5]}
+            return single, list_out, dict_out
+
+        input_tensor = torch.randn(5, 4, dtype=torch.float32)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        mixed_outputs(input_tensor)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('mixed_outputs')
+
+    def test_onnx_large_nested_structure(self):
+        """Test ONNX export with large nested dict/list structure (stress test)."""
+
+        @annotate.method(export_with="onnx")
+        def process_large_structure(data: dict):
+            # Process a large nested structure
+            results = []
+            for i in range(4):
+                group = data[f'group_{i}']
+                for j in range(2):
+                    results.append(group[j] * 2.0)
+            # Return sum of all processed tensors
+            return torch.stack(results).sum(dim=0)
+
+        # Create large nested structure: 4 groups, each with 2 tensors
+        large_input = {
+            f'group_{i}': [
+                torch.randn(3, 4, dtype=torch.float32) for _ in range(2)
+            ] for i in range(4)
+        }
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        process_large_structure(large_input)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('process_large_structure')
+
+    def test_onnx_deeply_nested_dict_input(self):
+        """Test ONNX export with deeply nested dict input (3+ levels)."""
+
+        @annotate.method(export_with="onnx")
+        def process_deep_dict(nested: dict):
+            # Access 3-level deep nested values
+            a = nested['l1']['l2']['l3']['a']
+            b = nested['l1']['l2']['l3']['b']
+            return a + b
+
+        deep_input = {
+            'l1': {
+                'l2': {
+                    'l3': {
+                        'a': torch.randn(3, 4, dtype=torch.float32),
+                        'b': torch.randn(3, 4, dtype=torch.float32),
+                    }
+                }
+            }
+        }
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        process_deep_dict(deep_input)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('process_deep_dict')
+
+    def test_onnx_many_tensor_inputs(self):
+        """Test ONNX export with many individual tensor inputs (stress test)."""
+
+        @annotate.method(export_with="onnx")
+        def sum_many_tensors(t0: torch.Tensor, t1: torch.Tensor, t2: torch.Tensor, 
+                             t3: torch.Tensor, t4: torch.Tensor, t5: torch.Tensor,
+                             t6: torch.Tensor, t7: torch.Tensor, t8: torch.Tensor, 
+                             t9: torch.Tensor):
+            return t0 + t1 + t2 + t3 + t4 + t5 + t6 + t7 + t8 + t9
+
+        tensors = [torch.randn(3, 4, dtype=torch.float32) for _ in range(10)]
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        sum_many_tensors(*tensors)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('sum_many_tensors')
+
+    def test_onnx_many_dict_tensor_inputs(self):
+        """Test ONNX export with dict containing many tensors."""
+
+        @annotate.method(export_with="onnx")
+        def sum_dict_tensors(data: dict):
+            total = data['t0']
+            for i in range(1, 10):
+                total = total + data[f't{i}']
+            return total
+
+        input_dict = {f't{i}': torch.randn(3, 4, dtype=torch.float32) for i in range(10)}
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        sum_dict_tensors(input_dict)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('sum_dict_tensors')
+
+    def test_onnx_split_tensor_to_many_outputs(self):
+        """Test ONNX export that splits one tensor into many outputs."""
+
+        @annotate.method(export_with="onnx")
+        def split_to_many(x: torch.Tensor):
+            # Split tensor into 8 parts
+            return [x[i:i+1] for i in range(8)]
+
+        input_tensor = torch.randn(8, 4, dtype=torch.float32)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        split_to_many(input_tensor)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('split_to_many')
+
+    def test_onnx_bidirectional_dict_list_io(self):
+        """Test ONNX export with dict and list inputs producing list and dict outputs.
+        
+        Mirrors test_export_dict_and_list_bidirectional_io from test_export_situation.py
+        """
+
+        @annotate.method(export_with="onnx")
+        def bidirectional_io(dict_input: dict, list_input: list):
+            # Dict input -> list output
+            list_out = [v for v in dict_input.values()]
+            # List input -> dict output
+            dict_out = {f'item_{i}': v for i, v in enumerate(list_input)}
+            return list_out, dict_out
+
+        dict_input = {
+            'a': torch.randn(3, 4, dtype=torch.float32),
+            'b': torch.randn(3, 4, dtype=torch.float32),
+            'c': torch.randn(3, 4, dtype=torch.float32),
+        }
+        list_input = [
+            torch.randn(3, 4, dtype=torch.float32),
+            torch.randn(3, 4, dtype=torch.float32),
+        ]
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        bidirectional_io(dict_input, list_input)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('bidirectional_io')
+
+    def test_onnx_complex_nested_dict_with_extra_input(self):
+        """Test ONNX export with nested dict input plus additional tensor input.
+        
+        Similar to test_export_nnModule_with_large_nested_dict_io from test_export_situation.py
+        """
+
+        @annotate.method(export_with="onnx")
+        def nested_with_extra(nested_input: dict, extra_tensor: torch.Tensor):
+            # Access nested values
+            nested = nested_input[0]['nested']
+            a = nested['a']
+            b = nested['b']
+            # Combine with extra tensor
+            return [a + extra_tensor, b * extra_tensor]
+
+        nested = [
+            {
+                'nested': {
+                    'a': torch.randn(3, 4, dtype=torch.float32),
+                    'b': torch.randn(3, 4, dtype=torch.float32),
+                }
+            }
+        ]
+        extra = torch.randn(3, 4, dtype=torch.float32)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        nested_with_extra(nested, extra)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('nested_with_extra')
+
+    @pytest.mark.filterwarnings("ignore:You are using the legacy TorchScript-based ONNX export")
+    @pytest.mark.filterwarnings("ignore:The feature will be removed")
+    def test_onnx_torchscript_dict_list_io(self):
+        """Test ONNX TorchScript export with dict/list I/O (non-dynamo)."""
+
+        @annotate.method(export_with="onnx", backend_params={"dynamo": False})
+        def torchscript_io(inputs: dict):
+            a = inputs['a']
+            b = inputs['b']
+            return [a + b, a - b]
+
+        input_dict = {
+            'a': torch.randn(3, 4, dtype=torch.float32),
+            'b': torch.randn(3, 4, dtype=torch.float32),
+        }
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        torchscript_io(input_dict)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('torchscript_io')
+
+    @pytest.mark.filterwarnings("ignore:You are using the legacy TorchScript-based ONNX export")
+    @pytest.mark.filterwarnings("ignore:The feature will be removed")
+    def test_onnx_torchscript_nested_inputs(self):
+        """Test ONNX TorchScript export with nested list/dict inputs (non-dynamo)."""
+
+        @annotate.method(export_with="onnx", backend_params={"dynamo": False})
+        def torchscript_nested(data: list):
+            # Nested list: [[tensor, tensor], [tensor]]
+            a = data[0][0]
+            b = data[0][1]
+            c = data[1][0]
+            return a + b + c
+
+        nested_input = [
+            [torch.randn(3, 4, dtype=torch.float32), torch.randn(3, 4, dtype=torch.float32)],
+            [torch.randn(3, 4, dtype=torch.float32)],
+        ]
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        torchscript_nested(nested_input)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('torchscript_nested')
+
+    def test_onnx_with_nn_module_and_dict_input(self):
+        """Test ONNX export with nn.Module method that takes dict input."""
+
+        class ProcessingModule(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.linear = torch.nn.Linear(4, 4)
+
+            @annotate.method(export_with="onnx")
+            def process(self, inputs: dict):
+                a = inputs['a']
+                b = inputs['b']
+                return self.linear(a + b)
+
+        module = ProcessingModule()
+        input_dict = {
+            'a': torch.randn(3, 4, dtype=torch.float32),
+            'b': torch.randn(3, 4, dtype=torch.float32),
+        }
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        module.process(input_dict)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('process')
+
+    def test_onnx_with_nn_module_and_list_output(self):
+        """Test ONNX export with nn.Module method that returns list output."""
+
+        class SplitModule(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.linear1 = torch.nn.Linear(4, 4)
+                self.linear2 = torch.nn.Linear(4, 4)
+
+            @annotate.method(export_with="onnx")
+            def split_process(self, x: torch.Tensor):
+                return [self.linear1(x), self.linear2(x)]
+
+        module = SplitModule()
+        input_tensor = torch.randn(3, 4, dtype=torch.float32)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        module.split_process(input_tensor)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('split_process')
+
 
 # ============================================================================
 # PROPOSED TESTS - POTENTIAL EDGE CASES THAT MIGHT FAIL

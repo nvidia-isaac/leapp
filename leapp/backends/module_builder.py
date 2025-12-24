@@ -4,6 +4,7 @@ import linecache
 import textwrap
 import re
 import ast
+from torch.nn.modules.lazy import LazyModuleMixin
 from leapp._logging import _get_logger
 
 from typing import Tuple, List, Dict
@@ -18,7 +19,11 @@ def get_module_template(name, parent_class, constant_attrs):
         bases = (torch.nn.Module, parent_class)
 
     def __init__(self, *args, **kwargs):
-        super(self.__class__, self).__init__(*args, **kwargs)
+        # Call torch.nn.Module.__init__ directly to set up essential module internals
+        # (_modules, _parameters, _buffers, etc.) without reinitializing the parent class.
+        # This preserves any user-modified class variables. The actual attribute duplication
+        # happens later in _duplicate_attributes().
+        torch.nn.Module.__init__(self)
         self.saved_buffers: List[str] = []
 
     def add_buffer(self, name, value):
@@ -145,6 +150,20 @@ class ModuleBuilder:
         # copy all the attributes from the original object to the module
         if 'self' in self.node_context.input_frame.f_locals:
             original_obj = self.node_context.input_frame.f_locals['self']
+
+            # Warning #1: Lazy modules may not transfer correctly
+            if isinstance(original_obj, LazyModuleMixin) and original_obj.has_uninitialized_params():
+                _get_logger().error(
+                    "Parent class contains uninitialized lazy parameters. "
+                    "Export may fail or produce incorrect results.")
+
+            # Warning #3: Check for registered hooks that may not transfer correctly
+            hook_attrs = ['_forward_hooks', '_backward_hooks', '_forward_pre_hooks', '_backward_pre_hooks']
+            for hook_attr in hook_attrs:
+                if hasattr(original_obj, hook_attr) and len(getattr(original_obj, hook_attr)) > 0:
+                    _get_logger().error(
+                        f"Parent class has registered {hook_attr}. These may not transfer correctly.")
+
             for attr_name in dir(original_obj):
                 # we don't copy any private attributes or register buffers or registered constants
                 if attr_name.startswith('__') or attr_name.endswith('__') or \
@@ -175,6 +194,20 @@ class ModuleBuilder:
                 except Exception as e:
                     _get_logger().error(
                         f"Error setting attribute {attr_name}: {e}")
+
+            # Fix #2: Also copy slotted attributes (not in __dict__)
+            for cls in type(original_obj).__mro__:
+                if hasattr(cls, '__slots__'):
+                    for slot in cls.__slots__:
+                        if slot.startswith('__') or slot.endswith('__'):
+                            continue
+                        if hasattr(original_obj, slot) and not hasattr(self.module_instance, slot):
+                            try:
+                                value = getattr(original_obj, slot)
+                                setattr(self.module_instance, slot, value)
+                                _get_logger().debug(f"Copied slotted attribute: {slot}")
+                            except Exception as e:
+                                _get_logger().error(f"Error copying slotted attribute {slot}: {e}")
 
     def _extract_source_code(self):
         executed_lines = self.node_context.executed_lines

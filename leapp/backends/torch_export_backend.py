@@ -17,7 +17,6 @@
 import torch
 import os
 from typing import Tuple
-from leapp.utils import resolve_tensor_descriptions_to_values
 from leapp.backends.export_backend import ExportBackend
 from leapp._logging import _get_logger
 
@@ -55,9 +54,8 @@ class TorchTraceExportBackend(TorchExportBackend):
                 "TorchTraceExportBackend does not support buffers, "
                 "consider using export_with='torch' without use_trace=True")
         m = self.module_builder().eval()
-        # input_formats is a list of ParameterFormat objects, resolve each one to get values
-        input_values = [resolve_tensor_descriptions_to_values(param_format)
-                        for param_format in self.node_context.input_formats]
+        # Get flat tensor values directly from inputs (not input_formats which preserves nested structure)
+        input_values = [tensor_desc.value for tensor_desc in self.node_context.inputs]
 
         compiled_model = torch.jit.trace(
             m, input_values, **self.backend_params)
