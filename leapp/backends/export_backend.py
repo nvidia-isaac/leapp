@@ -61,30 +61,33 @@ class SimplifiedONNXProgram:
     with dynamo=True, allowing the model to be called directly for inference.
     """
 
-    def __init__(self, onnx_model, device=None):
+    def __init__(self, onnx_model_path, device=None):
         """Initialize the ONNX program.
 
         Args:
-            onnx_model: The ONNX model proto.
+            onnx_model_path: Path to an ONNX file.
             device: Device to run on ('cuda', 'cpu', or None for auto-detect).
                     If None, will use CUDA if available, otherwise CPU.
         """
-        self.model_proto = onnx_model
         self._device = device
-
-        # Create ONNX Runtime session for inference
-        # Serialize model to bytes since we have it in memory
-        model_bytes = onnx_model.SerializeToString()
-
-        # Determine execution providers based on device
+        model_path = str(onnx_model_path)
+        
+        # Create session immediately from file path
+        # This is more reliable for large models with external data files
+        # The session loads everything into memory, so file can be deleted after
         providers = self._get_providers(device)
-        self._session = ort.InferenceSession(model_bytes, providers=providers)
-
-        # Cache input names in order
+        self._session = ort.InferenceSession(model_path, providers=providers)
         self._input_names = [inp.name for inp in self._session.get_inputs()]
-
-        # Track which provider is actually being used
         self._active_provider = self._session.get_providers()[0] if self._session.get_providers() else 'CPUExecutionProvider'
+        
+        # Load model with external data embedded for later save()
+        # Store model_proto directly - don't serialize/deserialize (fails for >2GB models)
+        self._model_proto = onnx.load(model_path, load_external_data=True)
+
+    @property
+    def model_proto(self):
+        """Get the ONNX model proto."""
+        return self._model_proto
 
     def _get_providers(self, device):
         """Get the list of execution providers based on device preference."""
@@ -105,9 +108,59 @@ class SimplifiedONNXProgram:
         else:
             return ['CPUExecutionProvider']
 
+    def _estimate_model_size(self):
+        """Estimate the model size in bytes by summing initializer sizes."""
+        if self._model_proto is None:
+            return 0
+        
+        total_size = 0
+        for initializer in self._model_proto.graph.initializer:
+            # Each element size depends on data type
+            # Common types: float32=4, float16=2, int64=8, int32=4
+            dtype_sizes = {
+                1: 4,   # FLOAT
+                2: 1,   # UINT8
+                3: 1,   # INT8
+                4: 2,   # UINT16
+                5: 2,   # INT16
+                6: 4,   # INT32
+                7: 8,   # INT64
+                10: 2,  # FLOAT16
+                11: 8,  # DOUBLE
+                16: 2,  # BFLOAT16
+            }
+            elem_size = dtype_sizes.get(initializer.data_type, 4)
+            num_elements = 1
+            for dim in initializer.dims:
+                num_elements *= dim
+            total_size += num_elements * elem_size
+        
+        return total_size
+
     def save(self, destination, include_initializers=True, keep_initializers_as_inputs=False):
         """Save the ONNX model to disk"""
-        onnx.save(self.model_proto, destination)
+        # 2GB threshold for protobuf limit
+        SIZE_THRESHOLD = 2 * 1024 * 1024 * 1024  # 2GB
+        
+        estimated_size = self._estimate_model_size()
+        
+        if estimated_size > SIZE_THRESHOLD:
+            # Large model - must use external data
+            _get_logger().info(
+                f"Model size (~{estimated_size / (1024**3):.2f} GB) exceeds 2GB limit, "
+                "saving with external data"
+            )
+            onnx.save(
+                self._model_proto, 
+                destination,
+                save_as_external_data=True,
+                all_tensors_to_one_file=True,
+                location=os.path.basename(destination) + ".data",
+                size_threshold=1024,
+            )
+        else:
+            # Small model - regular save
+            onnx.save(self._model_proto, destination)
 
     def __call__(self, *args):
         """Run inference on the ONNX model.

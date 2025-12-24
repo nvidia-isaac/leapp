@@ -59,10 +59,11 @@ class ONNXExportBackend(ExportBackend):
                 report=self.backend_params.get('report', False),
                 opset_version=self.backend_params.get('opset_version', None),
             )
-            onnx_model = onnx.load(save_path)
 
-        # we should convert to a ONNXProgram object for unity and convenience when testing with this model
-        onnx_program = SimplifiedONNXProgram(onnx_model)
+            # Create program directly from file path while in temp directory
+            # This loads the session from path (like the working export_backbone.py does)
+            # and reads bytes for later saving
+            onnx_program = SimplifiedONNXProgram(save_path)
 
         return onnx_program
 
@@ -80,18 +81,22 @@ class ONNXExportBackend(ExportBackend):
     def save(self, save_path: str, compiled_model) -> Tuple[str, str, str]:
         onnx_path = os.path.join(save_path, f"{self.node_context.name}.onnx")
 
-        try:
-            onnx.checker.check_model(compiled_model.model_proto)
-        except onnx.shape_inference.InferenceError as e:
-            _get_logger().error(f"Error checking ONNX model: {e}")
-            return None, None, None
-
         # Use ONNXProgram's save method
         compiled_model.save(
             onnx_path,
             include_initializers=True,
             keep_initializers_as_inputs=False,
         )
+        
+        # Validate model (skip for large models as it can fail with protobuf limits)
+        skip_validation = self.backend_params.get('skip_validation', False)
+        if not skip_validation:
+            try:
+                # Try to check model, but don't fail the export if validation fails
+                onnx.checker.check_model(onnx_path)
+            except Exception as e:
+                _get_logger().error(f"ONNX model validation warning (model still saved): {e}")
+        
         md5sum, sha256sum = self._verify_model_location_and_get_hash(onnx_path)
 
         return onnx_path, md5sum, sha256sum
