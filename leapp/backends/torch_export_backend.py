@@ -17,8 +17,9 @@
 import torch
 import os
 from typing import Tuple
-from leapp.backends.export_backend import ExportBackend
+from leapp.backends.export_backend import ExportBackend, prepare_tensors_for_export
 from leapp._logging import _get_logger
+
 
 class TorchExportBackend(ExportBackend):
     def get_backed_model_type(self):
@@ -56,6 +57,8 @@ class TorchTraceExportBackend(TorchExportBackend):
         m = self.module_builder().eval()
         # Get flat tensor values directly from inputs (not input_formats which preserves nested structure)
         input_values = [tensor_desc.value for tensor_desc in self.node_context.inputs]
+        # Clone tensors to escape inference mode (inference tensors can't participate in autograd)
+        input_values = prepare_tensors_for_export(input_values)
 
         compiled_model = torch.jit.trace(
             m, input_values, **self.backend_params)

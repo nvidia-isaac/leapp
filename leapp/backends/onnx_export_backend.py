@@ -1,6 +1,6 @@
 import torch
 from typing import Tuple
-from leapp.backends.export_backend import ExportBackend, SimplifiedONNXProgram
+from leapp.backends.export_backend import ExportBackend, SimplifiedONNXProgram, prepare_tensors_for_export
 from leapp._logging import _get_logger
 import os
 import onnx
@@ -14,6 +14,8 @@ class ONNXExportBackend(ExportBackend):
     def compile_dynamo(self, m):
         # Get flat tensor values directly from inputs (not input_formats which preserves nested structure)
         input_values = tuple([tensor_desc.value for tensor_desc in self.node_context.inputs])
+        # Clone tensors to escape inference mode (inference tensors can't participate in autograd)
+        input_values = prepare_tensors_for_export(input_values)
         onnx_program = torch.onnx.export(
             m,
             input_values,
@@ -38,6 +40,8 @@ class ONNXExportBackend(ExportBackend):
     def compile_torchscript(self, m):
         # Get flat tensor values directly from inputs (not input_formats which preserves nested structure)
         input_values = tuple([tensor_desc.value for tensor_desc in self.node_context.inputs])
+        # Clone tensors to escape inference mode (inference tensors can't participate in autograd)
+        input_values = prepare_tensors_for_export(input_values)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             save_path = os.path.join(tmpdir, "model.onnx")
