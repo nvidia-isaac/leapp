@@ -43,27 +43,28 @@ class ONNXExportBackend(ExportBackend):
         # Clone tensors to escape inference mode (inference tensors can't participate in autograd)
         input_values = prepare_tensors_for_export(input_values)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            save_path = os.path.join(tmpdir, "model.onnx")
-            torch.onnx.export(
-                m,
-                input_values,
-                save_path,
-                dynamo=False,
-                input_names=[
-                    tensor_desc.name for tensor_desc in self.node_context.inputs],
-                output_names=[
-                    tensor_desc.name for tensor_desc in self.node_context.outputs],
+        # Create temp directory manually (not context manager) so we can control its lifetime
+        tmpdir = tempfile.mkdtemp()
+        save_path = os.path.join(tmpdir, "model.onnx")
+        
+        torch.onnx.export(
+            m,
+            input_values,
+            save_path,
+            dynamo=False,
+            input_names=[
+                tensor_desc.name for tensor_desc in self.node_context.inputs],
+            output_names=[
+                tensor_desc.name for tensor_desc in self.node_context.outputs],
 
-                verbose=_get_logger().is_verbose(),
-                report=self.backend_params.get('report', False),
-                opset_version=self.backend_params.get('opset_version', None),
-            )
+            verbose=_get_logger().is_verbose(),
+            report=self.backend_params.get('report', False),
+            opset_version=self.backend_params.get('opset_version', None),
+        )
 
-            # Create program directly from file path while in temp directory
-            # This loads the session from path (like the working export_backbone.py does)
-            # and reads bytes for later saving
-            onnx_program = SimplifiedONNXProgram(save_path)
+        # Create program from file path
+        # Temp dir will be cleaned up when program is deleted
+        onnx_program = SimplifiedONNXProgram(save_path, temp_dir=tmpdir)
 
         return onnx_program
 
