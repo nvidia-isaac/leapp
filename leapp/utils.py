@@ -452,7 +452,9 @@ def verify_data_exact_match(source_data, target_data):
 def extract_return_names(func):
     """Extract variable names from return statements in the function."""
     try:
-        source = inspect.getsource(func)
+        # Unwrap decorated functions to get to the original source
+        unwrapped_func = inspect.unwrap(func)
+        source = inspect.getsource(unwrapped_func)
         # Remove leading indentation to make it valid Python code
         dedented_source = textwrap.dedent(source)
         tree = ast.parse(dedented_source)

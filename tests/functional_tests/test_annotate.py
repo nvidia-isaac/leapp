@@ -238,6 +238,89 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
         self.verify_single_torchscript_model_expected_value(
             [torch.tensor([0])], [torch.tensor([1]), torch.tensor([1])], 'counter')
 
+    def test_annotate_method_with_torch_no_grad_wrapper(self):
+        """Tests that annotate.method works with functions wrapped by multiple decorators.
+        
+        This tests that inspect.unwrap() correctly follows the __wrapped__ chain
+        through multiple decorator layers.
+        """
+        
+        # Define a function with TWO decorators stacked
+        # Both use functools.wraps internally, so inspect.unwrap() can follow the chain
+        @torch.inference_mode()
+        @torch.no_grad()
+        def wrapped_func(inputA: torch.Tensor):
+            result = inputA * 2 + 1
+            return result
+        
+        # Apply annotate.method on top of the wrapped function
+        annotated_func = annotate.method(export_with="torch")(wrapped_func)
+        
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        input_tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+        output = annotated_func(input_tensor)
+        annotate.stop()
+        
+        # Verify node was created correctly
+        self.assertEqual(len(annotate.nodes), 1)
+        self.assertIn('wrapped_func', annotate.nodes)
+        self.assertEqual(len(annotate.nodes['wrapped_func'].inputs), 1)
+        self.assertEqual(len(annotate.nodes['wrapped_func'].outputs), 1)
+        self.assertEqual(annotate.nodes['wrapped_func'].inputs[0].name, "inputA")
+        
+        # Compile the graph
+        annotate.compile_graph(visualize=False)
+        
+        # Verify model was generated
+        self.verify_all_models_exist('wrapped_func')
+        
+        # Verify the model produces correct results
+        expected_output = input_tensor * 2 + 1
+        self.verify_single_torchscript_model_expected_value(
+            [input_tensor], [expected_output], 'wrapped_func')
+
+    def test_annotate_method_with_torch_no_grad_wrapper_on_class_method(self):
+        """Tests that annotate.method works with class methods wrapped by @torch.no_grad()"""
+        
+        class MockModel:
+            def __init__(self):
+                self.scale = 3.0
+            
+            @torch.no_grad()
+            def forward(self, x: torch.Tensor):
+                result = x * self.scale
+                return result
+        
+        model = MockModel()
+        
+        # Apply annotate.method to the bound method (simulating runtime decoration)
+        model.forward = annotate.method(
+            node_name='model_forward',
+            export_with="torch"
+        )(model.forward)
+        
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        input_tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+        output = model.forward(input_tensor)
+        annotate.stop()
+        
+        # Verify node was created correctly
+        self.assertEqual(len(annotate.nodes), 1)
+        self.assertIn('model_forward', annotate.nodes)
+        self.assertEqual(len(annotate.nodes['model_forward'].inputs), 1)
+        self.assertEqual(len(annotate.nodes['model_forward'].outputs), 1)
+        self.assertEqual(annotate.nodes['model_forward'].inputs[0].name, "x")
+        
+        # Compile the graph
+        annotate.compile_graph(visualize=False)
+        
+        # Verify model was generated
+        self.verify_all_models_exist('model_forward')
+        
+        # Verify the model produces correct results
+        expected_output = input_tensor * 3.0
+        self.verify_single_torchscript_model_expected_value(
+            [input_tensor], [expected_output], 'model_forward')
 
 
 class TestAnnotateTensor(LEAPPFunctionalTestBase):

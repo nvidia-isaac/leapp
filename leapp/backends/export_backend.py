@@ -156,6 +156,12 @@ class SimplifiedONNXProgram:
             
             model_proto = onnx.load(src_path, load_external_data=True)
             data_filename = dest_filename + ".data"
+            data_path = os.path.join(dest_dir, data_filename)
+            
+            # Delete existing data file to avoid appending (ONNX appends instead of overwriting)
+            if os.path.exists(data_path):
+                os.remove(data_path)
+            
             _get_logger().info(f"Saving model to {destination} with external data in {data_filename}")
             onnx.save(
                 model_proto,

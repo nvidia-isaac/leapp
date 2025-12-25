@@ -39,15 +39,38 @@ class FunctionDecoratorNode(BlockContextNode):
             raise e
     
     def compile_trace(self, func, *args):
-        func_code = func.__code__
+        # Unwrap decorated functions to get to the original source
+        unwrapped_func = inspect.unwrap(func)
+        
+        # Warn if the function is wrapped - tracing won't trace through the wrapper
+        if unwrapped_func is not func:
+            _get_logger().warning(
+                f"Function '{func.__name__}' is wrapped by another decorator (e.g., @torch.no_grad()). "
+                f"Tracing will only capture the inner function's code, not the wrapper's behavior."
+            )
+        
+        func_code = unwrapped_func.__code__
         self.executed_lines['filename'] = func_code.co_filename
         self.executed_lines['function_name'] = func_code.co_name
 
         # Get the line range of the function
-        func_lines, start_line = inspect.getsourcelines(func)
+        try:
+            func_lines, start_line = inspect.getsourcelines(unwrapped_func)
+        except OSError as e:
+            # Source not available (e.g., C extension, built-in, or dynamically generated)
+            _get_logger().error(
+                f"Cannot inspect source of '{func.__name__}': it appears to be wrapped by a decorator "
+                f"that doesn't preserve source info. Try putting @annotate.method() as the innermost "
+                f"decorator (closest to the function definition)."
+            )
+            raise OSError(
+                f"Cannot get source lines for function '{func.__name__}'. "
+                f"If this function is wrapped by another decorator, try reordering so @annotate.method() "
+                f"is the innermost decorator."
+            ) from e
+            
         self.executed_lines['min_line'] = start_line
-        self.executed_lines['max_line'] = start_line + \
-            len(func_lines) - 1
+        self.executed_lines['max_line'] = start_line + len(func_lines) - 1
 
         # Initialize the lines set with all function lines
         self.executed_lines['lines'] = set(
@@ -83,7 +106,9 @@ class FunctionDecoratorNode(BlockContextNode):
         return trace_function
 
     def inspect_function_inputs(self, func, args, kwargs):
-        # Get parameter names from function signature
+        # NOTE: Don't use inspect.unwrap() here!
+        # inspect.signature() already follows __wrapped__ AND handles bound methods correctly.
+        # Using unwrap() would lose the bound method's self binding.
         sig = inspect.signature(func)
         param_names = list(sig.parameters.keys())
 
