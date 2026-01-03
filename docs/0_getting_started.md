@@ -240,9 +240,6 @@ models:
     parameters:
       backend: torch
       device: cuda
-      enable_cuda_graphs: false
-      enable_fp16: false
-      is_engine_path: false
       md5sum: db4183a5028b64c97cbdad1c648e568e
       model_path: control_decision.pt
       sha256sum: f70e35e6f59313bb30c04a6f1895d526c527092263396166564fbd5ea7e29079

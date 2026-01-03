@@ -59,8 +59,6 @@ class LeappNode():
     def __init__(self, name, node_index):
         self.name = name
         self.node_index = node_index
-        self.enable_fp16 = False  # legacy for holoinfer
-        self.enable_cuda_graphs = False  # legacy for holoinfer
 
         # model settings
         self._model_captured = False
@@ -122,10 +120,7 @@ class LeappNode():
             'md5sum': self.md5sum,
             'sha256sum': self.sha256sum,
             'device': self.model_device,
-            'is_engine_path': self.is_engine_path(),
             'backend': self.get_backend(),
-            'enable_fp16': self.enable_fp16,  # legacy for holoinfer
-            'enable_cuda_graphs': self.enable_cuda_graphs,  # legacy for holoinfer
         }
         # description['formatting'] = {
         #     'input_format': input_formats,

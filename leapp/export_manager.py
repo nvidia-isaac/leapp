@@ -335,8 +335,6 @@ class ExportManager:
                 - outputs: Output specifications for the node.
                 - environment_constants: Constants to capture from the environment.
                 - register_buffers: Buffers to register with the model.
-                - enable_fp16: Enable FP16 precision mode.
-                - enable_cuda_graphs: Enable CUDA graphs optimization.
 
         Returns:
             BlockTraceContext: A context manager for tracing the block.
@@ -419,8 +417,6 @@ class ExportManager:
                 - outputs: Output specifications for the node.
                 - environment_constants: Constants to capture from the environment.
                 - register_buffers: Buffers to register with the model.
-                - enable_fp16: Enable FP16 precision mode.
-                - enable_cuda_graphs: Enable CUDA graphs optimization.
 
         Returns:
             decorator: A decorator function that can be applied to functions/methods.

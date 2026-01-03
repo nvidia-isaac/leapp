@@ -98,13 +98,6 @@ class CombinedNodeModel(torch.nn.Module):
 class CombinedNode(LeappNode):
     def __init__(self, nodes: List[LeappNode],
                  node_index: int, name, backend):
-        nodes_enable_fp16 = [node.enable_fp16 for node in nodes]
-        nodes_enable_cuda_graphs = [node.enable_cuda_graphs for node in nodes]
-        if not all(node_enable_fp16 == nodes_enable_fp16[0] for node_enable_fp16 in nodes_enable_fp16):
-            raise ValueError("All nodes must have the same enable_fp16")
-        if not all(node_enable_cuda_graphs == nodes_enable_cuda_graphs[0] for node_enable_cuda_graphs in nodes_enable_cuda_graphs):
-            raise ValueError("All nodes must have the same enable_cuda_graphs")
-
         LeappNode.__init__(self, name, node_index)
 
         self.nodes = sorted(nodes, key=lambda node: node.node_index)
