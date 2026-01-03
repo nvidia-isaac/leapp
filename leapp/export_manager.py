@@ -292,7 +292,7 @@ class ExportManager:
             return
 
         if tensors_changed:
-            _get_logger().warning(f"Warning: no tensor name provided for input_tensors call in node {node_name}\n"
+            _get_logger().warning(f"Warning: no tensor name provided for output_tensors call in node {node_name}\n"
                         "Assuming default tensor name")
 
         types = set(type(tensor) for tensor in flattened_tensors.values())

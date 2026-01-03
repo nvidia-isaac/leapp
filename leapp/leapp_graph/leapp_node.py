@@ -178,11 +178,6 @@ class LeappNode():
     def get_backend(self):
         return self.export_backend.get_backed_model_type()
 
-    def is_engine_path(self):
-        if self.get_backend() == 'trt':
-            return True
-        return False
-
     def get_compiled_model(self):
         if self.compiled_model is None:
             raise Exception(
