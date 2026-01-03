@@ -95,7 +95,8 @@ class BlockContextNode(LeappNode):
         # Extract source code when tracing stops
         self.executed_lines['source_code'], message = extract_source_from_line_range(
             self.executed_lines,
-            self.name
+            self.name,
+            is_function=False  # Block contexts use With/AsyncWith AST nodes
         )
         if self.executed_lines['source_code'] != "":
             _get_logger().info(message)

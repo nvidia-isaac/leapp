@@ -1012,6 +1012,38 @@ class TestAnnotateMixed(LEAPPFunctionalTestBase):
             annotate, nodes=3, inputs=2, outputs=1, internal_connections=2)
         self.verify_all_models_exist('process_a', 'process_b', 'combine')
 
+    def test_block_with_multiline_dict_comprehension(self):
+        """Test that block context correctly handles multiline dict comprehensions.
+        
+        This tests a known issue where Python's line tracer only fires once for
+        multiline statements, causing max_line to miss the closing brace.
+        
+        Regression test for: SyntaxError: '{' was never closed
+        """
+        input_data = {
+            'a': torch.tensor([1.0, 2.0, 3.0]),
+            'b': torch.tensor([4.0, 5.0, 6.0]),
+        }
+        
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        
+        with annotate.block('multiline_dict', 
+                            inputs=['input_data'], 
+                            outputs=['output_data'],
+                            export_with='torch'):
+            # This multiline dict comprehension should be fully captured
+            output_data = {
+                key: value * 2.0 for key, value in input_data.items()
+            }
+        
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        
+        # Verify node was created
+        self.assertEqual(len(annotate.nodes), 1)
+        self.assertIn('multiline_dict', annotate.nodes)
+        self.verify_all_models_exist('multiline_dict')
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

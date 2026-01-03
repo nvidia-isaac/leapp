@@ -30,19 +30,24 @@ from leapp.leapp_graph.traced_tensor import TracedTensor
 from leapp._logging import _get_logger
 
 
-def extract_source_from_line_range(executed_lines, context_name):
+def extract_source_from_line_range(executed_lines, context_name, is_function=False):
     """
     Extract source code from a traced line range.
+
+    This is the unified source extraction function used by both function decorators
+    and block contexts. It uses AST to properly determine body boundaries and handles
+    multiline statements (like dict comprehensions) that only trigger a single line event.
 
     Args:
         executed_lines: Dictionary with keys 'filename', 'min_line', 'max_line', 'function_name'
         context_name: Name of the context/node for logging purposes
+        is_function: If True, look for FunctionDef/AsyncFunctionDef. If False, look for With/AsyncWith.
 
     Returns:
-        str: Extracted source code or empty string if extraction fails
+        tuple: (source_code, message) where source_code is the extracted code or empty string
     """
     if executed_lines['filename'] is None:
-        return ""
+        return "", f"No filename provided for {context_name}"
 
     try:
         filename = executed_lines['filename']
@@ -58,10 +63,10 @@ def extract_source_from_line_range(executed_lines, context_name):
         end_idx = max_line  # max_line is inclusive, so we don't subtract 1
 
         if start_idx < 0 or end_idx > len(source_lines):
-            print(
-                f"\033[93mWarning {context_name}: Line range {min_line}-{max_line}"
-                f" is out of bounds for file {filename}\033[0m")
-            return ""
+            return "", (
+                f"Warning {context_name}: Line range {min_line}-{max_line} "
+                f"is out of bounds for file {filename}"
+            )
 
         # Determine the start of the executable body using AST (robust for multiline headers)
         file_source = ''.join(source_lines)
@@ -73,9 +78,13 @@ def extract_source_from_line_range(executed_lines, context_name):
             best_candidate = None
             best_start = -1
 
-            wanted = (ast.With, ast.AsyncWith)
+            # Choose AST node types based on whether this is a function or block context
+            if is_function:
+                wanted = (ast.FunctionDef, ast.AsyncFunctionDef)
+            else:
+                wanted = (ast.With, ast.AsyncWith)
 
-            # Find the function that contains our line range
+            # Find the node that contains our line range
             for n in ast.walk(tree):
                 if isinstance(n, wanted):
                     node_start = getattr(n, 'lineno', None)
@@ -90,8 +99,8 @@ def extract_source_from_line_range(executed_lines, context_name):
                         else:
                             node_end = node_start
 
-                    # Check if this function overlaps with our line range
-                    # (handles decorators by checking if function def line or any body line is in range)
+                    # Check if this node overlaps with our line range
+                    # (handles decorators by checking if def line or any body line is in range)
                     if (min_line <= node_start <= max_line) or (node_start <= min_line <= node_end):
                         if node_start > best_start:
                             best_candidate = n
@@ -102,6 +111,13 @@ def extract_source_from_line_range(executed_lines, context_name):
                     best_candidate.body[0], 'lineno', None)
                 if body_start_line is not None:
                     body_start_idx = body_start_line - 1
+                
+                # Extend end_idx to capture multiline statements
+                # Python's line tracer only fires once for multiline statements (e.g., dict comprehensions),
+                # so max_line may not include the closing brace. Use AST's end_lineno instead.
+                ast_end_line = getattr(best_candidate, 'end_lineno', None)
+                if ast_end_line is not None and ast_end_line > end_idx:
+                    end_idx = ast_end_line
         except Exception:
             body_start_idx = None
 

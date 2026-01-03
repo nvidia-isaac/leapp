@@ -3,9 +3,9 @@ import types
 import linecache
 import textwrap
 import re
-import ast
 from torch.nn.modules.lazy import LazyModuleMixin
 from leapp._logging import _get_logger
+from leapp.utils import extract_source_from_line_range
 
 from typing import Tuple, List, Dict
 
@@ -210,139 +210,25 @@ class ModuleBuilder:
                                 _get_logger().error(f"Error copying slotted attribute {slot}: {e}")
 
     def _extract_source_code(self):
+        """Extract the source code body for the traced function or block.
+        
+        Uses the unified extract_source_from_line_range function which handles
+        both function decorators and block contexts, and properly captures
+        multiline statements.
+        """
         executed_lines = self.node_context.executed_lines
-
-        if executed_lines['filename'] is None:
-            return ""
-
-        try:
-            filename = executed_lines['filename']
-            min_line = executed_lines['min_line']
-            max_line = executed_lines['max_line']
-
-            # Read the source file
-            with open(filename, 'r') as f:
-                source_lines = f.readlines()
-
-            # Extract lines from min_line to max_line (convert to 0-based indexing)
-            start_idx = min_line - 1
-            end_idx = max_line  # max_line is inclusive, so we don't subtract 1
-
-            if start_idx < 0 or end_idx > len(source_lines):
-                print(
-                    f"\033[93mWarning {self.node_context.name}: Line range {min_line}-{max_line}"
-                    f" is out of bounds for file {filename}\033[0m")
-                return ""
-
-            # Determine the start of the executable body using AST (robust for multiline headers)
-            file_source = ''.join(source_lines)
-            body_start_idx = None
-
-            try:
-                tree = ast.parse(file_source)
-
-                best_candidate = None
-                best_start = -1
-
-                if self.node_context.from_function:
-                    wanted = (ast.FunctionDef, ast.AsyncFunctionDef)
-                else:
-                    wanted = (ast.With, ast.AsyncWith)
-
-                # Find the function that contains our line range
-                for n in ast.walk(tree):
-                    if isinstance(n, wanted):
-                        node_start = getattr(n, 'lineno', None)
-                        node_end = getattr(n, 'end_lineno', None)
-                        if node_start is None:
-                            continue
-                        if node_end is None:
-                            if getattr(n, 'body', None):
-                                last_child = n.body[-1]
-                                node_end = getattr(last_child, 'end_lineno', getattr(
-                                    last_child, 'lineno', node_start))
-                            else:
-                                node_end = node_start
-
-                        # Check if this function overlaps with our line range
-                        # (handles decorators by checking if function def line or any body line is in range)
-                        if (min_line <= node_start <= max_line) or (node_start <= min_line <= node_end):
-                            if node_start > best_start:
-                                best_candidate = n
-                                best_start = node_start
-
-                if best_candidate is not None and getattr(best_candidate, 'body', None):
-                    body_start_line = getattr(
-                        best_candidate.body[0], 'lineno', None)
-                    if body_start_line is not None:
-                        body_start_idx = body_start_line - 1
-            except Exception:
-                body_start_idx = None
-
-            if body_start_idx is None:
-                # Fallback: scan to the end of the logical header by balancing symbols and strings
-                open_paren = open_brack = open_brace = 0
-                in_string = False
-                string_char = ''
-                header_end_line_idx = start_idx
-                i = start_idx
-                while i < end_idx:
-                    line = source_lines[i]
-                    j = 0
-                    while j < len(line):
-                        ch = line[j]
-                        if not in_string and ch in ('"', "'"):
-                            in_string = True
-                            string_char = ch
-                        elif in_string and ch == string_char and (j == 0 or line[j-1] != '\\'):
-                            in_string = False
-                            string_char = ''
-                        elif not in_string:
-                            if ch == '(':
-                                open_paren += 1
-                            elif ch == ')':
-                                open_paren = max(0, open_paren-1)
-                            elif ch == '[':
-                                open_brack += 1
-                            elif ch == ']':
-                                open_brack = max(0, open_brack-1)
-                            elif ch == '{':
-                                open_brace += 1
-                            elif ch == '}':
-                                open_brace = max(0, open_brace-1)
-                            elif ch == ':' and open_paren == 0 and open_brack == 0 and open_brace == 0:
-                                header_end_line_idx = i
-                                i = i + 1
-                                break
-                        j += 1
-                    else:
-                        i += 1
-                        continue
-                    break
-
-                body_start_idx = max(header_end_line_idx + 1, start_idx)
-
-            start_idx = min(max(body_start_idx, 0), len(source_lines))
-
-            # Extract the relevant lines
-            extracted_lines = source_lines[start_idx:end_idx]
-
-            if extracted_lines:
-                dedented_code = textwrap.dedent(''.join(extracted_lines))
-                source_code = dedented_code.rstrip()
-            else:
-                source_code = ""
-            _get_logger().info(
-                f"Extracted code from file: {filename}, function: {executed_lines['function_name']}")
-
-        except Exception as e:
-            _get_logger().error(
-                f"Error extracting source from line range: {e}")
-            source_code = ""
-
-        if source_code == "":
-            raise Exception(
-                f"No source code found for {self.node_context.name}")
+        
+        source_code, message = extract_source_from_line_range(
+            executed_lines,
+            self.node_context.name,
+            is_function=self.node_context.from_function
+        )
+        
+        if source_code:
+            _get_logger().info(message)
+        else:
+            _get_logger().error(message)
+            raise Exception(f"No source code found for {self.node_context.name}")
 
         return source_code
 
