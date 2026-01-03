@@ -21,7 +21,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "leapp"
-version = "0.2.0"
+version = "0.3.0"
 description = "LEAPP - Lightweight Export Annotations for Policy Pipelines: A Python package for tracing and exporting computational graphs from PyTorch code"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -46,12 +46,17 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
+# dict in key insertion order is garunteeded in python 3.7+
+# __init__subclass__ is provided in 3.6+
 requires-python = ">=3.8"
 dependencies = [
-    "torch>=2.5.0",
+    "torch>=2.6.0",
     "matplotlib>=3.5.0",
     "networkx>=2.6",
     "PyYAML>=6.0",
+    "onnx>=1.19.0",
+    "onnxruntime>=1.20.0",
+    "onnxscript>=0.1.0",
 ]
 
 [project.optional-dependencies]
@@ -81,3 +86,11 @@ exclude = ["tests*"]
 # Include all files specified in MANIFEST.in
 "*" = ["*.md", "*.txt", "LICENSE"]
 "leapp" = ["*.py"]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::UserWarning",
+    "ignore:The feature will be removed.*:DeprecationWarning:torch.onnx",
+    "ignore:The TorchScript type system doesn't support instance-level annotations:Warning",
+    "ignore:You are using the legacy TorchScript-based ONNX export:Warning",
+]

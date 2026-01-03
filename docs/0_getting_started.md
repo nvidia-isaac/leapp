@@ -7,35 +7,35 @@ Welcome to LEAPP - Lightweight Export Annotations for Policy Pipelines! This gui
 In this guide, you'll learn how to:
 - Use function decorators to annotate methods
 - Use context managers to annotate code blocks  
+- Use traced tensors to annotate input and output tensors
 - Create computational graphs that connect multiple processing stages
 - Export your pipeline for deployment
 
 ## Simple Example: Robot Sensor Processing Pipeline
 
-Let's create a simple robot sensor processing pipeline that demonstrates LEAPP's core features. Our pipeline will:
-1. Process raw sensor data using a decorated function
-2. Calculate movement speed using another decorated function
-3. Make control decisions using an annotation block that combines outputs from both functions
+Let's create a simple robot sensor processing pipeline that demonstrates LEAPP's three annotation methods. Our pipeline will:
+1. Process raw sensor data using a **decorated function** (`@annotate.method`)
+2. Extract navigation features using **traced tensors** (`annotate.input_tensors` / `annotate.output_tensors`)
+3. Make control decisions using an **annotation block** (`annotate.block`)
 
 ```python
 import torch
 from leapp import annotate
 
-# First function: Process sensor data
-@annotate.method(export_with="torch", node_name="sensor_processor")
+# Method node: Process and normalize sensor data
+@annotate.method(export_with="torch")
 def process_sensor_data(raw_readings):
     """Process raw sensor readings and normalize them."""
     processed = torch.clamp(raw_readings, min=0.0, max=1.0)
     normalized = (processed - 0.5) * 2.0
     return normalized
 
-# Second function: Calculate movement speed
-@annotate.method(export_with="torch", node_name="speed_calculator")
-def calculate_movement_speed(sensor_data):
-    """Calculate safe movement speed based on sensor data."""
+# Helper function for feature extraction (called within traced tensor context)
+def compute_obstacle_features(sensor_data):
+    """Compute obstacle-related features from sensor data."""
     obstacle_distance = torch.mean(torch.abs(sensor_data))
-    safe_speed = torch.clamp(obstacle_distance, min=0.1, max=1.0)
-    return safe_speed
+    obstacle_variance = torch.var(sensor_data)
+    return obstacle_distance, obstacle_variance
 
 def main():
     # Start tracing our computational graph
@@ -44,23 +44,44 @@ def main():
     # Create some sample sensor data
     raw_sensor_data = torch.tensor([0.1, 0.8, 0.3, 0.9, 0.2])
     
-    # Process sensor data using first decorated function
+    # ===== NODE 1: Method decorator =====
+    # Process sensor data using decorated function
     clean_data = process_sensor_data(raw_sensor_data)
     
-    # Calculate movement speed using second decorated function
-    movement_speed = calculate_movement_speed(clean_data)
+    # ===== NODE 2: Traced tensors =====
+    # Extract navigation features using traced tensors
+    # This allows us to trace operations across function calls
+    sensor_input = annotate.input_tensors({
+        'sensor_data': clean_data
+    }, 'feature_extractor')
     
-    # Annotation block: Control decisions (uses outputs from both functions)
+    # Operations are automatically traced - even through helper functions!
+    obstacle_dist, obstacle_var = compute_obstacle_features(sensor_input)
+    
+    # Additional inline operations are also traced
+    safe_speed = torch.clamp(obstacle_dist, min=0.1, max=1.0)
+    confidence = 1.0 / (1.0 + obstacle_var)
+    
+    # Mark outputs to finalize the traced node
+    annotate.output_tensors({
+        'safe_speed': safe_speed,
+        'confidence': confidence
+    }, 'feature_extractor', export_with="torch")
+    
+    # ===== NODE 3: Block annotation =====
+    # Control decisions using annotation block
     with annotate.block("control_decision",
-                         inputs=["clean_data", "movement_speed"],
+                         inputs=["safe_speed", "confidence"],
                          outputs=["robot_action"],
                          export_with="torch"):
-        sensor_confidence = 1.0 - torch.std(clean_data)
-        
-        if sensor_confidence > 0.8:
-            robot_action = torch.tensor([movement_speed.item(), 0.0, 0.0])
-        else:
-            robot_action = torch.tensor([0.0, 0.0, movement_speed.item() * 0.5])
+        # Combine features into final robot action
+        # Action format: [forward_speed, turn_rate, caution_factor]
+        forward_speed = safe_speed * confidence
+        turn_rate = torch.zeros(1)
+        caution_factor = 1.0 - confidence
+        robot_action = torch.cat([forward_speed.unsqueeze(0), 
+                                   turn_rate, 
+                                   caution_factor.unsqueeze(0)])
     
     # Stop tracing and compile the graph
     annotate.stop()
@@ -68,9 +89,9 @@ def main():
     
     print(f"Raw sensor data: {raw_sensor_data}")
     print(f"Processed data: {clean_data}")
-    print(f"Movement speed: {movement_speed}")
+    print(f"Safe speed: {safe_speed}")
+    print(f"Confidence: {confidence}")
     print(f"Robot action: {robot_action}")
-    print(f"Sensor confidence: {sensor_confidence}")
 
 if __name__ == "__main__":
     main()
@@ -81,50 +102,73 @@ if __name__ == "__main__":
 ### 1. Function Decorator (`@annotate.method`)
 
 ```python
-@annotate.method(export_with="torch", node_name="sensor_processor")
+@annotate.method(export_with="torch")
 def process_sensor_data(raw_readings):
     # Your processing logic here
     return processed_data
 ```
 
 The `@annotate.method` decorator marks an entire function as a graph node. Key parameters:
-- `export_with="torch"`: Export this node as TorchScript
-- `node_name`: Custom name for the node in the graph
+- `export_with`: Export format ("torch" for TorchScript, "onnx" for ONNX)
+- `node_name`: Optional custom name for the node (defaults to function name)
 
-### 2. Context Manager Blocks (`annotate.block`)
+### 2. Traced Tensors (`annotate.input_tensors` / `annotate.output_tensors`)
+
+```python
+# Create traced inputs - returns TracedTensor objects
+sensor_input = annotate.input_tensors({
+    'sensor_data': clean_data
+}, 'feature_extractor')
+
+# All operations on TracedTensors are recorded - even through function calls!
+result = some_helper_function(sensor_input)
+result = result * 2 + 1
+
+# Mark outputs to finalize the node
+annotate.output_tensors({
+    'result': result
+}, 'feature_extractor', export_with="torch")
+```
+
+Traced tensors provide the most flexible approach for capturing operations:
+- **Spans function calls**: Operations through helper functions are automatically traced
+- **Inline operations**: Mix function calls with inline tensor operations
+- **Programmatic control**: Define nodes dynamically without decorators or context managers
+
+### 3. Context Manager Blocks (`annotate.block`)
 
 ```python
 with annotate.block("control_decision",
-                     inputs=["clean_data", "movement_speed"],
+                     inputs=["safe_speed", "confidence"],
                      outputs=["robot_action"],
                      export_with="torch"):
     # Your processing logic here
-    robot_action = combine_inputs(clean_data, movement_speed)
+    robot_action = compute_action(safe_speed, confidence)
 ```
 
 Context managers let you annotate specific code blocks as graph nodes. Key parameters:
 - First parameter: Node name
-- `inputs`: List of input variable names (can take outputs from multiple functions)
+- `inputs`: List of input variable names (references variables in scope)
 - `outputs`: List of output variable names  
 - `export_with`: Export format
 
-### 3. Graph Flow
+### 4. Graph Flow
 
 The example demonstrates how data flows through the computational graph:
 
 ```
-raw_sensor_data → [sensor_processor] → clean_data
+raw_sensor_data → [process_sensor_data] → clean_data
+                                              ↓
+                                    [feature_extractor]
+                                       ↓          ↓
+                                 safe_speed   confidence
+                                       ↓          ↓
+                                   [control_decision]
                                           ↓
-                                     ┌────┴────┐
-                                     ↓         ↓
-                        [speed_calculator]     │
-                                     ↓         ↓
-                           movement_speed → [control_decision] ← clean_data
-                                                   ↓
-                                              robot_action
+                                     robot_action
 ```
 
-### 4. Tracing Lifecycle
+### 5. Tracing Lifecycle
 
 ```python
 # 1. Start tracing
@@ -164,9 +208,10 @@ First, let's look at the generated graph visualization:
 ![Sample Robot Pipeline Graph](images/robot_pipeline.png)
 
 This automatically generated diagram shows your entire computational pipeline at a glance. You can see:
-- **Function nodes** (sensor_processor, speed_calculator) represented as rectangles
-- **Block nodes** (control_decision) also shown as processing steps  
-- **Data flow connections** showing how outputs from functions feed into blocks
+- **Method nodes** (process_sensor_data) created from decorated functions
+- **Traced tensor nodes** (feature_extractor) capturing programmatic tensor operations
+- **Block nodes** (control_decision) from context manager annotations
+- **Data flow connections** showing how outputs from nodes feed into subsequent nodes
 - **Input/output tensors** with their names and shapes
 
 This visual representation is invaluable for **verifying that LEAPP detected your intended graph structure correctly**. You can quickly spot if connections are missing, if nodes aren't being captured, or if the data flow doesn't match your expectations.
@@ -176,43 +221,51 @@ This visual representation is invaluable for **verifying that LEAPP detected you
 LEAPP also generates a complete specification of your pipeline in `sample_robot_pipeline/sample_robot_pipeline.yaml`:
 
 ```yaml
-graph_name: sample_robot_pipeline
-nodes:
-  sensor_processor:
-    type: method
-    inputs:
-      - name: raw_readings
-        dtype: float32
-        shape: [5]
-    outputs:
-      - name: normalized
-        dtype: float32
-        shape: [5]
-  
-  speed_calculator:
-    type: method
-    inputs:
-      - name: sensor_data
-        dtype: float32
-        shape: [5]
-    outputs:
-      - name: safe_speed
-        dtype: float32
-        shape: []
-  
+models:
   control_decision:
-    type: block
     inputs:
-      - name: clean_data
-        dtype: float32
-        shape: [5]
-      - name: movement_speed
-        dtype: float32
-        shape: []
+    - dtype: float32
+      name: safe_speed
+      shape: []
+      type: tensor
+    - dtype: float32
+      name: confidence
+      shape: []
+      type: tensor
     outputs:
-      - name: robot_action
-        dtype: float32
-        shape: [3]
+    - dtype: float32
+      name: robot_action
+      shape: [3]
+      type: tensor
+    parameters:
+      backend: torch
+      device: cuda
+      md5sum: db4183a5028b64c97cbdad1c648e568e
+      model_path: control_decision.pt
+      sha256sum: f70e35e6f59313bb30c04a6f1895d526c527092263396166564fbd5ea7e29079
+  feature_extractor:
+    inputs:
+    - dtype: float32
+
+...
+
+
+pipeline:
+  dangling_inputs:
+    process_sensor_data: [raw_readings]
+  dangling_outputs:
+    control_decision: [robot_action]
+  data_flow:
+    feature_extractor/confidence: [control_decision/confidence]
+    feature_extractor/safe_speed: [control_decision/safe_speed]
+    process_sensor_data/sensor_data: [feature_extractor/sensor_data]
+  feedback_flow: {}
+
+system information:
+  cuda version: 
+
+...
+
 ```
 
 This YAML file contains:
@@ -221,7 +274,7 @@ This YAML file contains:
 - **Graph structure metadata** ready for deployment systems
 - **Export configuration** showing how each node should be compiled
 
-Additionally, you'll find the individual exported model files (`sensor_processor.pt`, `speed_calculator.pt`, `control_decision.pt`) ready for deployment in production environments.
+Additionally, you'll find the individual exported model files (`process_sensor_data.pt`, `feature_extractor.pt`, `control_decision.pt`) ready for deployment in production environments.
 
 ## Next Steps
 

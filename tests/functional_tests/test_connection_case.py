@@ -112,6 +112,173 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
         self.verify_num_connections(annotate, nodes=5, inputs=1, outputs=1,
                                     internal_connections=5, feedback_connections=0)
 
+    def test_mirror_leapp_tags_with_inplace_assignment(self):
+        """Test mirror_leapp_tags with in-place assignment operations between nodes"""
+        @annotate.method(export_with="torch")
+        def funcA(inputA: torch.Tensor):
+            return inputA * 2.0
+
+        @annotate.method(export_with="torch")
+        def funcB(inputB: torch.Tensor):
+            return inputB + 1.0
+
+        @annotate.method(export_with="torch")
+        def funcC(inputC: torch.Tensor):
+            return inputC * 3.0
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        out_funcA = funcA(torch.tensor([1.0, 2.0, 3.0]))
+        
+        # Simulate in-place assignment to a preallocated buffer BETWEEN nodes
+        buffer = torch.zeros_like(out_funcA)
+        buffer[:] = out_funcA
+        # Mirror tags to maintain graph connections
+        annotate.mirror_leapp_tags(out_funcA, buffer)
+        
+        out_funcB = funcB(buffer)
+        out_funcC = funcC(out_funcB)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+
+        # Should have proper connections: funcA -> funcB -> funcC
+        self.verify_num_connections(annotate, nodes=3, inputs=1, outputs=1,
+                                    internal_connections=2)
+
+    def test_mirror_leapp_tags_with_preallocated_buffer(self):
+        """Test mirror_leapp_tags with a class that uses preallocated buffers between nodes"""
+        class DataProcessor:
+            def __init__(self):
+                self._buffer = torch.zeros(3)
+
+            def copy_to_buffer(self, data):
+                """Copy data to buffer and mirror tags (outside of annotated nodes)"""
+                self._buffer[:] = data
+                annotate.mirror_leapp_tags(data, self._buffer)
+                return self._buffer
+
+            @annotate.method(export_with="torch")
+            def process(self, input_data: torch.Tensor):
+                # Process the buffered data
+                result = input_data * 2.0
+                return result
+
+        @annotate.method(export_with="torch")
+        def upstream_node(inputA: torch.Tensor):
+            return inputA + 1.0
+
+        @annotate.method(export_with="torch")
+        def downstream_node(inputB: torch.Tensor):
+            return inputB + 3.0
+
+        processor = DataProcessor()
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        upstream_output = upstream_node(torch.tensor([1.0, 2.0, 3.0]))
+        
+        # Copy to buffer and mirror tags BETWEEN nodes
+        buffered_data = processor.copy_to_buffer(upstream_output)
+        
+        processed = processor.process(buffered_data)
+        final_output = downstream_node(processed)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+
+        # Should have proper connections through all three nodes
+        self.verify_num_connections(annotate, nodes=3, inputs=1, outputs=1,
+                                    internal_connections=2)
+
+    def test_mirror_leapp_tags_multiple_buffers(self):
+        """Test mirror_leapp_tags with multiple buffers between nodes"""
+        @annotate.method(export_with="torch")
+        def funcA(inputA: torch.Tensor):
+            return inputA, inputA + 1.0
+
+        @annotate.method(export_with="torch")
+        def funcB(inputB1: torch.Tensor, inputB2: torch.Tensor):
+            # Process the inputs
+            return inputB1 * 2.0, inputB2 * 3.0
+
+        @annotate.method(export_with="torch")
+        def funcC(inputC1: torch.Tensor, inputC2: torch.Tensor):
+            return inputC1 + inputC2
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        out_A1, out_A2 = funcA(torch.tensor([1.0, 2.0, 3.0]))
+        
+        # Create two separate buffers BETWEEN nodes
+        buffer1 = torch.zeros_like(out_A1)
+        buffer2 = torch.zeros_like(out_A2)
+        
+        # In-place copy
+        buffer1[:] = out_A1
+        buffer2[:] = out_A2
+        
+        # Mirror tags for both
+        annotate.mirror_leapp_tags(out_A1, buffer1)
+        annotate.mirror_leapp_tags(out_A2, buffer2)
+        
+        out_B1, out_B2 = funcB(buffer1, buffer2)
+        final_output = funcC(out_B1, out_B2)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+
+        # Verify connections: funcA (2 outputs) -> funcB (2 inputs, 2 outputs) -> funcC (2 inputs)
+        self.verify_num_connections(annotate, nodes=3, inputs=1, outputs=1,
+                                    internal_connections=4)
+
+    def test_mirror_leapp_tags_preserves_tag_through_chain(self):
+        """Test that mirror_leapp_tags preserves tags through a long chain of buffer operations"""
+        @annotate.method(export_with="torch")
+        def source_node(inputA: torch.Tensor):
+            return inputA * 2.0
+
+        @annotate.method(export_with="torch")
+        def process_node1(inputB: torch.Tensor):
+            return inputB + 1.0
+
+        @annotate.method(export_with="torch")
+        def process_node2(inputC: torch.Tensor):
+            return inputC * 3.0
+
+        @annotate.method(export_with="torch")
+        def sink_node(inputD: torch.Tensor):
+            return inputD
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        out1 = source_node(torch.tensor([1.0, 2.0, 3.0]))
+        
+        # Buffer between nodes 1 and 2
+        buffer1 = torch.empty_like(out1)
+        buffer1[:] = out1
+        annotate.mirror_leapp_tags(out1, buffer1)
+        
+        out2 = process_node1(buffer1)
+        
+        # Buffer between nodes 2 and 3
+        buffer2 = torch.empty_like(out2)
+        buffer2[:] = out2
+        annotate.mirror_leapp_tags(out2, buffer2)
+        
+        out3 = process_node2(buffer2)
+        final = sink_node(out3)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+
+        # Should maintain proper connections through all nodes
+        self.verify_num_connections(annotate, nodes=4, inputs=1, outputs=1,
+                                    internal_connections=3)
+
+    def test_mirror_leapp_tags_noop_outside_tracing(self):
+        """Test that mirror_leapp_tags safely no-ops outside of tracing"""
+        source = torch.tensor([1.0, 2.0, 3.0])
+        target = torch.zeros(3)
+        target[:] = source
+        
+        # Should not raise an error when called outside tracing
+        annotate.mirror_leapp_tags(source, target)
+        
+        # Verify data is still correct
+        self.assertTrue(torch.allclose(source, target))
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

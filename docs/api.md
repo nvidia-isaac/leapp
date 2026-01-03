@@ -9,7 +9,8 @@ from leapp import annotate, MergeCfgEnum
 
 # Core workflow
 annotate.start(name="my_graph", save_path=".", verbose=False)
-# ... trace your code using @annotate.method() or with annotate.block()
+# ... trace your code using @annotate.method(), with annotate.block(), 
+#     or annotate.input_tensors() / annotate.output_tensors()
 annotate.stop()
 annotate.compile_graph(visualize=True, merge_nodes=MergeCfgEnum.NO_MERGE)
 ```
@@ -157,6 +158,87 @@ with annotate.block(node_name: str, **kwargs):
 - Input and output variable names must be explicitly declared
 - Variable names in `inputs` and `outputs` must match actual Python variable names in scope
 - The traced code block should not contain nested `block()` or `method()` annotations
+
+---
+
+## `annotate.input_tensors()`
+
+Create traced tensor inputs for programmatic node definition. Returns TracedTensor objects that record all subsequent operations.
+
+### Signature
+
+```python
+traced_tensors = annotate.input_tensors(tensors: dict, node_name: str)
+```
+
+### Parameters
+
+- **`tensors`** (dict, required): A dictionary mapping input names to tensor values. Keys become the input names in the exported model. Values can be:
+  - `torch.Tensor`: Regular tensors
+  - Nested structures: `dict`, `list`, or `tuple` containing tensors (will be flattened)
+  
+- **`node_name`** (str, required): The unique name to identify this node in the computational graph.
+
+### Returns
+
+- **TracedTensor(s)**: Returns TracedTensor object(s) that wrap the input tensors and record all operations performed on them.
+  - Single tensor input: Returns a single TracedTensor
+  - Multiple tensor inputs: Returns a tuple of TracedTensors (in dict key order)
+  - Nested structures: Returns the same structure with TracedTensors replacing regular tensors
+
+### Behavior
+
+- Creates a new traced tensor node context (or reuses existing if called again with same `node_name`)
+- Wraps input tensors in TracedTensor objects that use `torch.fx` to record operations
+- All operations on TracedTensors are automatically captured in the computation graph
+- Operations can span multiple function calls - helper functions work seamlessly
+- Must be paired with `output_tensors()` to finalize the node
+
+### Notes
+
+- **Backend limitation**: Traced tensor nodes currently only support `export_with="torch"` with TorchScript export (`use_trace=False`). ONNX export is not yet supported.
+- Graph interpretation must be enabled via `start()` before calling
+- TracedTensors support most PyTorch tensor operations
+- Cannot mix TracedTensors from different node contexts in a single operation
+- Cannot pass TracedTensors to `@annotate.method()` decorated functions (call `output_tensors()` first)
+- Calling `input_tensors()` multiple times with the same `node_name` will reuse the existing and add another input to the node context
+
+---
+
+## `annotate.output_tensors()`
+
+Mark traced tensor outputs and finalize a traced tensor node.
+
+### Signature
+
+```python
+annotate.output_tensors(tensors: dict, node_name: str, **kwargs)
+```
+
+### Parameters
+
+- **`tensors`** (dict, required): A dictionary mapping output names to TracedTensor values. Keys become the output names in the exported model. Values should be TracedTensors (or nested structures containing them) that were derived from `input_tensors()`.
+
+- **`node_name`** (str, required): The node name. Must match the name used in the corresponding `input_tensors()` call.
+
+- **`**kwargs`**: Export configuration options:
+  - **`export_with`** (str): Backend for exporting. **Currently only `"torch"` is supported** for traced tensor nodes.
+  - **`backend_params`** (dict): Backend-specific parameters.
+
+### Behavior
+
+- Finalizes the traced tensor node by marking which tensors are outputs
+- Compiles the recorded computation graph into an exportable model
+- Automatically prunes unused inputs (inputs that don't contribute to outputs)
+- Returns the underlying raw tensors (unwrapped from TracedTensor)
+- After calling, the TracedTensors for this node are no longer tracing (operations return regular tensors)
+
+### Notes
+
+- **Backend limitation**: Traced tensor nodes currently only support `export_with="torch"` with `use_trace=False` (TorchScript). ONNX export is not yet supported for traced tensor nodes.
+- Must be called after `input_tensors()` with the same `node_name`
+- All output tensors must be derived from the corresponding input TracedTensors
+- Unused inputs are automatically detected and removed from the exported model
 
 ---
 
@@ -398,6 +480,12 @@ exports/complete_pipeline/
 3. **Specify `export_with`**: Explicitly declare your export backend
 4. **Run feedback loops twice**: Required for cycle detection
 5. **Use verbose mode during development**: Helps debug tracing issues
+6. **Choose the right annotation method**:
+   - Use `@annotate.method()` for self-contained functions
+   - Use `annotate.block()` for inline code with explicit I/O
+   - Use `input_tensors()`/`output_tensors()` for operations spanning multiple functions or dynamic scenarios
+7. **Always pair `input_tensors()` with `output_tensors()`**: Forgetting to call `output_tensors()` leaves the node incomplete
+8. **Don't mix TracedTensors across contexts**: Complete one traced tensor node before starting another
 
 ---
 
