@@ -17,31 +17,31 @@
 
 from leapp.utils import CompactYamlList
 from leapp.enums import MergeCfgEnum
+from leapp._logging import _get_logger
 from .graph_gui import visualize_graph
-from .leapp_combination_node import get_subgraph_node
+from .combined_node import get_combined_node
 
 
 class LeappGraph:
-    def __init__(self, logger, nodes):
-        self.logger = logger
+    def __init__(self, nodes):
         self.nodes = nodes
         self.node_name_map = {node.name: node.name for node in nodes.values()}
 
         # process graph connections
-        self.logger.section("Processing Node Connections Using Tagged Values")
+        _get_logger().section("Processing Node Connections Using Tagged Values")
         self.connections, self.feedback_connections = self._build_connections(
             self.nodes)
 
-        self.logger.section("Reconciling internal i/o names")
+        _get_logger().section("Reconciling internal i/o names")
         self._reconcile_io_names(self.connections)
 
-        self.logger.section("Discovering graph inputs and outputs")
+        _get_logger().section("Discovering graph inputs and outputs")
         self.graph_inputs, self.graph_outputs = self._compile_graph_io(
             self.nodes, self.connections, self.feedback_connections)
 
     def merge_nodes(self, merge_nodes):
         if merge_nodes != MergeCfgEnum.NO_MERGE:
-            self.logger.section(
+            _get_logger().section(
                 f"Merging nodes with the {merge_nodes.value} configuration")
 
         num_merged = 0
@@ -56,11 +56,11 @@ class LeappGraph:
 
         # Rediscover connections after merging nodes
         if num_merged:
-            self.logger.info(f"Successfully merged {num_merged} nodes")
-            self.logger.info("Rediscovering connections after node merge")
+            _get_logger().info(f"Successfully merged {num_merged} nodes")
+            _get_logger().info("Rediscovering connections after node merge")
             self.connections, self.feedback_connections = self._build_connections(
                 self.nodes)
-            self.logger.section("Rediscovering graph inputs and outputs")
+            _get_logger().section("Rediscovering graph inputs and outputs")
             self.graph_inputs, self.graph_outputs = self._compile_graph_io(
                 self.nodes, self.connections, self.feedback_connections)
 
@@ -130,7 +130,7 @@ class LeappGraph:
             duplicates = set([tag for tag in tags if tags.count(tag) > 1])
             if duplicates:
                 for duplicate in duplicates:
-                    self.logger.error(
+                    _get_logger().error(
                         f"Found duplicate input with the tag {duplicate} in node {node.name}")
                 raise Exception(
                     "Error: unsupported use of sending the same tensor multiple times to the same node")
@@ -158,7 +158,7 @@ class LeappGraph:
                             }
                         connections[input.tag]['targets'].append(
                             {'node': node, 'idx': in_idx})
-                        self.logger.info("Found connection: "
+                        _get_logger().info("Found connection: "
                                          f"{source_node.name}/{source_node.outputs[out_idx].name_str} "
                                          f" -> {node.name}/{node.inputs[in_idx].name_str}")
                     else:
@@ -169,7 +169,7 @@ class LeappGraph:
                             }
                         feedback_connections[input.tag]['targets'].append(
                             {'node': node, 'idx': in_idx})
-                        self.logger.info("Found feedback connection: "
+                        _get_logger().info("Found feedback connection: "
                                          f"{source_node.name}/{source_node.outputs[out_idx].name_str} "
                                          f" -> {node.name}/{node.inputs[in_idx].name_str}")
 
@@ -224,8 +224,8 @@ class LeappGraph:
                 if node_output not in all_source_ports:
                     graph_outputs.append(node_output)
 
-        self.logger.info(f"Discovered {len(graph_inputs)} graph inputs")
-        self.logger.info(f"Discovered {len(graph_outputs)} graph outputs")
+        _get_logger().info(f"Discovered {len(graph_inputs)} graph inputs")
+        _get_logger().info(f"Discovered {len(graph_outputs)} graph outputs")
         return graph_inputs, graph_outputs
 
     def _reconcile_io_names(self, connections):
@@ -249,11 +249,11 @@ class LeappGraph:
                 source['node'].change_output_name(
                     source['node'].outputs[source['idx']].name_str, desired_target_name)
         if names_changed:
-            self.logger.warning("i/o names changed, this process edits the node specifications, and may produce "
+            _get_logger().warning("i/o names changed, this process edits the node specifications, and may produce "
                                 "unexpected behavior. Please check the graph for correctness. If this is not desired, "
                                 "please make sure to match io names in the source code")
         else:
-            self.logger.info("no names changed")
+            _get_logger().info("no names changed")
 
     def _merge_nodes_automatically(self):
         merged = 0
@@ -328,26 +328,26 @@ class LeappGraph:
             name = current_group_sorted[0].name
             for node in current_group_sorted[1:]:
                 name += "-" + node.name
-            self.logger.info("Creating merged node: " + name)
+            _get_logger().info("Creating merged node: " + name)
             try:
-                subgraph_node = get_subgraph_node(
-                    name=name, nodes=current_group_sorted, logger=self.logger)
+                combined_node = get_combined_node(
+                    name=name, nodes=current_group_sorted)
             except Exception as e:
-                self.logger.error(
+                _get_logger().error(
                     f"Unexpected error creating merged node {name}: {e}")
-                self.logger.error(f"Skipping node merge for {name}")
+                _get_logger().error(f"Skipping node merge for {name}")
                 continue
 
-            if subgraph_node is not None:
+            if combined_node is not None:
                 # Remove all nodes in the group from self.nodes
                 for node in current_group_sorted:
-                    self.logger.debug(
+                    _get_logger().debug(
                         f"Removing node {node.name} from nodes dictionary, current existing nodes: {list(self.nodes.keys())}")
-                    self.node_name_map[node.name] = subgraph_node.name
+                    self.node_name_map[node.name] = combined_node.name
                     del self.nodes[node.name]
                     merged += 1
 
-                # Insert the subgraph node
-                self.nodes[subgraph_node.name] = subgraph_node
+                # Insert the combined node
+                self.nodes[combined_node.name] = combined_node
 
         return self.nodes, merged

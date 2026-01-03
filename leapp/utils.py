@@ -26,22 +26,28 @@ import sys
 import collections.abc
 from dataclasses import dataclass
 from typing import Optional, Any, Dict, Tuple
+from leapp.leapp_graph.traced_tensor import TracedTensor
+from leapp._logging import _get_logger
 
 
-def extract_source_from_line_range(executed_lines, from_function, context_name):
+def extract_source_from_line_range(executed_lines, context_name, is_function=False):
     """
     Extract source code from a traced line range.
 
+    This is the unified source extraction function used by both function decorators
+    and block contexts. It uses AST to properly determine body boundaries and handles
+    multiline statements (like dict comprehensions) that only trigger a single line event.
+
     Args:
         executed_lines: Dictionary with keys 'filename', 'min_line', 'max_line', 'function_name'
-        from_function: Boolean indicating if the source is from a function
         context_name: Name of the context/node for logging purposes
+        is_function: If True, look for FunctionDef/AsyncFunctionDef. If False, look for With/AsyncWith.
 
     Returns:
-        str: Extracted source code or empty string if extraction fails
+        tuple: (source_code, message) where source_code is the extracted code or empty string
     """
     if executed_lines['filename'] is None:
-        return ""
+        return "", f"No filename provided for {context_name}"
 
     try:
         filename = executed_lines['filename']
@@ -57,10 +63,10 @@ def extract_source_from_line_range(executed_lines, from_function, context_name):
         end_idx = max_line  # max_line is inclusive, so we don't subtract 1
 
         if start_idx < 0 or end_idx > len(source_lines):
-            print(
-                f"\033[93mWarning {context_name}: Line range {min_line}-{max_line}"
-                f" is out of bounds for file {filename}\033[0m")
-            return ""
+            return "", (
+                f"Warning {context_name}: Line range {min_line}-{max_line} "
+                f"is out of bounds for file {filename}"
+            )
 
         # Determine the start of the executable body using AST (robust for multiline headers)
         file_source = ''.join(source_lines)
@@ -72,12 +78,13 @@ def extract_source_from_line_range(executed_lines, from_function, context_name):
             best_candidate = None
             best_start = -1
 
-            if from_function:
+            # Choose AST node types based on whether this is a function or block context
+            if is_function:
                 wanted = (ast.FunctionDef, ast.AsyncFunctionDef)
             else:
                 wanted = (ast.With, ast.AsyncWith)
 
-            # Find the function that contains our line range
+            # Find the node that contains our line range
             for n in ast.walk(tree):
                 if isinstance(n, wanted):
                     node_start = getattr(n, 'lineno', None)
@@ -92,8 +99,8 @@ def extract_source_from_line_range(executed_lines, from_function, context_name):
                         else:
                             node_end = node_start
 
-                    # Check if this function overlaps with our line range
-                    # (handles decorators by checking if function def line or any body line is in range)
+                    # Check if this node overlaps with our line range
+                    # (handles decorators by checking if def line or any body line is in range)
                     if (min_line <= node_start <= max_line) or (node_start <= min_line <= node_end):
                         if node_start > best_start:
                             best_candidate = n
@@ -104,6 +111,13 @@ def extract_source_from_line_range(executed_lines, from_function, context_name):
                     best_candidate.body[0], 'lineno', None)
                 if body_start_line is not None:
                     body_start_idx = body_start_line - 1
+                
+                # Extend end_idx to capture multiline statements
+                # Python's line tracer only fires once for multiline statements (e.g., dict comprehensions),
+                # so max_line may not include the closing brace. Use AST's end_lineno instead.
+                ast_end_line = getattr(best_candidate, 'end_lineno', None)
+                if ast_end_line is not None and ast_end_line > end_idx:
+                    end_idx = ast_end_line
         except Exception:
             body_start_idx = None
 
@@ -285,7 +299,8 @@ class ParameterFormat:
 
     @property
     def name_str(self) -> str:
-        """Return just the name as a string."""
+        """Return just the name as a string. 
+        will do some modifications to me the vairable compliant with python"""
         return self.name.replace(".", "_")
 
     @property
@@ -307,6 +322,97 @@ class ParameterFormat:
             return False
         return True
 
+    @property
+    # TODO: use this to replace reference to the tensor descriptions.
+    def tensor_expr_in_order(self) -> list[str]:
+        """
+        Generate a list of tensor expressions in the order of the nested structure.
+        """
+        def _generate_expr(format_item) -> list[str]:
+            if isinstance(format_item, ParameterFormat):
+                return _generate_expr(format_item.formatting)
+            elif isinstance(format_item, TensorDescription):
+                return [format_item.name_str]
+            elif isinstance(format_item, list):
+                return [_generate_expr(item) for item in format_item]
+            elif isinstance(format_item, dict):
+                return [_generate_expr(value) for value in format_item.values()]
+            else:
+                return []
+        return _generate_expr(self.formatting)
+
+    @property
+    def packed_tensor_expr(self) -> str:
+        """
+        Generate a packing assignment expression for this parameter.
+
+        Converts flat tensor inputs into the expected nested structure.
+        Handles nested structures (lists, dicts).
+
+        Returns:
+            Assignment string like "inputA = [inputA_0, inputA_1]". 
+            Empty string if no packing needed.
+        """
+        def _generate_expr(format_item) -> str:
+            if isinstance(format_item, ParameterFormat):
+                return _generate_expr(format_item.formatting)
+            elif isinstance(format_item, TensorDescription):
+                return format_item.name_str
+            elif isinstance(format_item, list):
+                elements = [_generate_expr(item) for item in format_item]
+                return "[" + ", ".join(elements) + "]"
+            elif isinstance(format_item, dict):
+                items = [
+                    f'"{k}": {_generate_expr(v)}' for k, v in format_item.items()]
+                return "{" + ", ".join(items) + "}"
+            else:
+                return "None"
+
+        reconstruction = _generate_expr(self.formatting)
+
+        # Skip trivial assignments where name == expression
+        if self.name_str == reconstruction:
+            return ""
+
+        return f"{self.name_str} = {reconstruction}"
+
+    @property
+    def unpacked_tensor_expr(self) -> str:
+        """
+        Generate unpacking assignment expressions that extract flat tensors from
+        a nested structure, using accessor paths.
+
+        This is the inverse of packed_tensor_expr.
+
+        Handles:
+        - List unpacking (e.g., "inputA_0 = inputA[0]", "inputA_1 = inputA[1]")
+        - Dict unpacking (e.g., 'state_pose = state["pose"]')
+        - Nested structures (e.g., 'nested_0_0 = nested[0][0]')
+
+        Returns:
+            Newline-separated assignment strings. Empty string if no unpacking needed.
+        """
+        def _generate_unpacking(format_item, accessor_path: str, assignments: list):
+            if isinstance(format_item, ParameterFormat):
+                _generate_unpacking(format_item.formatting,
+                                    accessor_path, assignments)
+            elif isinstance(format_item, TensorDescription):
+                tensor_name = format_item.name_str
+                if tensor_name != accessor_path:
+                    assignments.append(f"{tensor_name} = {accessor_path}")
+            elif isinstance(format_item, list):
+                for idx, item in enumerate(format_item):
+                    child_path = f"{accessor_path}[{idx}]"
+                    _generate_unpacking(item, child_path, assignments)
+            elif isinstance(format_item, dict):
+                for key, value in format_item.items():
+                    child_path = f'{accessor_path}["{key}"]'
+                    _generate_unpacking(value, child_path, assignments)
+
+        assignments = []
+        _generate_unpacking(self.formatting, self.name_str, assignments)
+        return "\n".join(assignments)
+
 
 def verify_data_exact_match(source_data, target_data):
     # Check if both are the same type (allow dict-like and list-like substitutions)
@@ -316,6 +422,10 @@ def verify_data_exact_match(source_data, target_data):
         target_data, (str, bytes, torch.Tensor))
     source_is_dict_like = isinstance(source_data, collections.abc.Mapping)
     target_is_dict_like = isinstance(target_data, collections.abc.Mapping)
+    if isinstance(source_data, TracedTensor):
+        source_data = source_data.tensor
+    if isinstance(target_data, TracedTensor):
+        target_data = target_data.tensor
 
     # If one is list-like and the other is not, they don't match
     if source_is_list_like != target_is_list_like:
@@ -358,7 +468,9 @@ def verify_data_exact_match(source_data, target_data):
 def extract_return_names(func):
     """Extract variable names from return statements in the function."""
     try:
-        source = inspect.getsource(func)
+        # Unwrap decorated functions to get to the original source
+        unwrapped_func = inspect.unwrap(func)
+        source = inspect.getsource(unwrapped_func)
         # Remove leading indentation to make it valid Python code
         dedented_source = textwrap.dedent(source)
         tree = ast.parse(dedented_source)
@@ -447,9 +559,10 @@ def extract_return_names(func):
         return ["output1"]
 
 
-def map_from_torch_dtype(notation):
+def map_from_torch_dtype(notation, dtype):
     if notation == "prefix":
-        return {
+        map = {
+            #common dtypes
             torch.float64: "kFloat64",
             torch.float32: "kFloat32",
             torch.float16: "kFloat16",
@@ -458,9 +571,13 @@ def map_from_torch_dtype(notation):
             torch.uint8: "kUInt8",
             torch.int8: "kInt8",
             torch.bool: "kBool",
+
+            # other dtypes
+            torch.bfloat16: "kBFloat16",
         }
     elif notation == "python":
-        return {
+        map = {
+            #common dtypes
             torch.float64: "float64",
             torch.float32: "float32",
             torch.float16: "float16",
@@ -469,9 +586,33 @@ def map_from_torch_dtype(notation):
             torch.uint8: "uint8",
             torch.int8: "int8",
             torch.bool: "bool",
+
+            # other dtypes
+            torch.bfloat16: "bfloat16",
         }
     else:
         raise ValueError(f"Unsupported notation: {notation}")
+    
+    if dtype not in map:
+        raise ValueError(f"{dtype} tensors detected but not supported for export.")
+    
+    return map[dtype]
+
+
+def flatten_io_structure(data, name_str):
+    flat_data = {}
+    if isinstance(data, collections.abc.Sequence) and not isinstance(data, (str, bytes, torch.Tensor)):
+        for idx, item in enumerate(data):
+            child_name = f"{name_str}_{idx}" if name_str else str(idx)
+            flat_data.update(flatten_io_structure(item, child_name))
+    elif isinstance(data, collections.abc.Mapping):
+        for key, value in data.items():
+            child_name = f"{name_str}_{key}" if name_str else key
+            flat_data.update(flatten_io_structure(value, child_name))
+    elif isinstance(data, torch.Tensor) or isinstance(data, TracedTensor):
+        flat_data[name_str] = data
+
+    return flat_data
 
 
 def describe_io_helper(data, name_str, dtype_notation):
@@ -479,13 +620,13 @@ def describe_io_helper(data, name_str, dtype_notation):
     if isinstance(data, collections.abc.Sequence) and not isinstance(data, (str, bytes, torch.Tensor)):
         if not isinstance(data, list):
             type_name = type(data).__name__
-            print(
+            _get_logger().warning(
                 f"Input/Output '{name_str}' has list-like type '{type_name}' which will be "
                 f"treated as 'list'. Ensure the runtime can handle this substitution.")
 
         io_format = []
         for idx, item in enumerate(data):
-            child_name = "_".join([name_str, str(idx)])
+            child_name = f"{name_str}_{idx}" if name_str else str(idx)
             child_description, child_format = describe_io_helper(
                 item, child_name, dtype_notation)
             io_format.append(child_format)
@@ -494,13 +635,13 @@ def describe_io_helper(data, name_str, dtype_notation):
     elif isinstance(data, collections.abc.Mapping):
         if not isinstance(data, dict):
             type_name = type(data).__name__
-            print(
+            _get_logger().warning(
                 f"Input/Output '{name_str}' has dict-like type '{type_name}' which will be "
                 f"treated as 'dict'. Ensure the runtime can handle this substitution.")
 
         io_format = {}
         for k, v in data.items():
-            child_name = "_".join([name_str, k])
+            child_name = f"{name_str}_{k}" if name_str else k
             child_description, child_format = describe_io_helper(
                 v, child_name, dtype_notation)
             io_format[k] = child_format
@@ -513,7 +654,7 @@ def describe_io_helper(data, name_str, dtype_notation):
         # Create TensorDescription dataclass instance
         tensor_desc = TensorDescription(
             name=name_str,
-            dtype=map_from_torch_dtype(dtype_notation)[data.dtype],
+            dtype=map_from_torch_dtype(dtype_notation, data.dtype),
             shape=CompactYamlList(data.shape),
             type="tensor",
             tag=tag,
@@ -523,6 +664,8 @@ def describe_io_helper(data, name_str, dtype_notation):
         # Return as a list containing the dataclass (for now, keep compatibility)
         data_description = [tensor_desc]
         io_format = tensor_desc  # Plain string
+    elif isinstance(data, TracedTensor):
+        return describe_io_helper(data.tensor, name_str, dtype_notation)
     else:
         # For non-tensor data types
         data_desc = TensorDescription(
@@ -739,8 +882,12 @@ def flatten_to_named_dict(data, io_format, use_tag_first=True):
 
 
 def safe_deepcopy(data):
+    # this is used to deepcopy a complex data structure.
+    # running safe deepcopy also unwraps the TracedTensor to the underlying tensor.
     if isinstance(data, torch.Tensor):
         return data.clone()
+    elif isinstance(data, TracedTensor):
+        return data.tensor.clone()
 
     elif isinstance(data, list):
         return [safe_deepcopy(item) for item in data]
@@ -748,80 +895,6 @@ def safe_deepcopy(data):
         return {k: safe_deepcopy(v) for k, v in data.items()}
     else:
         return copy.deepcopy(data)
-
-
-def find_header_end(text, start_pos):
-    """Find the end of function header (the colon after balanced parentheses)"""
-    paren_count = 0
-    in_string = False
-    string_char = None
-    found_params = False
-
-    for i in range(start_pos, len(text)):
-        char = text[i]
-
-        # Handle string literals (simple approach)
-        if not in_string and char in ('"', "'"):
-            in_string = True
-            string_char = char
-        elif in_string and char == string_char and text[i-1:i] != '\\':
-            in_string = False
-            string_char = None
-        elif in_string:
-            continue
-
-        # Handle parentheses
-        if char == '(':
-            paren_count += 1
-            found_params = True
-        elif char == ')':
-            paren_count -= 1
-        elif char == ':' and paren_count == 0 and found_params:
-            return i
-
-    return None
-
-
-def clean_header_to_single_line(header):
-    """Convert multi-line header to clean single line"""
-    # Remove extra whitespace and newlines
-    cleaned = re.sub(r'\s+', ' ', header.strip())
-
-    # Fix spacing around special characters
-    cleaned = re.sub(r'\s*\(\s*', '(', cleaned)
-    cleaned = re.sub(r'\s*\)\s*', ')', cleaned)
-    cleaned = re.sub(r'\s*,\s*', ', ', cleaned)
-    cleaned = re.sub(r'\s*->\s*', ' -> ', cleaned)
-    cleaned = re.sub(r'\s*:\s*$', ':', cleaned)
-
-    return cleaned
-
-
-def add_self_if_needed(header):
-    """Add self parameter if not already present"""
-    # Extract parameters between parentheses
-    match = re.match(r'(.*?\()([^)]*)(\).*)', header)
-    if not match:
-        return header
-
-    before, params, after = match.groups()
-    params = params.strip()
-
-    # Check if self is already the first parameter
-    if not params:
-        # No parameters - add self
-        return f"{before}self{after}"
-
-    # Get first parameter name (remove type hints and defaults)
-    first_param = params.split(',')[0].strip()
-    param_name = first_param.split(':')[0].split('=')[0].strip().lstrip('*')
-
-    if param_name == 'self':
-        # Self already present
-        return header
-    else:
-        # Add self as first parameter
-        return f"{before}self, {params}{after}"
 
 
 def get_attribute_value_from_frame(frame, attr_name):
@@ -856,74 +929,6 @@ def get_attribute_value_from_frame(frame, attr_name):
         final_attr_name = attr_name
 
     return obj, final_attr_name
-
-
-#########################################################
-# Class Templates
-#########################################################
-
-
-def create_module(name, parent_class, constant_attrs):
-    if parent_class is None:
-        bases = (torch.nn.Module,)
-    elif isinstance(parent_class, torch.nn.Module) or issubclass(parent_class, torch.nn.Module):
-        bases = (parent_class,)
-    else:
-        bases = (torch.nn.Module, parent_class)
-
-    constants = {}
-    for name, value in constant_attrs.items():
-        if 'self.' in name:
-            name = name.split('self.')[1]
-        constants[name] = value
-
-    def __init__(self, *args, **kwargs):
-        # Initialize all parent classes
-        super(ModuleTemplate, self).__init__(*args, **kwargs)
-        self.saved_buffers = []
-
-    def add_buffer(self, name, value):
-        # clean up the input name
-        if 'self.' in name:
-            name = name.split('self.')[1]
-        # verify no duplicate buffer names
-        if name in self.saved_buffers:
-            raise ValueError(
-                f"Buffer with name '{name}' was already registered")
-        if name in self.__constant__:
-            raise ValueError(
-                f"Buffer with name '{name}' was already registered as a constant")
-        # clean up preexisting attributes
-        if hasattr(self, name):
-            delattr(self, name)
-        # register the buffer
-        self.register_buffer(name, value)
-        self.saved_buffers.append(name)
-
-    def forward(self):
-        raise NotImplementedError("The forward method is not implemented.")
-
-    ModuleTemplate = type(
-        name,  # Class name
-        bases,            # Base classes tuple
-        {
-            '__init__': __init__,
-            '__constant__': list(constants.keys()),
-            'add_buffer': add_buffer,
-            'forward': forward,
-        }
-    )
-
-    module_template = ModuleTemplate()
-
-    # add constants
-    for name, value in constants.items():
-        if not hasattr(module_template, name):
-            setattr(module_template, name, value)
-        else:
-            raise ValueError(
-                f"Invalid constant name {name} detected when setting the module template. The constant already exists in module template")
-    return module_template
 
 #########################################################
 # Tagged datatype
@@ -1005,6 +1010,10 @@ def mirror_all_tensor_tags(source, target):
     '''
     Mirror all tensor tags from source to target.
     '''
+    if isinstance(source, TracedTensor):
+        source = source.tensor
+    if isinstance(target, TracedTensor):
+        target = target.tensor
     if isinstance(source, torch.Tensor) and isinstance(target, torch.Tensor):
         if hasattr(source, 'leapp_tag'):
             tag_tensor(target, source.leapp_tag)

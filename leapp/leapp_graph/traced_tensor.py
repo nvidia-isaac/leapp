@@ -1,0 +1,684 @@
+import operator
+
+import torch
+from torch.fx.proxy import Proxy
+from leapp._logging import _get_logger
+from leapp.tracing_lock import TracingLock
+
+
+class TracedTensor:
+    """A tensor wrapper that records operations using torch.fx.
+
+    This class wraps a torch.Tensor and records all operations performed on it
+    by maintaining a computation graph via torch.fx.Proxy. The recorded graph
+    can be exported to TorchScript or ONNX.
+
+    TracedTensors must be created via TraceContext.create_input().
+    """
+
+    def __init__(self, tensor: torch.Tensor, name: str, context, proxy: Proxy):
+        """Initialize a TracedTensor.
+
+        TracedTensors can only be created via TraceContext.create_input().
+
+        Args:
+            tensor: The actual torch.Tensor to wrap
+            name: Name for the tensor (used in ONNX export and graph)
+            context: The TraceContext that owns this tensor
+            proxy: The fx.Proxy for graph recording
+        """
+        self._tensor = tensor
+        self._name = name
+        self._context = context
+        self._proxy = proxy
+        self._global_tracing_lock = TracingLock()
+
+    @property
+    def tensor(self) -> torch.Tensor:
+        """Get the underlying torch.Tensor."""
+        return self._tensor
+
+    @property
+    def proxy(self) -> Proxy:
+        """Get the fx.Proxy for graph recording."""
+        return self._proxy
+
+    @property
+    def name(self) -> str:
+        """Get the name of the tensor."""
+        return self._name
+
+    @property
+    def context(self) -> str:
+        """Get the name of the  that owns this tensor."""
+        return self._context.name
+
+    @property
+    def context_obj(self):
+        """Get the TracedTensorNode that owns this tensor."""
+        return self._context
+
+    @property
+    def is_tracing(self) -> bool:
+        """Get the tracing status of the TracedTensorNode that owns this tensor."""
+        return self._context.is_tracing
+        
+
+    def _new(self, tensor: torch.Tensor, proxy: Proxy = None) -> "TracedTensor":
+        """Create a new TracedTensor in the same context.
+
+        Intermediate tensors get auto-generated names based on the operation.
+        When not tracing, proxy can be None.
+        """
+        if proxy is not None:
+            # Generate a name based on the proxy node's name
+            intermediate_name = str(proxy.node.name)
+        else:
+            # When not tracing, use a placeholder name
+            intermediate_name = "untraced"
+        return TracedTensor(tensor, intermediate_name, self._context, proxy)
+
+    @staticmethod
+    def _convert_method_descriptor(func, context=None):
+        """Convert torch.Tensor method descriptors to torch.* function equivalents.
+
+        Method descriptors (like torch.Tensor.div) can't be used with TorchScript
+        because they don't support weak references. This converts them to their
+        equivalent torch.* functions (like torch.div).
+        A common situation where this is needed is when the source coded uses
+        normalTensor + tracedTensor(normal tensor is first)
+        """
+        # Check if it's a method descriptor on torch.Tensor
+        func_type = type(func).__name__
+        if func_type in ('method_descriptor', 'builtin_function_or_method'):
+            # Try to get the method name
+            func_name = getattr(func, '__name__', None)
+            if func_name:
+                # Look for equivalent in torch module
+                torch_func = getattr(torch, func_name, None)
+                if torch_func is not None and callable(torch_func):
+                    return torch_func
+                
+                # Handle in-place operations (e.g., add_ -> torch.add)
+                # In-place methods end with '_' but torch.* functions don't
+                if func_name.endswith('_') and len(func_name) > 1:
+                    base_name = func_name[:-1]  # Remove trailing underscore
+                    torch_func = getattr(torch, base_name, None)
+                    if torch_func is not None and callable(torch_func):
+                        return torch_func
+                
+                # Log warning if we couldn't find the equivalent torch function
+                if context is not None:
+                    _get_logger().warning(
+                        f"while tracing for {context} detected method_descriptor or builtin_function_or_method {func_name} "
+                        f"but failed to find equivalent torch function. this may cause issues during graph creation"
+                    )
+        return func
+
+    @staticmethod
+    # Find the first TracedTensor in args (including nested in lists/tuples)
+    def find_traced_tensor(obj):
+        if isinstance(obj, TracedTensor):
+            return obj
+        elif isinstance(obj, (list, tuple)):
+            for item in obj:
+                result = TracedTensor.find_traced_tensor(item)
+                if result is not None:
+                    return result
+        return None
+    
+    # Helper to recursively unwrap TracedTensors
+    @staticmethod
+    def unwrap_traced_tensor(obj):
+        if isinstance(obj, TracedTensor):
+            return obj.tensor
+        elif isinstance(obj, (list, tuple)):
+            return type(obj)(TracedTensor.unwrap_traced_tensor(item) for item in obj)
+        elif isinstance(obj, dict):
+            return {k: TracedTensor.unwrap_traced_tensor(v) for k, v in obj.items()}
+        return obj
+
+    @staticmethod
+    def find_all_contexts(obj, contexts=None):
+        """Recursively find all unique context names."""
+        if contexts is None:
+            contexts = set()
+        if isinstance(obj, TracedTensor) and obj.is_tracing:
+            contexts.add(obj.context)
+        elif isinstance(obj, (list, tuple)):
+            for item in obj:
+                TracedTensor.find_all_contexts(item, contexts)
+        elif isinstance(obj, dict):
+            for v in obj.values():
+                TracedTensor.find_all_contexts(v, contexts)
+        return contexts
+    
+    def validate_status(self, args = None, kwargs = None):
+        if not self.is_tracing:
+            return False
+        if self.is_tracing and self._global_tracing_lock.is_active:
+            _get_logger().error(
+                f"Error: detected active TracedTensor {self._name} from node {self.context} inside of a traced function.\n"
+                f"\n"
+                f"This happens when you have an active TracedTensor and it is being used for computation inside of a traced function/block."
+                f"\n"
+                f"You must call output_tensors() to finalize the TracedTensor node first"
+            )
+            raise Exception(
+                "Cannot use TracedTensor inside of a traced function/block. "
+                "Call output_tensors() first to finalize the TracedTensor node"
+            )
+        
+        contexts = set()
+        if args is not None:
+            for arg in args:
+                contexts = TracedTensor.find_all_contexts(arg, contexts)
+        if kwargs is not None:
+            for kwarg in kwargs.values():
+                contexts = TracedTensor.find_all_contexts(kwarg, contexts)
+
+        if len(contexts) > 1:
+            _get_logger().error(
+                f"Error: detected multiple TracedTensor contexts: {contexts} inside of a traced function.\n"
+                "\n"
+                "This happens when you mix multiple active TracedTensors from different contexts inside of a traced function/block."
+                "\n"
+                "You can call output_tensors() to finalize one of the TracedTensor nodes first "
+                "or combine both nodes into a single node by calling input_tensors() with the same node name"
+            )
+            raise Exception(
+                "Cannot mix multiple active TracedTensors from different contexts inside of a traced function/block. "
+                "Call output_tensors() to finalize one of the TracedTensor nodes first"
+                "or combine both nodes into a single node by calling input_tensors() with the same node name"
+            )
+        return True
+
+
+    @classmethod
+    def __torch_function__(cls, func, types, args=(), kwargs=None):
+        """Intercept torch operations to record them in the graph.
+
+        This method is called by PyTorch whenever a torch function is applied
+        to this object. We execute the operation on the real tensor and record
+        it in the FX graph.
+        """
+        if kwargs is None:
+            kwargs = {}
+
+        traced_tensor = TracedTensor.find_traced_tensor(args)
+
+        # Convert method descriptors to function equivalents for TorchScript compatibility
+        # Pass context if we have a traced_tensor for better error messages
+        context_name = traced_tensor.context if traced_tensor is not None else None
+        func = cls._convert_method_descriptor(func, context_name)
+
+        if traced_tensor is None:
+            # Fallback to default behavior if no TracedTensor found
+            return NotImplemented
+
+
+        # Extract real tensors for actual computation
+        real_args = tuple(TracedTensor.unwrap_traced_tensor(arg) for arg in args)
+        real_kwargs = {k: TracedTensor.unwrap_traced_tensor(v) for k, v in kwargs.items()}
+
+        # ================== EXECUTE THE ACTUAL OPERATION ==================
+        tensor_out = func(*real_args, **real_kwargs)
+        # ================== END OF EXECUTE THE ACTUAL OPERATION ===========
+
+
+        # Skip tracing if context is not tracing - return raw tensors
+        if not traced_tensor.validate_status(args, kwargs):
+            return tensor_out
+
+        # Check if we're trying to call a TorchScript module/method
+        # This will fail when trying to script the graph later
+        # We check this here (after confirming we're tracing) to avoid unnecessary
+        # type introspection when not recording to the graph
+        func_type_name = type(func).__name__
+        func_module = type(func).__module__ if hasattr(
+            type(func), '__module__') else ''
+
+        # Detect TorchScript ScriptMethod, ScriptModule, or RecursiveScriptModule
+        if 'ScriptMethod' in func_type_name or 'ScriptModule' in func_type_name:
+            _get_logger().error(
+                f"TorchScript modules cannot be used with TracedTensor during tracing.\n"
+                f"Detected call to: {func_type_name}\n"
+                f"Issue: The FX graph will contain references to TorchScript objects that cannot be scripted later.\n"
+                f"Solutions:\n"
+                f"  1. Use the regular (non-scripted) nn.Module instead during tracing\n"
+                f"  2. Extract and call the underlying operations directly\n"
+                f"  3. break the chain by calling output_tensors first then annotate the scripted module usage with other LEAPP api"
+            )
+            raise ValueError(
+                f"TorchScript modules cannot be used with TracedTensor during tracing. Detected call to: {func_type_name}")
+
+        # Also check if the function comes from torch.jit module
+        if func_module.startswith('torch.jit') or func_module.startswith('torch._C'):
+            # Check if it's actually a ScriptMethod by trying to access __self__
+            if hasattr(func, '__self__') and hasattr(func.__self__, '__class__'):
+                self_class_name = func.__self__.__class__.__name__
+                if 'Script' in self_class_name:
+                    _get_logger().error(
+                        f"TorchScript modules cannot be used with TracedTensor during tracing.\n"
+                        f"Detected: {func} from {self_class_name}\n"
+                        f"The compiled FX graph will contain TorchScript references that prevent scripting.\n"
+                        f"Use the original nn.Module instead of the scripted version during tracing."
+                    )
+                    raise ValueError(
+                        f"TorchScript modules cannot be used with TracedTensor during tracing. Detected call to: {func}")
+
+        # Helper to recursively extract proxies
+        def extract_proxy(obj):
+            if isinstance(obj, TracedTensor):
+                return obj.proxy
+            elif isinstance(obj, (list, tuple)):
+                return type(obj)(extract_proxy(item) for item in obj)
+            elif isinstance(obj, dict):
+                return {k: extract_proxy(v) for k, v in obj.items()}
+            return obj
+
+        # Extract proxies for graph recording
+        proxy_args = tuple(extract_proxy(arg) for arg in args)
+        proxy_kwargs = {k: extract_proxy(v) for k, v in kwargs.items()}
+
+        # Record the operation in the graph
+        proxy_out = traced_tensor._context.tracer.create_proxy(
+            "call_function", func, proxy_args, proxy_kwargs
+        )
+
+        # Handle multiple outputs (e.g., torch.split returns a tuple)
+        if isinstance(tensor_out, (tuple, list)):
+            # For operations that return tuples, we need to index the proxy for each output
+            result = []
+            for i, t in enumerate(tensor_out):
+                if isinstance(t, torch.Tensor):
+                    # Create a proxy for this specific output by indexing
+                    item_proxy = traced_tensor._context.tracer.create_proxy(
+                        "call_function", operator.getitem, (proxy_out, i), {}
+                    )
+                    result.append(traced_tensor._new(t, item_proxy))
+                else:
+                    result.append(t)
+            return type(tensor_out)(result)
+        elif isinstance(tensor_out, torch.Tensor):
+            return traced_tensor._new(tensor_out, proxy_out)
+        else:
+            # Non-tensor return (e.g., .item(), .tolist())
+            return tensor_out
+
+    # Provide convenient access to tensor attributes
+    @property
+    def shape(self) -> torch.Size:
+        """Get the shape of the underlying tensor."""
+        return self._tensor.shape
+
+    @property
+    def dtype(self) -> torch.dtype:
+        """Get the dtype of the underlying tensor."""
+        return self._tensor.dtype
+
+    @property
+    def device(self) -> torch.device:
+        """Get the device of the underlying tensor."""
+        return self._tensor.device
+
+    def __str__(self) -> str:
+        """String representation of TracedTensor."""
+        return f"TracedTensor({self._tensor})"
+
+    def __repr__(self) -> str:
+        """String representation of TracedTensor."""
+        return f"TracedTensor({self._tensor})"
+
+    def __format__(self, format_spec: str) -> str:
+        """Format the TracedTensor by delegating to the underlying tensor."""
+        return self._tensor.__format__(format_spec)
+
+    def __getattr__(self, name: str):
+        """Forward unknown attributes to torch functions or tensor methods.
+
+        This allows tensor methods like x.sum() to automatically work by
+        forwarding to torch.sum(x), which then gets intercepted by
+        __torch_function__ for graph recording.
+
+        For attributes that don't have corresponding torch functions,
+        we forward to the underlying tensor's attribute.
+        """
+        # Handle in-place operations (methods ending with _)
+        if name.endswith('_') and not name.startswith('_') and len(name) > 1:
+            base_name = name[:-1]  # Remove trailing underscore
+            torch_func = getattr(torch, base_name, None)
+
+            if torch_func is not None and callable(torch_func):
+                def inplace_method(*args, **kwargs):
+                    if not self.is_tracing:
+                        # Just call the in-place method on the tensor and return raw tensor
+                        getattr(self._tensor, name)(*args, **kwargs)
+                        return self._tensor
+
+                    # Record as functional operation
+                    result = torch_func(self, *args, **kwargs)
+
+                    # Update internal state to maintain in-place semantics
+                    if isinstance(result, TracedTensor):
+                        self._tensor = result.tensor
+                        self._proxy = result.proxy
+
+                    return self
+
+                return inplace_method
+
+        # Try to find a torch function with this name
+        torch_func = getattr(torch, name, None)
+        if torch_func is not None and callable(torch_func):
+            # Return a wrapper that calls the torch function with self as first arg
+            def method(*args, **kwargs):
+                return torch_func(self, *args, **kwargs)
+
+            return method
+
+        # Fall back to the underlying tensor's attribute
+        attr = getattr(self._tensor, name, None)
+        if attr is not None:
+            # If it's a callable method, wrap it to ensure it goes through __torch_function__
+            if callable(attr):
+                def wrapped_method(*args, **kwargs):
+                    # Call the method on the underlying tensor
+                    result = attr(*args, **kwargs)
+                    # If result is a tensor, wrap it in TracedTensor
+                    if isinstance(result, torch.Tensor):
+                        # Skip tracing if context is not tracing - return raw tensor
+                        if not self.validate_status():
+                            return result
+                        # Create a proxy node for this operation
+                        proxy = self._proxy._tracer.create_proxy(
+                            'call_method', name, (self._proxy,) + args, kwargs)
+                        return self._new(result, proxy)
+                    return result
+                return wrapped_method
+            return attr
+
+        # Attribute not found
+        raise AttributeError(
+            f"'TracedTensor' object has no attribute '{name}'")
+
+    # Special methods: reshape and permute need custom handling due to signature differences
+    def reshape(self, *shape):
+        """Reshape the tensor.
+
+        Note: torch.reshape expects (tensor, shape) but tensor.reshape
+        allows both reshape(shape) and reshape(*shape), so we handle both.
+        """
+        return torch.reshape(self, shape)
+
+    def permute(self, *dims):
+        """Permute dimensions.
+
+        Note: torch.permute expects (tensor, dims) but tensor.permute
+        allows both permute(dims) and permute(*dims), so we handle both.
+        """
+        # Handle both permute(2, 0, 1) and permute((2, 0, 1))
+        if len(dims) == 1 and isinstance(dims[0], (tuple, list)):
+            dims = dims[0]
+        return torch.permute(self, dims)
+
+    # Arithmetic operators (must be explicit, __getattr__ doesn't work for these)
+    def __add__(self, other):
+        """Addition operator."""
+        return torch.add(self, other)
+
+    def __radd__(self, other):
+        """Reverse addition operator."""
+        return torch.add(other, self)
+
+    def __sub__(self, other):
+        """Subtraction operator."""
+        return torch.sub(self, other)
+
+    def __rsub__(self, other):
+        """Reverse subtraction operator."""
+        return torch.sub(other, self)
+
+    def __mul__(self, other):
+        """Multiplication operator."""
+        return torch.mul(self, other)
+
+    def __rmul__(self, other):
+        """Reverse multiplication operator."""
+        return torch.mul(other, self)
+
+    def __truediv__(self, other):
+        """Division operator."""
+        return torch.div(self, other)
+
+    def __rtruediv__(self, other):
+        """Reverse division operator."""
+        return torch.div(other, self)
+
+    def __pow__(self, other):
+        """Power operator."""
+        return torch.pow(self, other)
+
+    def __rpow__(self, other):
+        """Reverse power operator."""
+        return torch.pow(other, self)
+
+    def __neg__(self):
+        """Negation operator."""
+        return torch.neg(self)
+
+    def __matmul__(self, other):
+        """Matrix multiplication operator (@)."""
+        return torch.matmul(self, other)
+
+    def __rmatmul__(self, other):
+        """Reverse matrix multiplication operator (@)."""
+        return torch.matmul(other, self)
+
+    # In-place arithmetic operators
+    def __iadd__(self, other):
+        """In-place addition (+=)."""
+        if not self.is_tracing:
+            self._tensor += other
+            return self._tensor
+
+        # Record as functional operation in graph
+        result = torch.add(self, other)
+
+        # Update internal state to maintain in-place semantics
+        self._tensor = result.tensor
+        self._proxy = result.proxy
+
+        return self
+
+    def __isub__(self, other):
+        """In-place subtraction (-=)."""
+        if not self.is_tracing:
+            self._tensor -= other
+            return self._tensor
+
+        result = torch.sub(self, other)
+        self._tensor = result.tensor
+        self._proxy = result.proxy
+        return self
+
+    def __imul__(self, other):
+        """In-place multiplication (*=)."""
+        if not self.is_tracing:
+            self._tensor *= other
+            return self._tensor
+
+        result = torch.mul(self, other)
+        self._tensor = result.tensor
+        self._proxy = result.proxy
+        return self
+
+    def __itruediv__(self, other):
+        """In-place division (/=)."""
+        if not self.is_tracing:
+            self._tensor /= other
+            return self._tensor
+
+        result = torch.div(self, other)
+        self._tensor = result.tensor
+        self._proxy = result.proxy
+        return self
+
+    def __ipow__(self, other):
+        """In-place power (**=)."""
+        if not self.is_tracing:
+            self._tensor **= other
+            return self._tensor
+
+        result = torch.pow(self, other)
+        self._tensor = result.tensor
+        self._proxy = result.proxy
+        return self
+
+    def __imatmul__(self, other):
+        """In-place matrix multiplication (@=)."""
+        if not self.is_tracing:
+            self._tensor @= other
+            return self._tensor
+
+        result = torch.matmul(self, other)
+        self._tensor = result.tensor
+        self._proxy = result.proxy
+        return self
+
+    # Comparison operators (must be explicit, __getattr__ doesn't work for these)
+    def __gt__(self, other):
+        """Greater than operator."""
+        return torch.gt(self, other)
+
+    def __lt__(self, other):
+        """Less than operator."""
+        return torch.lt(self, other)
+
+    def __ge__(self, other):
+        """Greater than or equal operator."""
+        return torch.ge(self, other)
+
+    def __le__(self, other):
+        """Less than or equal operator."""
+        return torch.le(self, other)
+
+    def __eq__(self, other):
+        """Equal operator."""
+        return torch.eq(self, other)
+
+    def __ne__(self, other):
+        """Not equal operator."""
+        return torch.ne(self, other)
+
+    def __getitem__(self, key):
+        """Indexing operator for TracedTensor.
+
+        Supports all Python indexing operations: slicing, integer indexing,
+        tensor indexing, etc. The operation is recorded in the computation graph.
+
+        Note: Boolean/mask indexing with TracedTensor masks is not supported
+        because FX tracer cannot serialize TracedTensor objects as arguments.
+
+        Note: This requires special handling because __getitem__ is a Python
+        special method, not a torch.* function, so __torch_function__ doesn't
+        intercept it. We need to manually create the proxy and wrap the result.
+
+        Args:
+            key: The indexing key (int, slice, tensor, list, tuple, etc.)
+
+        Returns:
+            TracedTensor or scalar with the indexing operation recorded
+
+        Raises:
+            NotImplementedError: If key is a TracedTensor (boolean mask or advanced indexing)
+        """
+        # Check for boolean mask indexing with TracedTensor
+        if isinstance(key, TracedTensor):
+            # Check if it's a boolean tensor (mask)
+            if key.dtype == torch.bool:
+                raise NotImplementedError(
+                    "Boolean/mask indexing with TracedTensor is not supported. "
+                    "The FX tracer cannot serialize TracedTensor objects as indexing arguments.\n"
+                    "Alternatives:\n"
+                    "  1. Use torch.masked_select(tensor, mask) instead\n"
+                    "  2. Convert mask to regular tensor: tensor[mask.tensor]\n"
+                    "  3. Use torch.where() for conditional selection"
+                )
+            else:
+                # Non-boolean tensor indexing with TracedTensor
+                raise NotImplementedError(
+                    "Advanced indexing with TracedTensor indices is not supported. "
+                    "The FX tracer cannot serialize TracedTensor objects as indexing arguments.\n"
+                    "Convert to regular tensor first: tensor[indices.tensor]"
+                )
+
+        # Check for tuple containing TracedTensor
+        if isinstance(key, tuple):
+            for item in key:
+                if isinstance(item, TracedTensor):
+                    if item.dtype == torch.bool:
+                        raise NotImplementedError(
+                            "Boolean/mask indexing with TracedTensor is not supported. "
+                            "The FX tracer cannot serialize TracedTensor objects as indexing arguments.\n"
+                            "Use torch.masked_select() or convert mask to regular tensor."
+                        )
+                    else:
+                        raise NotImplementedError(
+                            "Advanced indexing with TracedTensor indices is not supported. "
+                            "The FX tracer cannot serialize TracedTensor objects as indexing arguments.\n"
+                            "Convert to regular tensor first."
+                        )
+
+        result_tensor = self._tensor[key]
+
+        # Skip tracing if context is not tracing - return raw tensor
+        if not self.validate_status():
+            return result_tensor
+
+        proxy_out = self._context.tracer.create_proxy(
+            "call_function", operator.getitem, (self._proxy, key), {}
+        )
+        if isinstance(result_tensor, torch.Tensor):
+            return self._new(result_tensor, proxy_out)
+        return result_tensor
+
+    def __len__(self) -> int:
+        """Length operator for TracedTensor.
+
+        Returns:
+            int: The length of the first dimension of the tensor
+        """
+        return len(self._tensor)
+
+    def __bool__(self) -> bool:
+        """Boolean conversion for TracedTensor.
+
+        Delegates to the underlying tensor. This allows using TracedTensors
+        in control flow (if/else) based on their trace-time values.
+        """
+        return bool(self._tensor)
+
+    @property
+    def T(self):
+        """Transpose property (for 2D tensors)."""
+        return torch.transpose(self, 0, 1)
+
+    def to(self, *args, **kwargs):
+        """Convert tensor to different dtype or device.
+
+        Note: This requires special handling because .to() is a tensor method,
+        not a torch.* function, so __torch_function__ doesn't intercept it.
+        We need to manually create the proxy and wrap the result.
+        """
+        result_tensor = self._tensor.to(*args, **kwargs)
+
+        # Skip tracing if context is not tracing - return raw tensor
+        if not self.validate_status():
+            return result_tensor
+
+        # For type conversions, we track it as an operation
+        proxy_out = self._context.tracer.create_proxy(
+            "call_method", "to", (self._proxy,) + args, kwargs
+        )
+        return self._new(result_tensor, proxy_out)
