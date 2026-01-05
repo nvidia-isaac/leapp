@@ -232,7 +232,7 @@ class ExportManager:
             traced_tensors_node, node_name = self._setup_new_node(
                 node_name, TracedTensorNode)
             self.nodes[node_name] = traced_tensors_node
-        
+
         # TODO: this is still confusing. we need to make it more explicit.
         tensors_changed = False
         if not isinstance(tensors, dict):
@@ -242,17 +242,18 @@ class ExportManager:
         # reason this is convoluted is to mirror the scheme in output_tensors
         if tensors_changed:
             _get_logger().warning(f"Warning: no tensor name provided for input_tensors call in node {node_name}\n"
-                        "Assuming default tensor name")
+                                  "Assuming default tensor name")
 
         # if the node is not tracing, we validate the inputs only and return the raw tensors
         if not traced_tensors_node.is_tracing:
             for tensor_name, tensor in tensors.items():
-                traced_tensors_node.validate_input_and_update_tags(tensor_name, tensor_name, tensor)
+                traced_tensors_node.validate_input_and_update_tags(
+                    tensor_name, tensor_name, tensor)
             values = list(tensors.values())
             return values[0] if len(values) == 1 else tuple(values)
 
             # TODO: need a scheme to update tags. in the future that scheme will be expanded to check
-            # the inputs and outputs for type equivalence. 
+            # the inputs and outputs for type equivalence.
 
         # we need to handle input tensors more carefully than outputs because
         # we need to ensure the inputs are returned in the original structure
@@ -277,14 +278,14 @@ class ExportManager:
                 f"Error: output tensors called for node {node_name} but not registered to the ExportManager")
             raise Exception(
                 "Error: exeption detected in output_tensors declaration")
-        
+
         tensors_changed = False
         if not isinstance(tensors, dict):
             tensors_changed = True
             tensors = {'tensor': tensors}
 
         flattened_tensors = flatten_io_structure(tensors, '')
-        
+
         if not traced_tensors_node.is_tracing:
             # tag regardless of tracing status
             for tensor_name, tensor in flattened_tensors.items():
@@ -293,30 +294,32 @@ class ExportManager:
 
         if tensors_changed:
             _get_logger().warning(f"Warning: no tensor name provided for output_tensors call in node {node_name}\n"
-                        "Assuming default tensor name")
+                                  "Assuming default tensor name")
 
         types = set(type(tensor) for tensor in flattened_tensors.values())
 
         if not all([type is TracedTensor for type in types]):
             _get_logger().error(
                 f"Error: detected the following types when expected all outputs to be TracedTensors: {types}\n"
-                "**This could happen if you are not using TracedTensors in your computations.**\n" 
+                "**This could happen if you are not using TracedTensors in your computations.**\n"
                 "Please verify if you are using the returned wrapped tensors from input_tensors() to "
                 "correctly trace your computations.")
             raise Exception(
                 "Error: exeption detected in output_tensors declaration")
-    
-        context_names = set([tensor.context for tensor in flattened_tensors.values()])
+
+        context_names = set(
+            [tensor.context for tensor in flattened_tensors.values()])
         if not len(context_names) == 1 and context_names.pop() != traced_tensors_node.name:
             _get_logger().error(
                 f"Error: expected all context names to match the node name: {node_name}"
                 f" but detected the following context names: {context_names}")
             raise Exception(
                 "Error: exeption detected in output_tensors declaration")
-        
+
         traced_tensors_node.compile_trace(flattened_tensors,
-                                   backend=kwargs.get("export_with", None),
-                                   backend_params=kwargs.get("backend_params", {}))
+                                          backend=kwargs.get(
+                                              "export_with", None),
+                                          backend_params=kwargs.get("backend_params", {}))
 
     def block(self, node_name, **kwargs):
         """Create a context manager for tracing a block of code in the computational graph.
@@ -485,7 +488,8 @@ class ExportManager:
         if not ExportManager._interpret_graph:
             return
         if TracingLock().is_active:
-            raise Exception("Error: detected calling mirror_leapp_tags while tracing a function/block. this function is only valid outside of nodes")
+            raise Exception(
+                "Error: detected calling mirror_leapp_tags while tracing a function/block. this function is only valid outside of nodes")
         try:
             if not verify_data_exact_match(source, target):
                 _get_logger().error(
@@ -501,7 +505,9 @@ class ExportManager:
         _get_logger().section(
             f"Compiling graph parameters for {len(self.nodes)} nodes")
         models = {"models": {}}
-        for node in self.nodes.values():
+        nodes_to_describe = sorted(
+            self.nodes.values(), key=lambda x: x.node_index)
+        for node in nodes_to_describe:
             _get_logger().info(f"Compiling parameters for {node.name}")
             description = node.get_description()
             if 'parameters' in description and 'model_path' in description['parameters']:
@@ -607,7 +613,7 @@ class ExportManager:
 
         system_info = get_system_info()
         with open(os.path.join(self.SAVE_PATH, f"{self.GRAPH_NAME}.yaml"), "w") as f:
-            yaml.dump(models, f)
+            yaml.dump(models, f, sort_keys=False)
             f.write("\n")  # Add a newline separator
             yaml.dump(pipeline, f)
             f.write("\n")

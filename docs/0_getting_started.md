@@ -251,9 +251,9 @@ models:
 
 
 pipeline:
-  dangling_inputs:
+  inputs:
     process_sensor_data: [raw_readings]
-  dangling_outputs:
+  outputs:
     control_decision: [robot_action]
   data_flow:
     feature_extractor/confidence: [control_decision/confidence]

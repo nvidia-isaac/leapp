@@ -316,9 +316,9 @@ pipeline:
     - source: later_node/output_name
       targets:
         - earlier_node/input_name
-  dangling_inputs:
+  inputs:
     node_name: [input1, input2]
-  dangling_outputs:
+  outputs:
     node_name: [output1, output2]
 
 system_info:

@@ -43,12 +43,12 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
                              "Number of nodes do not match")
         if inputs is not None:
             total_inputs = sum(
-                [len(graph_inputs) for graph_inputs in leapp_annotation.detected_pipeline['dangling_inputs'].values()])
+                [len(graph_inputs) for graph_inputs in leapp_annotation.detected_pipeline['inputs'].values()])
             self.assertEqual(inputs, total_inputs,
                              "Number of inputs do not match")
         if outputs is not None:
             total_outputs = sum(
-                [len(graph_outputs) for graph_outputs in leapp_annotation.detected_pipeline['dangling_outputs'].values()])
+                [len(graph_outputs) for graph_outputs in leapp_annotation.detected_pipeline['outputs'].values()])
             self.assertEqual(outputs, total_outputs,
                              "Number of outputs do not match")
         if internal_connections is not None:

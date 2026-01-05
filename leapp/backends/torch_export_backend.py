@@ -43,10 +43,22 @@ class TorchExportBackend(ExportBackend):
         md5sum, sha256sum = self._verify_model_location_and_get_hash(path)
         return path, md5sum, sha256sum
 
+    def load(self, model_path: str, sha256sum: str, device: str):
+        _, actual_sha256sum = self._verify_model_location_and_get_hash(model_path)
+        if actual_sha256sum != sha256sum:
+            raise ValueError(
+                f"SHA256 checksum mismatch for {model_path}: "
+                f"expected {sha256sum}, got {actual_sha256sum}"
+            )
+        model = torch.jit.load(model_path)
+        model.to(device)
+        return model
+
     def compile(self) -> torch.jit.ScriptModule:
         raise NotImplementedError(
             "TorchExportBackend does not support compilation, please use torch-script or torch-trace instead")
         return None
+
 
 class TorchTraceExportBackend(TorchExportBackend):
     def compile(self):
@@ -56,7 +68,8 @@ class TorchTraceExportBackend(TorchExportBackend):
                 "consider using export_with='torch' without use_trace=True")
         m = self.module_builder().eval()
         # Get flat tensor values directly from inputs (not input_formats which preserves nested structure)
-        input_values = [tensor_desc.value for tensor_desc in self.node_context.inputs]
+        input_values = [
+            tensor_desc.value for tensor_desc in self.node_context.inputs]
         # Clone tensors to escape inference mode (inference tensors can't participate in autograd)
         input_values = prepare_tensors_for_export(input_values)
 

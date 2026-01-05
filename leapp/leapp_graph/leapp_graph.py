@@ -86,8 +86,8 @@ class LeappGraph:
                 graph_outputs[node_name].append(field_name)
         pipeline = {'pipeline': {'data_flow': processed_connections,
                                  'feedback_flow': processed_feedback_connections,
-                                 'dangling_inputs': graph_inputs,
-                                 'dangling_outputs': graph_outputs}}
+                                 'inputs': graph_inputs,
+                                 'outputs': graph_outputs}}
 
         return pipeline
 

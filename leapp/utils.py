@@ -111,7 +111,7 @@ def extract_source_from_line_range(executed_lines, context_name, is_function=Fal
                     best_candidate.body[0], 'lineno', None)
                 if body_start_line is not None:
                     body_start_idx = body_start_line - 1
-                
+
                 # Extend end_idx to capture multiline statements
                 # Python's line tracer only fires once for multiline statements (e.g., dict comprehensions),
                 # so max_line may not include the closing brace. Use AST's end_lineno instead.
@@ -558,26 +558,9 @@ def extract_return_names(func):
             f"Error extracting return names from {func.__name__}, reverting to defaults: {e}")
         return ["output1"]
 
-
-def map_from_torch_dtype(notation, dtype):
-    if notation == "prefix":
-        map = {
-            #common dtypes
-            torch.float64: "kFloat64",
-            torch.float32: "kFloat32",
-            torch.float16: "kFloat16",
-            torch.int32: "kInt32",
-            torch.int64: "kInt64",
-            torch.uint8: "kUInt8",
-            torch.int8: "kInt8",
-            torch.bool: "kBool",
-
-            # other dtypes
-            torch.bfloat16: "kBFloat16",
-        }
-    elif notation == "python":
-        map = {
-            #common dtypes
+def get_dtype_maps():
+    return {
+        "python": {
             torch.float64: "float64",
             torch.float32: "float32",
             torch.float16: "float16",
@@ -586,18 +569,43 @@ def map_from_torch_dtype(notation, dtype):
             torch.uint8: "uint8",
             torch.int8: "int8",
             torch.bool: "bool",
-
-            # other dtypes
             torch.bfloat16: "bfloat16",
-        }
-    else:
+        },
+        "prefix": {
+            torch.float64: "kFloat64",
+            torch.float32: "kFloat32",
+            torch.float16: "kFloat16",
+            torch.int32: "kInt32",
+            torch.int64: "kInt64",
+            torch.uint8: "kUInt8",
+            torch.int8: "kInt8",
+            torch.bool: "kBool",
+            torch.bfloat16: "kBFloat16",
+        },
+    }
+
+def map_from_torch_dtype(notation, dtype):
+    maps = get_dtype_maps()
+    if notation not in maps:
         raise ValueError(f"Unsupported notation: {notation}")
-    
+    map = maps[notation]
+
     if dtype not in map:
-        raise ValueError(f"{dtype} tensors detected but not supported for export.")
-    
+        raise ValueError(
+            f"{dtype} tensors detected but not supported for export.")
+
     return map[dtype]
 
+def map_to_torch_dtype(string):
+    maps = get_dtype_maps()
+    # Create reverse mapping: string -> dtype
+    reverse_map = {dtype_str: dtype 
+                   for notation in maps.values() 
+                   for dtype, dtype_str in notation.items()}
+    
+    if string in reverse_map:
+        return reverse_map[string]
+    raise ValueError(f"Unsupported string: {string}")
 
 def flatten_io_structure(data, name_str):
     flat_data = {}
