@@ -220,13 +220,13 @@ class InferenceManager:
         # update will corrupt the data if called within a try/except block. do not call within a try/except block.
         self.value_dict['inputs'].update_(inputs)
         for node_name, node in self.nodes.items():
-            print("="*60)
-            print("FRANK DEBUG: running", node_name)
             # inference with the model
             outputs = node(*self.value_dict['inputs'][node_name].values())
             output_order = node.output_names
+            # Ensure outputs is always a tuple/list for consistent iteration
+            if len(output_order) == 1:
+                outputs = (outputs,)
             for output_name, output_value in zip(output_order, outputs):
-                print("FRANK DEBUG: sampling", output_name)
                 self.value_dict['outputs'][node_name][output_name].copy_(output_value)
 
             # continue if this is a leaf node
@@ -242,8 +242,6 @@ class InferenceManager:
                     if i > 0:
                         tensor_val = tensor_val.clone() # clone if this tensor is being used by multiple downstream. This prevents corruption of the data.
                     target_node_name, target_input_name = targets[i]
-                    print("FRANK DEBUG: updating", target_node_name, target_input_name)
-                    print("FRANK DEBUG: tensor_val", tensor_val)
                     self.value_dict['inputs'][target_node_name][target_input_name].copy_(tensor_val)
 
         return self.build_return_value_from_outputs()
