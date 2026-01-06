@@ -182,12 +182,7 @@ class InferenceManager:
         for node_name, node in self.nodes.items():
             input_values_to_populate[node_name] = node.mock_input
         
-        output_values_to_populate = {}
-        for node_name, node in self.nodes.items():
-            output_values_to_populate[node_name] = node.mock_output
-        
-        self.value_dict.update({'inputs':input_values_to_populate}) #configures keys and prealocates the data
-        self.value_dict.update({'outputs':output_values_to_populate})
+        self.value_dict.update(input_values_to_populate) #configures keys and prealocates the data
 
         self.organized_pipeline_connections = {}
         #organize the pipeline connections
@@ -200,51 +195,54 @@ class InferenceManager:
                 target_node_name, target_input_name = target.split('/')
                 self.organized_pipeline_connections[source_node_name][source_output_name].append((target_node_name, target_input_name))
 
-        self.return_value_list = self.pipeline['outputs']
+        # Create '==out==' slot and route final outputs to it
+        output_cache = {}
+        for node_name, output_names in self.pipeline['outputs'].items():
+            node = self.nodes[node_name]
+            # Get output descriptions for this node
+            output_descs = {desc['name']: desc for desc in node.output_descriptions}
+            
+            for output_name in output_names:
+                desc = output_descs[output_name]
+                output_shape = json.loads(desc['shape']) if isinstance(desc['shape'], str) else desc['shape']
+                output_dtype = map_to_torch_dtype(desc['dtype'])
+                # Create cache tensor with unique key: node_name/output_name
+                cache_key = f"{node_name}/{output_name}"
+                output_cache[cache_key] = torch.zeros(tuple(output_shape), dtype=output_dtype, device=node.device)
+                
+                # Add connection from this output to ==out==
+                if node_name not in self.organized_pipeline_connections:
+                    self.organized_pipeline_connections[node_name] = {}
+                if output_name not in self.organized_pipeline_connections[node_name]:
+                    self.organized_pipeline_connections[node_name][output_name] = []
+                self.organized_pipeline_connections[node_name][output_name].append(('==out==', cache_key))
+        
+        self.value_dict.update({'==out==': output_cache})
 
         self.value_dict.lock_()
     
-    def build_return_value_from_outputs(self):
-        return_value = {}
-        for node_name, output_names in self.return_value_list.items():
-            outputs = {}
-            for output_name in output_names:
-                outputs[output_name] = self.value_dict['outputs'][node_name][output_name]
-
-            return_value[node_name] = outputs
-        return return_value
 
 
     def run_policy(self, inputs: Dict[str, Dict[str, torch.Tensor]]):
         # TODO: Validate the all expected inputs are present
         # update will corrupt the data if called within a try/except block. do not call within a try/except block.
-        self.value_dict['inputs'].update_(inputs)
+        self.value_dict.update_(inputs)
         for node_name, node in self.nodes.items():
             # inference with the model
-            outputs = node(*self.value_dict['inputs'][node_name].values())
+            outputs = node(*self.value_dict[node_name].values())
             output_order = node.output_names
             # Ensure outputs is always a tuple/list for consistent iteration
             if len(output_order) == 1:
                 outputs = (outputs,)
+            
+            pipeline_map = self.organized_pipeline_connections[node_name]
             for output_name, output_value in zip(output_order, outputs):
-                self.value_dict['outputs'][node_name][output_name].copy_(output_value)
+                for i in range(len(pipeline_map[output_name])):
+                    target_node_name, target_input_name = pipeline_map[output_name][i]
+                    self.value_dict[target_node_name][target_input_name].copy_(output_value)
 
-            # continue if this is a leaf node
-            if node_name not in self.organized_pipeline_connections:
-                continue
 
-            # update the input values
-            connections = self.organized_pipeline_connections[node_name]
-            for output_name, targets in connections.items():
-                # import pdb; pdb.set_trace()
-                for i in range(len(targets)):
-                    tensor_val = self.value_dict['outputs'][node_name][output_name]
-                    if i > 0:
-                        tensor_val = tensor_val.clone() # clone if this tensor is being used by multiple downstream. This prevents corruption of the data.
-                    target_node_name, target_input_name = targets[i]
-                    self.value_dict['inputs'][target_node_name][target_input_name].copy_(tensor_val)
-
-        return self.build_return_value_from_outputs()
+        return {k: v for k, v in self.value_dict['==out=='].items()}
             
     
     def __call__(self, inputs: Dict[str, Dict[str, torch.Tensor]]):
