@@ -4,8 +4,6 @@ import torch
 import json
 from typing import Dict
 
-from tensordict import TensorDict
-
 from leapp.utils import map_to_torch_dtype
 
 from leapp.backends.torch_export_backend import TorchExportBackend
@@ -162,14 +160,11 @@ class InferenceManager:
 
 
     def _validate_and_create_inference_graph(self):
-        self.value_dict = TensorDict({}, batch_size = [])
+        self.value_dict = {}
 
-        # inputs
-        input_values_to_populate = {}
+        # inputs - preallocate tensors for each node's inputs
         for node_name, node in self.nodes.items():
-            input_values_to_populate[node_name] = node.mock_input
-        
-        self.value_dict.update(input_values_to_populate) #configures keys and prealocates the data
+            self.value_dict[node_name] = node.mock_input
 
         self.organized_pipeline_connections = {}
         #organize the pipeline connections
@@ -204,12 +199,26 @@ class InferenceManager:
                     self.organized_pipeline_connections[node_name][output_name] = []
                 self.organized_pipeline_connections[node_name][output_name].append(('==out==', cache_key))
         
-        self.value_dict.update({'==out==': output_cache})
+        self.value_dict['==out=='] = output_cache
 
         # Validate shape and dtype compatibility for all data_flow connections
         for source, targets in self.pipeline['data_flow'].items():
             source_node_name, source_output_name = source.split('/')
+            
+            # Validate source node exists
+            if source_node_name not in self.nodes:
+                raise ValueError(f"Source node '{source_node_name}' in data_flow not found in models")
+            
             source_node = self.nodes[source_node_name]
+            
+            # Validate source output exists
+            source_output_names = [desc['name'] for desc in source_node.output_descriptions]
+            if source_output_name not in source_output_names:
+                raise ValueError(
+                    f"Source output '{source_output_name}' not found in node '{source_node_name}'. "
+                    f"Available outputs: {source_output_names}"
+                )
+            
             # Get source output description
             source_desc = next(
                 desc for desc in source_node.output_descriptions 
@@ -220,6 +229,19 @@ class InferenceManager:
             
             for target in targets:
                 target_node_name, target_input_name = target.split('/')
+                
+                # Validate target node exists
+                if target_node_name not in self.nodes:
+                    raise ValueError(f"Target node '{target_node_name}' in data_flow not found in models")
+                
+                # Validate target input exists
+                if target_input_name not in self.value_dict[target_node_name]:
+                    available_inputs = list(self.value_dict[target_node_name].keys())
+                    raise ValueError(
+                        f"Target input '{target_input_name}' not found in node '{target_node_name}'. "
+                        f"Available inputs: {available_inputs}"
+                    )
+                
                 target_tensor = self.value_dict[target_node_name][target_input_name]
                 
                 if list(target_tensor.shape) != list(source_shape):
@@ -234,30 +256,36 @@ class InferenceManager:
                         f"{source} {source_dtype} -> "
                         f"{target} {target_tensor.dtype}"
                     )
-
-        self.value_dict.lock_()
     
 
 
     def run_policy(self, inputs: Dict[str, Dict[str, torch.Tensor]]):
-        # update will corrupt the data if called within a try/except block. do not call within a try/except block.
-        self.value_dict.update_(inputs)
+        # Update input tensors with provided values
+        for node_name, node_inputs in inputs.items():
+            for input_name, input_value in node_inputs.items():
+                self.value_dict[node_name][input_name] = input_value
+        
         for node_name, node in self.nodes.items():
-            # inference with the model
+            # Run inference via node's __call__
             outputs = node(*self.value_dict[node_name].values())
             output_order = node.output_names
+            
             # Ensure outputs is always a tuple/list for consistent iteration
             if len(output_order) == 1:
                 outputs = (outputs,)
             
             pipeline_map = self.organized_pipeline_connections[node_name]
             for output_name, output_value in zip(output_order, outputs):
-                for i in range(len(pipeline_map[output_name])):
-                    target_node_name, target_input_name = pipeline_map[output_name][i]
-                    self.value_dict[target_node_name][target_input_name].copy_(output_value)
+                targets = pipeline_map[output_name]
+                for i, (target_node_name, target_input_name) in enumerate(targets):
+                    if i == 0:
+                        # Zero-copy: direct assignment for first consumer
+                        self.value_dict[target_node_name][target_input_name] = output_value
+                    else:
+                        # Clone for 2nd+ consumers to prevent data corruption
+                        self.value_dict[target_node_name][target_input_name] = output_value.clone()
 
-
-        return {k: v for k, v in self.value_dict['==out=='].items()}
+        return dict(self.value_dict['==out=='])
             
     
     def __call__(self, inputs: Dict[str, Dict[str, torch.Tensor]]):
