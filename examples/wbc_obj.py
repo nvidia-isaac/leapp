@@ -151,7 +151,7 @@ class WBC:
         with annotate.block("concatenate_and_run_model",
                             inputs=["lin_vel_b", "ang_vel_b",
                                     "gravity_b", "velocity_commands",
-                                    "processed_joint_pos", "joint_vel"],
+                                    "processed_joint_pos", "joint_vel", "self.previous_actions"],
                             outputs=["actions"],
                             environment_constants=['self.model'],
                             register_buffers=['self.previous_actions'],
@@ -188,5 +188,4 @@ if __name__ == "__main__":
     annotate.start(name="sample_wbc_obj", verbose=True)
     main()
     annotate.stop()
-
     annotate.compile_graph()

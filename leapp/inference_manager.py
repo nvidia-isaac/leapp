@@ -9,6 +9,7 @@ from leapp.utils import map_to_torch_dtype
 from leapp.backends.torch_export_backend import TorchExportBackend
 from leapp.backends.onnx_export_backend import ONNXExportBackend
 
+
 class NodeManager:
     def __init__(self, name, model_path, inputs, outputs, parameters):
         self.name = name
@@ -17,7 +18,8 @@ class NodeManager:
         self.output_descriptions = outputs
 
         backend = self._create_backend(parameters['backend'])
-        self.model = backend.load(model_path, parameters['sha256sum'], parameters['device'])
+        self.model = backend.load(
+            model_path, parameters['sha256sum'], parameters['device'])
 
         self.device = parameters['device']
 
@@ -44,17 +46,19 @@ class NodeManager:
     @property
     def output_dtypes(self):
         return [output['dtype'] for output in self.output_descriptions]
-    
+
     @property
     def mock_input(self):
         input_values_to_populate = {}
         for input_val in self.input_descriptions:
             input_name = input_val['name']
-            input_shape = json.loads(input_val['shape']) if isinstance(input_val['shape'], str) else input_val['shape']
+            input_shape = json.loads(input_val['shape']) if isinstance(
+                input_val['shape'], str) else input_val['shape']
             input_dtype = input_val['dtype']
-            input_value = torch.zeros(tuple(input_shape), dtype=map_to_torch_dtype(input_dtype))
+            input_value = torch.zeros(
+                tuple(input_shape), dtype=map_to_torch_dtype(input_dtype))
             input_values_to_populate[input_name] = input_value.to(self.device)
-            
+
         return input_values_to_populate
 
     @property
@@ -62,11 +66,14 @@ class NodeManager:
         output_values_to_populate = {}
         for output_val in self.output_descriptions:
             output_name = output_val['name']
-            output_shape = json.loads(output_val['shape']) if isinstance(output_val['shape'], str) else output_val['shape']
+            output_shape = json.loads(output_val['shape']) if isinstance(
+                output_val['shape'], str) else output_val['shape']
             output_dtype = output_val['dtype']
-            output_value = torch.zeros(tuple(output_shape), dtype=map_to_torch_dtype(output_dtype))
-            output_values_to_populate[output_name] = output_value.to(self.device)
-        
+            output_value = torch.zeros(
+                tuple(output_shape), dtype=map_to_torch_dtype(output_dtype))
+            output_values_to_populate[output_name] = output_value.to(
+                self.device)
+
         return output_values_to_populate
 
     def _create_backend(self, backend):
@@ -78,7 +85,6 @@ class NodeManager:
         else:
             raise ValueError(f"Unsupported backend: {backend}")
 
-
     def __call__(self, *inputs):
         if len(inputs) != len(self.input_descriptions):
             raise ValueError(
@@ -86,9 +92,13 @@ class NodeManager:
 
         outputs = self.model(*inputs)
 
-        if len(self.output_descriptions) == 1 and not isinstance(outputs, tuple):
+        # Handle single output case - unwrap from list/tuple if needed
+        if len(self.output_descriptions) == 1:
+            if isinstance(outputs, (list, tuple)):
+                return outputs[0]
             return outputs
-        elif len(self.output_descriptions) > 1 and len(outputs) == len(self.output_descriptions):
+        # Handle multiple outputs
+        elif len(outputs) == len(self.output_descriptions):
             return tuple(outputs)
         else:
             raise ValueError(
@@ -103,7 +113,6 @@ class InferenceManager:
         self.system_info = None
 
         # runtime variables
-        
 
         if not os.path.exists(model_path):
             raise FileNotFoundError(
@@ -120,6 +129,8 @@ class InferenceManager:
         self.nodes = self._create_nodes()
 
         self._validate_and_create_inference_graph()
+
+        self._prepopulate_feedback_inputs()
 
     def _load_description(self):
         with open(self.model_path, "r") as f:
@@ -158,7 +169,6 @@ class InferenceManager:
 
         return nodes
 
-
     def _validate_and_create_inference_graph(self):
         self.value_dict = {}
 
@@ -167,83 +177,97 @@ class InferenceManager:
             self.value_dict[node_name] = node.mock_input
 
         self.organized_pipeline_connections = {}
-        #organize the pipeline connections
-        for source, targets in self.pipeline['data_flow'].items():
+        all_flows = {**self.pipeline['data_flow'],
+                     **self.pipeline['feedback_flow']}
+        # organize the pipeline connections
+        for source, targets in all_flows.items():
             source_node_name, source_output_name = source.split('/')
             if source_node_name not in self.organized_pipeline_connections:
                 self.organized_pipeline_connections[source_node_name] = {}
-            self.organized_pipeline_connections[source_node_name][source_output_name] = []
+            self.organized_pipeline_connections[source_node_name][source_output_name] = [
+            ]
             for target in targets:
                 target_node_name, target_input_name = target.split('/')
-                self.organized_pipeline_connections[source_node_name][source_output_name].append((target_node_name, target_input_name))
+                self.organized_pipeline_connections[source_node_name][source_output_name].append(
+                    (target_node_name, target_input_name))
 
         # Create '==out==' slot and route final outputs to it
         output_cache = {}
         for node_name, output_names in self.pipeline['outputs'].items():
             node = self.nodes[node_name]
             # Get output descriptions for this node
-            output_descs = {desc['name']: desc for desc in node.output_descriptions}
-            
+            output_descs = {desc['name']
+                : desc for desc in node.output_descriptions}
+
             for output_name in output_names:
                 desc = output_descs[output_name]
-                output_shape = json.loads(desc['shape']) if isinstance(desc['shape'], str) else desc['shape']
+                output_shape = json.loads(desc['shape']) if isinstance(
+                    desc['shape'], str) else desc['shape']
                 output_dtype = map_to_torch_dtype(desc['dtype'])
                 # Create cache tensor with unique key: node_name/output_name
                 cache_key = f"{node_name}/{output_name}"
-                output_cache[cache_key] = torch.zeros(tuple(output_shape), dtype=output_dtype, device=node.device)
-                
+                output_cache[cache_key] = torch.zeros(
+                    tuple(output_shape), dtype=output_dtype, device=node.device)
+
                 # Add connection from this output to ==out==
                 if node_name not in self.organized_pipeline_connections:
                     self.organized_pipeline_connections[node_name] = {}
                 if output_name not in self.organized_pipeline_connections[node_name]:
-                    self.organized_pipeline_connections[node_name][output_name] = []
-                self.organized_pipeline_connections[node_name][output_name].append(('==out==', cache_key))
-        
+                    self.organized_pipeline_connections[node_name][output_name] = [
+                    ]
+                self.organized_pipeline_connections[node_name][output_name].append(
+                    ('==out==', cache_key))
+
         self.value_dict['==out=='] = output_cache
 
         # Validate shape and dtype compatibility for all data_flow connections
         for source, targets in self.pipeline['data_flow'].items():
             source_node_name, source_output_name = source.split('/')
-            
+
             # Validate source node exists
             if source_node_name not in self.nodes:
-                raise ValueError(f"Source node '{source_node_name}' in data_flow not found in models")
-            
+                raise ValueError(
+                    f"Source node '{source_node_name}' in data_flow not found in models")
+
             source_node = self.nodes[source_node_name]
-            
+
             # Validate source output exists
-            source_output_names = [desc['name'] for desc in source_node.output_descriptions]
+            source_output_names = [desc['name']
+                                   for desc in source_node.output_descriptions]
             if source_output_name not in source_output_names:
                 raise ValueError(
                     f"Source output '{source_output_name}' not found in node '{source_node_name}'. "
                     f"Available outputs: {source_output_names}"
                 )
-            
+
             # Get source output description
             source_desc = next(
-                desc for desc in source_node.output_descriptions 
+                desc for desc in source_node.output_descriptions
                 if desc['name'] == source_output_name
             )
-            source_shape = json.loads(source_desc['shape']) if isinstance(source_desc['shape'], str) else source_desc['shape']
+            source_shape = json.loads(source_desc['shape']) if isinstance(
+                source_desc['shape'], str) else source_desc['shape']
             source_dtype = map_to_torch_dtype(source_desc['dtype'])
-            
+
             for target in targets:
                 target_node_name, target_input_name = target.split('/')
-                
+
                 # Validate target node exists
                 if target_node_name not in self.nodes:
-                    raise ValueError(f"Target node '{target_node_name}' in data_flow not found in models")
-                
+                    raise ValueError(
+                        f"Target node '{target_node_name}' in data_flow not found in models")
+
                 # Validate target input exists
                 if target_input_name not in self.value_dict[target_node_name]:
-                    available_inputs = list(self.value_dict[target_node_name].keys())
+                    available_inputs = list(
+                        self.value_dict[target_node_name].keys())
                     raise ValueError(
                         f"Target input '{target_input_name}' not found in node '{target_node_name}'. "
                         f"Available inputs: {available_inputs}"
                     )
-                
+
                 target_tensor = self.value_dict[target_node_name][target_input_name]
-                
+
                 if list(target_tensor.shape) != list(source_shape):
                     raise ValueError(
                         f"Shape mismatch in pipeline connection: "
@@ -256,24 +280,28 @@ class InferenceManager:
                         f"{source} {source_dtype} -> "
                         f"{target} {target_tensor.dtype}"
                     )
-    
 
+    def _prepopulate_feedback_inputs(self):
+        pass
 
-    def run_policy(self, inputs: Dict[str, Dict[str, torch.Tensor]]):
-        # Update input tensors with provided values
-        for node_name, node_inputs in inputs.items():
-            for input_name, input_value in node_inputs.items():
-                self.value_dict[node_name][input_name] = input_value
-        
+    def run_policy(self, inputs: Dict[str, torch.Tensor]):
+        # Update input tensors with provided values (keys are "node_name/input_name")
+        for key, input_value in inputs.items():
+            node_name, input_name = key.split('/')
+            self.value_dict[node_name][input_name] = input_value
+
         for node_name, node in self.nodes.items():
             # Run inference via node's __call__
-            outputs = node(*self.value_dict[node_name].values())
+            # Use node.input_names to ensure inputs are passed in the correct order
+            inputs = [self.value_dict[node_name][name]
+                      for name in node.input_names]
+            outputs = node(*inputs)
             output_order = node.output_names
-            
+
             # Ensure outputs is always a tuple/list for consistent iteration
             if len(output_order) == 1:
                 outputs = (outputs,)
-            
+
             pipeline_map = self.organized_pipeline_connections[node_name]
             for output_name, output_value in zip(output_order, outputs):
                 targets = pipeline_map[output_name]
@@ -283,11 +311,35 @@ class InferenceManager:
                         self.value_dict[target_node_name][target_input_name] = output_value
                     else:
                         # Clone for 2nd+ consumers to prevent data corruption
-                        self.value_dict[target_node_name][target_input_name] = output_value.clone()
+                        self.value_dict[target_node_name][target_input_name] = output_value.clone(
+                        )
 
         return dict(self.value_dict['==out=='])
-            
-    
-    def __call__(self, inputs: Dict[str, Dict[str, torch.Tensor]]):
+
+    @property
+    def inputs(self) -> list:
+        """Returns list of expected input keys in 'node_name/input_name' format."""
+        input_keys = []
+        for node_name, input_names in self.pipeline['inputs'].items():
+            for input_name in input_names:
+                input_keys.append(f"{node_name}/{input_name}")
+        return input_keys
+
+    @property
+    def outputs(self) -> list:
+        """Returns list of output keys in 'node_name/output_name' format."""
+        output_keys = []
+        for node_name, output_names in self.pipeline['outputs'].items():
+            for output_name in output_names:
+                output_keys.append(f"{node_name}/{output_name}")
+        return output_keys
+
+    @property
+    def feedback_inputs(self) -> list:
+        return list(self.pipeline['feedback_flow'].values())
+
+    def set_input_value(self, node_name: str, input_name: str, value: torch.Tensor):
+        self.value_dict[node_name][input_name].copy_(value)
+
+    def __call__(self, inputs: Dict[str, torch.Tensor]):
         return self.run_policy(inputs)
-        
