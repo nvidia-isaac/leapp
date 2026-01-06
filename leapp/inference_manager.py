@@ -6,8 +6,6 @@ from typing import Dict
 
 from tensordict import TensorDict
 
-from leapp.leapp_graph.leapp_node import LeappNode
-from leapp._logging import _get_logger
 from leapp.utils import map_to_torch_dtype
 
 from leapp.backends.torch_export_backend import TorchExportBackend
@@ -85,8 +83,6 @@ class NodeManager:
 
     def __call__(self, *inputs):
         if len(inputs) != len(self.input_descriptions):
-            _get_logger().error(
-                f"Expected {len(self.input_descriptions)} inputs, got {len(inputs)}")
             raise ValueError(
                 f"Expected {len(self.input_descriptions)} inputs, got {len(inputs)}")
 
@@ -97,16 +93,12 @@ class NodeManager:
         elif len(self.output_descriptions) > 1 and len(outputs) == len(self.output_descriptions):
             return tuple(outputs)
         else:
-            _get_logger().error(
-                f"Expected {len(self.output_descriptions)} outputs, got {len(outputs)}")
             raise ValueError(
                 f"Expected {len(self.output_descriptions)} outputs, got {len(outputs)}")
 
 
 class InferenceManager:
     def __init__(self, model_path, verbose=False):
-        _get_logger().configure(verbose=verbose, savepath='.')
-
         # data reading variables
         self.models = None
         self.pipeline = None
@@ -116,14 +108,10 @@ class InferenceManager:
         
 
         if not os.path.exists(model_path):
-            _get_logger().error(
-                f"Leapp description file not found at {model_path}")
             raise FileNotFoundError(
                 f"Leapp description file not found at {model_path}")
 
         if not model_path.endswith(".yaml"):
-            _get_logger().error(
-                f"Leapp description file must end with .yaml, got {model_path}")
             raise ValueError(
                 f"Leapp description file must end with .yaml, got {model_path}")
 
@@ -132,7 +120,6 @@ class InferenceManager:
         self._load_description()
 
         self.nodes = self._create_nodes()
-        _get_logger().info(f"Created {len(self.nodes)} nodes")
 
         self._validate_and_create_inference_graph()
 
@@ -219,12 +206,40 @@ class InferenceManager:
         
         self.value_dict.update({'==out==': output_cache})
 
+        # Validate shape and dtype compatibility for all data_flow connections
+        for source, targets in self.pipeline['data_flow'].items():
+            source_node_name, source_output_name = source.split('/')
+            source_node = self.nodes[source_node_name]
+            # Get source output description
+            source_desc = next(
+                desc for desc in source_node.output_descriptions 
+                if desc['name'] == source_output_name
+            )
+            source_shape = json.loads(source_desc['shape']) if isinstance(source_desc['shape'], str) else source_desc['shape']
+            source_dtype = map_to_torch_dtype(source_desc['dtype'])
+            
+            for target in targets:
+                target_node_name, target_input_name = target.split('/')
+                target_tensor = self.value_dict[target_node_name][target_input_name]
+                
+                if list(target_tensor.shape) != list(source_shape):
+                    raise ValueError(
+                        f"Shape mismatch in pipeline connection: "
+                        f"{source} {tuple(source_shape)} -> "
+                        f"{target} {tuple(target_tensor.shape)}"
+                    )
+                if target_tensor.dtype != source_dtype:
+                    raise ValueError(
+                        f"Dtype mismatch in pipeline connection: "
+                        f"{source} {source_dtype} -> "
+                        f"{target} {target_tensor.dtype}"
+                    )
+
         self.value_dict.lock_()
     
 
 
     def run_policy(self, inputs: Dict[str, Dict[str, torch.Tensor]]):
-        # TODO: Validate the all expected inputs are present
         # update will corrupt the data if called within a try/except block. do not call within a try/except block.
         self.value_dict.update_(inputs)
         for node_name, node in self.nodes.items():
