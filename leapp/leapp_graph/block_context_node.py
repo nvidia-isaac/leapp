@@ -111,6 +111,11 @@ class BlockContextNode(LeappNode):
         
         Returns:
             A trace function suitable for use with sys.settrace
+            
+        Note:
+            Block boundaries (min_line, max_line) are now determined by AST
+            in export_manager.py, not by tracing. Tracing is only used to
+            capture buffer snapshots at each executed line.
         """
         def trace_code_snippet(frame, event, arg):
             # Skip tracing the specified file
@@ -118,17 +123,16 @@ class BlockContextNode(LeappNode):
             if code.co_filename.split('/')[-1] == skip_file:
                 return trace_code_snippet
 
-            # Capture line events to determine the range of executed code
+            # Capture line events for buffer snapshots
             if event == 'line':
-                # Only track lines from the same file as the first line
+                # Only process lines from the same file/function as the block
                 if (self.executed_lines['filename'] == code.co_filename and 
                     self.executed_lines['function_name'] == code.co_name):
+                    # Track lines for debugging purposes (not used for comparison)
                     self.executed_lines['lines'].add(frame.f_lineno)
-                    self.executed_lines['min_line'] = min(
-                        self.executed_lines['min_line'], frame.f_lineno)
+                    # Snapshot buffer values at each line
+                    # this is to get environment constatants and buffers at each line
                     self.snapshot_buffer_values(frame)
-                    self.executed_lines['max_line'] = max(
-                        self.executed_lines['max_line'], frame.f_lineno)
 
             return trace_code_snippet
         return trace_code_snippet

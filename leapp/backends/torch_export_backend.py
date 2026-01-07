@@ -52,7 +52,7 @@ class TorchExportBackend(ExportBackend):
             )
         model = torch.jit.load(model_path)
         model.to(device)
-        return model
+        return model.eval()
 
     def compile(self) -> torch.jit.ScriptModule:
         raise NotImplementedError(

@@ -376,7 +376,6 @@ class CompassNavigationModel:
         Returns:
             Final velocity commands [linear_x, linear_y, angular_z]
         """
-        print("Running compass navigation pipeline...")
 
         # Step 1: Process odometry
         prev_transform = self.transform.clone()
@@ -396,7 +395,6 @@ class CompassNavigationModel:
 
         # Step 5: Prepare inputs for mobility model
         # Add batch and time dimensions
-        start_time = time.time()
         with annotate.block(node_name="process_and_run_inference", export_with="torch",
                             inputs=["processed_image",
                                     "route_vectors", "self.speed"],
@@ -412,19 +410,13 @@ class CompassNavigationModel:
                 0).to(self.device)       # [1, 1, 1]
 
             # Step 6: Run mobility model
-            print("Running mobility model inference...")
-
             action_output, history_output, sample_output = self.mobility_model(
                 image_input, route_input, speed_input,
                 self.action, self.history, self.sample)
-            # Update state
-            self.action = action_output
+            # Update state - squeeze sequence dimension to match expected input shape
+            self.action = action_output.squeeze(1)      # [1, 1, 6] -> [1, 6]
             self.history = history_output
             self.sample = sample_output
-
-        end_time = time.time()
-        print(
-            f"Mobility model inference took {(end_time - start_time) * 1000:.2f} ms")
 
         # Step 7: Post-process commands
         with annotate.block(node_name="post_process_commands", export_with="torch",
@@ -508,8 +500,9 @@ def main():
         annotate.start(name="sample_compass_navigation_pipeline", verbose=True)
         # Run navigation pipeline
         print("Running navigation pipeline...")
-        final_commands = compass_model.run_navigation_pipeline(
-            test_image, test_odom, goal_pose, test_transform, route_transform)
+        for i in range(2):
+            final_commands = compass_model.run_navigation_pipeline(
+                test_image, test_odom, goal_pose, test_transform, route_transform)
         annotate.stop()
         annotate.compile_graph()
 

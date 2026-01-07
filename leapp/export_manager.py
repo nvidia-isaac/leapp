@@ -34,6 +34,7 @@ from leapp.tracing_lock import TracingLock
 
 from .utils import (CompactYamlList,
                     CompactYamlDict,
+                    find_with_block_end,
                     get_relative_path,
                     get_system_info,
                     verify_data_exact_match,
@@ -195,21 +196,29 @@ class ExportManager:
 
             try:
                 if node_name in self.nodes.keys():
-                    # we have seen this node before, we need to check if all values match.
-                    original_node_data = {
-                        k: v for k, v in self.nodes[node_name].executed_lines.items() if k != 'source_code'}
-                    new_node_data = {
-                        k: v for k, v in node_context.executed_lines.items() if k != 'source_code'}
-
-                    if original_node_data != new_node_data:
+                    # Compare only deterministic fields (AST-derived boundaries)
+                    # Don't compare 'lines' set which depends on non-deterministic tracing
+                    deterministic_keys = ('filename', 'function_name', 'min_line', 'max_line')
+                    original = self.nodes[node_name].executed_lines
+                    new = node_context.executed_lines
+                    
+                    mismatch = False
+                    for key in deterministic_keys:
+                        if original.get(key) != new.get(key):
+                            mismatch = True
+                            break
+                    
+                    if mismatch:
+                        original_data = {k: original.get(k) for k in deterministic_keys}
+                        new_data = {k: new.get(k) for k in deterministic_keys}
                         _get_logger().error(
-                            f"Error: {node_name} seen twice but detected lines do not match\n"
-                            f"Original node data: {original_node_data}\n"
-                            f"New node data: {new_node_data}")
+                            f"Error: {node_name} seen twice but block boundaries do not match\n"
+                            f"Original: {original_data}\n"
+                            f"New: {new_data}")
                         raise Exception(
-                            f"Error: {node_name} seen twice but detected lines do not match\n"
-                            f"Original node data: {original_node_data}\n"
-                            f"New node data: {new_node_data}")
+                            f"Error: {node_name} seen twice but block boundaries do not match\n"
+                            f"Original: {original_data}\n"
+                            f"New: {new_data}")
 
                 self.nodes[node_name] = node_context
 
@@ -368,6 +377,9 @@ class ExportManager:
 
             def __enter__(self):
                 caller_frame = sys._getframe(1)
+                filename = caller_frame.f_code.co_filename
+                start_line = caller_frame.f_lineno
+                end_line = find_with_block_end(filename, start_line)
 
                 node_context.capture_inputs_from_frame(caller_frame)
 
@@ -376,10 +388,10 @@ class ExportManager:
                 # Set up local tracing for the caller frame
                 if hasattr(caller_frame, 'f_trace_lines'):
                     caller_frame.f_trace_lines = True
-                node_context.executed_lines['filename'] = caller_frame.f_code.co_filename
+                node_context.executed_lines['filename'] = filename
                 node_context.executed_lines['function_name'] = caller_frame.f_code.co_name
-                node_context.executed_lines['min_line'] = caller_frame.f_lineno
-                node_context.executed_lines['max_line'] = caller_frame.f_lineno
+                node_context.executed_lines['min_line'] = start_line
+                node_context.executed_lines['max_line'] = end_line
 
                 trace_fn = node_context.create_trace_function(skip_file)
                 export_manager._start_tracing(caller_frame, trace_fn)

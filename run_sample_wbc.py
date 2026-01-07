@@ -14,22 +14,36 @@ def main():
         )
     image, odom, transform, goal_pose, route_transform = create_test_data(
             device=compass_model.device)
+    inputs = {
+        'compass_goal_checker/goal': goal_pose.clone(), 
+        'compass_image_processor/raw_image': image.clone(), 
+        'compass_odometry_processor/odom_msg': odom.clone(), 
+        'compass_odometry_processor/transform': transform.clone(), 
+        'compass_route_calculator/goal_pose': goal_pose.clone(), 
+        'compass_route_calculator/transform': route_transform.clone(),
+    }
 
-    final_commands = compass_model.run_navigation_pipeline(
-            image, odom, goal_pose, transform, route_transform)
-    print(final_commands)
+    for i in range(5):
+        final_commands = compass_model.run_navigation_pipeline(
+                image, odom, goal_pose, transform, route_transform)
+        print(final_commands)
     compass_policy = InferenceManager(
         "sample_compass_navigation_pipeline/sample_compass_navigation_pipeline.yaml", verbose=True)
-    print(compass_policy.inputs)
-    inputs = {'compass_goal_checker/goal': 
-            'compass_image_processor/raw_image': image,
-            'compass_odometry_processor/odom_msg': odom,
-            'compass_odometry_processor/transform': transform,
-            'compass_odometry_processor/prev_transform': transform.clone(),
-            'compass_odometry_processor/ego_speed': 
-            'compass_odometry_processor/position_2d': 
-            'compass_route_calculator/goal_pose': 
-            'compass_route_calculator/transform': 
+
+    for i in range(5):
+        outputs = compass_policy.run_policy(inputs)
+        print(outputs)
+    # inputs = {
+    #     'compass_goal_checker/goal': goal_pose,
+    #     'compass_image_processor/raw_image': image,
+    #     'compass_odometry_processor/odom_msg': odom,
+    #     'compass_odometry_processor/transform': transform,
+    #     'compass_odometry_processor/prev_transform': transform.clone(),
+    #     'compass_odometry_processor/ego_speed': torch.zeros(1, device=DEVICE, dtype=DTYPE),
+    #     'compass_odometry_processor/position_2d': torch.zeros(3, device=DEVICE, dtype=DTYPE),
+    #     'compass_route_calculator/goal_pose': goal_pose,
+    #     'compass_route_calculator/transform': route_transform,
+    # }
 
     # }
 

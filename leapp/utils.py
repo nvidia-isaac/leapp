@@ -18,7 +18,6 @@
 import torch
 import inspect
 import ast
-import re
 import textwrap
 import copy
 import os
@@ -28,6 +27,29 @@ from dataclasses import dataclass
 from typing import Optional, Any, Dict, Tuple
 from leapp.leapp_graph.traced_tensor import TracedTensor
 from leapp._logging import _get_logger
+
+
+def find_with_block_end(filename, start_lineno):
+    """Use AST to find the end line of the with block starting at start_lineno.
+    
+    This is deterministic and doesn't depend on runtime tracing behavior.
+    
+    Args:
+        filename: Path to the source file
+        start_lineno: Line number where the 'with' statement starts
+        
+    Returns:
+        The end line number of the with block, or None if not found
+    """
+    with open(filename, 'r') as f:
+        source = f.read()
+    
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.With, ast.AsyncWith)):
+            if node.lineno == start_lineno:
+                return node.end_lineno
+    return None
 
 
 def extract_source_from_line_range(executed_lines, context_name, is_function=False):
@@ -521,7 +543,7 @@ def extract_return_names(func):
 
         if len(return_statements) > 1:
             # Multiple return statements - log warning and intelligently merge
-            print(f"Warning: Function {func.__name__} has {len(return_statements)} return statements. "
+            _get_logger().warning(f"Warning: Function {func.__name__} has {len(return_statements)} return statements. "
                   f"This may cause unexpected behavior if the return statements return different "
                   f"data types, shapes, or dtypes.")
 
@@ -1121,7 +1143,6 @@ def get_relative_path(model_path, yaml_save_path):
     except ValueError:
         # If relative path calculation fails (e.g., different drives on Windows), keep absolute path
         return model_path
-
 
 def get_system_info():
     import leapp

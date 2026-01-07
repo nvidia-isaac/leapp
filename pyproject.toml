@@ -47,6 +47,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 # dict in key insertion order is garunteeded in python 3.7+
+# getting the end_lineno for ast nodes is provided in 3.8+
 # __init__subclass__ is provided in 3.6+
 requires-python = ">=3.8"
 dependencies = [

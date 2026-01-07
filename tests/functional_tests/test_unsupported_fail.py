@@ -65,7 +65,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         except Exception as e:
             annotate.stop()
             first_line = str(e).split('\n')[0]
-            expected = "Error: funcA seen twice but detected lines do not match"
+            expected = "Error: funcA seen twice but block boundaries do not match"
             self.assertEqual(first_line, expected)
             return
 
