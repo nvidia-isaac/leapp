@@ -345,5 +345,36 @@ class InferenceManager:
     def set_input_value(self, node_name: str, input_name: str, value: torch.Tensor):
         self.value_dict[node_name][input_name].copy_(value)
 
+    def get_mock_input(self):
+        """Generate random tensors for all external pipeline inputs.
+
+        Returns:
+            dict: Mapping of 'node_name/input_name' to random tensors with correct dtype, device, and shape.
+        """
+        mock_inputs = {}
+
+        for node_name, input_names in self.pipeline['inputs'].items():
+            node = self.nodes[node_name]
+            # Create a lookup for input descriptions by name
+            input_descs = {desc['name']: desc for desc in node.input_descriptions}
+
+            for input_name in input_names:
+                desc = input_descs[input_name]
+                shape = json.loads(desc['shape']) if isinstance(
+                    desc['shape'], str) else desc['shape']
+                dtype = map_to_torch_dtype(desc['dtype'])
+                device = node.device
+
+                # Generate random tensor (randn for floats, randint for integers)
+                if dtype.is_floating_point:
+                    tensor = torch.randn(
+                        tuple(shape), dtype=dtype, device=device)
+                else:
+                    tensor = torch.randint(0, 256, tuple(
+                        shape), dtype=dtype, device=device)
+                mock_inputs[f"{node_name}/{input_name}"] = tensor
+
+        return mock_inputs
+
     def __call__(self, inputs: Dict[str, torch.Tensor]):
         return self.run_policy(inputs)

@@ -108,8 +108,9 @@ class CompassOdometryProcessor:
             dyaw += 2 * torch.pi
 
         # Create angular velocity with consistent tensor shapes
-        ang_vel = torch.tensor(
-            [0.0, 0.0, (dyaw / dt_s).item()], dtype=torch.float32)
+        # Use tensor ops instead of .item() for TorchScript compatibility
+        ang_vel = torch.cat(
+            [torch.zeros(2, device=dyaw.device), (dyaw / dt_s).unsqueeze(0)])
 
         return ang_vel, lin_vel
 
