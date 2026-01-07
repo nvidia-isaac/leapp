@@ -1,5 +1,5 @@
 from leapp.inference_manager import InferenceManager
-from examples.wbc_obj import WBC
+from examples.wbc_plain import get_model, run_model
 
 import torch
 
@@ -8,11 +8,13 @@ DTYPE = torch.float32
 
 
 def main():
-    wbc = WBC()
+    model = get_model("models/isaac_velocity_flat_h1_v0.pt")
     wbc_policy = InferenceManager(
         "sample_wbc_graph/sample_wbc_graph.yaml", verbose=True)
-    wbc_policy.set_input_value('concatenate_and_run_model', 'previous_actions', torch.randn(
-        19, device=DEVICE, dtype=DTYPE))
+
+    previous_actions = torch.zeros(19, device=DEVICE, dtype=DTYPE)
+    wbc_policy.set_input_value(
+        'concatenate_and_run_model', 'previous_actions', previous_actions)
 
     for i in range(10):
         inputs = {
@@ -26,7 +28,8 @@ def main():
         # Extract just the input names (part after '/') for the reference WBC
         inputs_for_wbc = {
             key.split('/')[1]: value for key, value in inputs.items()}
-        reference_outputs = wbc.run_model(**inputs_for_wbc)
+        reference_outputs, previous_actions = run_model(
+            model, **inputs_for_wbc, previous_actions=previous_actions)
 
         outputs = wbc_policy.run_policy(inputs)
 

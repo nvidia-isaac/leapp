@@ -177,8 +177,14 @@ class InferenceManager:
             self.value_dict[node_name] = node.mock_input
 
         self.organized_pipeline_connections = {}
-        all_flows = {**self.pipeline['data_flow'],
-                     **self.pipeline['feedback_flow']}
+        # Merge data_flow and feedback_flow, combining target lists for shared keys
+        all_flows = {}
+        for flow_dict in [self.pipeline['data_flow'], self.pipeline['feedback_flow']]:
+            for source, targets in flow_dict.items():
+                if source in all_flows:
+                    all_flows[source] = all_flows[source] + targets
+                else:
+                    all_flows[source] = targets
         # organize the pipeline connections
         for source, targets in all_flows.items():
             source_node_name, source_output_name = source.split('/')
@@ -196,8 +202,7 @@ class InferenceManager:
         for node_name, output_names in self.pipeline['outputs'].items():
             node = self.nodes[node_name]
             # Get output descriptions for this node
-            output_descs = {desc['name']
-                : desc for desc in node.output_descriptions}
+            output_descs = {desc['name']: desc for desc in node.output_descriptions}
 
             for output_name in output_names:
                 desc = output_descs[output_name]
@@ -297,7 +302,6 @@ class InferenceManager:
                       for name in node.input_names]
             outputs = node(*inputs)
             output_order = node.output_names
-
             # Ensure outputs is always a tuple/list for consistent iteration
             if len(output_order) == 1:
                 outputs = (outputs,)
