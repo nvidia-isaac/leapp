@@ -292,7 +292,10 @@ class InferenceManager:
     def run_policy(self, inputs: Dict[str, torch.Tensor]):
         # Update input tensors with provided values (keys are "node_name/input_name")
         for key, input_value in inputs.items():
-            node_name, input_name = key.split('/')
+            try:
+                node_name, input_name = key.split('/')
+            except ValueError:
+                raise ValueError(f"Invalid input key: {key}\n Expected format: node_name/input_name")
             self.value_dict[node_name][input_name] = input_value
 
         for node_name, node in self.nodes.items():
