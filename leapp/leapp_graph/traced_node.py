@@ -82,11 +82,24 @@ class TracedTensorNode(LeappNode):
         elif isinstance(data, TracedTensor):
             tensor_val = data.tensor
             if to_traced:
-                # cannot retrace a currently active traced tensor
                 if data.is_tracing:
-                    _get_logger().error(f"Error: when creating inputs for {self.name}, \
-                                            detected data {name} is already a TracedTensor and is tracing")
-                    raise ValueError("Error in TracedTensorNode")
+                    # Check if the traced tensor is from the same context (node)
+                    if data.context_obj is self:
+                        # Same context: allow override with warning
+                        _get_logger().warning(
+                            f"Input '{name}' for node '{self.name}' is an active TracedTensor "
+                            f"from the same node. Creating fresh input placeholder "
+                            f"(previous trace will be discarded for this branch)."
+                        )
+                    else:
+                        # Different context: error - cannot use traced tensor from another node
+                        _get_logger().error(
+                            f"Error: when creating inputs for '{self.name}', "
+                            f"detected data '{name}' is an active TracedTensor from a different node '{data.context}'. "
+                            f"Cannot use TracedTensor from one node as input to another. "
+                            f"Call output_tensors() on the source node first."
+                        )
+                        raise ValueError("Error in TracedTensorNode")
                 return self._create_io_helper(tensor_val, name, to_traced)
             else:
                 # return the underlying tensor value
@@ -174,23 +187,25 @@ class TracedTensorNode(LeappNode):
         # Erase nodes in reverse order to avoid issues with dependencies
         for node in reversed(nodes_to_remove):
             if node.op == "placeholder":
-                input_description = LeappNode.get_io_description_by_name(node.name, self.inputs)
+                input_description = LeappNode.get_io_description_by_name(
+                    node.name, self.inputs)
                 if input_description is None:
-                    _get_logger().error(f"Error: when building the graph module for {self.name}")
+                    _get_logger().error(
+                        f"Error: when building the graph module for {self.name}")
                 self.trimmed_inputs.add(input_description.name_str)
 
             if len(node.users) == 0:
                 self.graph.erase_node(node)
-        
+
         if len(self.trimmed_inputs) > 0:
             _get_logger().warning(f"Warning: when building the graph module for {self.name}, "
                                   "detected the following inputs are not used in the computation or directly returned as output: "
                                   f"{self.trimmed_inputs} \n"
                                   "For clarity and efficiency, consider removing these inputs")
-            
-            # Remove trimmed inputs from self.inputs
-            self.inputs = [inp for inp in self.inputs if inp.name_str not in self.trimmed_inputs]
 
+            # Remove trimmed inputs from self.inputs
+            self.inputs = [
+                inp for inp in self.inputs if inp.name_str not in self.trimmed_inputs]
 
         # Check if graph already has an output node
         has_output = any(node.op == "output" for node in self.graph.nodes)

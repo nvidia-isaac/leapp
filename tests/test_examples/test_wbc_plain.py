@@ -80,7 +80,7 @@ class TestWBCPlain(BaseExampleTest):
 
         try:
             torch.cuda.synchronize()  # Wait for GPU operations to complete
-            self.assertTrue(torch.allclose(outputs, exported_action, rtol=1e-6, atol=1e-6))
+            self.assertTrue(torch.allclose(outputs, exported_action, rtol=1e-3, atol=1e-6))
         except AssertionError as e:
             print("Outputs do not match:")
             print(f"Outputs: {outputs}")

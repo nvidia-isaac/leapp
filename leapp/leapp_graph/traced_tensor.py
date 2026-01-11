@@ -643,6 +643,83 @@ class TracedTensor:
             return self._new(result_tensor, proxy_out)
         return result_tensor
 
+    def __setitem__(self, key, value):
+        """Indexed assignment operator for TracedTensor.
+
+        This allows assignments like `traced_tensor[:] = value` to be recorded
+        in the computation graph. The TracedTensor is updated in-place to reflect
+        the new values and proxy.
+
+        If the value is a TracedTensor, this tensor "inherits" the tracing from
+        that value, meaning subsequent operations on this tensor will continue
+        to be traced.
+
+        Args:
+            key: The indexing key (int, slice, tensor, list, tuple, etc.)
+            value: The value to assign (can be a TracedTensor or regular tensor/scalar)
+        """
+        # Unwrap value if it's a TracedTensor
+        real_value = TracedTensor.unwrap_traced_tensor(value)
+        
+        # Perform the actual assignment
+        self._tensor[key] = real_value
+        
+        # Skip tracing if context is not tracing
+        if not self.validate_status():
+            return
+        
+        # Extract proxy from value if it's a TracedTensor
+        if isinstance(value, TracedTensor):
+            value_proxy = value.proxy
+        else:
+            value_proxy = value
+        
+        # For full slice assignment [:], we can treat it as the value itself
+        if key == slice(None) or (isinstance(key, tuple) and all(k == slice(None) for k in key)):
+            # Full replacement - the proxy becomes the value's proxy
+            if isinstance(value, TracedTensor):
+                self._proxy = value.proxy
+        else:
+            # Partial assignment - record as a call_method
+            proxy_out = self._context.tracer.create_proxy(
+                "call_method", "__setitem__", (self._proxy, key, value_proxy), {}
+            )
+            self._proxy = proxy_out
+
+    @staticmethod
+    def copy_into(target: torch.Tensor, source: "TracedTensor") -> "TracedTensor":
+        """Copy values from a TracedTensor into a regular tensor, returning a TracedTensor.
+        
+        This is useful when you have a pre-allocated buffer (regular tensor) and want
+        to copy traced values into it while maintaining the trace. The returned
+        TracedTensor wraps the target tensor but inherits the tracing graph from source.
+        
+        Usage:
+            # Instead of: self._action[:] = action.to(self.device)
+            # Use:        self._action = TracedTensor.copy_into(self._action, action.to(self.device))
+        
+        Args:
+            target: The destination tensor (regular torch.Tensor) to copy into
+            source: The source TracedTensor whose values and trace to use
+            
+        Returns:
+            A TracedTensor wrapping the target tensor with source's proxy
+        """
+        if not isinstance(source, TracedTensor):
+            raise TypeError(f"source must be a TracedTensor, got {type(source)}")
+        
+        # Copy the actual data
+        target.copy_(source.tensor)
+        
+        # Return a new TracedTensor that wraps target but uses source's proxy
+        # This effectively makes target "become" traced
+        return TracedTensor(
+            target, 
+            source.name, 
+            source._context, 
+            source.proxy
+        )
+
     def __len__(self) -> int:
         """Length operator for TracedTensor.
 

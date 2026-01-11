@@ -1570,6 +1570,164 @@ class TestTracedTensor(unittest.TestCase):
                 except Exception as e:
                     self.fail(f"{func_name}: Error exporting to ONNX: {e}")
 
+    # ==================== Setitem Tests ====================
+
+    def test_setitem_full_slice_with_regular_tensor(self):
+        """Test full slice assignment with a regular tensor value."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+
+        # Assign a new value via full slice
+        x[:] = torch.tensor([10.0, 20.0, 30.0])
+
+        # Should still be a TracedTensor
+        self.assertIsInstance(x, TracedTensor)
+        # Should have updated values
+        expected = torch.tensor([10.0, 20.0, 30.0])
+        self.assertTrue(torch.allclose(x.tensor, expected))
+
+    def test_setitem_full_slice_with_traced_tensor(self):
+        """Test full slice assignment where value is another TracedTensor."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+
+        # Create another traced tensor via operation
+        y = x * 2  # [2.0, 4.0, 6.0]
+
+        # Create a buffer and assign y to it
+        buffer = ctx.create_input(torch.zeros(3), name="buffer")
+        buffer[:] = y
+
+        # Buffer should now have y's values
+        self.assertIsInstance(buffer, TracedTensor)
+        expected = torch.tensor([2.0, 4.0, 6.0])
+        self.assertTrue(torch.allclose(buffer.tensor, expected))
+
+        # Test compilation - buffer's proxy was replaced with y's proxy,
+        # so the graph traces back to x (buffer input is unused/pruned)
+        ctx.compile_trace({'buffer': buffer})
+        
+        # Run GraphModule and verify output
+        result = ctx.compiled_graph_module(torch.tensor([1.0, 2.0, 3.0]))
+        self.assertTrue(torch.allclose(result, expected))
+
+        # Also verify TorchScript compilation works
+        scripted = torch.jit.script(ctx.compiled_graph_module)
+        result_scripted = scripted(torch.tensor([1.0, 2.0, 3.0]))
+        self.assertTrue(torch.allclose(result_scripted, expected))
+        
+        # Test with different input to ensure it's actually computing
+        result_different = ctx.compiled_graph_module(torch.tensor([10.0, 20.0, 30.0]))
+        expected_different = torch.tensor([20.0, 40.0, 60.0])
+        self.assertTrue(torch.allclose(result_different, expected_different))
+
+    def test_setitem_partial_slice(self):
+        """Test partial slice assignment."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0]), name="x")
+
+        # Assign to a partial slice
+        x[1:3] = torch.tensor([20.0, 30.0])
+
+        # Should still be a TracedTensor
+        self.assertIsInstance(x, TracedTensor)
+        # Should have updated values
+        expected = torch.tensor([1.0, 20.0, 30.0, 4.0, 5.0])
+        self.assertTrue(torch.allclose(x.tensor, expected))
+
+    def test_setitem_single_index(self):
+        """Test single index assignment."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+
+        # Assign to a single index
+        x[1] = 99.0
+
+        self.assertIsInstance(x, TracedTensor)
+        expected = torch.tensor([1.0, 99.0, 3.0])
+        self.assertTrue(torch.allclose(x.tensor, expected))
+
+    def test_setitem_2d_slice(self):
+        """Test 2D slice assignment."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.zeros(3, 4), name="x")
+
+        # Assign to a row
+        x[1, :] = torch.tensor([1.0, 2.0, 3.0, 4.0])
+
+        self.assertIsInstance(x, TracedTensor)
+        self.assertTrue(torch.allclose(x.tensor[1], torch.tensor([1.0, 2.0, 3.0, 4.0])))
+
+    def test_copy_into_basic(self):
+        """Test TracedTensor.copy_into static method."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        source = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="source")
+
+        # Create a traced result
+        traced_result = source * 2  # [2.0, 4.0, 6.0]
+
+        # Create a regular tensor buffer
+        buffer = torch.zeros(3)
+
+        # Use copy_into to copy traced values to buffer
+        result = TracedTensor.copy_into(buffer, traced_result)
+
+        # Result should be a TracedTensor
+        self.assertIsInstance(result, TracedTensor)
+        # Buffer should be updated in-place
+        expected = torch.tensor([2.0, 4.0, 6.0])
+        self.assertTrue(torch.allclose(buffer, expected))
+        # Result should wrap the same buffer
+        self.assertTrue(torch.allclose(result.tensor, expected))
+
+        # Test compilation
+        ctx.compile_trace({'result': result})
+        output = ctx.compiled_graph_module(torch.tensor([1.0, 2.0, 3.0]))
+        self.assertTrue(torch.allclose(output, expected))
+
+    def test_copy_into_preserves_buffer_reference(self):
+        """Test that copy_into preserves the buffer memory location."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        source = ctx.create_input(torch.tensor([5.0, 6.0, 7.0]), name="source")
+
+        # Create a buffer and keep a reference to its data
+        buffer = torch.zeros(3)
+        buffer_data_ptr = buffer.data_ptr()
+
+        # Use copy_into
+        result = TracedTensor.copy_into(buffer, source)
+
+        # The buffer's data pointer should be unchanged (same memory)
+        self.assertEqual(buffer.data_ptr(), buffer_data_ptr)
+        # Result should wrap the same tensor
+        self.assertEqual(result.tensor.data_ptr(), buffer_data_ptr)
+
+    def test_copy_into_type_error(self):
+        """Test that copy_into raises TypeError for non-TracedTensor source."""
+        buffer = torch.zeros(3)
+        regular_tensor = torch.tensor([1.0, 2.0, 3.0])
+
+        with self.assertRaises(TypeError) as context:
+            TracedTensor.copy_into(buffer, regular_tensor)
+
+        self.assertIn("TracedTensor", str(context.exception))
+
+    def test_setitem_after_compile_no_trace(self):
+        """Test that setitem doesn't trace after compile."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+        y = x * 2
+
+        ctx.compile_trace({'y': y})
+
+        # After compile, setitem should still work but not trace
+        x[:] = torch.tensor([10.0, 20.0, 30.0])
+
+        # Should still be TracedTensor but values updated
+        self.assertIsInstance(x, TracedTensor)
+        expected = torch.tensor([10.0, 20.0, 30.0])
+        self.assertTrue(torch.allclose(x.tensor, expected))
+
     # ==================== Unsupported Operation error message ====================
     def test_boolean_indexing_raises_error(self):
         """Test that boolean indexing with TracedTensor raises a clear error."""
