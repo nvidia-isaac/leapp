@@ -197,7 +197,7 @@ class SimplifiedONNXProgram:
         outputs = self._session.run(None, input_dict)
 
         # Convert outputs back to torch tensors on the appropriate device
-        return [torch.from_numpy(out).to(output_device) for out in outputs]
+        return tuple(torch.from_numpy(out).to(output_device) for out in outputs)
 
 
 class ONNXExportBackend(ExportBackend):

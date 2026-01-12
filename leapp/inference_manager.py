@@ -92,14 +92,14 @@ class NodeManager:
 
         outputs = self.model(*inputs)
 
-        # Handle single output case - unwrap from list/tuple if needed
+        # Handle single output case - unwrap from tuple if needed
         if len(self.output_descriptions) == 1:
-            if isinstance(outputs, (list, tuple)):
+            if isinstance(outputs, tuple):
                 return outputs[0]
             return outputs
         # Handle multiple outputs
         elif len(outputs) == len(self.output_descriptions):
-            return tuple(outputs)
+            return outputs
         else:
             raise ValueError(
                 f"Expected {len(self.output_descriptions)} outputs, got {len(outputs)}")
@@ -202,7 +202,8 @@ class InferenceManager:
         for node_name, output_names in self.pipeline['outputs'].items():
             node = self.nodes[node_name]
             # Get output descriptions for this node
-            output_descs = {desc['name']: desc for desc in node.output_descriptions}
+            output_descs = {desc['name']
+                : desc for desc in node.output_descriptions}
 
             for output_name in output_names:
                 desc = output_descs[output_name]
@@ -295,7 +296,8 @@ class InferenceManager:
             try:
                 node_name, input_name = key.split('/')
             except ValueError:
-                raise ValueError(f"Invalid input key: {key}\n Expected format: node_name/input_name")
+                raise ValueError(
+                    f"Invalid input key: {key}\n Expected format: node_name/input_name")
             self.value_dict[node_name][input_name] = input_value
 
         for node_name, node in self.nodes.items():
@@ -359,7 +361,8 @@ class InferenceManager:
         for node_name, input_names in self.pipeline['inputs'].items():
             node = self.nodes[node_name]
             # Create a lookup for input descriptions by name
-            input_descs = {desc['name']: desc for desc in node.input_descriptions}
+            input_descs = {desc['name']
+                : desc for desc in node.input_descriptions}
 
             for input_name in input_names:
                 desc = input_descs[input_name]

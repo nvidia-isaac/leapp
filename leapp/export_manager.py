@@ -198,18 +198,20 @@ class ExportManager:
                 if node_name in self.nodes.keys():
                     # Compare only deterministic fields (AST-derived boundaries)
                     # Don't compare 'lines' set which depends on non-deterministic tracing
-                    deterministic_keys = ('filename', 'function_name', 'min_line', 'max_line')
+                    deterministic_keys = (
+                        'filename', 'function_name', 'min_line', 'max_line')
                     original = self.nodes[node_name].executed_lines
                     new = node_context.executed_lines
-                    
+
                     mismatch = False
                     for key in deterministic_keys:
                         if original.get(key) != new.get(key):
                             mismatch = True
                             break
-                    
+
                     if mismatch:
-                        original_data = {k: original.get(k) for k in deterministic_keys}
+                        original_data = {k: original.get(
+                            k) for k in deterministic_keys}
                         new_data = {k: new.get(k) for k in deterministic_keys}
                         _get_logger().error(
                             f"Error: {node_name} seen twice but block boundaries do not match\n"
@@ -555,7 +557,8 @@ class ExportManager:
     #########################################################
     # graph compilation
     #########################################################
-    def compile_graph(self, visualize=True, merge_nodes: MergeCfgEnum = MergeCfgEnum.NO_MERGE):
+    def compile_graph(self, visualize=True, merge_nodes: MergeCfgEnum = MergeCfgEnum.NO_MERGE,
+                      validate: bool = True, rtol: float = 1e-3, atol: float = 1e-5, strict=True):
         """Compile and save the computational graph from traced nodes.
 
         This method performs the complete pipeline of compiling traced nodes into exportable
@@ -637,3 +640,136 @@ class ExportManager:
         # this is **ONLY USED FOR TESTING**
         self.detected_nodes = models['models']
         self.detected_pipeline = pipeline['pipeline']
+
+        # validate all the models in the compute graph
+        if validate:
+            return self.validate_all_models(rtol=rtol, atol=atol, strict=strict)
+
+        return True
+
+    def validate_all_models(self, rtol: float = 1e-3, atol: float = 1e-5, strict: bool = True):
+        """Validate all exported models by comparing computed outputs against captured outputs.
+
+        This method runs each compiled model with its captured input values and verifies
+        that the outputs match the captured output values within the specified tolerances.
+
+        Args:
+            rtol (float): Relative tolerance for torch.allclose comparison. Default: 1e-3
+            atol (float): Absolute tolerance for torch.allclose comparison. Default: 1e-5
+
+        Returns:
+            dict: A dictionary mapping node names to validation results:
+                - True: All outputs matched within tolerance
+                - False: At least one output did not match
+                - Exception object: If model execution failed
+
+        Raises:
+            Exception: If called before compile_models() has been run.
+
+        Example:
+            >>> annotate.start(name="my_graph")
+            >>> # ... run your code ...
+            >>> annotate.stop()
+            >>> annotate.compile_graph()
+            >>> results = annotate.validate_all_models()
+            >>> assert all(results.values()), "Some models failed validation"
+        """
+
+        if not self.nodes:
+            _get_logger().error("No nodes to validate")
+            return {}
+
+        results = {}
+
+        _get_logger().section(f"Validating {len(self.nodes)} models")
+
+        for node_name, node in self.nodes.items():
+
+            _get_logger().info(f"Validating {node_name}...")
+
+            try:
+                # Check that model has been compiled
+                if node.compiled_model is None:
+                    _get_logger().warning(f"Model {node_name} does not have a compiled model. "
+                                          "Skipping validation.")
+                    # model wasn't provided but we will skip validation
+                    results[node_name] = True
+                    continue
+
+                # 1. Extract input values from TensorDescriptions
+                # The compiled model expects flat tensor inputs in order
+                input_values = [
+                    tensor_desc.value for tensor_desc in node.inputs]
+
+                # 3. Run the compiled model
+                with torch.no_grad():
+                    actual_outputs = node.compiled_model(*input_values)
+
+                # 4. Normalize outputs to tuple for consistent handling
+                if not isinstance(actual_outputs, tuple):
+                    actual_outputs = (actual_outputs,)
+
+                # 5. Extract expected output values
+                expected_outputs = tuple(
+                    tensor_desc.value for tensor_desc in node.outputs)
+
+                # 6. Validate output count matches
+                if len(actual_outputs) != len(expected_outputs):
+                    _get_logger().error(
+                        f"{node_name}: Output count mismatch - "
+                        f"got {len(actual_outputs)}, expected {len(expected_outputs)}")
+                    results[node_name] = True  # the model wasn't provided
+                    continue
+
+                # 7. Compare each output tensor
+                all_match = True
+                for idx, (actual, expected) in enumerate(zip(actual_outputs, expected_outputs)):
+                    output_name = node.outputs[idx].name if idx < len(
+                        node.outputs) else f"output_{idx}"
+
+                    # Ensure tensors are on the same device for comparison
+                    if actual.device != expected.device:
+                        actual = actual.to(expected.device)
+
+                    if not torch.allclose(actual, expected, rtol=rtol, atol=atol):
+                        all_match = False
+                        max_diff = (actual - expected).abs().max().item()
+                        _get_logger().error(
+                            f"{node_name}/{output_name}: Mismatch detected, "
+                            f"max diff: {max_diff:.6e} (rtol={rtol}, atol={atol})")
+
+                        _get_logger().info(
+                            f"  Expected shape: {expected.shape}, dtype: {expected.dtype}")
+                        _get_logger().info(
+                            f"  Actual shape: {actual.shape}, dtype: {actual.dtype}")
+
+                results[node_name] = all_match
+
+                if all_match:
+                    _get_logger().info(f"  ✓ {node_name} passed validation")
+
+            except Exception as e:
+                _get_logger().error(
+                    f"{node_name}: Validation failed with exception: {e}")
+                results[node_name] = e
+
+        # Print summary
+        _get_logger().section("Validation Summary")
+        passed = sum(1 for v in results.values() if v is True)
+        failed = sum(1 for v in results.values() if v is False)
+        errors = sum(1 for v in results.values() if isinstance(v, Exception))
+
+        _get_logger().info(f"  Passed: {passed}/{len(results)}")
+        if failed > 0:
+            _get_logger().warning(f"  Failed: {failed}/{len(results)}")
+        if errors > 0:
+            _get_logger().error(f"  Errors: {errors}/{len(results)}")
+
+        if strict and (failed > 0 or errors > 0):
+            failed_nodes = [name for name,
+                            v in results.items() if v is not True]
+            raise Exception(
+                f"Model validation failed for {len(failed_nodes)} node(s): {failed_nodes}"
+            )
+
+        return results
