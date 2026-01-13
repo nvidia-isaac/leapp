@@ -531,6 +531,5 @@ class TestExportSituation(LEAPPFunctionalTestBase):
                 f"Iteration {i}: got {actual}, expected {expected}"
             )
 
-
 if __name__ == '__main__':
     unittest.main(verbosity=2)

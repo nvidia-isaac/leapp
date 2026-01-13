@@ -927,38 +927,50 @@ def safe_deepcopy(data):
         return copy.deepcopy(data)
 
 
-def get_attribute_value_from_frame(frame, attr_name):
+def frame_to_namespace(frame):
+    """Convert a Python frame object to a namespace dictionary.
+    
+    Args:
+        frame: A Python frame object from sys._getframe() or similar
+        
+    Returns:
+        dict: A namespace combining globals and locals from the frame
+    """
+    return {**frame.f_globals, **frame.f_locals}
+
+
+def get_attribute_value_from_namespace(namespace, attr_name):
+    """Look up a variable (possibly dotted like 'self.counter') from a namespace dict.
+    
+    Args:
+        namespace: dict containing variables to look up
+        attr_name: Variable name, possibly dotted (e.g., 'self.counter', 'my_var')
+    
+    Returns:
+        tuple: (value, final_attr_name) where final_attr_name is the last part of dotted name
+    """
     if "." in attr_name:
         parts = attr_name.split(".")
         final_attr_name = parts[-1]
-        if parts[0] in frame.f_locals:
-            obj = frame.f_locals[parts[0]]
-        elif parts[0] in frame.f_globals:
-            obj = frame.f_globals[parts[0]]
-        else:
-            raise Exception(
-                f"Variable '{parts[0]}' not found in frame locals or globals")
-
+        if parts[0] not in namespace:
+            raise Exception(f"Variable '{parts[0]}' not found in namespace")
+        
+        obj = namespace[parts[0]]
         for attr in parts[1:]:
             try:
                 obj = getattr(obj, attr)
             except Exception as e:
                 raise Exception(
                     f"Error attempting to find {attr_name}, "
-                    f"failed to get attribute {attr}\n",
-                    e)
-
+                    f"failed to get attribute {attr}\n", e)
     else:
-        if attr_name in frame.f_locals:
-            obj = frame.f_locals[attr_name]
-        elif attr_name in frame.f_globals:
-            obj = frame.f_globals[attr_name]
-        else:
-            raise Exception(
-                f"Variable '{attr_name}' not found in frame locals or globals")
+        if attr_name not in namespace:
+            raise Exception(f"Variable '{attr_name}' not found in namespace")
+        obj = namespace[attr_name]
         final_attr_name = attr_name
 
     return obj, final_attr_name
+
 
 #########################################################
 # Tagged datatype

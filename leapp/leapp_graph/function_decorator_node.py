@@ -17,6 +17,7 @@
 
 from leapp.utils import (
     extract_return_names,
+    frame_to_namespace,
 )
 from leapp._logging import _get_logger
 from leapp.leapp_graph.block_context_node import BlockContextNode
@@ -103,7 +104,7 @@ class FunctionDecoratorNode(BlockContextNode):
         self.executed_lines['lines'] = set(
             range(start_line, start_line + len(func_lines)))
 
-    def create_trace_function(self, skip_file):
+    def create_trace_function(self, skip_file, entry_hook=None):
         """Create and return the trace function for function decorator tracing.
 
         Args:
@@ -119,15 +120,14 @@ class FunctionDecoratorNode(BlockContextNode):
                 if code.co_filename.split('/')[-1] == skip_file:
                     return trace_function
 
-                # Save frame if function is within the traced function's line range
+                # Save namespace if function is within the traced function's line range
+                # we need to repeatedly save the message namespace. This is to make sure we can capture the last outputs of the function before it returns
                 if (code.co_filename == self.executed_lines['filename'] and
                         self.executed_lines['min_line'] <= frame.f_lineno <= self.executed_lines['max_line']):
-                    if self.input_frame is None:
-                        self.input_frame = frame  # we will only store input frame once
-                        # store buffer values upon entering the function
-                        self.snapshot_buffer_values(frame)
-                    # Keep on updating output frame
-                    self.output_frame = frame
+                    # Convert frame to namespace for flexibility
+                    namespace = frame_to_namespace(frame)
+                    # Keep on updating output namespace
+                    self.output_namespace = namespace
 
             return trace_function
         return trace_function

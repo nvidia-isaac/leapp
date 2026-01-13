@@ -17,6 +17,7 @@
 
 import sys
 import functools
+import inspect
 import yaml
 import os
 import torch
@@ -29,6 +30,7 @@ from leapp.leapp_graph.leapp_node import LeappNode
 from leapp.leapp_graph.traced_node import TracedTensorNode
 from leapp.leapp_graph.traced_tensor import TracedTensor
 from leapp.leapp_graph.block_context_node import BlockContextNode
+from leapp.utils import frame_to_namespace
 from leapp.enums import MergeCfgEnum
 from leapp.tracing_lock import TracingLock
 
@@ -180,30 +182,6 @@ class ExportManager:
         return node, name
 
     #########################################################
-    # Tracing
-    #########################################################
-
-    def _start_tracing(self, frame, trace_function):
-        """Start the trace function."""
-        TracingLock().acquire()
-        frame.f_trace = trace_function
-        sys.settrace(trace_function)
-
-    def _stop_tracing(self, node_name, node_context):
-        if TracingLock().is_active:
-            """Stop the trace function."""
-            sys.settrace(None)
-
-            try:
-                # Save the node if it's the first time seeing it
-                # Boundary validation is done inline in block/function decorators
-                if node_name not in self.nodes:
-                    self.nodes[node_name] = node_context
-            finally:
-                # Always reset tracing state, even if an exception occurred
-                TracingLock().release()
-
-    #########################################################
     # annotation APIs
     #########################################################
     def input_tensors(self, tensors, node_name: str):
@@ -352,61 +330,48 @@ class ExportManager:
             new_node = True
             node_context, name = self._setup_new_node(
                 node_name, BlockContextNode, **kwargs)
+            self.nodes[name] = node_context
         export_manager = self
-        skip_file = __file__.split('/')[-1]
 
         class BlockTraceContext:
             """Context manager for tracing a block of code."""
 
             def __enter__(self):
                 caller_frame = sys._getframe(1)
-                # Check if this is a re-entry - validate block boundaries match
-                new_executed_lines = {
-                    'filename': caller_frame.f_code.co_filename,
-                    'function_name': caller_frame.f_code.co_name,
-                    'min_line': caller_frame.f_lineno,
-                    'max_line': find_with_block_end(caller_frame.f_code.co_filename, caller_frame.f_lineno)
-                }
+                # Convert frame to namespace immediately
+                namespace = frame_to_namespace(caller_frame)
 
                 if new_node:
-                    node_context.capture_inputs_from_frame(caller_frame)
-                    node_context.snapshot_buffer_values(caller_frame)
+                    # First entry - set the executed_lines boundaries
+                    node_context.executed_lines.update({
+                        'filename': caller_frame.f_code.co_filename,
+                        'function_name': caller_frame.f_code.co_name,
+                        'min_line': caller_frame.f_lineno,
+                        'max_line': find_with_block_end(caller_frame.f_code.co_filename, caller_frame.f_lineno)
+                    })
+                    node_context.capture_inputs_from_namespace(namespace)
+                    node_context.snapshot_buffer_values(namespace)
                     _get_logger().info(f"****Tracing started for {name}****")
-                    # First entry - set the values and start tracing
-                    node_context.executed_lines.update(new_executed_lines)
-
+                    node_context.compile_trace()
                 else:
-                    node_context.validate_inputs_from_frame(caller_frame)
-                    # Re-entry - compare boundaries
-                    for key in ('filename', 'function_name', 'min_line', 'max_line'):
-                        if node_context.executed_lines[key] != new_executed_lines[key]:
-                            _get_logger().error(
-                                f"Error: {name} re-entered but block boundaries do not match\n"
-                                f"Original: {node_context.executed_lines}\n"
-                                f"New: {new_executed_lines}")
-                            raise Exception(
-                                f"Error: {name} re-entered but block boundaries do not match")
-
-                # tracing is required to capture the output since we don't know for sure when the block will exit
-                # Enable line-level tracing for the caller frame
-                if hasattr(caller_frame, 'f_trace_lines'):
-                    caller_frame.f_trace_lines = True
-                trace_fn = node_context.create_trace_function(skip_file)
-                export_manager._start_tracing(caller_frame, trace_fn)
+                    # Re-entry - validate boundaries and inputs match
+                    node_context.validate_function_boundaries(caller_frame)
+                    node_context.validate_inputs_from_namespace(namespace)
+                # Acquire lock to prevent nested tracing and TracedTensor operations inside block
+                TracingLock().acquire()
 
                 return self
 
             def __exit__(self, exc_type, exc_value, traceback):
-
-                export_manager._stop_tracing(name, node_context)
-
+                TracingLock().release()
+                # Convert frame to namespace for output capture
+                output_namespace = frame_to_namespace(sys._getframe(1))
                 if new_node:
-                    node_context.compile_trace()
                     _get_logger().info(
                         f"****Tracing stopped for {node_context.name}****\n\n")
-                    node_context.capture_outputs_from_frame(sys._getframe(1))
+                    node_context.capture_outputs_from_namespace(output_namespace)
                 else:
-                    node_context.validate_outputs_from_frame(sys._getframe(1))
+                    node_context.validate_outputs_from_namespace(output_namespace)
 
         return BlockTraceContext()
 
@@ -465,47 +430,69 @@ class ExportManager:
                     new_node = True
                     node_context, _ = self._setup_new_node(
                         name, FunctionDecoratorNode, **params)
+                    self.nodes[name] = node_context
+                
+                caller_namespace = frame_to_namespace(sys._getframe(1))
 
                 if new_node:
                     _get_logger().info(f"****Tracing started for {name}****")
+                    sig = inspect.signature(func)
+                    bound_args = sig.bind(*args, **kwargs)
+                    bound_args.apply_defaults()
+
                     node_context.inspect_function_inputs(func, args, kwargs)
-                    # tracing requires max and min lines to be configured already so this needs to be run before tracing
-                    # sets up function boundaries
+                    # Build merged namespace: caller frame + bound function arguments
+                    # This allows capture and snapshot to look up 'self' and other function
+                    # parameters that wouldn't be in the caller's frame.
+                    input_namespace = {**caller_namespace, **bound_args.arguments}
+                    # For bound methods, 'self' is not in bound_args (it's already bound)
+                    # We need to explicitly add it from the method's __self__ attribute
+                    if hasattr(func, '__self__'):
+                        input_namespace['self'] = func.__self__
+                    node_context.capture_inputs_from_namespace(input_namespace)
+                    # Sets up function boundaries - required before tracing
                     node_context.compile_trace(func)
+                    # Use the same namespace (with 'self' if bound method) for buffer/constant lookup
+                    node_context.snapshot_buffer_values(input_namespace)
+
+                    trace_fn = node_context.create_trace_function(
+                        __file__.split('/')[-1], entry_hook=None)
                 else:
                     node_context.validate_function_boundaries(func)
                     node_context.validate_function_inputs(func, args, kwargs)
+                    # No entry_hook on re-entry - only need to capture output_namespace
+                    trace_fn = node_context.create_trace_function(
+                        __file__.split('/')[-1], entry_hook=None)
 
-                # this tracing step captures the input and output frames
-                trace_fn = node_context.create_trace_function(
-                    __file__.split('/')[-1])
-                self._start_tracing(sys._getframe(1), trace_fn)
+                # Start sys.settrace to capture namespaces (and run entry_hook on new_node)
+                sys._getframe(1).f_trace = trace_fn
+                
+                # Acquire lock to prevent nested tracing and TracedTensor operations
+                TracingLock().acquire()
+                sys.settrace(trace_fn)
 
                 try:
+                    ##### run the actual function #########
                     result = func(*args, **kwargs)
-                except Exception as e:
-                    raise e
-                finally:
-                    self._stop_tracing(name, node_context)
-                    if name not in self.nodes.keys():
-                        _get_logger().error(
-                            f"Error: Tracing stopped for {name} but node not found in nodes dictionary")
-                        raise Exception("Error: in annotating method")
-                    node_context = self.nodes[name]
-                    if new_node:
-                        _get_logger().info(
-                            f"****Tracing stopped for {node_context.name}****\n\n")
+                    #### run the actual function #########
+                finally: 
+                    sys.settrace(None)
+                    TracingLock().release()
 
                 if new_node:
+                    _get_logger().info(
+                        f"****Tracing stopped for {node_context.name}****\n\n")
                     node_context.inspect_function_outputs(func, result)
-                    # capture outputs from the frame for custom returns
-                    if node_context.output_frame is not None:
-                        node_context.capture_outputs_from_frame(
-                            node_context.output_frame)
+                    # capture outputs from the namespace for custom returns (declared via outputs=[...])
+                    if node_context.output_namespace is not None:
+                        node_context.capture_outputs_from_namespace(
+                            node_context.output_namespace)
                 else:
                     node_context.validate_function_outputs(func, result)
-                    node_context.validate_outputs_from_frame(
-                        node_context.output_frame)
+                    # validate outputs from namespace for declared outputs=[...]
+                    if node_context.output_namespace is not None:
+                        node_context.validate_outputs_from_namespace(
+                            node_context.output_namespace)
 
                 return result
             return wrapper
