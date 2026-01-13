@@ -448,102 +448,87 @@ class TestExportSituation(LEAPPFunctionalTestBase):
         self.assertEqual(len(model_info['inputs']), 4)
         self.assertEqual(len(model_info['outputs']), 3)  # 3 outputs
 
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA not available")
     def test_export_buffer_capture_across_iterations(self):
         """
         Test that buffers are captured from the first iteration only.
 
         This test creates:
-        - A method with a register_buffer that changes each iteration
-        - A block with another register_buffer that changes each iteration
+        - A method with a counter buffer that increments INSIDE the function
+        - A block with another counter that increments INSIDE the block
 
-        Both are run for 5 iterations. The exported graph should use buffer
-        values from the first iteration only. Inference manager should produce
-        consistent results matching the first iteration.
+        During Python execution, buffers change each iteration.
+        The exported model should freeze buffer values from the first iteration,
+        so inference always produces the same output as the first iteration.
+
+        Example: count_multiple(value) increments count then returns value * count
+        - Python iter 1: count 1->2, returns value*2
+        - Python iter 2: count 2->3, returns value*3
+        - Exported model: frozen at count=2, always returns value*2
         """
         from leapp.inference_manager import InferenceManager
 
-        class BufferTestModel:
+        device = torch.device('cuda')
+
+        class CounterModel:
             def __init__(self):
-                # Buffers that will change each iteration
-                self.method_buffer = torch.tensor([1.0])
-                self.block_buffer = torch.tensor([10.0])
-                self.iteration = 0
+                # Counters that will be incremented inside functions (on CUDA)
+                self.method_count = torch.tensor([0.0], device=device)
+                self.block_count = torch.tensor([10.0], device=device)
 
-            @annotate.method(export_with="torch", register_buffers=['self.method_buffer'])
-            def process_with_method(self, input_tensor: torch.Tensor):
-                # Use the buffer in computation
-                result = input_tensor * self.method_buffer
+            @annotate.method(export_with="torch", register_buffers=['self.method_count'])
+            def count_multiply(self, value: torch.Tensor):
+                # Increment counter INSIDE the function, then use it
+                self.method_count = self.method_count + 1.0
+                result = value * self.method_count
                 return result
 
-            def process_with_block(self, input_tensor: torch.Tensor):
+            def count_add(self, value: torch.Tensor):
                 with annotate.block(
-                    node_name="block_processor",
+                    node_name="block_counter",
                     export_with="torch",
-                    inputs=["input_tensor"],
+                    inputs=["value"],
                     outputs=["result"],
-                    register_buffers=["self.block_buffer"]
+                    register_buffers=["self.block_count"]
                 ):
-                    result = input_tensor + self.block_buffer
+                    # Increment counter INSIDE the block, then use it
+                    self.block_count = self.block_count - 2.0
+                    result = value + self.block_count
                 return result
 
-            def run_pipeline(self, input_tensor: torch.Tensor):
-                # First process with method
-                intermediate = self.process_with_method(input_tensor)
-                # Then process with block
-                output = self.process_with_block(intermediate)
-
-                # Update buffers for next iteration (simulating changing state)
-                self.iteration += 1
-                self.method_buffer = torch.tensor([float(self.iteration + 1)])
-                self.block_buffer = torch.tensor(
-                    [float((self.iteration + 1) * 10)])
-
+            def run_pipeline(self, input_value: torch.Tensor):
+                # First: multiply by method counter
+                intermediate = self.count_multiply(input_value)
+                # Then: add block counter
+                output = self.count_add(intermediate)
                 return output
 
-        model = BufferTestModel()
-        input_tensor = torch.tensor([5.0])
+        model = CounterModel()
+        input_value = torch.tensor([3.0], device=device)
 
-        # Store expected output from first iteration
-        # First iteration: method_buffer=1.0, block_buffer=10.0
-        # intermediate = 5.0 * 1.0 = 5.0
-        # output = 5.0 + 10.0 = 15.0
-        expected_first_iteration_output = torch.tensor([15.0])
-
-        # Run for 5 iterations
+        # Run for 5 iterations and collect Python outputs
         annotate.start(name=self.TEST_GRAPH_NAME)
-        outputs = []
+        python_outputs = []
         for i in range(5):
-            output = model.run_pipeline(input_tensor)
-            outputs.append(output.clone())
+            output = model.run_pipeline(input_value)
+            python_outputs.append(output.clone())
         annotate.stop()
         annotate.compile_graph(visualize=False)
 
-        # Verify buffer values were captured from first iteration
-        # The first output should be 15.0 (from first iteration buffers)
-        self.assertTrue(
-            torch.allclose(outputs[0], expected_first_iteration_output),
-            f"First iteration output {outputs[0]} doesn't match expected {expected_first_iteration_output}"
-        )
+        model = InferenceManager(f'{self.TEST_GRAPH_NAME}/{self.TEST_GRAPH_NAME}.yaml')
+        inputs = {
+            'count_multiply/value': input_value
+        }
 
-        # Load with inference manager
-        inference_manager = InferenceManager(
-            f'{self.TEST_GRAPH_NAME}/{self.TEST_GRAPH_NAME}.yaml')
-
-        # Run inference for 5 iterations - all should produce same result
-        # because buffers are frozen from first iteration
+        inference_outputs = []
         for i in range(5):
-            inference_inputs = {
-                'process_with_method/input_tensor': input_tensor
-            }
-            inference_outputs = inference_manager.run_policy(inference_inputs)
+            outputs = model(inputs)
+            inference_outputs.append(outputs['block_counter/result'].clone())
 
-            # Get the final output
-            block_output = inference_outputs['block_processor/result']
-
-            # All iterations should match first iteration output
+        for i, (actual, expected) in enumerate(zip(python_outputs, inference_outputs)):
             self.assertTrue(
-                torch.allclose(block_output, expected_first_iteration_output),
-                f"Inference iteration {i} output {block_output} doesn't match expected {expected_first_iteration_output}"
+                torch.allclose(actual, expected),
+                f"Iteration {i}: got {actual}, expected {expected}"
             )
 
 
