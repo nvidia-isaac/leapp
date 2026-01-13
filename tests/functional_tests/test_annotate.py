@@ -151,6 +151,45 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
 
         self.verify_single_torchscript_model_expected_value(
             [torch.tensor([1])], [outputA, outputB, outputC], funcA.__name__)
+    
+    def test_annotate_method_with_custom_inputs(self):
+        class MockModule:
+            def __init__(self):
+                self.input = None
+            def set_inputs(self, input: torch.Tensor):
+                self.input = input
+            @annotate.method(inputs = ["self.input"], export_with="torch")
+            def compute(self):
+                return self.input * 2
+
+        module = MockModule()
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        module.set_inputs(torch.tensor([1, 2, 3, 4]))
+        output = module.compute()
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+
+        self.verify_single_torchscript_model_expected_value(
+            [torch.tensor([1, 1, 1, 1])], [torch.tensor([2, 2, 2, 2])], 'compute')
+    
+    def test_annotate_method_with_mixed_inputs(self):
+        class MockModule:
+            def __init__(self):
+                self.input = None
+            def set_inputs(self, input: torch.Tensor):
+                self.input = input
+            @annotate.method(inputs = ["self.input"], export_with="torch")
+            def compute(self, input2):
+                return self.input * 2 + input2
+            
+        module = MockModule()
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        module.set_inputs(torch.tensor([1, 2, 3, 4]))
+        output = module.compute(torch.tensor([5, 6, 7, 8]))
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_single_torchscript_model_expected_value(
+            [torch.tensor([5, 6, 7, 8]), torch.tensor([1, 2, 3, 4])], [output], 'compute')
 
     def test_annotate_method_with_custom_returns(self):
         """tests the situation where the function has custom returns"""
