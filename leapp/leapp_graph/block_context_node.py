@@ -27,24 +27,24 @@ from leapp.leapp_graph.traced_tensor import TracedTensor
 
 class BlockContextNode(LeappNode):
     def __init__(self, name, node_index, backend=None, use_trace=False,
-                backend_params=None, inputs=None, outputs=None,
-                environment_constants=None, register_buffers=None):
+                 backend_params=None, inputs=None, outputs=None,
+                 environment_constants=None, register_buffers=None):
         super().__init__(name, node_index)
         # input parameters
         # this variable is for temporary use only,
         # all data will be stored in self.inputs after the function is executed
         if inputs is not None:
-            self._declared_inputs = inputs
+            self._declared_inputs = list(set(inputs))
         else:
             self._declared_inputs = []
         # output parameters
         # this variable is for temporary use only,
         # all data will be stored in self.outputs after the function is executed
         if outputs is not None:
-            self._declared_outputs = outputs
+            self._declared_outputs = list(set(outputs))
         else:
             self._declared_outputs = []
-        
+
         # node settings
         self.from_function = False
         if environment_constants is not None:
@@ -83,7 +83,6 @@ class BlockContextNode(LeappNode):
         self.cached_buffer_values = {}
         self.cached_constant_values = {}
 
-
     def compile_model(self):
         try:
             self.compiled_model = self.export_backend.compile()
@@ -105,13 +104,13 @@ class BlockContextNode(LeappNode):
 
     def create_trace_function(self, skip_file):
         """Create and return the trace function for block context tracing.
-        
+
         Args:
             skip_file: Filename to skip when tracing (e.g., export_manager.py)
-        
+
         Returns:
             A trace function suitable for use with sys.settrace
-            
+
         Note:
             Block boundaries (min_line, max_line) are now determined by AST
             in export_manager.py, not by tracing. Tracing is only used to
@@ -123,27 +122,24 @@ class BlockContextNode(LeappNode):
             if code.co_filename.split('/')[-1] == skip_file:
                 return trace_code_snippet
 
-            # Capture line events for buffer snapshots
+            # Capture line events for tracking executed lines
             if event == 'line':
                 # Only process lines from the same file/function as the block
-                if (self.executed_lines['filename'] == code.co_filename and 
-                    self.executed_lines['function_name'] == code.co_name):
+                if (self.executed_lines['filename'] == code.co_filename and
+                        self.executed_lines['function_name'] == code.co_name):
                     # Track lines for debugging purposes (not used for comparison)
                     self.executed_lines['lines'].add(frame.f_lineno)
-                    # Snapshot buffer values at each line
-                    # this is to get environment constatants and buffers at each line
-                    self.snapshot_buffer_values(frame)
 
             return trace_code_snippet
         return trace_code_snippet
-    
+
     def _check_for_active_traced_tensors(self, data, variable_name, path=None):
         """Recursively check if data contains any TracedTensor instances.
-        
+
         Args:
             data: The data structure to check
             path: Current path in the data structure (for error messages)
-            
+
         Returns:
             tuple: (found, traced_tensor, location) where:
                 - found: True if TracedTensor was found
@@ -222,6 +218,32 @@ class BlockContextNode(LeappNode):
             _get_logger().error(f"Error capturing outputs from frame: {e}")
             raise e
         self.output_frame = frame
+
+    def validate_outputs_from_frame(self, frame):
+        try:
+            for output_name in self._declared_outputs:
+                obj, _ = get_attribute_value_from_frame(frame, output_name)
+                self.tag_data(obj, output_name)
+                final_output_name, final_output_value = self._capture_specified_value_from_frame(
+                    output_name, frame)
+                self.validate_output_and_update_tags(
+                    final_output_name, output_name, final_output_value)
+        except Exception as e:
+            _get_logger().error(f"Error validating outputs from frame: {e}")
+            raise e
+        self.output_frame = frame
+
+    def validate_inputs_from_frame(self, frame):
+        try:
+            for input_name in self._declared_inputs:
+                final_input_name, final_input_value = self._capture_specified_value_from_frame(
+                    input_name, frame)
+                self.validate_input_and_update_tags(
+                    final_input_name, input_name, final_input_value)
+        except Exception as e:
+            _get_logger().error(f"Error validating inputs from frame: {e}")
+            raise e
+        self.input_frame = frame
 
     def snapshot_buffer_values(self, frame):
         for buffer_name in self.register_buffers:

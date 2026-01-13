@@ -195,35 +195,10 @@ class ExportManager:
             sys.settrace(None)
 
             try:
-                if node_name in self.nodes.keys():
-                    # Compare only deterministic fields (AST-derived boundaries)
-                    # Don't compare 'lines' set which depends on non-deterministic tracing
-                    deterministic_keys = (
-                        'filename', 'function_name', 'min_line', 'max_line')
-                    original = self.nodes[node_name].executed_lines
-                    new = node_context.executed_lines
-
-                    mismatch = False
-                    for key in deterministic_keys:
-                        if original.get(key) != new.get(key):
-                            mismatch = True
-                            break
-
-                    if mismatch:
-                        original_data = {k: original.get(
-                            k) for k in deterministic_keys}
-                        new_data = {k: new.get(k) for k in deterministic_keys}
-                        _get_logger().error(
-                            f"Error: {node_name} seen twice but block boundaries do not match\n"
-                            f"Original: {original_data}\n"
-                            f"New: {new_data}")
-                        raise Exception(
-                            f"Error: {node_name} seen twice but block boundaries do not match\n"
-                            f"Original: {original_data}\n"
-                            f"New: {new_data}")
-
-                self.nodes[node_name] = node_context
-
+                # Save the node if it's the first time seeing it
+                # Boundary validation is done inline in block/function decorators
+                if node_name not in self.nodes:
+                    self.nodes[node_name] = node_context
             finally:
                 # Always reset tracing state, even if an exception occurred
                 TracingLock().release()
@@ -369,8 +344,14 @@ class ExportManager:
         if not ExportManager._interpret_graph:
             return self  # no-op context manager
 
-        node_context, name = self._setup_new_node(
-            node_name, BlockContextNode, **kwargs)
+        if node_name in self.nodes.keys():
+            new_node = False
+            name = node_name
+            node_context = self.nodes[node_name]
+        else:
+            new_node = True
+            node_context, name = self._setup_new_node(
+                node_name, BlockContextNode, **kwargs)
         export_manager = self
         skip_file = __file__.split('/')[-1]
 
@@ -379,33 +360,53 @@ class ExportManager:
 
             def __enter__(self):
                 caller_frame = sys._getframe(1)
-                filename = caller_frame.f_code.co_filename
-                start_line = caller_frame.f_lineno
-                end_line = find_with_block_end(filename, start_line)
+                # Check if this is a re-entry - validate block boundaries match
+                new_executed_lines = {
+                    'filename': caller_frame.f_code.co_filename,
+                    'function_name': caller_frame.f_code.co_name,
+                    'min_line': caller_frame.f_lineno,
+                    'max_line': find_with_block_end(caller_frame.f_code.co_filename, caller_frame.f_lineno)
+                }
 
-                node_context.capture_inputs_from_frame(caller_frame)
+                if new_node:
+                    node_context.capture_inputs_from_frame(caller_frame)
+                    node_context.snapshot_buffer_values(caller_frame)
+                    _get_logger().info(f"****Tracing started for {name}****")
+                    # First entry - set the values and start tracing
+                    node_context.executed_lines.update(new_executed_lines)
 
-                _get_logger().info(f"****Tracing started for {name}****")
+                else:
+                    node_context.validate_inputs_from_frame(caller_frame)
+                    # Re-entry - compare boundaries
+                    for key in ('filename', 'function_name', 'min_line', 'max_line'):
+                        if node_context.executed_lines[key] != new_executed_lines[key]:
+                            _get_logger().error(
+                                f"Error: {name} re-entered but block boundaries do not match\n"
+                                f"Original: {node_context.executed_lines}\n"
+                                f"New: {new_executed_lines}")
+                            raise Exception(
+                                f"Error: {name} re-entered but block boundaries do not match")
 
-                # Set up local tracing for the caller frame
+                # tracing is required to capture the output since we don't know for sure when the block will exit
+                # Enable line-level tracing for the caller frame
                 if hasattr(caller_frame, 'f_trace_lines'):
                     caller_frame.f_trace_lines = True
-                node_context.executed_lines['filename'] = filename
-                node_context.executed_lines['function_name'] = caller_frame.f_code.co_name
-                node_context.executed_lines['min_line'] = start_line
-                node_context.executed_lines['max_line'] = end_line
-
                 trace_fn = node_context.create_trace_function(skip_file)
                 export_manager._start_tracing(caller_frame, trace_fn)
+
                 return self
 
             def __exit__(self, exc_type, exc_value, traceback):
+
                 export_manager._stop_tracing(name, node_context)
 
-                node_context.compile_trace()
-                node_context.capture_outputs_from_frame(sys._getframe(1))
-                _get_logger().info(
-                    f"****Tracing stopped for {node_context.name}****\n\n")
+                if new_node:
+                    node_context.compile_trace()
+                    _get_logger().info(
+                        f"****Tracing stopped for {node_context.name}****\n\n")
+                    node_context.capture_outputs_from_frame(sys._getframe(1))
+                else:
+                    node_context.validate_outputs_from_frame(sys._getframe(1))
 
         return BlockTraceContext()
 
@@ -456,14 +457,24 @@ class ExportManager:
                 if not ExportManager._interpret_graph:
                     return func(*args, **kwargs)
 
-                node_context, node_name = self._setup_new_node(
-                    name, FunctionDecoratorNode, **params)
+                # Check if this is a re-entry
+                if name in self.nodes:
+                    new_node = False
+                    node_context = self.nodes[name]
+                else:
+                    new_node = True
+                    node_context, _ = self._setup_new_node(
+                        name, FunctionDecoratorNode, **params)
 
-                _get_logger().info(f"****Tracing started for {name}****")
-                node_context.inspect_function_inputs(
-                    func, args, kwargs)
-                # tracing requires max and min lines to be configured already so this needs to be run before tracing
-                node_context.compile_trace(func)
+                if new_node:
+                    _get_logger().info(f"****Tracing started for {name}****")
+                    node_context.inspect_function_inputs(func, args, kwargs)
+                    # tracing requires max and min lines to be configured already so this needs to be run before tracing
+                    # sets up function boundaries
+                    node_context.compile_trace(func)
+                else:
+                    node_context.validate_function_boundaries(func)
+                    node_context.validate_function_inputs(func, args, kwargs)
 
                 # this tracing step captures the input and output frames
                 trace_fn = node_context.create_trace_function(
@@ -475,21 +486,27 @@ class ExportManager:
                 except Exception as e:
                     raise e
                 finally:
-                    self._stop_tracing(
-                        node_name, node_context)
+                    self._stop_tracing(name, node_context)
                     if name not in self.nodes.keys():
                         _get_logger().error(
                             f"Error: Tracing stopped for {name} but node not found in nodes dictionary")
                         raise Exception("Error: in annotating method")
                     node_context = self.nodes[name]
-                    _get_logger().info(
-                        f"****Tracing stopped for {node_context.name}****\n\n")
+                    if new_node:
+                        _get_logger().info(
+                            f"****Tracing stopped for {node_context.name}****\n\n")
 
-                node_context.inspect_function_outputs(func, result)
-                # capture outputs from the frame for custom returns
-                if node_context.output_frame is not None:
-                    node_context.capture_outputs_from_frame(
+                if new_node:
+                    node_context.inspect_function_outputs(func, result)
+                    # capture outputs from the frame for custom returns
+                    if node_context.output_frame is not None:
+                        node_context.capture_outputs_from_frame(
+                            node_context.output_frame)
+                else:
+                    node_context.validate_function_outputs(func, result)
+                    node_context.validate_outputs_from_frame(
                         node_context.output_frame)
+
                 return result
             return wrapper
         return decorator
