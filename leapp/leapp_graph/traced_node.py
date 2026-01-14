@@ -57,31 +57,31 @@ class TracedTensorNode(LeappNode):
         self.export_backend.override_module_builder(
             lambda: self.compiled_graph_module)
 
-    def _create_io_helper(self, data, name: str, to_traced: bool):
+    def _create_io_helper(self, data, name: str, to: str):
         if isinstance(data, dict):
             new_data = {}
             for key, value in data.items():
                 child_name = "_".join([name, key])
                 new_data[key] = self._create_io_helper(
-                    value, child_name, to_traced)
+                    value, child_name, to)
             return new_data
         elif isinstance(data, list):
             new_data = []
             for idx, value in enumerate(data):
                 child_name = "_".join([name, str(idx)])
                 new_data.append(self._create_io_helper(
-                    value, child_name, to_traced))
+                    value, child_name, to))
             return new_data
         elif isinstance(data, tuple):
             new_data = []
             for idx, value in enumerate(data):
                 child_name = "_".join([name, str(idx)])
                 new_data.append(self._create_io_helper(
-                    value, child_name, to_traced))
+                    value, child_name, to))
             return tuple(new_data)
         elif isinstance(data, TracedTensor):
             tensor_val = data.tensor
-            if to_traced:
+            if to=="traced":
                 if data.is_tracing:
                     # Check if the traced tensor is from the same context (node)
                     if data.context_obj is self:
@@ -100,8 +100,8 @@ class TracedTensorNode(LeappNode):
                             f"Call output_tensors() on the source node first."
                         )
                         raise ValueError("Error in TracedTensorNode")
-                return self._create_io_helper(tensor_val, name, to_traced)
-            else:
+                return self._create_io_helper(tensor_val, name, to)
+            elif to=="tensor":
                 # return the underlying tensor value
                 if not data.is_tracing:
                     _get_logger().warning(f"Warning: when creating outputs for {self.name}, \
@@ -110,12 +110,20 @@ class TracedTensorNode(LeappNode):
                 return tensor_val
 
         elif isinstance(data, torch.Tensor):
-            if to_traced:  # convert the tensor to a TracedTensor
+            if to == "traced":  # convert the tensor to a TracedTensor (input placeholder)
                 """ Future warp support
                     if isinstance(tensor, wp.array):
                         tensor = wp.to_torch(tensor)
                 """
                 node = self.graph.create_node("placeholder", name, (), {})
+                proxy = Proxy(node, self.tracer)
+                return TracedTensor(data, name, self, proxy)
+            elif to == "static":  # embed as constant in the graph (get_attr node)
+                # Create unique attribute name and store on root module
+                attr_name = f"_static_{name}".replace(".", "_")
+                self.tracer.root.register_buffer(attr_name, data.clone())
+                # Create get_attr node that retrieves the stored constant
+                node = self.graph.create_node("get_attr", attr_name, (), {})
                 proxy = Proxy(node, self.tracer)
                 return TracedTensor(data, name, self, proxy)
             else:
@@ -139,11 +147,11 @@ class TracedTensorNode(LeappNode):
             TracedTensor: A traced tensor in this context
         """
         self.add_input(name, name, data)
-        traced_data = self._create_io_helper(data, name, to_traced=True)
+        traced_data = self._create_io_helper(data, name, to="traced")
         return traced_data
 
     def create_output(self, data, name: str):
-        unwrapped_data = self._create_io_helper(data, name, to_traced=False)
+        unwrapped_data = self._create_io_helper(data, name, to="tensor")
         self.tag_data(unwrapped_data, name)
         self.add_output(name, name, unwrapped_data)
         return unwrapped_data

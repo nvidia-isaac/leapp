@@ -306,33 +306,16 @@ class InferenceManager:
             node_inputs = [self.value_dict[node_name][name]
                       for name in node.input_names]
             
-            if verbose:
-                print(f"\n=== Running node: {node_name} ===")
-                for inp_name, inp_val in zip(node.input_names, node_inputs):
-                    if inp_val.numel() <= 10:
-                        print(f"  Input {inp_name}: {inp_val}")
-                    else:
-                        print(f"  Input {inp_name}: shape={inp_val.shape}, mean={inp_val.float().mean():.6f}, std={inp_val.float().std():.6f}")
-            
             outputs = node(*node_inputs)
             output_order = node.output_names
             # Ensure outputs is always a tuple/list for consistent iteration
             if len(output_order) == 1:
                 outputs = (outputs,)
 
-            if verbose:
-                for out_name, out_val in zip(output_order, outputs):
-                    if out_val.numel() <= 10:
-                        print(f"  Output {out_name}: {out_val}")
-                    else:
-                        print(f"  Output {out_name}: shape={out_val.shape}, mean={out_val.float().mean():.6f}, std={out_val.float().std():.6f}")
-
             pipeline_map = self.organized_pipeline_connections[node_name]
             for output_name, output_value in zip(output_order, outputs):
                 targets = pipeline_map[output_name]
                 for i, (target_node_name, target_input_name) in enumerate(targets):
-                    if verbose:
-                        print(f"  Routing {output_name} -> {target_node_name}/{target_input_name}")
                     if i == 0:
                         # Zero-copy: direct assignment for first consumer
                         self.value_dict[target_node_name][target_input_name] = output_value

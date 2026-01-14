@@ -212,7 +212,7 @@ Mark traced tensor outputs and finalize a traced tensor node.
 ### Signature
 
 ```python
-annotate.output_tensors(tensors: dict, node_name: str, **kwargs)
+annotate.output_tensors(node_name: str, tensors: dict, **kwargs)
 ```
 
 ### Parameters

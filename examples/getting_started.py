@@ -42,10 +42,10 @@ def main():
     confidence = 1.0 / (1.0 + obstacle_var)
     
     # Mark outputs to finalize the traced node
-    annotate.output_tensors({
+    annotate.output_tensors('feature_extractor', {
         'safe_speed': safe_speed,
         'confidence': confidence
-    }, 'feature_extractor', export_with="torch")
+    }, export_with="torch")
     
     # ===== NODE 3: Block annotation =====
     # Control decisions using annotation block

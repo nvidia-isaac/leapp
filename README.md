@@ -115,14 +115,14 @@ normalized_vel = joint_vel / 10.0
 combined = torch.cat([normalized_pos, normalized_vel])
 
 # Mark outputs and specify export format
-annotate.output_tensors({
+annotate.output_tensors('preprocessing', {
     'features': combined
-}, 'preprocessing', export_with="torch")
+}, export_with="torch")
 
 # Chain to another node - traced tensors automatically connect nodes
 features = annotate.input_tensors({'features': combined}, 'inference')
 predictions = features @ torch.randn(24, 3)  # Simple linear transform
-annotate.output_tensors({'predictions': predictions}, 'inference', export_with="onnx")
+annotate.output_tensors('inference', {'predictions': predictions}, export_with="onnx")
 
 annotate.stop()
 annotate.compile_graph()

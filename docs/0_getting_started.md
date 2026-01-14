@@ -63,10 +63,10 @@ def main():
     confidence = 1.0 / (1.0 + obstacle_var)
     
     # Mark outputs to finalize the traced node
-    annotate.output_tensors({
+    annotate.output_tensors('feature_extractor', {
         'safe_speed': safe_speed,
         'confidence': confidence
-    }, 'feature_extractor', export_with="torch")
+    }, export_with="torch")
     
     # ===== NODE 3: Block annotation =====
     # Control decisions using annotation block
@@ -125,9 +125,9 @@ result = some_helper_function(sensor_input)
 result = result * 2 + 1
 
 # Mark outputs to finalize the node
-annotate.output_tensors({
+annotate.output_tensors('feature_extractor', {
     'result': result
-}, 'feature_extractor', export_with="torch")
+}, export_with="torch")
 ```
 
 Traced tensors provide the most flexible approach for capturing operations:

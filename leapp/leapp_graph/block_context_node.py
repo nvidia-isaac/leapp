@@ -36,14 +36,16 @@ class BlockContextNode(LeappNode):
         # this variable is for temporary use only,
         # all data will be stored in self.inputs after the function is executed
         if inputs is not None:
-            self._declared_inputs = list(set(inputs))
+            # Deduplicate while preserving order (dict.fromkeys preserves insertion order)
+            self._declared_inputs = list(dict.fromkeys(inputs))
         else:
             self._declared_inputs = []
         # output parameters
         # this variable is for temporary use only,
         # all data will be stored in self.outputs after the function is executed
         if outputs is not None:
-            self._declared_outputs = list(set(outputs))
+            # Deduplicate while preserving order (dict.fromkeys preserves insertion order)
+            self._declared_outputs = list(dict.fromkeys(outputs))
         else:
             self._declared_outputs = []
 

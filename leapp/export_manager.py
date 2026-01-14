@@ -230,7 +230,7 @@ class ExportManager:
         # if node is tracing we return the traced tensors
         return traced_tensors[0] if len(traced_tensors) == 1 else tuple(traced_tensors)
 
-    def output_tensors(self, tensors, node_name: str, **kwargs):
+    def output_tensors(self, node_name: str, tensors, static_outputs=None, **kwargs):
         if not ExportManager._interpret_graph:
             return
         self._verify_no_active_function_tracing()
@@ -241,8 +241,9 @@ class ExportManager:
             _get_logger().error(
                 f"Error: output tensors called for node {node_name} but not registered to the ExportManager")
             raise Exception(
-                "Error: exeption detected in output_tensors declaration")
-
+                "Error: exception detected in output_tensors declaration")
+        
+        ## process outputs
         tensors_changed = False
         if not isinstance(tensors, dict):
             tensors_changed = True
@@ -258,7 +259,7 @@ class ExportManager:
 
         if tensors_changed:
             _get_logger().warning(f"Warning: no tensor name provided for output_tensors call in node {node_name}\n"
-                                  "Assuming default tensor name")
+                                "Assuming default tensor name")
 
         types = set(type(tensor) for tensor in flattened_tensors.values())
 
@@ -269,7 +270,7 @@ class ExportManager:
                 "Please verify if you are using the returned wrapped tensors from input_tensors() to "
                 "correctly trace your computations.")
             raise Exception(
-                "Error: exeption detected in output_tensors declaration")
+                "Error: exception detected in output_tensors declaration")
 
         context_names = set(
             [tensor.context for tensor in flattened_tensors.values()])
@@ -278,12 +279,46 @@ class ExportManager:
                 f"Error: expected all context names to match the node name: {node_name}"
                 f" but detected the following context names: {context_names}")
             raise Exception(
-                "Error: exeption detected in output_tensors declaration")
+                "Error: exception detected in output_tensors declaration")
+        
+        ## process static outputs (constant tensors that should be returned but aren't derived from inputs)
+        if static_outputs is not None:
+            static_outputs_changed = False
+            if not isinstance(static_outputs, dict):
+                static_outputs_changed = True
+                static_outputs = {'static_output': static_outputs}
+            
+            flattened_static_outputs = flatten_io_structure(static_outputs, '')
+            
+            if static_outputs_changed:
+                _get_logger().warning(f"Warning: no tensor name provided for static_outputs in node {node_name}\n"
+                                    "Assuming default tensor name")
+            
+            # Validate all static outputs are raw tensors (not TracedTensors)
+            for tensor_name, tensor in flattened_static_outputs.items():
+                if not isinstance(tensor, torch.Tensor):
+                    _get_logger().error(
+                        f"Error: static output '{tensor_name}' has type {type(tensor).__name__} "
+                        "but expected torch.Tensor.\n"
+                        "**Static outputs must be raw tensors, not derived from input tensors.**\n"
+                        "If this value depends on inputs, use it as a regular output tensor instead.")
+                    raise Exception("Error: exception detected in output_tensors declaration")
+                if isinstance(tensor, TracedTensor):
+                    _get_logger().error(
+                        f"Error: static output '{tensor_name}' is a TracedTensor. "
+                        "Static outputs should be constant tensors, not traced computations.")
+                    raise Exception("Error: exception detected in output_tensors declaration")
+            
+            # Wrap static tensors as TracedTensors so they appear in the graph output
+            wrapped_static_outputs = traced_tensors_node._create_io_helper(
+                flattened_static_outputs, '', to="static")
+            
+            # Merge with traced outputs
+            flattened_tensors = {**flattened_tensors, **wrapped_static_outputs}
 
         traced_tensors_node.compile_trace(flattened_tensors,
-                                          backend=kwargs.get(
-                                              "export_with", None),
-                                          backend_params=kwargs.get("backend_params", {}))
+                                        backend=kwargs.get("export_with", None),
+                                        backend_params=kwargs.get("backend_params", {}))
 
     def block(self, node_name, **kwargs):
         """Create a context manager for tracing a block of code in the computational graph.
