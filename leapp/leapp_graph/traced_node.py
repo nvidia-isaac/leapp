@@ -61,21 +61,21 @@ class TracedTensorNode(LeappNode):
         if isinstance(data, dict):
             new_data = {}
             for key, value in data.items():
-                child_name = "_".join([name, key])
+                child_name = "_".join([name, key]) if name else key
                 new_data[key] = self._create_io_helper(
                     value, child_name, to)
             return new_data
         elif isinstance(data, list):
             new_data = []
             for idx, value in enumerate(data):
-                child_name = "_".join([name, str(idx)])
+                child_name = "_".join([name, str(idx)]) if name else str(idx)
                 new_data.append(self._create_io_helper(
                     value, child_name, to))
             return new_data
         elif isinstance(data, tuple):
             new_data = []
             for idx, value in enumerate(data):
-                child_name = "_".join([name, str(idx)])
+                child_name = "_".join([name, str(idx)]) if name else str(idx)
                 new_data.append(self._create_io_helper(
                     value, child_name, to))
             return tuple(new_data)
@@ -99,7 +99,7 @@ class TracedTensorNode(LeappNode):
                             f"Cannot use TracedTensor from one node as input to another. "
                             f"Call output_tensors() on the source node first."
                         )
-                        raise ValueError("Error in TracedTensorNode")
+                        raise Exception("Error in TracedTensorNode")
                 return self._create_io_helper(tensor_val, name, to)
             elif to=="tensor":
                 # return the underlying tensor value
@@ -108,6 +108,11 @@ class TracedTensorNode(LeappNode):
                                             detected data {name} is a TracedTensor but is not tracing")
 
                 return tensor_val
+            elif to == "static":
+                _get_logger().error(f"Cannot create static output from TracedTensor '{name}'. "
+                                    "Static outputs must be raw tensors.")
+                raise Exception("Error in TracedTensorNode")
+
 
         elif isinstance(data, torch.Tensor):
             if to == "traced":  # convert the tensor to a TracedTensor (input placeholder)
@@ -134,7 +139,7 @@ class TracedTensorNode(LeappNode):
         else:
             _get_logger().error(f"Error: when creating inputs for {self.name}, detected data {name} is {type(data).__name__}"
                                 " which is not a dict, list, tuple, or torch.Tensor")
-            raise ValueError("Error in TracedTensorNode")
+            raise Exception("Error in TracedTensorNode")
 
     def create_input(self, data, name: str) -> "TracedTensor":
         """Create a TrackedTensor as an input to this context.
@@ -155,6 +160,30 @@ class TracedTensorNode(LeappNode):
         self.tag_data(unwrapped_data, name)
         self.add_output(name, name, unwrapped_data)
         return unwrapped_data
+    
+    def create_static_tensors(self, flattened_static_outputs):
+        ''' assumes the input is already flattened in the form of Dict[str, torch.Tensor] '''
+        # Validate all static outputs are raw tensors (not TracedTensors)
+        for tensor_name, tensor in flattened_static_outputs.items():
+            if not isinstance(tensor, torch.Tensor):
+                _get_logger().error(
+                    f"Error: static output '{tensor_name}' has type {type(tensor).__name__} "
+                    "but expected torch.Tensor.\n"
+                    "**Static outputs must be raw tensors, not derived from input tensors.**\n"
+                    "If this value depends on inputs, use it as a regular output tensor instead.")
+                raise Exception("Error: exception detected in output_tensors declaration")
+            if isinstance(tensor, TracedTensor):
+                _get_logger().error(
+                    f"Error: static output '{tensor_name}' is a TracedTensor. "
+                    "Static outputs should be constant tensors, not traced computations.")
+                raise Exception("Error: exception detected in output_tensors declaration")
+        
+        # Wrap static tensors as TracedTensors so they appear in the graph output
+        wrapped_static_outputs = self._create_io_helper(
+            flattened_static_outputs, '', to="static")
+        
+        return wrapped_static_outputs
+        
 
     def build_graph_module(self, outputs: list["TracedTensor"]) -> fx.GraphModule:
         """Convert the traced computation to a torch.fx.GraphModule.

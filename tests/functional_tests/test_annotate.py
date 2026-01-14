@@ -386,6 +386,41 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
         self.verify_single_torchscript_model_expected_value(
             [torch.tensor([1.0, 2.0, 3.0])], [tensor1.tensor], 'func1')
 
+    def test_annotate_tensor_with_static_outputs(self):
+        """Test that static outputs (constant tensors not derived from inputs) are returned by the model."""
+        annotate.start(name=self.TEST_GRAPH_NAME, verbose=True)
+        
+        # Input tensor
+        input_tensor = torch.tensor([1.0, 2.0, 3.0])
+        traced_input = annotate.input_tensors({'input': input_tensor}, 'static_test')
+        
+        # Static output - a constant tensor not derived from input
+        static_tensor = torch.tensor([4.0, 5.0, 6.0])
+        
+        # Computed output derived from input
+        computed_output = traced_input + 1.0
+        
+        # Output both computed and static tensors
+        annotate.output_tensors(
+            'static_test',
+            {'computed': computed_output},
+            static_outputs={'static': static_tensor},
+            export_with="torch"
+        )
+        
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        
+        # Verify graph structure: 1 input, 2 outputs (computed + static)
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=1, outputs=2, internal_connections=0)
+        
+        # Verify model outputs correct values
+        # Expected: computed = input + 1 = [2, 3, 4], static = [4, 5, 6]
+        expected_computed = input_tensor + 1.0
+        self.verify_single_torchscript_model_expected_value(
+            [input_tensor], [expected_computed, static_tensor], 'static_test')
+
     def test_annotate_tensor_with_dict_io(self):
         annotate.start(name=self.TEST_GRAPH_NAME, verbose=True)
         input_dict = {'input1': torch.tensor([1.0, 2.0, 3.0])}

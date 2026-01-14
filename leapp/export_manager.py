@@ -294,24 +294,7 @@ class ExportManager:
                 _get_logger().warning(f"Warning: no tensor name provided for static_outputs in node {node_name}\n"
                                     "Assuming default tensor name")
             
-            # Validate all static outputs are raw tensors (not TracedTensors)
-            for tensor_name, tensor in flattened_static_outputs.items():
-                if not isinstance(tensor, torch.Tensor):
-                    _get_logger().error(
-                        f"Error: static output '{tensor_name}' has type {type(tensor).__name__} "
-                        "but expected torch.Tensor.\n"
-                        "**Static outputs must be raw tensors, not derived from input tensors.**\n"
-                        "If this value depends on inputs, use it as a regular output tensor instead.")
-                    raise Exception("Error: exception detected in output_tensors declaration")
-                if isinstance(tensor, TracedTensor):
-                    _get_logger().error(
-                        f"Error: static output '{tensor_name}' is a TracedTensor. "
-                        "Static outputs should be constant tensors, not traced computations.")
-                    raise Exception("Error: exception detected in output_tensors declaration")
-            
-            # Wrap static tensors as TracedTensors so they appear in the graph output
-            wrapped_static_outputs = traced_tensors_node._create_io_helper(
-                flattened_static_outputs, '', to="static")
+            wrapped_static_outputs = traced_tensors_node.create_static_tensors(flattened_static_outputs)            
             
             # Merge with traced outputs
             flattened_tensors = {**flattened_tensors, **wrapped_static_outputs}
