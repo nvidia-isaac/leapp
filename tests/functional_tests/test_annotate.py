@@ -421,6 +421,51 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
         self.verify_single_torchscript_model_expected_value(
             [input_tensor], [expected_computed, static_tensor], 'static_test')
 
+    def test_annotate_register_buffer_with_inplace_assignment(self):
+        """Test that register_buffer allows a tensor to participate in tracing with in-place assignment.
+        """
+        class MockModule:
+            def __init__(self):
+                self.values = torch.tensor([1.0, 2.0, 3.0])
+            
+            def run(self, traced_input):
+                # Register the buffer - makes self.values a TracedTensor
+                buffers = annotate.register_buffer('buffer_test', {'values': self.values})
+                self.values = buffers['values']
+                # In-place assignment - now traced because self.values is a TracedTensor
+                self.values[:] = traced_input
+                # Operations on the buffer are traced
+                return self.values * 100.0
+        
+        module = MockModule()
+        
+        annotate.start(name=self.TEST_GRAPH_NAME, verbose=True)
+        
+        # Create traced input
+        input_tensor = torch.tensor([4.0, 5.0, 6.0])
+        traced_input = annotate.input_tensors({'input': input_tensor}, 'buffer_test')
+        
+        # Run the module - this registers the buffer and performs traced operations
+        result = module.run(traced_input)
+        
+        # Output the result
+        annotate.output_tensors('buffer_test', {'result': result}, export_with="torch")
+        
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        
+        # Verify graph structure: 1 input, 1 output
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=1, outputs=1, internal_connections=0)
+        
+        # Verify model produces correct results
+        # The buffer receives the input via in-place assignment, then multiplied by 100
+        # Expected: input * 100 = [400, 500, 600]
+        input_tensor = torch.tensor([1.0, 2.0, 1.0])
+        expected_output = input_tensor * 100.0
+        self.verify_single_torchscript_model_expected_value(
+            [input_tensor], [expected_output], 'buffer_test')
+
     def test_annotate_tensor_with_dict_io(self):
         annotate.start(name=self.TEST_GRAPH_NAME, verbose=True)
         input_dict = {'input1': torch.tensor([1.0, 2.0, 3.0])}

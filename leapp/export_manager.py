@@ -303,6 +303,69 @@ class ExportManager:
                                         backend=kwargs.get("export_with", None),
                                         backend_params=kwargs.get("backend_params", {}))
 
+    def register_buffer(self, node_name: str, tensors: dict) -> dict:
+        """Register tensors as persistent buffers for a traced node.
+        
+        The tensors become part of the compiled module's state and persist
+        across forward calls. The returned TracedTensors can be used in traced
+        computations, and modifications (via in-place ops) will be retained.
+        
+        Args:
+            node_name: Name of the TracedTensorNode to register the buffers with
+            tensors: Dictionary mapping buffer names to tensors
+            
+        Returns:
+            dict: Dictionary mapping buffer names to TracedTensors
+            
+        Example:
+            ```python
+            class Module:
+                def __init__(self):
+                    self.values = torch.tensor([1, 2, 3])
+                    self.state = torch.tensor([0, 0, 0])
+                
+                def run(self, input):
+                    # Make tensors participate in tracing
+                    buffers = annotate.register_buffer('my_node', {
+                        'values': self.values,
+                        'state': self.state
+                    })
+                    self.values = buffers['values']
+                    self.state = buffers['state']
+                    
+                    self.values[:] = input  # This assignment is now traced
+                    return self.values * 100
+            ```
+        """
+        if not ExportManager._interpret_graph:
+            return tensors  # Return unchanged when not tracing
+        
+        self._verify_no_active_function_tracing()
+        
+        if node_name not in self.nodes:
+            _get_logger().error(
+                f"Error: register_buffer called for node '{node_name}' but node not found. "
+                "Call input_tensors() first to create the node.")
+            raise Exception("Error: exception detected in register_buffer")
+        
+        traced_node = self.nodes[node_name]
+        
+        if not isinstance(traced_node, TracedTensorNode):
+            _get_logger().error(
+                f"Error: register_buffer only works with TracedTensorNode, "
+                f"but '{node_name}' is a {type(traced_node).__name__}")
+            raise Exception("Error: exception detected in register_buffer")
+        
+        if not traced_node.is_tracing:
+            _get_logger().warning(
+                f"Warning: register_buffer called for node '{node_name}' but tracing is complete. "
+                "Returning original tensors.")
+            return tensors
+        
+        # Flatten, validate, and wrap using create_static_tensors
+        flattened = flatten_io_structure(tensors, '')
+        return traced_node.create_static_tensors(flattened)
+
     def block(self, node_name, **kwargs):
         """Create a context manager for tracing a block of code in the computational graph.
 

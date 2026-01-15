@@ -52,6 +52,13 @@ class BaseExampleTest(unittest.TestCase):
     def tearDown(self):
         """Clean up after each test."""
         os.chdir(self.original_cwd)
+        
+        # Reset ExportManager singleton to avoid stale state between tests
+        # This is necessary because different examples may use the same node names
+        from leapp import annotate
+        if annotate._interpret_graph:
+            annotate._interpret_graph = False
+        annotate.nodes = {}
 
     def _run_example_script(self, script_name, expected_output_dir):
         """

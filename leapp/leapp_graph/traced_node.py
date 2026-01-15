@@ -183,7 +183,6 @@ class TracedTensorNode(LeappNode):
             flattened_static_outputs, '', to="static")
         
         return wrapped_static_outputs
-        
 
     def build_graph_module(self, outputs: list["TracedTensor"]) -> fx.GraphModule:
         """Convert the traced computation to a torch.fx.GraphModule.
