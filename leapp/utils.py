@@ -1008,29 +1008,28 @@ def tag_tensor(tensor, tag):
         return wrapper
     
     def _make_to_wrapper():
-        """Create a special wrapper for .to() that warns on dtype changes."""
+        """Create a special wrapper for .to() that preserves leapp_tag if present."""
         original_attr = '_original_to'
         
         def wrapper(self, *args, **kwargs):
             original_method = getattr(self, original_attr)
-            original_dtype = self.dtype
             result = original_method(*args, **kwargs)
             
-            # Check if dtype changed and warn
-            if result.dtype != original_dtype:
-                _get_logger().error(
-                    f"leapp: Tensor dtype changed from {original_dtype} to {result.dtype} "
-                    f"during .to() call. leapp_tag will be preserved but dtype changes "
-                    f"may not be fully supported in the exported pipeline.",
-                )
-                raise ValueError(
-                    f"Tensor dtype changed from {original_dtype} to {result.dtype} "
-                    f"during .to() call. leapp_tag will be preserved but dtype changes "
-                    f"may not be fully supported in the exported pipeline.")
+            # Only apply special handling for LEAPP-tagged tensors
+            if hasattr(self, 'leapp_tag'):
+                # Error if dtype changed on a tagged tensor - pipeline expects consistent dtypes
+                if result.dtype != self.dtype:
+                    raise ValueError(
+                        f"leapp: Tagged tensor dtype changed from {self.dtype} to {result.dtype} "
+                        f"during .to() call. This is not allowed for LEAPP-tagged tensors as the "
+                        f"exported pipeline expects consistent dtypes between nodes."
+                    )
+                return _copy_custom_attrs(self, result)
             
-            return _copy_custom_attrs(self, result)
+            # For non-tagged tensors, just return the result unchanged
+            return result
         
-        wrapper.__doc__ = 'Move tensor to device/dtype while preserving leapp_tag and other custom attributes (warns on dtype change).'
+        wrapper.__doc__ = 'Move tensor to device/dtype while preserving leapp_tag if present.'
         return wrapper
 
     # List of methods to monkey patch
@@ -1048,17 +1047,19 @@ def tag_tensor(tensor, tag):
     # Apply monkey patches
     for method_name, docstring in methods_to_patch:
         original_attr = f'_original_{method_name}'
-        if method_name == 'to':
-            setattr(torch.Tensor, original_attr, getattr(torch.Tensor, method_name))
-            setattr(torch.Tensor, method_name, _make_to_wrapper())
-            continue
-        elif not hasattr(torch.Tensor, original_attr):
-            # Save original method
-            setattr(torch.Tensor, original_attr,
-                    getattr(torch.Tensor, method_name))
-            # Replace with wrapper
-            setattr(torch.Tensor, method_name,
-                    _make_wrapper(method_name, docstring))
+        if not hasattr(torch.Tensor, original_attr):
+            if method_name == 'to':
+                # save original to method
+                setattr(torch.Tensor, original_attr, getattr(torch.Tensor, method_name))
+                # replace with wrapper
+                setattr(torch.Tensor, method_name, _make_to_wrapper())
+            else:
+                # Save original method
+                setattr(torch.Tensor, original_attr,
+                        getattr(torch.Tensor, method_name))
+                # Replace with wrapper
+                setattr(torch.Tensor, method_name,
+                        _make_wrapper(method_name, docstring))
         
     return tensor
 
