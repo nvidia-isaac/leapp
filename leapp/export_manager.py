@@ -69,6 +69,7 @@ class ExportManager:
             # graph settings
             self.GRAPH_NAME = "my_graph"
             self.SAVE_PATH = None
+            self.dry_run = False
 
             # tracetime variables
             self.nodes = {}
@@ -89,7 +90,7 @@ class ExportManager:
     #########################################################
     # flow control
     #########################################################
-    def start(self, name, save_path=".", verbose=False):
+    def start(self, name, save_path=".", verbose=False, dry_run=False):
         """Initialize and start LEAPP graph interpretation.
 
         This method prepares the export manager for tracing by setting up the graph name,
@@ -121,6 +122,9 @@ class ExportManager:
                                   "calling start() again will reset the graph")
             _get_logger().warning("Resetting graph...")
             TracingLock().reset()
+        if dry_run:
+            _get_logger().info("Starting dry run mode")
+        self.dry_run = dry_run
         self.nodes = {}
         ExportManager._interpret_graph = True
 
@@ -172,6 +176,10 @@ class ExportManager:
     def _setup_new_node(self, name, node_class: LeappNode, **kwargs):
         self._verify_no_active_function_tracing()
         node_index = self.get_node_index(name)
+
+        if self.dry_run:
+            kwargs['export_with'] = "torch"
+            kwargs['backend_params'] = {}
 
         node = node_class(name, node_index,
                           backend=kwargs.get("export_with", None),
@@ -304,9 +312,9 @@ class ExportManager:
             # Merge with traced outputs
             flattened_tensors = {**flattened_tensors, **wrapped_static_outputs}
 
+        export_with = None if self.dry_run else kwargs.get("export_with", None)
         traced_tensors_node.compile_trace(flattened_tensors,
-                                          backend=kwargs.get(
-                                              "export_with", None),
+                                          backend=export_with,
                                           backend_params=kwargs.get("backend_params", {}))
 
     def register_buffer(self, node_name: str, tensors: dict) -> dict:
@@ -648,7 +656,7 @@ class ExportManager:
     #########################################################
     # graph compilation
     #########################################################
-    def compile_graph(self, visualize=True, merge_nodes: MergeCfgEnum = MergeCfgEnum.NO_MERGE,
+    def compile_graph(self, visualize=True, verbose=None, merge_nodes: MergeCfgEnum = MergeCfgEnum.NO_MERGE,
                       validate: bool = True, rtol: float = 1e-3, atol: float = 1e-5, strict=True):
         """Compile and save the computational graph from traced nodes.
 
@@ -687,7 +695,11 @@ class ExportManager:
             - Visualization errors are logged but don't stop the compilation process.
         """
         # compile models first before input name reconciliation
-        self.compile_models()
+        if verbose is not None:
+            _get_logger().set_verbose(verbose)
+        
+        if not self.dry_run:        
+            self.compile_models()
 
         # builds the graph connections. this may change input and output names
         if not isinstance(merge_nodes, MergeCfgEnum):
@@ -697,7 +709,8 @@ class ExportManager:
         graph.merge_nodes(merge_nodes)
         pipeline = graph.get_full_pipeline_description()
 
-        self.save_models()
+        if not self.dry_run:
+            self.save_models()
 
         models = self.get_io_descriptions()
 

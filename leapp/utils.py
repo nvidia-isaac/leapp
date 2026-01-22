@@ -1006,6 +1006,32 @@ def tag_tensor(tensor, tag):
 
         wrapper.__doc__ = docstring
         return wrapper
+    
+    def _make_to_wrapper():
+        """Create a special wrapper for .to() that warns on dtype changes."""
+        original_attr = '_original_to'
+        
+        def wrapper(self, *args, **kwargs):
+            original_method = getattr(self, original_attr)
+            original_dtype = self.dtype
+            result = original_method(*args, **kwargs)
+            
+            # Check if dtype changed and warn
+            if result.dtype != original_dtype:
+                _get_logger().error(
+                    f"leapp: Tensor dtype changed from {original_dtype} to {result.dtype} "
+                    f"during .to() call. leapp_tag will be preserved but dtype changes "
+                    f"may not be fully supported in the exported pipeline.",
+                )
+                raise ValueError(
+                    f"Tensor dtype changed from {original_dtype} to {result.dtype} "
+                    f"during .to() call. leapp_tag will be preserved but dtype changes "
+                    f"may not be fully supported in the exported pipeline.")
+            
+            return _copy_custom_attrs(self, result)
+        
+        wrapper.__doc__ = 'Move tensor to device/dtype while preserving leapp_tag and other custom attributes (warns on dtype change).'
+        return wrapper
 
     # List of methods to monkey patch
     methods_to_patch = [
@@ -1014,18 +1040,26 @@ def tag_tensor(tensor, tag):
         ('contiguous', 'Make tensor contiguous while preserving leapp_tag and other custom attributes.'),
         ('cpu', 'Move tensor to CPU while preserving leapp_tag and other custom attributes.'),
         ('cuda', 'Move tensor to CUDA while preserving leapp_tag and other custom attributes.'),
+
+        #special case wrappers:
+        ('to', "Move tensor to device/dtype while preserving leapp_tag and other custom attributes (warns on dtype change)."),
     ]
 
     # Apply monkey patches
     for method_name, docstring in methods_to_patch:
         original_attr = f'_original_{method_name}'
-        if not hasattr(torch.Tensor, original_attr):
+        if method_name == 'to':
+            setattr(torch.Tensor, original_attr, getattr(torch.Tensor, method_name))
+            setattr(torch.Tensor, method_name, _make_to_wrapper())
+            continue
+        elif not hasattr(torch.Tensor, original_attr):
             # Save original method
             setattr(torch.Tensor, original_attr,
                     getattr(torch.Tensor, method_name))
             # Replace with wrapper
             setattr(torch.Tensor, method_name,
                     _make_wrapper(method_name, docstring))
+        
     return tensor
 
 
