@@ -54,6 +54,10 @@ class ExportManager:
     # initialization
     #########################################################
 
+    @property
+    def config_path(self):
+        return os.path.join(self.SAVE_PATH, f"{self.GRAPH_NAME}.yaml")
+
     def __new__(cls, *args, **kwargs):
         """Singleton implementation - only one instance allowed."""
         if cls._instance is None:
@@ -242,8 +246,8 @@ class ExportManager:
                 f"Error: output tensors called for node {node_name} but not registered to the ExportManager")
             raise Exception(
                 "Error: exception detected in output_tensors declaration")
-        
-        ## process outputs
+
+        # process outputs
         tensors_changed = False
         if not isinstance(tensors, dict):
             tensors_changed = True
@@ -259,7 +263,7 @@ class ExportManager:
 
         if tensors_changed:
             _get_logger().warning(f"Warning: no tensor name provided for output_tensors call in node {node_name}\n"
-                                "Assuming default tensor name")
+                                  "Assuming default tensor name")
 
         types = set(type(tensor) for tensor in flattened_tensors.values())
 
@@ -280,50 +284,52 @@ class ExportManager:
                 f" but detected the following context names: {context_names}")
             raise Exception(
                 "Error: exception detected in output_tensors declaration")
-        
-        ## process static outputs (constant tensors that should be returned but aren't derived from inputs)
+
+        # process static outputs (constant tensors that should be returned but aren't derived from inputs)
         if static_outputs is not None:
             static_outputs_changed = False
             if not isinstance(static_outputs, dict):
                 static_outputs_changed = True
                 static_outputs = {'static_output': static_outputs}
-            
+
             flattened_static_outputs = flatten_io_structure(static_outputs, '')
-            
+
             if static_outputs_changed:
                 _get_logger().warning(f"Warning: no tensor name provided for static_outputs in node {node_name}\n"
-                                    "Assuming default tensor name")
-            
-            wrapped_static_outputs = traced_tensors_node.create_static_tensors(flattened_static_outputs)            
-            
+                                      "Assuming default tensor name")
+
+            wrapped_static_outputs = traced_tensors_node.create_static_tensors(
+                flattened_static_outputs)
+
             # Merge with traced outputs
             flattened_tensors = {**flattened_tensors, **wrapped_static_outputs}
 
         traced_tensors_node.compile_trace(flattened_tensors,
-                                        backend=kwargs.get("export_with", None),
-                                        backend_params=kwargs.get("backend_params", {}))
+                                          backend=kwargs.get(
+                                              "export_with", None),
+                                          backend_params=kwargs.get("backend_params", {}))
 
     def register_buffer(self, node_name: str, tensors: dict) -> dict:
         """Register tensors as persistent buffers for a traced node.
-        
+
         The tensors become part of the compiled module's state and persist
         across forward calls. The returned TracedTensors can be used in traced
         computations, and modifications (via in-place ops) will be retained.
-        
+
         Args:
             node_name: Name of the TracedTensorNode to register the buffers with
             tensors: Dictionary mapping buffer names to tensors
-            
+
         Returns:
             dict: Dictionary mapping buffer names to TracedTensors
-            
+
         Example:
             ```python
             class Module:
                 def __init__(self):
                     self.values = torch.tensor([1, 2, 3])
                     self.state = torch.tensor([0, 0, 0])
-                
+
                 def run(self, input):
                     # Make tensors participate in tracing
                     buffers = annotate.register_buffer('my_node', {
@@ -332,36 +338,33 @@ class ExportManager:
                     })
                     self.values = buffers['values']
                     self.state = buffers['state']
-                    
+
                     self.values[:] = input  # This assignment is now traced
                     return self.values * 100
             ```
         """
         if not ExportManager._interpret_graph:
             return tensors  # Return unchanged when not tracing
-        
+
         self._verify_no_active_function_tracing()
-        
+
         if node_name not in self.nodes:
             _get_logger().error(
                 f"Error: register_buffer called for node '{node_name}' but node not found. "
                 "Call input_tensors() first to create the node.")
             raise Exception("Error: exception detected in register_buffer")
-        
+
         traced_node = self.nodes[node_name]
-        
+
         if not isinstance(traced_node, TracedTensorNode):
             _get_logger().error(
                 f"Error: register_buffer only works with TracedTensorNode, "
                 f"but '{node_name}' is a {type(traced_node).__name__}")
             raise Exception("Error: exception detected in register_buffer")
-        
+
         if not traced_node.is_tracing:
-            _get_logger().warning(
-                f"Warning: register_buffer called for node '{node_name}' but tracing is complete. "
-                "Returning original tensors.")
             return tensors
-        
+
         # Flatten, validate, and wrap using create_static_tensors
         flattened = flatten_io_structure(tensors, '')
         return traced_node.create_static_tensors(flattened)
@@ -450,9 +453,11 @@ class ExportManager:
                 if new_node:
                     _get_logger().info(
                         f"****Tracing stopped for {node_context.name}****\n\n")
-                    node_context.capture_outputs_from_namespace(output_namespace)
+                    node_context.capture_outputs_from_namespace(
+                        output_namespace)
                 else:
-                    node_context.validate_outputs_from_namespace(output_namespace)
+                    node_context.validate_outputs_from_namespace(
+                        output_namespace)
 
         return BlockTraceContext()
 
@@ -512,7 +517,7 @@ class ExportManager:
                     node_context, _ = self._setup_new_node(
                         name, FunctionDecoratorNode, **params)
                     self.nodes[name] = node_context
-                
+
                 caller_namespace = frame_to_namespace(sys._getframe(1))
 
                 if new_node:
@@ -525,7 +530,8 @@ class ExportManager:
                     # Build merged namespace: caller frame + bound function arguments
                     # This allows capture and snapshot to look up 'self' and other function
                     # parameters that wouldn't be in the caller's frame.
-                    input_namespace = {**caller_namespace, **bound_args.arguments}
+                    input_namespace = {
+                        **caller_namespace, **bound_args.arguments}
                     # For bound methods, 'self' is not in bound_args (it's already bound)
                     # We need to explicitly add it from the method's __self__ attribute
                     if hasattr(func, '__self__'):
@@ -547,7 +553,7 @@ class ExportManager:
 
                 # Start sys.settrace to capture namespaces (and run entry_hook on new_node)
                 sys._getframe(1).f_trace = trace_fn
-                
+
                 # Acquire lock to prevent nested tracing and TracedTensor operations
                 TracingLock().acquire()
                 sys.settrace(trace_fn)
@@ -556,7 +562,7 @@ class ExportManager:
                     ##### run the actual function #########
                     result = func(*args, **kwargs)
                     #### run the actual function #########
-                finally: 
+                finally:
                     sys.settrace(None)
                     TracingLock().release()
 
@@ -788,45 +794,91 @@ class ExportManager:
 
                 # 3. Run the compiled model
                 with torch.no_grad():
-                    actual_outputs = node.compiled_model(*input_values)
+                    exported_outputs = node.compiled_model(*input_values)
 
                 # 4. Normalize outputs to tuple for consistent handling
-                if not isinstance(actual_outputs, tuple):
-                    actual_outputs = (actual_outputs,)
+                if not isinstance(exported_outputs, tuple):
+                    exported_outputs = (exported_outputs,)
 
-                # 5. Extract expected output values
-                expected_outputs = tuple(
+                # 5. Extract source code output values
+                source_outputs = tuple(
                     tensor_desc.value for tensor_desc in node.outputs)
 
                 # 6. Validate output count matches
-                if len(actual_outputs) != len(expected_outputs):
+                if len(exported_outputs) != len(source_outputs):
                     _get_logger().error(
                         f"{node_name}: Output count mismatch - "
-                        f"got {len(actual_outputs)}, expected {len(expected_outputs)}")
+                        f"got {len(exported_outputs)}, expected {len(source_outputs)}")
                     results[node_name] = True  # the model wasn't provided
                     continue
 
                 # 7. Compare each output tensor
                 all_match = True
-                for idx, (actual, expected) in enumerate(zip(actual_outputs, expected_outputs)):
+                for idx, (exported, source) in enumerate(zip(exported_outputs, source_outputs)):
                     output_name = node.outputs[idx].name if idx < len(
                         node.outputs) else f"output_{idx}"
 
                     # Ensure tensors are on the same device for comparison
-                    if actual.device != expected.device:
-                        actual = actual.to(expected.device)
+                    if exported.device != source.device:
+                        exported = exported.to(source.device)
 
-                    if not torch.allclose(actual, expected, rtol=rtol, atol=atol):
+                    # Check for NaN/Inf values
+                    exported_nan = torch.isnan(exported).sum().item()
+                    exported_inf = torch.isinf(exported).sum().item()
+                    source_nan = torch.isnan(source).sum().item()
+                    source_inf = torch.isinf(source).sum().item()
+                    
+                    if exported_nan > 0 or exported_inf > 0 or source_nan > 0 or source_inf > 0:
                         all_match = False
-                        max_diff = (actual - expected).abs().max().item()
+                        num_elements = exported.numel()
                         _get_logger().error(
-                            f"{node_name}/{output_name}: Mismatch detected, "
-                            f"max diff: {max_diff:.6e} (rtol={rtol}, atol={atol})")
+                            f"{node_name}/{output_name}: NaN/Inf detected!")
+                        if exported_nan > 0:
+                            _get_logger().error(
+                                f"  Exported has {exported_nan}/{num_elements} NaN values ({100*exported_nan/num_elements:.3f}%)")
+                        if exported_inf > 0:
+                            _get_logger().error(
+                                f"  Exported has {exported_inf}/{num_elements} Inf values ({100*exported_inf/num_elements:.3f}%)")
+                        if source_nan > 0:
+                            _get_logger().warning(
+                                f"  Source has {source_nan}/{num_elements} NaN values ({100*source_nan/num_elements:.3f}%)")
+                        if source_inf > 0:
+                            _get_logger().warning(
+                                f"  Source has {source_inf}/{num_elements} Inf values ({100*source_inf/num_elements:.3f}%)")
+                        continue
 
+                    if not torch.allclose(exported, source, rtol=rtol, atol=atol):
+                        all_match = False
+                        diff = (exported - source).abs()
+                        diff_flat = diff.flatten().float()
+                        
+                        # Basic stats
+                        max_diff = diff.max().item()
+                        mean_diff = diff.mean().item()
+                        
+                        # Percentile differences
+                        percentiles = torch.tensor([0.50, 0.75, 0.90, 0.99, 0.995])
+                        pct_values = torch.quantile(diff_flat, percentiles)
+                        p50, p75, p90, p99, p995 = pct_values.tolist()
+                        
+                        # Tensor value ranges
+                        source_min, source_max = source.min().item(), source.max().item()
+                        exported_min, exported_max = exported.min().item(), exported.max().item()
+                        
+                        _get_logger().error(
+                            f"{node_name}/{output_name}: Mismatch detected (rtol={rtol}, atol={atol}). Please check logs for more details.")
                         _get_logger().info(
-                            f"  Expected shape: {expected.shape}, dtype: {expected.dtype}")
+                            f"  Source shape: {source.shape}, dtype: {source.dtype}")
                         _get_logger().info(
-                            f"  Actual shape: {actual.shape}, dtype: {actual.dtype}")
+                            f"  Exported shape: {exported.shape}, dtype: {exported.dtype}")
+                        _get_logger().info(
+                            f"  Source range:   [{source_min:.6e}, {source_max:.6e}]")
+                        _get_logger().info(
+                            f"  Exported range: [{exported_min:.6e}, {exported_max:.6e}]")
+                        _get_logger().info(
+                            f"  Diff stats: max={max_diff:.6e}, mean={mean_diff:.6e}")
+                        _get_logger().info(
+                            f"  Diff percentiles: p50={p50:.6e}, p75={p75:.6e}, p90={p90:.6e}, p99={p99:.6e}, p995={p995:.6e}")
 
                 results[node_name] = all_match
 

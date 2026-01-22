@@ -515,7 +515,8 @@ class TestExportSituation(LEAPPFunctionalTestBase):
         annotate.stop()
         annotate.compile_graph(visualize=False)
 
-        model = InferenceManager(f'{self.TEST_GRAPH_NAME}/{self.TEST_GRAPH_NAME}.yaml')
+        model = InferenceManager(
+            f'{self.TEST_GRAPH_NAME}/{self.TEST_GRAPH_NAME}.yaml')
         inputs = {
             'count_multiply/value': input_value
         }
@@ -530,6 +531,7 @@ class TestExportSituation(LEAPPFunctionalTestBase):
                 torch.allclose(actual, expected),
                 f"Iteration {i}: got {actual}, expected {expected}"
             )
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
