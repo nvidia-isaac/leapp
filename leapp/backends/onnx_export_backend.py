@@ -284,6 +284,9 @@ class ONNXExportBackend(ExportBackend):
             onnx_model = self.compile_dynamo(m)
         else:
             onnx_model = self.compile_torchscript(m)
+            
+        # NEW: Sync inputs after export
+        self._sync_inputs_with_onnx(onnx_model)
         return onnx_model
 
     def save(self, save_path: str, compiled_model) -> Tuple[str, str, str]:
@@ -309,3 +312,41 @@ class ONNXExportBackend(ExportBackend):
         md5sum, sha256sum = self._verify_model_location_and_get_hash(onnx_path)
 
         return onnx_path, md5sum, sha256sum
+    
+    # In onnx_export_backend.py
+
+    def _get_actual_onnx_inputs(self, onnx_program):
+        """Get actual input names from ONNX model, excluding initializers (constants)."""
+        if hasattr(onnx_program, 'model_proto'):
+            # dynamo export returns ONNXProgram with model_proto
+            model = onnx_program.model_proto
+        else:
+            # SimplifiedONNXProgram - load from file
+            model_path = os.path.join(onnx_program._source_dir, onnx_program._source_filename)
+            model = onnx.load(model_path)
+        
+        # Initializers are constants baked into the model - exclude them
+        initializer_names = {init.name for init in model.graph.initializer}
+        
+        # Return only true dynamic inputs
+        return [inp.name for inp in model.graph.input if inp.name not in initializer_names]
+
+    def _sync_inputs_with_onnx(self, onnx_program):
+        """Remove inputs from node_context that were optimized away by ONNX."""
+        expected_names = [td.name for td in self.node_context.inputs]
+        actual_names = set(self._get_actual_onnx_inputs(onnx_program))
+        
+        removed = [name for name in expected_names if name not in actual_names]
+        
+        if removed:
+            _get_logger().warning(
+                f"[{self.node_context.name}] ONNX export optimized away {len(removed)} inputs: {removed}. "
+                f"These inputs were unused or became constants. Updating node to match."
+            )
+            # Track trimmed inputs
+            self.node_context.trimmed_inputs.update(removed)
+            
+            # Filter inputs to only keep actual ONNX inputs (preserving order)
+            self.node_context.inputs = [
+                td for td in self.node_context.inputs if td.name in actual_names
+        ]
