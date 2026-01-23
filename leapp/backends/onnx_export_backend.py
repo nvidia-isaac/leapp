@@ -285,7 +285,8 @@ class ONNXExportBackend(ExportBackend):
         else:
             onnx_model = self.compile_torchscript(m)
             
-        # NEW: Sync inputs after export
+        # Sync inputs with what ONNX actually exported
+        # (ONNX can remove unused inputs during optimization)
         self._sync_inputs_with_onnx(onnx_model)
         return onnx_model
 
@@ -312,41 +313,65 @@ class ONNXExportBackend(ExportBackend):
         md5sum, sha256sum = self._verify_model_location_and_get_hash(onnx_path)
 
         return onnx_path, md5sum, sha256sum
-    
-    # In onnx_export_backend.py
 
-    def _get_actual_onnx_inputs(self, onnx_program):
-        """Get actual input names from ONNX model, excluding initializers (constants)."""
+    def _get_onnx_model(self, onnx_program):
+        """Get the ONNX model proto from an ONNX program."""
         if hasattr(onnx_program, 'model_proto'):
             # dynamo export returns ONNXProgram with model_proto
-            model = onnx_program.model_proto
+            return onnx_program.model_proto
         else:
             # SimplifiedONNXProgram - load from file
             model_path = os.path.join(onnx_program._source_dir, onnx_program._source_filename)
-            model = onnx.load(model_path)
-        
+            return onnx.load(model_path)
+
+    def _get_actual_onnx_inputs(self, onnx_model):
+        """Get actual input names from ONNX model, excluding initializers (constants)."""
         # Initializers are constants baked into the model - exclude them
-        initializer_names = {init.name for init in model.graph.initializer}
+        initializer_names = {init.name for init in onnx_model.graph.initializer}
         
         # Return only true dynamic inputs
-        return [inp.name for inp in model.graph.input if inp.name not in initializer_names]
+        return [inp.name for inp in onnx_model.graph.input if inp.name not in initializer_names]
 
     def _sync_inputs_with_onnx(self, onnx_program):
-        """Remove inputs from node_context that were optimized away by ONNX."""
-        expected_names = [td.name for td in self.node_context.inputs]
-        actual_names = set(self._get_actual_onnx_inputs(onnx_program))
+        """Sync inputs with what ONNX actually exported.
         
-        removed = [name for name in expected_names if name not in actual_names]
+        ONNX export can remove unused inputs (constant folding, dead code elimination).
+        This is allowed and we update node_context.inputs accordingly.
         
-        if removed:
+        However, if ONNX renames inputs (which happens with identity/passthrough functions
+        when using dynamo=True), we raise an error and suggest using dynamo=False.
+        """
+        onnx_model = self._get_onnx_model(onnx_program)
+        
+        expected_input_names = set(td.name for td in self.node_context.inputs)
+        actual_input_names = self._get_actual_onnx_inputs(onnx_model)
+        actual_input_set = set(actual_input_names)
+        
+        # Check for removed inputs (this is OK - ONNX optimized them away)
+        removed_inputs = [td.name for td in self.node_context.inputs if td.name not in actual_input_set]
+        
+        # Check for renamed/new inputs (this is NOT OK - we can't track them)
+        renamed_inputs = [name for name in actual_input_names if name not in expected_input_names]
+        
+        if renamed_inputs:
+            raise ValueError(
+                f"[{self.node_context.name}] ONNX export renamed inputs: {renamed_inputs}. "
+                f"This typically happens with identity/passthrough functions when using dynamo=True. "
+                f"This usecase is not supported by LEAPP, please: \n"
+                f"1. use dynamo=False by setting backend_params={{'dynamo': False}} \n"
+                f"2. use a different backend, such as torch-script or torch-trace \n"
+                f"3. remove the inputs that are not used in the computation or directly returned as output"
+            )
+        
+        if removed_inputs:
             _get_logger().warning(
-                f"[{self.node_context.name}] ONNX export optimized away {len(removed)} inputs: {removed}. "
+                f"[{self.node_context.name}] ONNX export optimized away {len(removed_inputs)} inputs: {removed_inputs}. "
                 f"These inputs were unused or became constants. Updating node to match."
             )
             # Track trimmed inputs
-            self.node_context.trimmed_inputs.update(removed)
+            self.node_context.trimmed_inputs.update(removed_inputs)
             
             # Filter inputs to only keep actual ONNX inputs (preserving order)
             self.node_context.inputs = [
-                td for td in self.node_context.inputs if td.name in actual_names
-        ]
+                td for td in self.node_context.inputs if td.name in actual_input_set
+            ]

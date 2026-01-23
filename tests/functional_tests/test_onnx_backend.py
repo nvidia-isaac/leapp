@@ -746,9 +746,9 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
         @annotate.method(export_with="onnx")
         def bidirectional_io(dict_input: dict, list_input: list):
             # Dict input -> list output
-            list_out = [v for v in dict_input.values()]
+            list_out = [v+1 for v in dict_input.values()]
             # List input -> dict output
-            dict_out = {f'item_{i}': v for i, v in enumerate(list_input)}
+            dict_out = {f'item_{i}': v+1 for i, v in enumerate(list_input)}
             return list_out, dict_out
 
         dict_input = {
