@@ -79,6 +79,18 @@ class LeappNode():
     def captured(self):
         # this is defaulted to False. the compile_trace method should set this to true
         return self._model_captured
+    
+    @property
+    def compiled_model(self):
+        assert self.export_backend is not None, f"Error: {self.name} has no export backend, please setup the backend first"
+        assert self.export_backend.compiled_model is not None, f"Error: {self.name} has no compiled model, please compile the model first"
+        return self.export_backend.compiled_model
+    
+    @property
+    def compiled_module(self):
+        assert self.export_backend is not None, f"Error: {self.name} has no export backend, please setup the backend first"
+        assert self.export_backend.compiled_module is not None, f"Error: {self.name} has no compiled module, please compile the model first"
+        return self.export_backend.compiled_module
 
     def get_description(self):
         # dynamically generate i/o descriptions depending on need

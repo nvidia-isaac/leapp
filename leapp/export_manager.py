@@ -21,7 +21,6 @@ import inspect
 import yaml
 import os
 import torch
-from typing import Any
 
 from leapp._logging import _get_logger
 from leapp.leapp_graph.leapp_graph import LeappGraph
@@ -286,9 +285,10 @@ class ExportManager:
 
         context_names = set(
             [tensor.context for tensor in flattened_tensors.values()])
-        if not len(context_names) == 1 and context_names.pop() != traced_tensors_node.name:
+        # Check that all tensors come from exactly one context matching the node name
+        if not (len(context_names) == 1 and next(iter(context_names)) == traced_tensors_node.name):
             _get_logger().error(
-                f"Error: expected all context names to match the node name: {node_name}"
+                f"Error: expected all context names to match the node name: {traced_tensors_node.name}"
                 f" but detected the following context names: {context_names}")
             raise Exception(
                 "Error: exception detected in output_tensors declaration")
@@ -705,7 +705,7 @@ class ExportManager:
         if not isinstance(merge_nodes, MergeCfgEnum):
             raise Exception(
                 f"Error: merge_nodes must be an instance of MergeCfgEnum, got {type(merge_nodes)}")
-        graph = LeappGraph(self.nodes)
+        graph = LeappGraph(self.nodes, self.GRAPH_NAME)
         graph.merge_nodes(merge_nodes)
         pipeline = graph.get_full_pipeline_description()
 
@@ -870,7 +870,7 @@ class ExportManager:
                         mean_diff = diff.mean().item()
                         
                         # Percentile differences
-                        percentiles = torch.tensor([0.50, 0.75, 0.90, 0.99, 0.995])
+                        percentiles = torch.tensor([0.50, 0.75, 0.90, 0.99, 0.995], device=diff_flat.device)
                         pct_values = torch.quantile(diff_flat, percentiles)
                         p50, p75, p90, p99, p995 = pct_values.tolist()
                         
@@ -878,8 +878,9 @@ class ExportManager:
                         source_min, source_max = source.min().item(), source.max().item()
                         exported_min, exported_max = exported.min().item(), exported.max().item()
                         
+                        log_path = _get_logger().path
                         _get_logger().error(
-                            f"{node_name}/{output_name}: Mismatch detected (rtol={rtol}, atol={atol}). Please check logs for more details.")
+                            f"{node_name}/{output_name}: Mismatch detected (rtol={rtol}, atol={atol}). Please check {log_path} for more details.")
                         _get_logger().info(
                             f"  Source shape: {source.shape}, dtype: {source.dtype}")
                         _get_logger().info(
@@ -902,6 +903,14 @@ class ExportManager:
                 _get_logger().error(
                     f"{node_name}: Validation failed with exception: {e}")
                 results[node_name] = e
+
+            finally:
+                # Free GPU memory after validating each model
+                # Delete the compiled model (validation is the last step)
+                node.compiled_model = None
+                # Clear CUDA cache to ensure GPU memory is released
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
         # Print summary
         _get_logger().section("Validation Summary")

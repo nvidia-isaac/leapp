@@ -23,8 +23,9 @@ from .combined_node import get_combined_node
 
 
 class LeappGraph:
-    def __init__(self, nodes):
+    def __init__(self, nodes, graph_name="combined_node"):
         self.nodes = nodes
+        self.graph_name = graph_name
         self.node_name_map = {node.name: node.name for node in nodes.values()}
 
         # process graph connections
@@ -48,6 +49,8 @@ class LeappGraph:
 
         if merge_nodes == MergeCfgEnum.NO_MERGE:
             return
+        elif merge_nodes == MergeCfgEnum.ALL:
+            merged_node_list, num_merged = self._merge_nodes_all()
         elif merge_nodes == MergeCfgEnum.AUTOMATIC:
             merged_node_list, num_merged = self._merge_nodes_automatically()
         elif merge_nodes == MergeCfgEnum.SIGNATURE:
@@ -349,5 +352,12 @@ class LeappGraph:
 
                 # Insert the combined node
                 self.nodes[combined_node.name] = combined_node
+
+        return self.nodes, merged
+    
+    def _merge_nodes_all(self):
+        merged = len(self.nodes)
+
+        combined_node = get_combined_node(name=self.graph_name, nodes=list(self.nodes.values()))
 
         return self.nodes, merged

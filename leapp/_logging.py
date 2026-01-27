@@ -65,6 +65,7 @@ class _LeappLogger:
         self.initialized = False
         self.console_handler = None
         self.verbose = False
+        self.log_path = None
 
     def configure(self, savepath, verbose):
         """Configure the logger with file and console handlers."""
@@ -76,6 +77,7 @@ class _LeappLogger:
             if os.path.exists(filepath):
                 filepath = os.path.join(
                     savepath, f'log_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt')
+            self.log_path = filepath
             self.file_handler = logging.FileHandler(filepath, mode='a')
             self.file_handler.setLevel(logging.DEBUG)
             # Plain format for file (with timestamp, no colors)
@@ -132,6 +134,10 @@ class _LeappLogger:
         """Log error message (file always, console always)."""
         if self.initialized:
             self.logger.error(msg)
+    
+    @property
+    def path(self):
+        return self.log_path
 
 
 # Global logger instance - initialized once and shared across the package
