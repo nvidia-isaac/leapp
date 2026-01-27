@@ -978,89 +978,43 @@ def get_attribute_value_from_namespace(namespace, attr_name):
 
 
 def tag_tensor(tensor, tag):
+    """Tag a tensor instance with a leapp_tag and wrap methods to preserve the tag.
+    
+    This binds wrapper methods to the specific tensor INSTANCE only.
+    """
     if hasattr(tensor, 'leapp_tag'):
+        # Already tagged - just update the tag
         tensor.leapp_tag = tag
         return tensor
 
     tensor.leapp_tag = tag
-    tensor.value = lambda: tensor
 
-    # Helper function to copy custom attributes from source to target tensor
-    def _copy_custom_attrs(source, target):
-        """Copy all custom attributes from source tensor to target tensor."""
-        for attr_name in dir(source):
-            if not attr_name.startswith('_') and not hasattr(torch.Tensor, attr_name):
-                if hasattr(source, attr_name):
-                    setattr(target, attr_name, getattr(source, attr_name))
-        return target
+    # Methods to wrap on this instance
+    methods_to_wrap = ['clone', 'detach', 'contiguous', 'cpu', 'cuda', 'to']
 
-    # Helper function to create a monkey-patched method wrapper
-    def _make_wrapper(method_name, docstring):
-        """Create a wrapper function that preserves custom attributes."""
+    for method_name in methods_to_wrap:
+        # Store the original bound method on the instance
         original_attr = f'_original_{method_name}'
+        if not hasattr(tensor, original_attr):
+            setattr(tensor, original_attr, getattr(tensor, method_name))
 
-        def wrapper(self, *args, **kwargs):
-            original_method = getattr(self, original_attr)
-            result = original_method(*args, **kwargs)
-            return _copy_custom_attrs(self, result)
+        def make_wrapper(mname, source_tensor):
+            """Create a wrapper that preserves leapp_tag on the result tensor."""
+            orig_attr = f'_original_{mname}'
 
-        wrapper.__doc__ = docstring
-        return wrapper
-    
-    def _make_to_wrapper():
-        """Create a special wrapper for .to() that preserves leapp_tag if present."""
-        original_attr = '_original_to'
-        
-        def wrapper(self, *args, **kwargs):
-            original_method = getattr(self, original_attr)
-            result = original_method(*args, **kwargs)
-            
-            # Only apply special handling for LEAPP-tagged tensors
-            if hasattr(self, 'leapp_tag'):
-                # Error if dtype changed on a tagged tensor - pipeline expects consistent dtypes
-                if result.dtype != self.dtype:
-                    raise ValueError(
-                        f"leapp: Tagged tensor dtype changed from {self.dtype} to {result.dtype} "
-                        f"during .to() call. This is not allowed for LEAPP-tagged tensors as the "
-                        f"exported pipeline expects consistent dtypes between nodes."
-                    )
-                return _copy_custom_attrs(self, result)
-            
-            # For non-tagged tensors, just return the result unchanged
-            return result
-        
-        wrapper.__doc__ = 'Move tensor to device/dtype while preserving leapp_tag if present.'
-        return wrapper
+            def wrapper(*args, **kwargs):
+                original_method = getattr(source_tensor, orig_attr)
+                result = original_method(*args, **kwargs)
+                # Tag the result tensor with the same tag (and wrap its methods too)
+                if hasattr(source_tensor, 'leapp_tag'):
+                    tag_tensor(result, source_tensor.leapp_tag)
+                return result
 
-    # List of methods to monkey patch
-    methods_to_patch = [
-        ('clone', 'Clone tensor while preserving leapp_tag and other custom attributes.'),
-        ('detach', 'Detach tensor while preserving leapp_tag and other custom attributes.'),
-        ('contiguous', 'Make tensor contiguous while preserving leapp_tag and other custom attributes.'),
-        ('cpu', 'Move tensor to CPU while preserving leapp_tag and other custom attributes.'),
-        ('cuda', 'Move tensor to CUDA while preserving leapp_tag and other custom attributes.'),
+            return wrapper
 
-        #special case wrappers:
-        ('to', "Move tensor to device/dtype while preserving leapp_tag and other custom attributes (warns on dtype change)."),
-    ]
+        # Bind wrapper to this specific instance (shadows the class method)
+        setattr(tensor, method_name, make_wrapper(method_name, tensor))
 
-    # Apply monkey patches
-    for method_name, docstring in methods_to_patch:
-        original_attr = f'_original_{method_name}'
-        if not hasattr(torch.Tensor, original_attr):
-            if method_name == 'to':
-                # save original to method
-                setattr(torch.Tensor, original_attr, getattr(torch.Tensor, method_name))
-                # replace with wrapper
-                setattr(torch.Tensor, method_name, _make_to_wrapper())
-            else:
-                # Save original method
-                setattr(torch.Tensor, original_attr,
-                        getattr(torch.Tensor, method_name))
-                # Replace with wrapper
-                setattr(torch.Tensor, method_name,
-                        _make_wrapper(method_name, docstring))
-        
     return tensor
 
 
@@ -1100,74 +1054,6 @@ def mirror_all_tensor_tags(source, target):
     elif isinstance(source, collections.abc.Iterable):
         for idx, item in enumerate(source):
             mirror_all_tensor_tags(item, target[idx])
-
-
-def get_tagged_subclass(base_class, value, tag):
-    if tag is None:
-        return value
-
-    # special case for torch tensors:
-    if isinstance(value, torch.Tensor):
-        tag_tensor(value, tag)
-        return value
-    elif hasattr(base_class, '__module__') and base_class.__module__ == 'torch' and 'Tensor' in base_class.__name__:
-        tag_tensor(value, tag)
-        return value
-
-    # For mutable types, try to preserve reference by adding attribute directly
-    # This works for list, dict, set, bytearray, and other mutable collections
-    if base_class in (list, set, bytearray) or hasattr(value, '__dict__'):
-        try:
-            value.leapp_tag = tag
-            # Add a method to get the original type (no lambda needed for identity)
-            value.value = lambda: value
-            return value  # Preserves original reference
-        except (AttributeError, TypeError):
-            # Fall back to subclassing if direct attribute assignment fails
-            pass
-
-    def __new__(cls, value, tag=None):
-        # bool is not subclassable; fall back to int while preserving bool semantics
-        if base_class is bool:
-            obj = int.__new__(cls, 1 if bool(value) else 0)
-            obj.leapp_tag = tag
-            return obj
-        obj = base_class.__new__(cls, value)
-        obj.leapp_tag = tag
-        return obj
-
-    def __init__(self, value, tag=None):
-        # Ensure base __init__ doesn't see the 'leapp_tag' kwarg (important for dict)
-        if base_class is bool:
-            # No-op; int.__init__ ignores args but don't forward leapp_tag
-            return
-        try:
-            base_class.__init__(self, value)
-        except TypeError:
-            # Some immutables ignore __init__ or have different signatures; safely ignore
-            pass
-
-        self.base_class = base_class
-
-    def get_base_class(self):
-        if base_class is bool:
-            return bool(int(self))
-        return self.base_class(self)
-
-    # all other python base classes need to be wrapped in a TaggedBaseClass function
-    new_cls = type(
-        "Tagged" + base_class.__name__,
-        (int,) if base_class is bool else (base_class,),
-        {
-            '__new__': __new__,
-            '__init__': __init__,
-            'value': get_base_class,
-        }
-    )
-
-    new_class = new_cls(value, tag)
-
-    return new_class
 
 
 def get_relative_path(model_path, yaml_save_path):

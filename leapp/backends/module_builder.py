@@ -190,8 +190,13 @@ class ModuleBuilder:
                     elif not callable(value):
                         self.module_instance.__dict__[attr_name] = value
                     elif callable(value):
-                        bound_method = types.MethodType(
-                            value, self.module_instance)
+                        # Check if value is already a bound method
+                        if isinstance(value, types.MethodType):
+                            # Use the underlying function, not the bound method
+                            func = value.__func__
+                            bound_method = types.MethodType(func, self.module_instance)
+                        else:
+                            bound_method = types.MethodType(value, self.module_instance)
                         setattr(self.module_instance, attr_name, bound_method)
                 except Exception as e:
                     _get_logger().error(

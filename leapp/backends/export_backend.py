@@ -46,7 +46,10 @@ def prepare_tensors_for_export(tensors):
     prepared = []
     for t in tensors:
         if isinstance(t, torch.Tensor):
-            prepared.append(t.clone())
+            if hasattr(t, 'original_clone'):
+                prepared.append(t.original_clone())
+            else:
+                prepared.append(t.clone())
         else:
             prepared.append(t)
     return tuple(prepared)
