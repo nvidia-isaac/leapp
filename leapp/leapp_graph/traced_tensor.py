@@ -271,6 +271,10 @@ class TracedTensor:
         def extract_proxy(obj):
             if isinstance(obj, TracedTensor):
                 return obj.proxy
+            elif isinstance(obj, torch.nn.Parameter):
+                # Convert Parameter to regular tensor so fx inlines it as constant
+                # This is safe when exporting to ONNX/JIT freeze where weights are baked in
+                return obj.data
             elif isinstance(obj, (list, tuple)):
                 return type(obj)(extract_proxy(item) for item in obj)
             elif isinstance(obj, dict):
