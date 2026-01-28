@@ -129,21 +129,14 @@ class CombinedNode(LeappNode):
             num_slots=num_slots
         )
 
-        # Get input values for tracing
-        input_values = [input_val.value for input_val in self.inputs]
-
         # Create the backend and compile
-        # import pdb; pdb.set_trace()
-        self.setup_backend(backend, {})
+        if 'jit' in backend:
+            backend = 'jit-trace' # this is more robust. jit script does not have any strengths over trace for this use case
 
-        if self.get_backend() == 'torch':
-            # Trace the combined model
-            # The forward() is simple enough that it should trace without LLVM issues
-            self.export_backend.compile(combined_model)
-            self.compiled_model = torch.jit.trace(combined_model, input_values)
-        else:
-            raise NotImplementedError(
-                f"Combination node for backend {self.get_backend()} is not implemented")
+        self.setup_backend(backend, {})
+        self.export_backend.override_module_builder(lambda: combined_model)
+
+        self.compile_model()
 
     def _build_routing(self, nodes: List[LeappNode]) -> Tuple[List, List, Dict]:
         """Build the index-based routing for the combined model.
@@ -240,17 +233,22 @@ def get_combined_node(nodes: List[LeappNode], name):
     3. All nodes have undergone i/o reconciliation (input names and output names match)
     '''
     nodes = sorted(nodes, key=lambda node: node.node_index)
+    export_backends = set([node.backend for node in nodes])
     node_backends = [node.export_backend.get_backed_model_type()
                      for node in nodes]
-    if not all(backend == node_backends[0] for backend in node_backends):
+    node_backend = set(node_backends)
+    if len(node_backend) != 1:
         _get_logger().warning(
-            f"skipping combining {name} because not all nodes have the same backend")
+            f"skipping combining {name} because not all nodes have the same backend.\n"
+            f"got {node_backend}")
         return None
-    backend = node_backends[0]
-    # TODO: This is a temporary hack to get the combined model working.
-    # the real solution is to allow the backend to handle existing models
-    if not backend == 'torch':
-        return None
+    
+    if len(export_backends) != 1:
+        _get_logger().warning(
+            f"CombinedNode {name} has multiple declared export backends: {export_backends}. \n"
+            f"exporting with the default backend for {list(node_backend)[0]}")
+
+    backend = node_backend.pop()
     node_index = nodes[0].node_index
     try:
         combined_node = CombinedNode(

@@ -58,6 +58,10 @@ class LeappNode():
         self.name = name
         self.node_index = node_index
 
+        # Attributes expected by export backends (subclasses may override)
+        self.register_buffers = set()
+        self.environment_constants = set()
+
         # model settings
         self._model_captured = False
         self.model_path = None
@@ -65,6 +69,7 @@ class LeappNode():
         self.sha256sum = None
         self.model_device = None
         self.export_backend = NoneExportBackend(self, {})
+        self.backend = None
 
         # i/o settings
         self.inputs = []
@@ -134,22 +139,28 @@ class LeappNode():
         self._create_backend(backend, backend_params)
 
     def _create_backend(self, backend, backend_params):
+        available_backends = ["jit-script", "jit-trace", "onnx-dynamo", "onnx-torchscript"]
         if backend is None:
+            self.backend = "None"
             self.export_backend = NoneExportBackend(
                 self, backend_params)
-        elif backend == "jit" or backend == "jit-script":
+        elif backend == "jit-script" or backend == "jit": # default jit export method
+            self.backend = "jit-script"
             from leapp.backends.torch_export_backend import TorchScriptExportBackend
             self.export_backend = TorchScriptExportBackend(
                 self, backend_params)
         elif backend == "jit-trace":
+            self.backend = "jit-trace"
             from leapp.backends.torch_export_backend import TorchTraceExportBackend
             self.export_backend = TorchTraceExportBackend(
                 self, backend_params)
         elif backend == "onnx-dynamo" or backend == "onnx": #default onnx export method
+            self.backend = "onnx-dynamo"
             from leapp.backends.onnx_export_backend import ONNXDynamoExportBackend
             self.export_backend = ONNXDynamoExportBackend(
                 self, backend_params)
         elif backend == "onnx-torchscript":
+            self.backend = "onnx-torchscript"
             from leapp.backends.onnx_export_backend import ONNXTorchScriptExportBackend
             self.export_backend = ONNXTorchScriptExportBackend(
                 self, backend_params)
@@ -160,7 +171,7 @@ class LeappNode():
         else:
             raise Exception(
                 f"{self.name} Unexpected backend: {backend}, \n"
-                "please use one of the following: torch, onnx, cpp, py")
+                f"please use one of the following: {available_backends}")
 
     def save_model(self, save_path: str):
         self.model_path, self.md5sum, self.sha256sum = self.export_backend.save(save_path)

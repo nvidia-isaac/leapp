@@ -196,7 +196,7 @@ def run_pipeline():
     # all operatons for all the nodes in features are captured
     concatenated = torch.cat(features)
     # Single output call closes the node. both inputs are now part of the same node
-    annotate.output_tensors('sensor_fusion', {'model_input': concatenated}, export_with='torch')
+    annotate.output_tensors('sensor_fusion', {'model_input': concatenated}, export_with="jit")
     
     output = model(concatenated)
     

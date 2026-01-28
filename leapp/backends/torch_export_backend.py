@@ -23,7 +23,7 @@ from leapp._logging import _get_logger
 
 class TorchExportBackend(ExportBackend):
     def get_backed_model_type(self):
-        return "torch"
+        return "jit"
 
     def save(self, save_path: str) -> Tuple[str, str, str]:
         compiled_model = self.compiled_model
