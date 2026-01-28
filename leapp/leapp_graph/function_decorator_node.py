@@ -25,10 +25,10 @@ import inspect
 
 
 class FunctionDecoratorNode(BlockContextNode):
-    def __init__(self, name, node_index, backend=None, use_trace=False,
+    def __init__(self, name, node_index, backend=None,
                  backend_params=None, inputs=None, outputs=None,
                  environment_constants=None, register_buffers=None):
-        super().__init__(name, node_index, backend, use_trace, backend_params,
+        super().__init__(name, node_index, backend, backend_params,
                          inputs, outputs, environment_constants, register_buffers)
         # node settings
         self.from_function = True

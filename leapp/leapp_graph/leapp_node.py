@@ -130,27 +130,18 @@ class LeappNode():
 
         return description
 
-    def setup_backend(self, backend, backend_params, use_trace=False):
-        if backend == "torch":
-            if use_trace:
-                backend = "torch-trace"
-            else:
-                backend = "torch-script"
+    def setup_backend(self, backend, backend_params):
         self._create_backend(backend, backend_params)
 
     def _create_backend(self, backend, backend_params):
         if backend is None:
             self.export_backend = NoneExportBackend(
                 self, backend_params)
-        elif backend == "torch":
-            from leapp.backends.torch_export_backend import TorchExportBackend
-            self.export_backend = TorchExportBackend(
-                self, backend_params)
-        elif backend == "torch-script":
+        elif backend == "jit" or backend == "jit-script":
             from leapp.backends.torch_export_backend import TorchScriptExportBackend
             self.export_backend = TorchScriptExportBackend(
                 self, backend_params)
-        elif backend == "torch-trace":
+        elif backend == "jit-trace":
             from leapp.backends.torch_export_backend import TorchTraceExportBackend
             self.export_backend = TorchTraceExportBackend(
                 self, backend_params)

@@ -183,7 +183,6 @@ class ExportManager:
         node = node_class(name, node_index,
                           backend=kwargs.get("export_with", None),
                           backend_params=kwargs.get("backend_params", None),
-                          use_trace=kwargs.get("use_trace", False),
                           inputs=kwargs.get("inputs", None),
                           outputs=kwargs.get("outputs", None),
                           environment_constants=kwargs.get(
@@ -389,7 +388,6 @@ class ExportManager:
             **kwargs: Additional parameters for node configuration. Supported options include:
                 - export_with: Backend to use for exporting the model.
                 - backend_params: Parameters for the export backend.
-                - use_trace: Whether to use tracing for model compilation.
                 - inputs: Input specifications for the node.
                 - outputs: Output specifications for the node.
                 - environment_constants: Constants to capture from the environment.
@@ -489,7 +487,6 @@ class ExportManager:
                   function's name.
                 - export_with: Backend to use for exporting the model.
                 - backend_params: Parameters for the export backend.
-                - use_trace: Whether to use tracing for model compilation.
                 - inputs: Input specifications for the node.
                 - outputs: Output specifications for the node.
                 - environment_constants: Constants to capture from the environment.

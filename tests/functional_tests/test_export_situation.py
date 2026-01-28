@@ -32,7 +32,7 @@ class TestExportSituation(LEAPPFunctionalTestBase):
     def test_export_nnModule_function(self):
         linear = torch.nn.Linear(3, 3)
 
-        @annotate.method(export_with="torch", environment_constants=['linear'])
+        @annotate.method(export_with="jit", environment_constants=['linear'])
         def funcA(inputA: torch.Tensor):
             output = linear(inputA)
             return output
@@ -48,7 +48,7 @@ class TestExportSituation(LEAPPFunctionalTestBase):
                 super(moduleA, self).__init__()
                 self.linear = torch.nn.Linear(3, 3)
 
-            @annotate.method(export_with="torch")
+            @annotate.method(export_with="jit")
             def forward(self, inputA: torch.Tensor):
                 return self.linear(inputA)
 
@@ -59,7 +59,7 @@ class TestExportSituation(LEAPPFunctionalTestBase):
 
     def test_export_nnModule_with_dict_list_io(self):
 
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def funcA(inputA: dict):
             list_conversion = list(inputA.values())
             return list_conversion
@@ -82,7 +82,7 @@ class TestExportSituation(LEAPPFunctionalTestBase):
         self.assertEqual(len(model_info['outputs']), 4)  # list_conversion
 
     def test_export_nnModule_with_large_nested_dict_io(self):
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def funcA(inputA: dict, inputB):
             underlying_values = inputA[0]['nested']
             list_conversion = list(underlying_values.values())
@@ -112,7 +112,7 @@ class TestExportSituation(LEAPPFunctionalTestBase):
                 self.idx = 0
                 self.stride = 3
 
-            @annotate.method(export_with="torch", environment_constants=['self.idx', 'self.stride'])
+            @annotate.method(export_with="jit", environment_constants=['self.idx', 'self.stride'])
             def get_subset(self, inputA: torch.Tensor):
                 retval = inputA[self.idx:self.idx+self.stride]
                 self.idx += self.stride
@@ -135,7 +135,7 @@ class TestExportSituation(LEAPPFunctionalTestBase):
                 self.var2 = None
 
             def concatenate_vars(self):
-                with annotate.block(node_name="concatenate", export_with="torch",
+                with annotate.block(node_name="concatenate", export_with="jit",
                                     inputs=["self.var1", "self.var2"], outputs=["result"]):
                     result = torch.cat((self.var1, self.var2), dim=-1)
                 return result
@@ -163,7 +163,7 @@ class TestExportSituation(LEAPPFunctionalTestBase):
                 self.var2 = None
 
             def concatenate_vars(self):
-                with annotate.block(node_name="concatenate", export_with="torch",
+                with annotate.block(node_name="concatenate", export_with="jit",
                                     inputs=["self.var1", "self.var2"], outputs=["result"]):
                     # Stack list of tensors before summing (TorchScript compatible)
                     value1 = torch.sum(torch.stack(self.var1))
@@ -190,7 +190,7 @@ class TestExportSituation(LEAPPFunctionalTestBase):
 
     def test_export_dict_and_list_bidirectional_io(self):
         """Test function that takes dict and list inputs, returns list and dict outputs"""
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def test_complex_io(input: dict, input_2: list):
             dictionary_output = {}
             for idx, value in enumerate(input_2):
@@ -236,7 +236,7 @@ class TestExportSituation(LEAPPFunctionalTestBase):
 
     def test_export_split_tensor_to_list(self):
         """Test function that takes a single tensor and splits it into a list of tensors"""
-        @annotate.method(export_with="torch", verbose=True)
+        @annotate.method(export_with="jit", verbose=True)
         def split_tensor(input_tensor: torch.Tensor):
             # Split the tensor into individual elements
             return [input_tensor[i:i+1] for i in range(len(input_tensor))]
@@ -276,7 +276,7 @@ class TestExportSituation(LEAPPFunctionalTestBase):
 
     def test_export_nested_list_of_lists_output(self):
         """Test function that returns a nested list of lists of tensors"""
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def create_nested_lists(input_tensor: torch.Tensor):
             # Split into groups of 2
             return [[input_tensor[i:i+1], input_tensor[i+1:i+2]] for i in range(0, 4, 2)]
@@ -306,7 +306,7 @@ class TestExportSituation(LEAPPFunctionalTestBase):
 
     def test_export_dict_with_list_values_output(self):
         """Test function that returns a dict where values are lists of tensors"""
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def create_dict_of_lists(input_list: list):
             return {
                 'first_half': [input_list[0], input_list[1]],
@@ -338,7 +338,7 @@ class TestExportSituation(LEAPPFunctionalTestBase):
 
     def test_export_mixed_return_types(self):
         """Test function that returns a single tensor, a list, and a dict all together"""
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def mixed_outputs(input_tensor: torch.Tensor):
             single_tensor = input_tensor[0:1]  # Still a tensor, shape (1,)
             list_out = [input_tensor[1:2], input_tensor[2:3]]
@@ -374,7 +374,7 @@ class TestExportSituation(LEAPPFunctionalTestBase):
 
     def test_export_list_of_dicts_output(self):
         """Test function that returns a list of dictionaries"""
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def create_list_of_dicts(input_tensor: torch.Tensor):
             return [
                 {'x': input_tensor[0:1], 'y': input_tensor[1:2]},
@@ -407,7 +407,7 @@ class TestExportSituation(LEAPPFunctionalTestBase):
 
     def test_export_deeply_nested_dict_to_flat_list(self):
         """Test function with deeply nested dict input and flat list output"""
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def flatten_nested_structure(nested: dict):
             # Extract from deeply nested structure: nested['level1']['level2']['data']
             level2 = nested['level1']['level2']
@@ -476,7 +476,7 @@ class TestExportSituation(LEAPPFunctionalTestBase):
                 self.method_count = torch.tensor([0.0], device=device)
                 self.block_count = torch.tensor([10.0], device=device)
 
-            @annotate.method(export_with="torch", register_buffers=['self.method_count'])
+            @annotate.method(export_with="jit", register_buffers=['self.method_count'])
             def count_multiply(self, value: torch.Tensor):
                 # Increment counter INSIDE the function, then use it
                 self.method_count = self.method_count + 1.0
@@ -486,7 +486,7 @@ class TestExportSituation(LEAPPFunctionalTestBase):
             def count_add(self, value: torch.Tensor):
                 with annotate.block(
                     node_name="block_counter",
-                    export_with="torch",
+                    export_with="jit",
                     inputs=["value"],
                     outputs=["result"],
                     register_buffers=["self.block_count"]

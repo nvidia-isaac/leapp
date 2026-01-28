@@ -2,7 +2,7 @@ import torch
 from leapp import annotate
 
 # Method node: Process and normalize sensor data
-@annotate.method(export_with="torch")
+@annotate.method(export_with="jit")
 def process_sensor_data(raw_readings):
     """Process raw sensor readings and normalize them."""
     processed = torch.clamp(raw_readings, min=0.0, max=1.0)
@@ -45,14 +45,14 @@ def main():
     annotate.output_tensors('feature_extractor', {
         'safe_speed': safe_speed,
         'confidence': confidence
-    }, export_with="torch")
+    }, export_with="jit")
     
     # ===== NODE 3: Block annotation =====
     # Control decisions using annotation block
     with annotate.block("control_decision",
                          inputs=["safe_speed", "confidence"],
                          outputs=["robot_action"],
-                         export_with="torch"):
+                         export_with="jit"):
         # Combine features into final robot action
         # Action format: [forward_speed, turn_rate, caution_factor]
         forward_speed = safe_speed * confidence

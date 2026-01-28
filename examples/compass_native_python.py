@@ -25,7 +25,7 @@ class CompassImageProcessor:
         self.target_width = target_width
         self.target_height = target_height
 
-    @annotate.method(node_name="compass_image_processor", export_with="torch")
+    @annotate.method(node_name="compass_image_processor", export_with="jit")
     def process(self, raw_image: torch.Tensor) -> torch.Tensor:
         """
         Process raw image data following the original navigator._new_image logic.
@@ -114,7 +114,7 @@ class CompassOdometryProcessor:
 
         return ang_vel, lin_vel
 
-    @annotate.method(node_name="compass_odometry_processor", export_with="torch")
+    @annotate.method(node_name="compass_odometry_processor", export_with="jit")
     def process(self, odom_msg: torch.Tensor, transform: torch.Tensor,
                 prev_transform: torch.Tensor, ego_speed: torch.Tensor,
                 position_2d: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -161,7 +161,7 @@ class CompassGoalChecker:
     def __init__(self, goal_tolerance=1.0):
         self.goal_tolerance = goal_tolerance
 
-    @annotate.method(node_name="compass_goal_checker", export_with="torch")
+    @annotate.method(node_name="compass_goal_checker", export_with="jit")
     def check(self, position_2d: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:
         """
         Check if goal is reached.
@@ -240,7 +240,7 @@ class CompassRouteCalculator:
         return torch.stack([transformed_x, transformed_y, transformed_z,
                            pose_qx, pose_qy, pose_qz, pose_qw])
 
-    @annotate.method(node_name="compass_route_calculator", export_with="torch")
+    @annotate.method(node_name="compass_route_calculator", export_with="jit")
     def calculate(self, goal_pose: torch.Tensor, transform: torch.Tensor,
                   max_distance: float = 1.0) -> torch.Tensor:
         """
@@ -395,7 +395,7 @@ class CompassNavigationModel:
 
         # Step 5: Prepare inputs for mobility model
         # Add batch and time dimensions
-        with annotate.block(node_name="process_and_run_inference", export_with="torch",
+        with annotate.block(node_name="process_and_run_inference", export_with="jit",
                             inputs=["processed_image",
                                     "route_vectors", "self.speed"],
                             outputs=["action_output"],
@@ -419,7 +419,7 @@ class CompassNavigationModel:
             self.sample = sample_output
 
         # Step 7: Post-process commands
-        with annotate.block(node_name="post_process_commands", export_with="torch",
+        with annotate.block(node_name="post_process_commands", export_with="jit",
                             inputs=["action_output", "is_reached"],
                             outputs=["cmd"],
                             environment_constants=['self.cmd_processor']):

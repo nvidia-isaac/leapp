@@ -108,7 +108,7 @@ def quat_to_rot_matrix(quat:
     return weight_scalar * identity + (1 - weight_scalar) * regular
 
 
-@annotate.method(export_with="torch")
+@annotate.method(export_with="jit")
 def post_process_actions(actions):
     _, _, _, action_scaling, default_pos = get_robot_params()
     action_scaling = action_scaling.to(actions.dtype).to(actions.device)
@@ -118,7 +118,7 @@ def post_process_actions(actions):
     return actions
 
 
-@annotate.method(export_with="torch")
+@annotate.method(export_with="jit")
 def process_odom(lin_vel_I: torch.Tensor, ang_vel_I: torch.Tensor, q_IB: torch.Tensor):
     R_IB = quat_to_rot_matrix(q_IB)
     R_BI = R_IB.transpose(0, 1)
@@ -141,7 +141,7 @@ def run_model(model, joint_pos, joint_vel, velocity_commands, lin_vel_I, ang_vel
             lin_vel_I, ang_vel_I, q_IB)
 
         with annotate.block("process_joint_pos", inputs=["joint_pos"], outputs=["processed_joint_pos"],
-                            environment_constants=['default_pos'], export_with="torch"):
+                            environment_constants=['default_pos'], export_with="jit"):
             processed_joint_pos = joint_pos - \
                 default_pos.to(joint_pos.dtype).to(joint_pos.device)
 

@@ -103,11 +103,11 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
 
     def test_mirror_leapp_tags_data_mismatch(self):
         """Test mirror_leapp_tags with various data mismatch scenarios"""
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def funcA(inputA: torch.Tensor):
             return inputA * 2.0
 
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def funcB(inputA: torch.Tensor):
             return inputA, inputA + 1.0
 
@@ -218,7 +218,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             def inner_func(inputA: torch.Tensor):
                 return inputA + tensors
             output_tensors = inner_func(input)
-            annotate.output_tensors('func', {'outputA': output_tensors}, export_with="torch")
+            annotate.output_tensors('func', {'outputA': output_tensors}, export_with="jit")
             annotate.stop()
             self.fail("Expected an exception")
         except Exception as e:
@@ -234,7 +234,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             tensors = annotate.input_tensors({'inputA': torch.tensor([1.0, 2.0, 3.0])}, 'func')
             tensors += 100
             output_tensors = inner_func(tensors)
-            annotate.output_tensors('func', {'outputA': output_tensors}, export_with="torch")
+            annotate.output_tensors('func', {'outputA': output_tensors}, export_with="jit")
             annotate.stop()
             self.fail("Expected an exception")
         except Exception as e:
@@ -249,7 +249,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             tensor1 = annotate.input_tensors({'inputA': torch.tensor([1.0, 2.0, 3.0])}, 'func1')
             tensor2 = annotate.input_tensors({'inputB': torch.tensor([1.0, 2.0, 3.0])}, 'func2')
             output_tensors = tensor1 + tensor2
-            annotate.output_tensors('func1', {'outputA': output_tensors}, export_with="torch")
+            annotate.output_tensors('func1', {'outputA': output_tensors}, export_with="jit")
             annotate.stop()
             self.fail("Expected an exception")
         except Exception as e:
@@ -348,7 +348,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
                 tensor1 += i
                 output_tensors.append(tensor1)
 
-            annotate.output_tensors('func_combined', {'outputs': output_tensors}, export_with="torch")
+            annotate.output_tensors('func_combined', {'outputs': output_tensors}, export_with="jit")
 
             annotate.stop()
             annotate.compile_graph(visualize=False)
@@ -375,7 +375,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             untraced_output = torch.tensor([4.0, 5.0, 6.0])
             
             # This should fail because untraced_output is not a TracedTensor
-            annotate.output_tensors('func', {'output': untraced_output}, export_with="torch")
+            annotate.output_tensors('func', {'output': untraced_output}, export_with="jit")
             
             annotate.stop()
             self.fail("Expected an exception")
@@ -408,7 +408,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
                 'func',
                 {'output': proper_output},
                 static_outputs={'bad_static': computed_tensor},  # Error: TracedTensor not allowed
-                export_with="torch"
+                export_with="jit"
             )
             
             annotate.stop()

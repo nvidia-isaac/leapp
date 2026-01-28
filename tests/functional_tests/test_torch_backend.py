@@ -30,7 +30,7 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
     """
 
     def test_torch_trace_backend(self):
-        @annotate.method(export_with="torch", use_trace=True)
+        @annotate.method(export_with="jit-trace")
         def funcA(inputA: torch.Tensor):
             return inputA*2.0
 
@@ -45,7 +45,7 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
             [input_tensor], [expected_output], funcA.__name__)
 
     def test_torch_script_backend(self):
-        @annotate.method(export_with="torch", use_trace=False)
+        @annotate.method(export_with="jit")
         def funcA(inputA: torch.Tensor):
             return inputA*2
 

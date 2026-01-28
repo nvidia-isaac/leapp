@@ -28,7 +28,7 @@ from leapp.leapp_graph.traced_tensor import TracedTensor
 
 
 class BlockContextNode(LeappNode):
-    def __init__(self, name, node_index, backend=None, use_trace=False,
+    def __init__(self, name, node_index, backend=None,
                  backend_params=None, inputs=None, outputs=None,
                  environment_constants=None, register_buffers=None):
         super().__init__(name, node_index)
@@ -70,7 +70,7 @@ class BlockContextNode(LeappNode):
             )
 
         # model settings
-        self.setup_backend(backend, backend_params, use_trace)
+        self.setup_backend(backend, backend_params)
 
         # source code:
         self.executed_lines = {

@@ -49,7 +49,7 @@ LEAPP provides three methods for marking nodes in your computational graph:
 import torch
 from leapp import annotate
 
-@annotate.method(export_with="torch")
+@annotate.method(export_with="jit")
 def process_data(input_tensor):
     # Your computation here
     result = input_tensor * 2 + 1
@@ -79,14 +79,14 @@ model = torch.nn.Linear(64, 3)
 with annotate.block("preprocessing",
                      inputs=["raw_data"],
                      outputs=["processed_data"],
-                     export_with="torch"):
+                     export_with="jit"):
     processed_data = raw_data.normalize()
     processed_data = processed_data.reshape(-1, 64)
 
 with annotate.block("inference",
                      inputs=["processed_data"],
                      outputs=["predictions"],
-                     export_with="torch"):
+                     export_with="jit"):
     predictions = model(processed_data)
 
 annotate.stop()
@@ -117,7 +117,7 @@ combined = torch.cat([normalized_pos, normalized_vel])
 # Mark outputs and specify export format
 annotate.output_tensors('preprocessing', {
     'features': combined
-}, export_with="torch")
+}, export_with="jit")
 
 # Chain to another node - traced tensors automatically connect nodes
 features = annotate.input_tensors({'features': combined}, 'inference')

@@ -23,7 +23,7 @@ class ActionProcessor:
         self._clip = torch.tensor([[[-1.0, 1.0]]])
         self.cfg = type('Config', (), {'clip': True})()
     
-    @annotate.method(outputs=["self._processed_actions"], export_with="torch", use_trace=True)
+    @annotate.method(outputs=["self._processed_actions"], export_with="jit-trace")
     def process_actions(self, actions: torch.Tensor):
         # Store the raw actions
         self._raw_actions[:] = actions
@@ -81,7 +81,7 @@ def process_with_external_model():
                         inputs=["sensor_input"],
                         outputs=["predictions"],
                         environment_constants=["pretrained_model"],
-                        export_with="torch"):
+                        export_with="jit"):
         # LEAPP captures the external model and makes it available
         predictions = pretrained_model(sensor_input)
     
@@ -104,7 +104,7 @@ class RobotProcessor:
         self.pretrained_model = torch.jit.load("path/to/model.pt")
         self.scaling_factor = 2.5
     
-    @annotate.method(export_with="torch")
+    @annotate.method(export_with="jit")
     def process_data(self, input_data):
         # self.* variables are automatically available - no need to declare them!
         scaled = input_data * self.scaling_factor
@@ -128,8 +128,7 @@ for term_name, term in self.terms.items():
         inputs=["action"],
         outputs=["term_actions"],
         environment_constants=['idx'],  # Freeze idx at current iteration value
-        export_with="torch",
-        use_trace=True
+        export_with="jit-trace",
     ):
         term_actions = action[:, idx : idx + term.action_dim]
     
@@ -144,7 +143,7 @@ class DataSlicer:
         self.idx = 0
         self.stride = 3
     
-    @annotate.method(export_with="torch", environment_constants=['self.idx', 'self.stride'])
+    @annotate.method(export_with="jit", environment_constants=['self.idx', 'self.stride'])
     def get_subset(self, inputA: torch.Tensor):
         retval = inputA[self.idx:self.idx+self.stride]
         self.idx += self.stride  # Changes after trace, but traced value is frozen
@@ -234,7 +233,7 @@ class RobotController:
                             register_buffers=["self.running_mean", 
                                             "self.running_count",
                                             "self.action_history"],
-                            export_with="torch"):
+                            export_with="jit"):
             # Update running mean
             self.running_count += 1
             alpha = 1.0 / self.running_count
@@ -268,7 +267,7 @@ LEAPP can track data connections through complex nested structures. Each individ
 import torch
 from leapp import annotate
 
-@annotate.method(export_with="torch", node_name="process_robot_state")
+@annotate.method(export_with="jit", node_name="process_robot_state")
 def process_robot_state(state_dict):
     """Process complex robot state dictionary."""
     # LEAPP tracks each tensor independently
@@ -306,7 +305,7 @@ def main():
     with annotate.block("decision_maker",
                         inputs=["processed"],
                         outputs=["action"],
-                        export_with="torch"):
+                        export_with="jit"):
         # You can access nested structures naturally
         position_factor = processed['position'].norm()
         velocity_factor = processed['velocity'].sum()
