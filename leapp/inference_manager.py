@@ -18,8 +18,9 @@ class NodeManager:
         self.output_descriptions = outputs
 
         backend = self._create_backend(parameters['backend'])
-        self.model = backend.load(
+        backend.load(
             model_path, parameters['sha256sum'], parameters['device'])
+        self.model = backend.compiled_model
 
         self.device = parameters['device']
 

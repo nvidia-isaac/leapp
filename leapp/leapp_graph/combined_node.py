@@ -112,7 +112,7 @@ class CombinedNode(LeappNode):
         self.inputs, self.outputs, routing = self._build_routing(self.nodes)
 
         # Extract routing components
-        models = [node.get_compiled_model() for node in self.nodes]
+        models = [node.compiled_module for node in self.nodes]
         model_input_indices = routing['model_input_indices']
         model_output_indices = routing['model_output_indices']
         final_output_indices = routing['final_output_indices']
@@ -133,11 +133,13 @@ class CombinedNode(LeappNode):
         input_values = [input_val.value for input_val in self.inputs]
 
         # Create the backend and compile
+        # import pdb; pdb.set_trace()
         self.setup_backend(backend, {})
 
         if self.get_backend() == 'torch':
             # Trace the combined model
             # The forward() is simple enough that it should trace without LLVM issues
+            self.export_backend.compile(combined_model)
             self.compiled_model = torch.jit.trace(combined_model, input_values)
         else:
             raise NotImplementedError(

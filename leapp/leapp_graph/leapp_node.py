@@ -60,7 +60,6 @@ class LeappNode():
 
         # model settings
         self._model_captured = False
-        self.compiled_model = None
         self.model_path = None
         self.md5sum = None
         self.sha256sum = None
@@ -82,15 +81,33 @@ class LeappNode():
     
     @property
     def compiled_model(self):
-        assert self.export_backend is not None, f"Error: {self.name} has no export backend, please setup the backend first"
-        assert self.export_backend.compiled_model is not None, f"Error: {self.name} has no compiled model, please compile the model first"
+        if self.export_backend is None:
+            return None
+        if self.export_backend.compiled_model is None:
+            return None
         return self.export_backend.compiled_model
+        # assert self.export_backend is not None, f"Error: {self.name} has no export backend, please setup the backend first"
+        # assert self.export_backend.compiled_model is not None, f"Error: {self.name} has no compiled model, please compile the model first"
+        # return self.export_backend.compiled_model
     
     @property
     def compiled_module(self):
-        assert self.export_backend is not None, f"Error: {self.name} has no export backend, please setup the backend first"
-        assert self.export_backend.compiled_module is not None, f"Error: {self.name} has no compiled module, please compile the model first"
+        if self.export_backend is None:
+            return None
+        if self.export_backend.compiled_module is None:
+            return None
         return self.export_backend.compiled_module
+        # assert self.export_backend is not None, f"Error: {self.name} has no export backend, please setup the backend first"
+        # assert self.export_backend.compiled_module is not None, f"Error: {self.name} has no compiled module, please compile the model first"
+        # return self.export_backend.compiled_module
+    
+    def delete_compiled_model(self):
+        if self.export_backend is None:
+            return
+        if self.export_backend.compiled_model is not None:
+            del self.export_backend.compiled_model
+        if self.export_backend.compiled_module is not None:
+            del self.export_backend.compiled_module
 
     def get_description(self):
         # dynamically generate i/o descriptions depending on need
@@ -137,9 +154,13 @@ class LeappNode():
             from leapp.backends.torch_export_backend import TorchTraceExportBackend
             self.export_backend = TorchTraceExportBackend(
                 self, backend_params)
-        elif backend == "onnx":
-            from leapp.backends.onnx_export_backend import ONNXExportBackend
-            self.export_backend = ONNXExportBackend(
+        elif backend == "onnx-dynamo" or backend == "onnx": #default onnx export method
+            from leapp.backends.onnx_export_backend import ONNXDynamoExportBackend
+            self.export_backend = ONNXDynamoExportBackend(
+                self, backend_params)
+        elif backend == "onnx-torchscript":
+            from leapp.backends.onnx_export_backend import ONNXTorchScriptExportBackend
+            self.export_backend = ONNXTorchScriptExportBackend(
                 self, backend_params)
         elif backend == "cpp":
             raise Exception("C++ backend not implemented")
@@ -151,25 +172,18 @@ class LeappNode():
                 "please use one of the following: torch, onnx, cpp, py")
 
     def save_model(self, save_path: str):
-        self.model_path, self.md5sum, self.sha256sum = self.export_backend.save(
-            save_path, self.compiled_model)
+        self.model_path, self.md5sum, self.sha256sum = self.export_backend.save(save_path)
         self.model_device = 'cuda'
 
     def compile_model(self):
         try:
-            self.compiled_model = self.export_backend.compile()
+            self.export_backend.compile()
         except Exception as e:
             _get_logger().error(f"Error compiling model {self.name}: {e}")
             raise e
 
     def get_backend(self):
         return self.export_backend.get_backed_model_type()
-
-    def get_compiled_model(self):
-        if self.compiled_model is None:
-            raise Exception(
-                f"Error: {self.name} has no compiled model, please export the model first")
-        return self.compiled_model
 
     def tag_data(self, tensor, tag):
         # the tag is the name of the tensor, with the node name prepended

@@ -907,7 +907,7 @@ class ExportManager:
             finally:
                 # Free GPU memory after validating each model
                 # Delete the compiled model (validation is the last step)
-                node.compiled_model = None
+                node.delete_compiled_model()
                 # Clear CUDA cache to ensure GPU memory is released
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()

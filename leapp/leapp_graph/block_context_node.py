@@ -87,13 +87,6 @@ class BlockContextNode(LeappNode):
         self.cached_buffer_values = {}
         self.cached_constant_values = {}
 
-    def compile_model(self):
-        try:
-            self.compiled_model = self.export_backend.compile()
-        except Exception as e:
-            _get_logger().error(f"Error compiling model: {e}")
-            raise e
-
     def compile_trace(self, *args):
         # Extract source code when tracing stops
         self.executed_lines['source_code'], message = extract_source_from_line_range(

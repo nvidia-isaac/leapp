@@ -33,13 +33,6 @@ class FunctionDecoratorNode(BlockContextNode):
         # node settings
         self.from_function = True
 
-    def compile_model(self):
-        try:
-            self.compiled_model = self.export_backend.compile()
-        except Exception as e:
-            _get_logger().error(f"Error compiling model: {e}")
-            raise e
-
     def compile_trace(self, func, *args):
         # Unwrap decorated functions to get to the original source
         unwrapped_func = inspect.unwrap(func)

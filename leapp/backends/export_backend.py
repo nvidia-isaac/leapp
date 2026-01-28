@@ -101,10 +101,6 @@ class SimplifiedONNXProgram:
                 total_size += size
                 files_info.append(f"{f} ({size / (1024**2):.2f} MB)")
 
-        # _get_logger().debug(
-        #     f"Source directory contents: {', '.join(files_info)}. "
-        #     f"Total size: {total_size / (1024**3):.2f} GB"
-        # )
         return total_size
 
     def save(self, destination, include_initializers=True, keep_initializers_as_inputs=False):
@@ -252,22 +248,6 @@ def prepare_tensors_for_export(tensors):
 
 
 class ExportBackend(abc.ABC):
-    def __init_subclass__(cls, **kwargs):
-        super().__init_subclass__(**kwargs)
-        # Only wrap if this class defines its own __init__
-        if 'compile' in cls.__dict__:
-            original_compile = cls.compile
-
-            @functools.wraps(original_compile)
-            def wrapped_compile(self, *args, **kwargs):
-                model = original_compile(self, *args, **kwargs)
-                if type(self) is cls:
-                    pass
-                    # TODO: run post-compilation validation if configured to do so
-
-                return model
-            cls.compile = wrapped_compile
-
     def __init__(self, node_context, backend_params=None):
         self.node_context = node_context
         if backend_params is None:
@@ -276,6 +256,9 @@ class ExportBackend(abc.ABC):
             self.backend_params = backend_params
 
         self.module_builder = ModuleBuilder(node_context)
+
+        self.compiled_model = None
+        self.compiled_module = None
 
     def override_module_builder(self, module_builder: Callable):
         self.module_builder = module_builder
@@ -317,7 +300,7 @@ class ExportBackend(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def compile(self) -> Any:
+    def compile(self, m: torch.nn.Module = None) -> Any:
         '''
         Compiles the model.
 
@@ -327,7 +310,7 @@ class ExportBackend(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def save(self, save_path: str, compiled_model: Any) -> Tuple[str, str, str]:
+    def save(self, save_path: str) -> Tuple[str, str, str]:
         '''
         Save the compiled model to the given path
 
@@ -348,7 +331,8 @@ class ExportBackend(abc.ABC):
                 f"expected {sha256sum}, got {actual_sha256sum}"
             )
         model = SimplifiedONNXProgram(model_path, device=device)
-        return model
+        self.compiled_model = model
+        self.compiled_module = None # ONNX models cannot be represented as a module for reexport.
     
     def _load_torchscript(self, model_path: str, sha256sum: str, device: str):
         _, actual_sha256sum = self._verify_model_location_and_get_hash(
@@ -359,14 +343,12 @@ class ExportBackend(abc.ABC):
                 f"expected {sha256sum}, got {actual_sha256sum}"
             )
         model = torch.jit.load(model_path)
-        return model
+        self.compiled_model = model.eval()
+        self.compiled_module = model
 
 
 class NoneExportBackend(ExportBackend):
-    def __call__(self) -> Any:
-        return self.compile()
-
-    def compile(self):
+    def compile(self, m: torch.nn.Module = None):
         if "model_path" not in self.backend_params or self.backend_params['model_path'] is None:
             _get_logger().warning(
                 f"No model path provided for {self.node_context.name}")
@@ -374,13 +356,12 @@ class NoneExportBackend(ExportBackend):
                                   "in the generated yaml file. Otherwise, please manually fill in the backend parameters.")
         else:
             _, sha256sum = self._verify_model_location_and_get_hash(self.backend_params['model_path'])
-            model_type = self.get_backed_model_type()
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
             device = self.backend_params['device'] if 'device' in self.backend_params else device
             self.load(self.backend_params['model_path'], sha256sum, device, self.get_backed_model_type())
 
 
-    def save(self, save_path: str, compiled_model=None) -> Tuple[str, str, str]:
+    def save(self, save_path: str) -> Tuple[str, str, str]:
         if "model_path" not in self.backend_params or self.backend_params['model_path'] is None:
             return None, None, None
         md5sum, sha256sum = self._verify_model_location_and_get_hash(
@@ -396,9 +377,9 @@ class NoneExportBackend(ExportBackend):
         if type is None: 
             return
         if type == "onnx":
-            return self._load_onnx(model_path, sha256sum, device)
+            self._load_onnx(model_path, sha256sum, device)
         elif type == "torchscript":
-            return self._load_torchscript(model_path, sha256sum, device)
+            self._load_torchscript(model_path, sha256sum, device)
         else:
             raise Exception(f"Unsupported model type: {type}")
 
