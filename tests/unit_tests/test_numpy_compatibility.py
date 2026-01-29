@@ -25,5 +25,3 @@ class TestNumpyCompatibilityTracedTensor(unittest.TestCase):
         annotate.output_tensors('basic_numpy_function', {'tensor': torch_tensors}, export_with="jit")
         annotate.stop()
         annotate.compile_graph(visualize=False)
-        print(torch_tensors)
-        import pdb; pdb.set_trace()

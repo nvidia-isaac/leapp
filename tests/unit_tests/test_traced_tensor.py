@@ -1899,6 +1899,45 @@ class TestTracedTensor(unittest.TestCase):
         self.assertIn("TracedTensor", error_msg)
         self.assertIn("during tracing", error_msg)
 
+    def test_tensordict_preserves_traced_tensor(self):
+        """Test that TensorDict preserves TracedTensor when storing and retrieving."""
+        try:
+            from tensordict import TensorDict
+        except ImportError:
+            self.skipTest("tensordict not installed")
+        
+        ctx = TracedTensorNode(name="test", node_index=0)
+        t = torch.randn(2, 3)
+        traced = ctx.create_input(t, name="obs")
+        
+        # Store in TensorDict
+        td = TensorDict({'obs': traced}, batch_size=[2])
+        
+        # Retrieve and verify it's still a TracedTensor
+        retrieved = td['obs']
+        self.assertIsInstance(retrieved, TracedTensor)
+        self.assertIs(retrieved, traced)  # Should be the exact same object
+
+    def test_torch_as_tensor_preserves_traced_tensor(self):
+        """Test that torch.as_tensor preserves TracedTensor."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        t = torch.randn(2, 3)
+        traced = ctx.create_input(t, name="x")
+        
+        result = torch.as_tensor(traced)
+        self.assertIsInstance(result, TracedTensor)
+        self.assertIs(result, traced)
+
+    def test_torch_tensor_preserves_traced_tensor(self):
+        """Test that torch.tensor preserves TracedTensor."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        t = torch.randn(2, 3)
+        traced = ctx.create_input(t, name="x")
+        
+        result = torch.tensor(traced)
+        self.assertIsInstance(result, TracedTensor)
+        self.assertIs(result, traced)
+
 
 if __name__ == "__main__":
     unittest.main()

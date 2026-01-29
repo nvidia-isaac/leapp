@@ -15,12 +15,14 @@ from .components import TorchDtypeWrapper
 
 
 # =============================================================================
-# Patch torch.from_numpy to handle TracedTensor
+# Patch torch functions that bypass __torch_function__
 # =============================================================================
-# torch.from_numpy does an early type check in C++ before __torch_function__
-# can intercept it. We patch it here to pass through TracedTensors unchanged.
+# Several torch functions do early type checks in C++ before __torch_function__
+# can intercept them. We patch them here to pass through TracedTensors unchanged.
 
 _original_torch_from_numpy = torch.from_numpy
+_original_torch_as_tensor = torch.as_tensor
+_original_torch_tensor = torch.tensor
 
 
 def _patched_from_numpy(arr):
@@ -29,14 +31,46 @@ def _patched_from_numpy(arr):
     If the input is a TracedTensor, return it directly (it's already a traced
     torch tensor). Otherwise, call the original torch.from_numpy.
     """
-    # Import here to avoid circular import at module load time
     if isinstance(arr, TracedTensor):
         return arr
     return _original_torch_from_numpy(arr)
 
 
-# Apply the patch
+def _patched_as_tensor(data, dtype=None, device=None):
+    """Patched torch.as_tensor that handles TracedTensor.
+    
+    If the input is a TracedTensor, return it directly (preserving tracing).
+    Otherwise, call the original torch.as_tensor.
+    """
+    if isinstance(data, TracedTensor):
+        # If dtype or device conversion is requested, we need to trace that
+        if dtype is not None or device is not None:
+            return data.to(dtype=dtype, device=device)
+        return data
+    return _original_torch_as_tensor(data, dtype=dtype, device=device)
+
+
+def _patched_tensor(data, *args, **kwargs):
+    """Patched torch.tensor that handles TracedTensor.
+    
+    If the input is a TracedTensor, return it directly (preserving tracing).
+    Otherwise, call the original torch.tensor.
+    """
+    if isinstance(data, TracedTensor):
+        # torch.tensor always copies, but for TracedTensor we want to preserve tracing
+        # Handle dtype/device if specified
+        dtype = kwargs.get('dtype')
+        device = kwargs.get('device')
+        if dtype is not None or device is not None:
+            return data.to(dtype=dtype, device=device)
+        return data
+    return _original_torch_tensor(data, *args, **kwargs)
+
+
+# Apply the patches
 torch.from_numpy = _patched_from_numpy
+torch.as_tensor = _patched_as_tensor
+torch.tensor = _patched_tensor
 
 
 class TracedTensor:
