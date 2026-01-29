@@ -1,9 +1,41 @@
 import operator
 
+import numpy as np
 import torch
 from torch.fx.proxy import Proxy
 from leapp._logging import _get_logger
 from leapp.tracing_lock import TracingLock
+from leapp.leapp_graph.datatypes.numpy_compatibility import (
+    AXIS_TO_DIM_FUNCTIONS,
+    convert_numpy_arg_to_torch,
+    get_torch_equivalent_ufunc,
+    get_torch_equivalent_func,
+)
+
+
+# =============================================================================
+# Patch torch.from_numpy to handle TracedTensor
+# =============================================================================
+# torch.from_numpy does an early type check in C++ before __torch_function__
+# can intercept it. We patch it here to pass through TracedTensors unchanged.
+
+_original_torch_from_numpy = torch.from_numpy
+
+
+def _patched_from_numpy(arr):
+    """Patched torch.from_numpy that handles TracedTensor.
+    
+    If the input is a TracedTensor, return it directly (it's already a traced
+    torch tensor). Otherwise, call the original torch.from_numpy.
+    """
+    # Import here to avoid circular import at module load time
+    if isinstance(arr, TracedTensor):
+        return arr
+    return _original_torch_from_numpy(arr)
+
+
+# Apply the patch
+torch.from_numpy = _patched_from_numpy
 
 
 class TracedTensor:
@@ -204,6 +236,13 @@ class TracedTensor:
         """
         if kwargs is None:
             kwargs = {}
+
+        # Handle torch.from_numpy - if input is TracedTensor, just return it
+        # This happens when code does: torch.from_numpy(traced_tensor.numpy())
+        # Since .numpy() returns self (TracedTensor), we just pass it through
+        if func is torch.from_numpy:
+            if len(args) == 1 and isinstance(args[0], TracedTensor):
+                return args[0]  # Already a TracedTensor, no conversion needed
 
         traced_tensor = TracedTensor.find_traced_tensor(args)
 
@@ -763,3 +802,121 @@ class TracedTensor:
             "call_method", "to", (self._proxy,) + args, kwargs
         )
         return self._new(result_tensor, proxy_out)
+
+    def numpy(self):
+        """Return self to maintain tracing through numpy operations.
+        
+        Instead of actually converting to numpy, we return the TracedTensor itself.
+        This allows numpy operations (np.sin, np.sum, etc.) to be intercepted by
+        __array_ufunc__ and __array_function__, which convert them to torch equivalents.
+        
+        This enables transparent tracing through code that uses numpy:
+            x = traced_tensor.numpy()  # Returns TracedTensor
+            y = np.sin(x)              # Intercepted → torch.sin(x) → TracedTensor
+        
+        Returns:
+            TracedTensor: self, to maintain tracing continuity
+        """
+        return self
+
+    def __array__(self, dtype=None):
+        """NumPy array protocol - return self to maintain tracing.
+        
+        When np.array(traced_tensor) or np.asarray(traced_tensor) is called,
+        we return self to keep the tracing chain intact. Subsequent numpy
+        operations will be intercepted by __array_ufunc__/__array_function__.
+        
+        Args:
+            dtype: Ignored (TracedTensor maintains its torch dtype)
+            
+        Returns:
+            TracedTensor: self, to maintain tracing continuity
+        """
+        return self
+
+    def __array_ufunc__(self, ufunc, method, *inputs, out=None, **kwargs):
+        """Handle numpy ufuncs by converting to torch equivalents.
+        
+        This allows operations like np.sin(traced_tensor) to be traced by
+        converting them to torch.sin(traced_tensor).
+        
+        Args:
+            ufunc: The numpy ufunc being called
+            method: The ufunc method ('__call__', 'reduce', etc.)
+            *inputs: Input arguments to the ufunc
+            out: Output array (not supported for tracing)
+            **kwargs: Additional keyword arguments
+            
+        Returns:
+            TracedTensor or result of the torch operation
+        """
+        # Only support __call__ method (not reduce, accumulate, etc.)
+        if method != '__call__':
+            _get_logger().warning(
+                f"NumPy ufunc method '{method}' not supported for TracedTensor. "
+                f"Only '__call__' is supported. Falling back to numpy."
+            )
+            return NotImplemented
+        
+        # Don't support out parameter as it breaks tracing
+        if out is not None:
+            _get_logger().warning(
+                "NumPy ufunc 'out' parameter not supported for TracedTensor tracing."
+            )
+            return NotImplemented
+        
+        # Look up the torch equivalent
+        torch_func = get_torch_equivalent_ufunc(ufunc)
+        if torch_func is None:
+            _get_logger().warning(
+                f"NumPy ufunc '{ufunc.__name__}' has no torch equivalent. "
+                f"Consider using torch.{ufunc.__name__} directly if available."
+            )
+            return NotImplemented
+        
+        # Convert inputs: numpy arrays -> tensors, keep TracedTensors
+        converted_inputs = [convert_numpy_arg_to_torch(inp, self.device) for inp in inputs]
+        
+        # Call the torch function - will be traced via __torch_function__
+        return torch_func(*converted_inputs, **kwargs)
+
+    def __array_function__(self, func, types, args, kwargs):
+        """Handle numpy functions by converting to torch equivalents.
+        
+        This allows operations like np.sum(traced_tensor) to be traced by
+        converting them to torch.sum(traced_tensor).
+        
+        Args:
+            func: The numpy function being called
+            types: Types of the arguments
+            args: Positional arguments
+            kwargs: Keyword arguments
+            
+        Returns:
+            TracedTensor or result of the torch operation
+        """
+        # Look up the torch equivalent
+        torch_func = get_torch_equivalent_func(func)
+        if torch_func is None:
+            _get_logger().warning(
+                f"NumPy function '{func.__name__}' has no torch equivalent. "
+                f"Consider using torch.{func.__name__} directly if available."
+            )
+            return NotImplemented
+        
+        # Convert args: numpy arrays -> tensors, keep TracedTensors
+        converted_args = [convert_numpy_arg_to_torch(arg, self.device) for arg in args]
+        converted_kwargs = {k: convert_numpy_arg_to_torch(v, self.device) for k, v in kwargs.items()}
+        
+        # Handle axis -> dim conversion for functions that need it
+        if 'axis' in converted_kwargs and torch_func in AXIS_TO_DIM_FUNCTIONS:
+            converted_kwargs['dim'] = converted_kwargs.pop('axis')
+        
+        # Handle expand_dims axis -> dim (special case: axis is positional arg)
+        if func == np.expand_dims and len(converted_args) >= 2:
+            # np.expand_dims(a, axis) -> torch.unsqueeze(a, dim)
+            converted_kwargs['dim'] = converted_args[1]
+            converted_args = [converted_args[0]]
+        
+        # Call the torch function - will be traced via __torch_function__
+        return torch_func(*converted_args, **converted_kwargs)
