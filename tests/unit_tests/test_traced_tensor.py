@@ -1906,37 +1906,72 @@ class TestTracedTensor(unittest.TestCase):
         except ImportError:
             self.skipTest("tensordict not installed")
         
+        from leapp.leapp_graph.datatypes import apply_traced_tensor_patches, remove_traced_tensor_patches
+        
         ctx = TracedTensorNode(name="test", node_index=0)
         t = torch.randn(2, 3)
         traced = ctx.create_input(t, name="obs")
         
-        # Store in TensorDict
-        td = TensorDict({'obs': traced}, batch_size=[2])
-        
-        # Retrieve and verify it's still a TracedTensor
-        retrieved = td['obs']
-        self.assertIsInstance(retrieved, TracedTensor)
-        self.assertIs(retrieved, traced)  # Should be the exact same object
+        # Apply patches (normally done by annotate.start())
+        apply_traced_tensor_patches()
+        try:
+            # Store in TensorDict
+            td = TensorDict({'obs': traced}, batch_size=[2])
+            
+            # Retrieve and verify it's still a TracedTensor
+            retrieved = td['obs']
+            self.assertIsInstance(retrieved, TracedTensor)
+            self.assertIs(retrieved, traced)  # Should be the exact same object
+        finally:
+            remove_traced_tensor_patches()
 
     def test_torch_as_tensor_preserves_traced_tensor(self):
-        """Test that torch.as_tensor preserves TracedTensor."""
+        """Test that torch.as_tensor preserves TracedTensor when patches are applied."""
+        from leapp.leapp_graph.datatypes import apply_traced_tensor_patches, remove_traced_tensor_patches
+        
         ctx = TracedTensorNode(name="test", node_index=0)
         t = torch.randn(2, 3)
         traced = ctx.create_input(t, name="x")
         
-        result = torch.as_tensor(traced)
-        self.assertIsInstance(result, TracedTensor)
-        self.assertIs(result, traced)
+        apply_traced_tensor_patches()
+        try:
+            result = torch.as_tensor(traced)
+            self.assertIsInstance(result, TracedTensor)
+            self.assertIs(result, traced)
+        finally:
+            remove_traced_tensor_patches()
 
     def test_torch_tensor_preserves_traced_tensor(self):
-        """Test that torch.tensor preserves TracedTensor."""
+        """Test that torch.tensor preserves TracedTensor when patches are applied."""
+        from leapp.leapp_graph.datatypes import apply_traced_tensor_patches, remove_traced_tensor_patches
+        
         ctx = TracedTensorNode(name="test", node_index=0)
         t = torch.randn(2, 3)
         traced = ctx.create_input(t, name="x")
         
-        result = torch.tensor(traced)
-        self.assertIsInstance(result, TracedTensor)
-        self.assertIs(result, traced)
+        apply_traced_tensor_patches()
+        try:
+            result = torch.tensor(traced)
+            self.assertIsInstance(result, TracedTensor)
+            self.assertIs(result, traced)
+        finally:
+            remove_traced_tensor_patches()
+
+    def test_patches_not_applied_at_import(self):
+        """Test that patches are deferred, not applied at import time.
+        
+        This is important for compatibility with TorchScript modules that
+        are compiled at import time (e.g., Isaac Sim's math modules).
+        """
+        from leapp.leapp_graph.datatypes import remove_traced_tensor_patches
+        
+        # Ensure patches are removed (clean state)
+        remove_traced_tensor_patches()
+        
+        # Verify torch functions are NOT patched
+        self.assertNotEqual(torch.tensor.__name__, "_patched_tensor")
+        self.assertNotEqual(torch.as_tensor.__name__, "_patched_as_tensor")
+        self.assertNotEqual(torch.from_numpy.__name__, "_patched_from_numpy")
 
 
 if __name__ == "__main__":

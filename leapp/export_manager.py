@@ -27,7 +27,11 @@ from leapp.leapp_graph.leapp_graph import LeappGraph
 from leapp.leapp_graph.function_decorator_node import FunctionDecoratorNode
 from leapp.leapp_graph.leapp_node import LeappNode
 from leapp.leapp_graph.traced_node import TracedTensorNode
-from leapp.leapp_graph.datatypes import TracedTensor
+from leapp.leapp_graph.datatypes import (
+    TracedTensor,
+    apply_traced_tensor_patches,
+    remove_traced_tensor_patches,
+)
 from leapp.leapp_graph.block_context_node import BlockContextNode
 from leapp.utils import frame_to_namespace
 from leapp.enums import MergeCfgEnum
@@ -126,6 +130,8 @@ class ExportManager:
         self.dry_run = dry_run
         self.nodes = {}
         ExportManager._interpret_graph = True
+        # Apply patches for torch functions that bypass __torch_function__
+        apply_traced_tensor_patches()
 
     def stop(self):
         """Stop LEAPP graph interpretation and disable tracing.
@@ -153,6 +159,8 @@ class ExportManager:
         if not ExportManager._interpret_graph:
             raise Exception("ExportManager graph interpretation is disabled")
         ExportManager._interpret_graph = False
+        # Remove patches to restore original torch function behavior
+        remove_traced_tensor_patches()
 
     #########################################################
     # node setup

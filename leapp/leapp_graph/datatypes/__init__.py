@@ -18,11 +18,18 @@ from .components import (
     TorchDtypeWrapper,
 )
 
-from .traced_tensor import TracedTensor
+from .traced_tensor import (
+    TracedTensor,
+    apply_traced_tensor_patches,
+    remove_traced_tensor_patches,
+)
 
 __all__ = [
     # Core data types
     "TracedTensor",
+    # Patch management
+    "apply_traced_tensor_patches",
+    "remove_traced_tensor_patches",
     # NumPy compatibility
     "NUMPY_UFUNC_TO_TORCH",
     "NUMPY_FUNC_TO_TORCH",
