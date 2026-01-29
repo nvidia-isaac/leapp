@@ -10,7 +10,7 @@ import torch
 import warnings
 
 from leapp.leapp_graph.traced_node import TracedTensorNode
-from leapp.leapp_graph.traced_tensor import TracedTensor
+from leapp.leapp_graph.datatypes import TracedTensor
 
 Tensor = torch.Tensor | TracedTensor
 

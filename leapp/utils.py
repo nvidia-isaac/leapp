@@ -25,7 +25,7 @@ import sys
 import collections.abc
 from dataclasses import dataclass
 from typing import Optional, Any, Dict, Tuple
-from leapp.leapp_graph.traced_tensor import TracedTensor
+from leapp.leapp_graph.datatypes import TracedTensor
 from leapp._logging import _get_logger
 
 

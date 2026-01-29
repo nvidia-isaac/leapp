@@ -1,1 +1,0 @@
-[INFO]: Node context initialized: basic_numpy_function

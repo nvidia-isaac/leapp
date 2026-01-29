@@ -5,12 +5,13 @@ import torch
 from torch.fx.proxy import Proxy
 from leapp._logging import _get_logger
 from leapp.tracing_lock import TracingLock
-from leapp.leapp_graph.datatypes.numpy_compatibility import (
+from .numpy_compatibility import (
     AXIS_TO_DIM_FUNCTIONS,
     convert_numpy_arg_to_torch,
     get_torch_equivalent_ufunc,
     get_torch_equivalent_func,
 )
+from .components import TorchDtypeWrapper
 
 
 # =============================================================================
@@ -356,9 +357,14 @@ class TracedTensor:
         return self._tensor.shape
 
     @property
-    def dtype(self) -> torch.dtype:
-        """Get the dtype of the underlying tensor."""
-        return self._tensor.dtype
+    def dtype(self) -> TorchDtypeWrapper:
+        """Get the dtype of the underlying tensor.
+        
+        Returns a TorchDtypeWrapper that provides both torch.dtype behavior
+        and numpy.dtype-compatible attributes (like .kind) for compatibility
+        with libraries like TensorDict.
+        """
+        return TorchDtypeWrapper(self._tensor.dtype)
 
     @property
     def device(self) -> torch.device:

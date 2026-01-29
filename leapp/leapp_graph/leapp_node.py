@@ -20,7 +20,7 @@ import os
 import torch
 from leapp.utils import (describe_io,
                          tag_tensor)
-from leapp.leapp_graph.traced_tensor import TracedTensor
+from leapp.leapp_graph.datatypes import TracedTensor
 from leapp.backends.export_backend import NoneExportBackend
 from leapp._logging import _get_logger
 import functools

@@ -18,7 +18,7 @@ import unittest
 import torch
 from leapp import annotate
 from .base import LEAPPFunctionalTestBase
-from leapp.leapp_graph.traced_tensor import TracedTensor
+from leapp.leapp_graph.datatypes import TracedTensor
 
 
 class TestAnnotateMethod(LEAPPFunctionalTestBase):

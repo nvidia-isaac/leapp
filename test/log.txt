@@ -1,4 +1,0 @@
-[INFO]: Node context initialized: basic_numpy_function
-[ERROR]: Error: detected the following types when expected all outputs to be TracedTensors: {<class 'torch.Tensor'>}
-**This could happen if you are not using TracedTensors in your computations.**
-Please verify if you are using the returned wrapped tensors from input_tensors() to correctly trace your computations.

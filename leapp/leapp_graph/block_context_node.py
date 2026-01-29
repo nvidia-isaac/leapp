@@ -24,7 +24,7 @@ from leapp.utils import (
 )
 from leapp._logging import _get_logger
 from leapp.leapp_graph.leapp_node import LeappNode
-from leapp.leapp_graph.traced_tensor import TracedTensor
+from leapp.leapp_graph.datatypes import TracedTensor
 
 
 class BlockContextNode(LeappNode):
