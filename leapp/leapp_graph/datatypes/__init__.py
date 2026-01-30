@@ -18,10 +18,12 @@ from .components import (
     TorchDtypeWrapper,
 )
 
-from .traced_tensor import (
-    TracedTensor,
+from .traced_tensor import TracedTensor
+
+from .global_patching import (
     apply_traced_tensor_patches,
     remove_traced_tensor_patches,
+    is_numpy_patching_enabled,
 )
 
 __all__ = [
@@ -30,6 +32,7 @@ __all__ = [
     # Patch management
     "apply_traced_tensor_patches",
     "remove_traced_tensor_patches",
+    "is_numpy_patching_enabled",
     # NumPy compatibility
     "NUMPY_UFUNC_TO_TORCH",
     "NUMPY_FUNC_TO_TORCH",

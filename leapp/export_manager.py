@@ -73,6 +73,7 @@ class ExportManager:
             self.GRAPH_NAME = "my_graph"
             self.SAVE_PATH = None
             self.dry_run = False
+            self._numpy_patches_applied = False
 
             # tracetime variables
             self.nodes = {}
@@ -93,7 +94,7 @@ class ExportManager:
     #########################################################
     # flow control
     #########################################################
-    def start(self, name, save_path=".", verbose=False, dry_run=False):
+    def start(self, name, save_path=".", verbose=False, dry_run=False, patch_numpy=True):
         """Initialize and start LEAPP graph interpretation.
 
         This method prepares the export manager for tracing by setting up the graph name,
@@ -107,6 +108,11 @@ class ExportManager:
                 will be created. Defaults to "." (current directory).
             verbose (bool, optional): If True, enables verbose logging output. 
                 Defaults to False.
+            dry_run (bool, optional): If True, enables dry run mode which skips model
+                compilation and export. Defaults to False.
+            patch_numpy (bool, optional): If True, applies patches to torch.from_numpy,
+                torch.as_tensor, and torch.tensor to enable TracedTensor compatibility
+                with numpy operations. Defaults to True.
 
         Returns:
             None
@@ -131,7 +137,9 @@ class ExportManager:
         self.nodes = {}
         ExportManager._interpret_graph = True
         # Apply patches for torch functions that bypass __torch_function__
-        apply_traced_tensor_patches()
+        self._numpy_patches_applied = patch_numpy
+        if patch_numpy:
+            apply_traced_tensor_patches()
 
     def stop(self):
         """Stop LEAPP graph interpretation and disable tracing.
@@ -160,7 +168,9 @@ class ExportManager:
             raise Exception("ExportManager graph interpretation is disabled")
         ExportManager._interpret_graph = False
         # Remove patches to restore original torch function behavior
-        remove_traced_tensor_patches()
+        if self._numpy_patches_applied:
+            remove_traced_tensor_patches()
+            self._numpy_patches_applied = False
 
     #########################################################
     # node setup

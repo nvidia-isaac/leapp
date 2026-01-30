@@ -20,7 +20,6 @@ from leapp.utils import (
     extract_source_from_line_range,
     find_with_block_end,
     get_attribute_value_from_namespace,
-    frame_to_namespace
 )
 from leapp._logging import _get_logger
 from leapp.leapp_graph.leapp_node import LeappNode

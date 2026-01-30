@@ -11,95 +11,8 @@ from .numpy_compatibility import (
     get_torch_equivalent_ufunc,
     get_torch_equivalent_func,
 )
+from .global_patching import is_numpy_patching_enabled
 from .components import TorchDtypeWrapper
-
-
-# =============================================================================
-# Deferred patching for torch functions that bypass __torch_function__
-# =============================================================================
-# Several torch functions do early type checks in C++ before __torch_function__
-# can intercept them. We use deferred patching to avoid conflicts with TorchScript
-# modules that are compiled at import time.
-#
-# Patches are applied when tracing starts (annotate.start()) and removed when
-# tracing stops (annotate.stop()).
-
-_original_torch_from_numpy = torch.from_numpy
-_original_torch_as_tensor = torch.as_tensor
-_original_torch_tensor = torch.tensor
-
-_patches_applied = False
-
-
-def _patched_from_numpy(arr):
-    """Patched torch.from_numpy that handles TracedTensor.
-    
-    If the input is a TracedTensor, return it directly (it's already a traced
-    torch tensor). Otherwise, call the original torch.from_numpy.
-    """
-    if isinstance(arr, TracedTensor):
-        return arr
-    return _original_torch_from_numpy(arr)
-
-
-def _patched_as_tensor(data, dtype=None, device=None):
-    """Patched torch.as_tensor that handles TracedTensor.
-    
-    If the input is a TracedTensor, return it directly (preserving tracing).
-    Otherwise, call the original torch.as_tensor.
-    """
-    if isinstance(data, TracedTensor):
-        # If dtype or device conversion is requested, we need to trace that
-        if dtype is not None or device is not None:
-            return data.to(dtype=dtype, device=device)
-        return data
-    return _original_torch_as_tensor(data, dtype=dtype, device=device)
-
-
-def _patched_tensor(data, dtype=None, device=None, requires_grad=False, pin_memory=False):
-    """Patched torch.tensor that handles TracedTensor.
-    
-    If the input is a TracedTensor, return it directly (preserving tracing).
-    Otherwise, call the original torch.tensor.
-    
-    Note: Uses explicit signature (not *args, **kwargs) to be TorchScript-compatible.
-    """
-    if isinstance(data, TracedTensor):
-        # torch.tensor always copies, but for TracedTensor we want to preserve tracing
-        # Handle dtype/device if specified
-        if dtype is not None or device is not None:
-            return data.to(dtype=dtype, device=device)
-        return data
-    return _original_torch_tensor(data, dtype=dtype, device=device,
-                                   requires_grad=requires_grad, pin_memory=pin_memory)
-
-
-def apply_traced_tensor_patches():
-    """Apply patches for torch functions that bypass __torch_function__.
-    
-    Call this when tracing starts to enable TracedTensor compatibility with
-    functions like torch.as_tensor, torch.tensor, and torch.from_numpy.
-    """
-    global _patches_applied
-    if not _patches_applied:
-        torch.from_numpy = _patched_from_numpy
-        torch.as_tensor = _patched_as_tensor
-        torch.tensor = _patched_tensor
-        _patches_applied = True
-
-
-def remove_traced_tensor_patches():
-    """Remove patches for torch functions.
-    
-    Call this when tracing stops to restore original torch function behavior.
-    This prevents conflicts with TorchScript compilation.
-    """
-    global _patches_applied
-    if _patches_applied:
-        torch.from_numpy = _original_torch_from_numpy
-        torch.as_tensor = _original_torch_as_tensor
-        torch.tensor = _original_torch_tensor
-        _patches_applied = False
 
 
 class TracedTensor:
@@ -919,6 +832,10 @@ class TracedTensor:
         Returns:
             TracedTensor or result of the torch operation
         """
+        # If numpy patching is not enabled, don't intercept numpy operations
+        if not is_numpy_patching_enabled():
+            return NotImplemented
+        
         # Only support __call__ method (not reduce, accumulate, etc.)
         if method != '__call__':
             _get_logger().warning(
@@ -964,6 +881,10 @@ class TracedTensor:
         Returns:
             TracedTensor or result of the torch operation
         """
+        # If numpy patching is not enabled, don't intercept numpy operations
+        if not is_numpy_patching_enabled():
+            return NotImplemented
+        
         # Look up the torch equivalent
         torch_func = get_torch_equivalent_func(func)
         if torch_func is None:
