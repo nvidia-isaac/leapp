@@ -129,8 +129,10 @@ NUMPY_FUNC_TO_TORCH = {
     np.mean: torch.mean,
     np.std: torch.std,
     np.var: torch.var,
-    np.min: torch.min,
-    np.max: torch.max,
+    # Use amax/amin instead of max/min because torch.max/min with dim returns (values, indices)
+    # while numpy just returns values. amax/amin always return just values.
+    np.min: torch.amin,
+    np.max: torch.amax,
     np.argmin: torch.argmin,
     np.argmax: torch.argmax,
     np.cumsum: torch.cumsum,
@@ -211,6 +213,8 @@ AXIS_TO_DIM_FUNCTIONS = {
     torch.var,
     torch.min,
     torch.max,
+    torch.amin,  # Used for np.min (returns values only, unlike torch.min with dim)
+    torch.amax,  # Used for np.max (returns values only, unlike torch.max with dim)
     torch.argmin,
     torch.argmax,
     torch.cumsum,

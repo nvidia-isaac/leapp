@@ -3,10 +3,13 @@ import torch
 import torch.fx as fx
 from torch.fx.proxy import Proxy
 from leapp._logging import _get_logger
-from leapp.leapp_graph.datatypes import TracedTensor
-from leapp.utils import (resolve_tensor_descriptions_to_names,
-                         is_tracable_tensor_type)
-from leapp.leapp_graph.datatypes.traced_data import TracedData
+from leapp.leapp_graph.datatypes import (
+    TracedData,
+    TracedTensor,  # Still needed for isinstance checks in create_static_tensors
+    as_traced,
+    is_tracable_tensor_type,
+)
+from leapp.utils import resolve_tensor_descriptions_to_names
 
 
 class TracedTensorNode(LeappNode):
@@ -108,7 +111,7 @@ class TracedTensorNode(LeappNode):
 
                 node = self.graph.create_node("placeholder", name, (), {})
                 proxy = Proxy(node, self.tracer)
-                return TracedTensor(data, name, self, proxy)
+                return as_traced(data, name, self, proxy)
 
             elif to=="tensor":
                 if not is_traced:
@@ -129,7 +132,7 @@ class TracedTensorNode(LeappNode):
                 # Create get_attr node that retrieves the stored constant
                 node = self.graph.create_node("get_attr", attr_name, (), {})
                 proxy = Proxy(node, self.tracer)
-                return TracedTensor(data, name, self, proxy)
+                return as_traced(data, name, self, proxy)
 
 
 

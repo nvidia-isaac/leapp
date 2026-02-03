@@ -78,7 +78,12 @@ class TracedData(ABC):
     def tensor(self) -> torch.Tensor:
         """Get the underlying data as a torch.Tensor."""
         pass
-    
+
+    @property
+    @abstractmethod
+    def data(self) -> Any:
+        """Get the underlying data."""
+        pass
     # =========================================================================
     # Abstract Methods - Must be implemented by child classes
     # =========================================================================

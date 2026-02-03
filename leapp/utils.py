@@ -15,19 +15,23 @@
 # limitations under the License.
 #
 
-import torch
-import inspect
 import ast
-import textwrap
+import collections.abc
 import copy
+import inspect
 import os
 import sys
-import collections.abc
+import textwrap
 from dataclasses import dataclass
 from typing import Optional, Any, Dict, Tuple
-from leapp.leapp_graph.datatypes import TracedData, TracedTensor
-from leapp._logging import _get_logger
 
+import torch
+
+from leapp._logging import _get_logger
+from leapp.leapp_graph.datatypes import TracedData, TracedTensor
+
+# Re-export from datatypes for backwards compatibility
+from leapp.leapp_graph.datatypes import is_tracable_tensor_type  # noqa: F401
 
 def find_with_block_end(filename, start_lineno):
     """Use AST to find the end line of the with block starting at start_lineno.
@@ -983,6 +987,7 @@ def tag_tensor(tensor, tag):
     """Tag a tensor instance with a leapp_tag and wrap methods to preserve the tag.
     
     This binds wrapper methods to the specific tensor INSTANCE only.
+    Works with both torch.Tensor and numpy arrays (including TracedNpArray).
     """
     if hasattr(tensor, 'leapp_tag'):
         # Already tagged - just update the tag
@@ -991,10 +996,19 @@ def tag_tensor(tensor, tag):
 
     tensor.leapp_tag = tag
 
-    # Methods to wrap on this instance
-    methods_to_wrap = ['clone', 'detach', 'contiguous', 'cpu', 'cuda', 'to']
+    # Methods to wrap depend on tensor type
+    # torch.Tensor: clone, detach, contiguous, cpu, cuda, to
+    # numpy.ndarray: copy (numpy's equivalent of clone)
+    if isinstance(tensor, torch.Tensor):
+        methods_to_wrap = ['clone', 'detach', 'contiguous', 'cpu', 'cuda', 'to']
+    else:
+        # For numpy arrays (including TracedNpArray), only wrap methods that exist
+        methods_to_wrap = ['copy']  # numpy's equivalent of clone
 
     for method_name in methods_to_wrap:
+        # Only wrap if the method exists on the tensor
+        if not hasattr(tensor, method_name):
+            continue
         # Store the original bound method on the instance
         original_attr = f'_original_{method_name}'
         if not hasattr(tensor, original_attr):
@@ -1089,9 +1103,3 @@ def get_system_info():
     metadata['system information']['os'] = os.uname().sysname
 
     return metadata
-
-
-
-def is_tracable_tensor_type(tensor):
-    tracable_tensor_types = [torch.Tensor,]
-    return any(isinstance(tensor, t) for t in tracable_tensor_types)

@@ -84,6 +84,11 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     def tensor(self) -> torch.Tensor:
         """Get the underlying torch.Tensor (for compatibility with original API)."""
         return self.as_subclass(torch.Tensor)
+    
+    @property
+    def data(self) -> torch.Tensor:
+        """Get the underlying data."""
+        return self.tensor
 
     @property
     def proxy(self) -> Proxy:
@@ -206,7 +211,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         """Recursively find all unique context names."""
         if contexts is None:
             contexts = set()
-        if isinstance(obj, TracedTensor) and obj.is_tracing:
+        if isinstance(obj, TracedData) and obj.is_tracing:
             contexts.add(obj.context)
         elif isinstance(obj, (list, tuple)):
             for item in obj:
