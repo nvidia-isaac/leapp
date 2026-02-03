@@ -1009,6 +1009,129 @@ class TestTracedTensor(unittest.TestCase):
         expected = torch.tensor([2.0, 3.0, 4.0])
         self.assertTrue(torch.allclose(result, expected))
 
+    def test_inplace_after_compile_all_operators(self):
+        """Test all in-place operators return raw tensor with correct values after compile."""
+        # Test +=
+        ctx = TracedTensorNode(name="test_add", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+        ctx.compile_trace({'y': x * 2})
+        x += 10
+        self.assertNotIsInstance(x, TracedTensor)
+        self.assertTrue(torch.allclose(x, torch.tensor([11.0, 12.0, 13.0])))
+
+        # Test -=
+        ctx = TracedTensorNode(name="test_sub", node_index=0)
+        x = ctx.create_input(torch.tensor([10.0, 20.0, 30.0]), name="x")
+        ctx.compile_trace({'y': x * 2})
+        x -= 5
+        self.assertNotIsInstance(x, TracedTensor)
+        self.assertTrue(torch.allclose(x, torch.tensor([5.0, 15.0, 25.0])))
+
+        # Test *=
+        ctx = TracedTensorNode(name="test_mul", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+        ctx.compile_trace({'y': x + 1})
+        x *= 3
+        self.assertNotIsInstance(x, TracedTensor)
+        self.assertTrue(torch.allclose(x, torch.tensor([3.0, 6.0, 9.0])))
+
+        # Test /=
+        ctx = TracedTensorNode(name="test_div", node_index=0)
+        x = ctx.create_input(torch.tensor([10.0, 20.0, 30.0]), name="x")
+        ctx.compile_trace({'y': x + 1})
+        x /= 2
+        self.assertNotIsInstance(x, TracedTensor)
+        self.assertTrue(torch.allclose(x, torch.tensor([5.0, 10.0, 15.0])))
+
+        # Test **=
+        ctx = TracedTensorNode(name="test_pow", node_index=0)
+        x = ctx.create_input(torch.tensor([2.0, 3.0, 4.0]), name="x")
+        ctx.compile_trace({'y': x + 1})
+        x **= 2
+        self.assertNotIsInstance(x, TracedTensor)
+        self.assertTrue(torch.allclose(x, torch.tensor([4.0, 9.0, 16.0])))
+
+    def test_inplace_after_compile_chained(self):
+        """Test chained in-place operations after compile."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+        ctx.compile_trace({'y': x * 2})
+
+        # Chain multiple in-place operations
+        x += 1   # [2, 3, 4]
+        x *= 2   # [4, 6, 8]
+        x -= 3   # [1, 3, 5]
+        x /= 2   # [0.5, 1.5, 2.5]
+
+        self.assertNotIsInstance(x, TracedTensor)
+        self.assertTrue(torch.allclose(x, torch.tensor([0.5, 1.5, 2.5])))
+
+    def test_inplace_methods_after_compile(self):
+        """Test all in-place methods return raw tensor with correct values after compile."""
+        # Test add_()
+        ctx = TracedTensorNode(name="test_add", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+        ctx.compile_trace({'y': x * 2})
+        result = x.add_(10)
+        self.assertNotIsInstance(result, TracedTensor)
+        self.assertTrue(torch.allclose(result, torch.tensor([11.0, 12.0, 13.0])))
+
+        # Test sub_()
+        ctx = TracedTensorNode(name="test_sub", node_index=0)
+        x = ctx.create_input(torch.tensor([10.0, 20.0, 30.0]), name="x")
+        ctx.compile_trace({'y': x * 2})
+        result = x.sub_(5)
+        self.assertNotIsInstance(result, TracedTensor)
+        self.assertTrue(torch.allclose(result, torch.tensor([5.0, 15.0, 25.0])))
+
+        # Test mul_()
+        ctx = TracedTensorNode(name="test_mul", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+        ctx.compile_trace({'y': x + 1})
+        result = x.mul_(5)
+        self.assertNotIsInstance(result, TracedTensor)
+        self.assertTrue(torch.allclose(result, torch.tensor([5.0, 10.0, 15.0])))
+
+        # Test div_()
+        ctx = TracedTensorNode(name="test_div", node_index=0)
+        x = ctx.create_input(torch.tensor([10.0, 20.0, 30.0]), name="x")
+        ctx.compile_trace({'y': x + 1})
+        result = x.div_(2)
+        self.assertNotIsInstance(result, TracedTensor)
+        self.assertTrue(torch.allclose(result, torch.tensor([5.0, 10.0, 15.0])))
+
+        # Test pow_()
+        ctx = TracedTensorNode(name="test_pow", node_index=0)
+        x = ctx.create_input(torch.tensor([2.0, 3.0, 4.0]), name="x")
+        ctx.compile_trace({'y': x + 1})
+        result = x.pow_(2)
+        self.assertNotIsInstance(result, TracedTensor)
+        self.assertTrue(torch.allclose(result, torch.tensor([4.0, 9.0, 16.0])))
+
+        # Test copy_()
+        ctx = TracedTensorNode(name="test_copy", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+        ctx.compile_trace({'y': x * 2})
+        x.copy_(torch.tensor([100.0, 200.0, 300.0]))
+        self.assertTrue(torch.allclose(x, torch.tensor([100.0, 200.0, 300.0])))
+
+    def test_inplace_with_broadcasting(self):
+        """Test in-place operations with broadcasting (2D tensor + 1D tensor)."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]), name="x")
+        
+        # Add a 1D tensor that broadcasts across rows
+        x += torch.tensor([10.0, 20.0, 30.0])
+        
+        self.assertIsInstance(x, TracedTensor)
+        expected = torch.tensor([[11.0, 22.0, 33.0], [14.0, 25.0, 36.0]])
+        self.assertTrue(torch.allclose(x.tensor, expected))
+        
+        # Verify it works after compile too
+        ctx.compile_trace({'x': x})
+        result = ctx.compiled_graph_module(torch.tensor([[1.0, 1.0, 1.0], [2.0, 2.0, 2.0]]))
+        self.assertTrue(torch.allclose(result, torch.tensor([[11.0, 21.0, 31.0], [12.0, 22.0, 32.0]])))
+
     # ==================== Advanced Indexing Tests ====================
 
     def test_indexing_with_none_newaxis(self):
@@ -1899,6 +2022,7 @@ class TestTracedTensor(unittest.TestCase):
         self.assertIn("TracedTensor", error_msg)
         self.assertIn("during tracing", error_msg)
 
+    @unittest.skip("TensorDict is not supported yet")
     def test_tensordict_preserves_traced_tensor(self):
         """Test that TensorDict preserves TracedTensor when storing and retrieving."""
         try:

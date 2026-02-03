@@ -18,6 +18,7 @@ from .components import (
     TorchDtypeWrapper,
 )
 
+from .traced_data import TracedData
 from .traced_tensor import TracedTensor
 
 from .global_patching import (
@@ -28,6 +29,7 @@ from .global_patching import (
 
 __all__ = [
     # Core data types
+    "TracedData",
     "TracedTensor",
     # Patch management
     "apply_traced_tensor_patches",

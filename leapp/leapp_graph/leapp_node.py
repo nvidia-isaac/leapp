@@ -20,7 +20,7 @@ import os
 import torch
 from leapp.utils import (describe_io,
                          tag_tensor)
-from leapp.leapp_graph.datatypes import TracedTensor
+from leapp.utils import is_tracable_tensor_type
 from leapp.backends.export_backend import NoneExportBackend
 from leapp._logging import _get_logger
 import functools
@@ -191,9 +191,9 @@ class LeappNode():
         # the tag is the name of the tensor, with the node name prepended
         tag = self.name + '/' + tag + '/'
 
-        if isinstance(tensor, torch.Tensor):
-            if isinstance(tensor, TracedTensor):
-                tensor = tensor.tensor
+        if is_tracable_tensor_type(tensor):
+            # Tag the tensor directly (works for both TracedTensor and regular tensors)
+            # For TracedTensor, we tag it directly so the tag is preserved through operations
             tag_tensor(tensor, tag)
         elif isinstance(tensor, collections.abc.Mapping):
             for key, value in tensor.items():

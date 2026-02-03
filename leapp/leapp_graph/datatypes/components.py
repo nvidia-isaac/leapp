@@ -19,10 +19,14 @@ class TorchDtypeWrapper:
     This allows TracedTensor to work with libraries like TensorDict that
     check numpy-style dtype attributes like .kind.
     
+    The wrapper passes isinstance(wrapper, torch.dtype) checks by overriding
+    __class__, allowing it to be used transparently where torch.dtype is expected.
+    
     Example:
         wrapper = TorchDtypeWrapper(torch.float32)
         wrapper.kind  # Returns 'f' (float)
         wrapper == torch.float32  # Returns True
+        isinstance(wrapper, torch.dtype)  # Returns True
     
     Attributes:
         kind: NumPy-style kind character ('f', 'i', 'u', 'b', 'c', 'O')
@@ -84,6 +88,15 @@ class TorchDtypeWrapper:
         self._torch_dtype = torch_dtype
     
     @property
+    def __class__(self):
+        """Return torch.dtype to pass isinstance checks.
+        
+        This allows isinstance(wrapper, torch.dtype) to return True,
+        enabling transparent use where torch.dtype is expected.
+        """
+        return torch.dtype
+    
+    @property
     def kind(self):
         """Return numpy-style kind character.
         
@@ -119,7 +132,7 @@ class TorchDtypeWrapper:
     
     def __eq__(self, other):
         """Compare with other dtypes."""
-        if isinstance(other, TorchDtypeWrapper):
+        if type(other).__name__ == 'TorchDtypeWrapper':
             return self._torch_dtype == other._torch_dtype
         return self._torch_dtype == other
     

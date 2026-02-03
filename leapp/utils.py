@@ -25,7 +25,7 @@ import sys
 import collections.abc
 from dataclasses import dataclass
 from typing import Optional, Any, Dict, Tuple
-from leapp.leapp_graph.datatypes import TracedTensor
+from leapp.leapp_graph.datatypes import TracedData, TracedTensor
 from leapp._logging import _get_logger
 
 
@@ -680,6 +680,9 @@ def describe_io_helper(data, name_str, dtype_notation):
         tag = None
         if hasattr(data, 'leapp_tag'):
             tag = data.leapp_tag
+        
+        if isinstance(data, TracedData):
+            data = data.tensor
 
         # Create TensorDescription dataclass instance
         tensor_desc = TensorDescription(
@@ -694,8 +697,7 @@ def describe_io_helper(data, name_str, dtype_notation):
         # Return as a list containing the dataclass (for now, keep compatibility)
         data_description = [tensor_desc]
         io_format = tensor_desc  # Plain string
-    elif isinstance(data, TracedTensor):
-        return describe_io_helper(data.tensor, name_str, dtype_notation)
+
     else:
         # For non-tensor data types
         data_desc = TensorDescription(
@@ -915,10 +917,10 @@ def safe_deepcopy(data):
     # this is used to deepcopy a complex data structure.
     # running safe deepcopy also unwraps the TracedTensor to the underlying tensor.
     if isinstance(data, torch.Tensor):
-        return data.clone()
-    elif isinstance(data, TracedTensor):
-        return data.tensor.clone()
-
+        cloned_data = data.clone()
+        if hasattr(data, 'leapp_tag'):
+            tag_tensor(cloned_data, data.leapp_tag)
+        return cloned_data
     elif isinstance(data, list):
         return [safe_deepcopy(item) for item in data]
     elif isinstance(data, dict):
@@ -1087,3 +1089,9 @@ def get_system_info():
     metadata['system information']['os'] = os.uname().sysname
 
     return metadata
+
+
+
+def is_tracable_tensor_type(tensor):
+    tracable_tensor_types = [torch.Tensor,]
+    return any(isinstance(tensor, t) for t in tracable_tensor_types)
