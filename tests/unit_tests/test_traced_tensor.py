@@ -1762,7 +1762,11 @@ class TestTracedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(x.tensor, expected))
 
     def test_setitem_full_slice_with_traced_tensor(self):
-        """Test full slice assignment where value is another TracedTensor."""
+        """Test full slice assignment where value is another TracedTensor.
+        
+        buffer[:] = y uses index_put(buffer, indices, y), so the graph
+        references both buffer and x (through y = x * 2).
+        """
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
 
@@ -1778,21 +1782,23 @@ class TestTracedTensor(unittest.TestCase):
         expected = torch.tensor([2.0, 4.0, 6.0])
         self.assertTrue(torch.allclose(buffer.tensor, expected))
 
-        # Test compilation - buffer's proxy was replaced with y's proxy,
-        # so the graph traces back to x (buffer input is unused/pruned)
+        # Test compilation - graph uses index_put(buffer, indices, y)
+        # which references both buffer and x (via y)
         ctx.compile_trace({'buffer': buffer})
         
-        # Run GraphModule and verify output
-        result = ctx.compiled_graph_module(torch.tensor([1.0, 2.0, 3.0]))
+        # Run GraphModule with both inputs (x and buffer)
+        input_x = torch.tensor([1.0, 2.0, 3.0])
+        input_buffer = torch.zeros(3)
+        result = ctx.compiled_graph_module(input_x, input_buffer)
         self.assertTrue(torch.allclose(result, expected))
 
         # Also verify TorchScript compilation works
         scripted = torch.jit.script(ctx.compiled_graph_module)
-        result_scripted = scripted(torch.tensor([1.0, 2.0, 3.0]))
+        result_scripted = scripted(input_x, input_buffer)
         self.assertTrue(torch.allclose(result_scripted, expected))
         
-        # Test with different input to ensure it's actually computing
-        result_different = ctx.compiled_graph_module(torch.tensor([10.0, 20.0, 30.0]))
+        # Test with different x input to ensure it's actually computing from x
+        result_different = ctx.compiled_graph_module(torch.tensor([10.0, 20.0, 30.0]), input_buffer)
         expected_different = torch.tensor([20.0, 40.0, 60.0])
         self.assertTrue(torch.allclose(result_different, expected_different))
 

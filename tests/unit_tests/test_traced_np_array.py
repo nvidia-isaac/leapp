@@ -1206,6 +1206,120 @@ class TestCompiledGraphExecution(unittest.TestCase):
         expected = np.where(input_data > 2, input_data, 0.0)
         self._test_operation("np_where", lambda x: np.where(x > 2, x, 0.0), input_data, expected)
 
+    # ==================== Setitem Operations ====================
+
+    def _test_setitem(self, test_name: str, input_data: np.ndarray, 
+                      setitem_func, expected_output: np.ndarray, atol: float = 1e-5):
+        """Helper to test setitem operations through all export formats.
+        
+        Args:
+            test_name: Name of the test (for error messages and ONNX filename)
+            input_data: Input numpy array
+            setitem_func: Function that takes TracedNpArray and does setitem + returns result
+            expected_output: Expected numpy output
+            atol: Absolute tolerance for comparisons
+        """
+        # Create traced version
+        ctx = TracedTensorNode(name=f"test_{test_name}", node_index=0)
+        traced_input = ctx.create_input(input_data.copy(), name="input")
+        traced_result = setitem_func(traced_input)
+        
+        # Compile the trace
+        ctx.compile_trace({'output': traced_result})
+        graph_module = ctx.compiled_graph_module
+        
+        # Convert input to torch tensor for execution
+        torch_input = torch.from_numpy(input_data.copy()).float()
+        torch_expected = torch.from_numpy(expected_output).float()
+        
+        # Test 1: FX GraphModule execution
+        try:
+            output = graph_module(torch_input)
+            self.assertTrue(
+                torch.allclose(output, torch_expected, atol=atol),
+                f"{test_name}: FX GraphModule execution failed - output doesn't match"
+            )
+        except Exception as e:
+            self.fail(f"{test_name}: FX GraphModule execution failed: {e}")
+        
+        # Test 2: TorchScript export
+        try:
+            scripted = torch.jit.script(graph_module)
+            output_ts = scripted(torch_input)
+            self.assertTrue(
+                torch.allclose(output_ts, torch_expected, atol=atol),
+                f"{test_name}: TorchScript output doesn't match"
+            )
+        except Exception as e:
+            self.fail(f"{test_name}: TorchScript export/execution failed: {e}")
+        
+        # Test 3: ONNX export
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                onnx_path = pathlib.Path(tmpdir) / f"{test_name}.onnx"
+                torch.onnx.export(
+                    graph_module,
+                    (torch_input,),
+                    onnx_path,
+                    dynamo=False,
+                    export_params=True,
+                    opset_version=17,
+                    input_names=['input'],
+                    output_names=['output'],
+                )
+                session = ort.InferenceSession(str(onnx_path))
+                output_onnx = session.run(None, {"input": torch_input.numpy()})[0]
+                self.assertTrue(
+                    np.allclose(output_onnx, expected_output, atol=atol),
+                    f"{test_name}: ONNX output doesn't match"
+                )
+        except Exception as e:
+            self.fail(f"{test_name}: ONNX export/execution failed: {e}")
+
+    def test_setitem_single_index(self):
+        """Test: x[0] = 10"""
+        input_data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        
+        def setitem_func(x):
+            x[0] = 10.0
+            return x * 2
+        
+        expected = np.array([20.0, 4.0, 6.0, 8.0, 10.0])
+        self._test_setitem("setitem_single", input_data, setitem_func, expected)
+
+    def test_setitem_slice(self):
+        """Test: x[1:3] = [10, 20]"""
+        input_data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        
+        def setitem_func(x):
+            x[1:3] = np.array([10.0, 20.0])
+            return x * 2
+        
+        expected = np.array([2.0, 20.0, 40.0, 8.0, 10.0])
+        self._test_setitem("setitem_slice", input_data, setitem_func, expected)
+
+    def test_setitem_full_slice(self):
+        """Test: x[:] = constant"""
+        input_data = np.array([1.0, 2.0, 3.0])
+        
+        def setitem_func(x):
+            x[:] = np.array([10.0, 20.0, 30.0])
+            return x * 2
+        
+        expected = np.array([20.0, 40.0, 60.0])
+        self._test_setitem("setitem_full", input_data, setitem_func, expected)
+
+    def test_setitem_step_slice(self):
+        """Test: x[::2] = [10, 30, 50] with step"""
+        input_data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        
+        def setitem_func(x):
+            x[::2] = np.array([10.0, 30.0, 50.0])  # Assigns to indices 0, 2, 4
+            return x * 2
+        
+        expected = np.array([20.0, 4.0, 60.0, 8.0, 100.0])
+        self._test_setitem("setitem_step", input_data, setitem_func, expected)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -296,11 +296,10 @@ class TracedData(ABC):
         Returns:
             New proxy representing the modified tensor, or None if unsupported
         """
-        # Full slice [:] with Proxy value - just return the value's proxy
+        # Convert full slice [:] to slice(0, None, 1) for uniform handling
+        # We always use index_put to maintain connection to self._proxy in the graph
         if key == slice(None) or (isinstance(key, tuple) and all(k == slice(None) for k in key)):
-            if isinstance(value_proxy, Proxy):
-                return value_proxy
-            # For constant values, fall through to slice handling
+            key = slice(0, None, 1)  # Convert to explicit slice for index_put handling
         
         # Single index: x[i] = v → index_put(x, (tensor([i]),), v)
         if isinstance(key, int):

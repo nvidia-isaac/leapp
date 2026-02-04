@@ -640,18 +640,61 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         return result
 
     def __setitem__(self, key, value):
-        """Handle array assignment."""
+        """Indexed assignment using functional operations for graph compatibility.
+        
+        Uses the shared _create_setitem_proxy helper from TracedData to convert
+        __setitem__ to torch.index_put for FX/TorchScript/ONNX compatibility.
+        """
+        # Unwrap value if it's a TracedNpArray
         unwrapped_value = TracedNpArray.unwrap_traced_array(value)
-        # Assign to underlying array
+        
+        # Perform the actual assignment on the underlying array
         self.view(np.ndarray)[key] = unwrapped_value
 
+        # Skip tracing if context is not tracing
         if not self.validate_status():
             return
 
-        # Record setitem in graph (though this may not work well with fx)
-        _get_logger().warning(
-            "In-place assignment (setitem) on TracedNpArray may not trace correctly. "
-            "Consider using functional operations instead."
+        # Extract proxy from value if it's a TracedNpArray, or convert to tensor for graph
+        if isinstance(value, TracedNpArray):
+            value_proxy = value.proxy
+        elif isinstance(value, np.ndarray):
+            # Convert numpy array to torch tensor in graph
+            value_proxy = self._context.tracer.create_proxy(
+                "call_function", torch.as_tensor, (value.tolist(),), {}
+            )
+        else:
+            # Scalar or list - will be handled by _create_setitem_proxy
+            value_proxy = value
+
+        # Use shared helper to create the proxy
+        proxy_out = self._create_setitem_proxy(key, value_proxy)
+        
+        if proxy_out is not None:
+            self._proxy = proxy_out
+            return
+        
+        # Handle unsupported cases with warnings
+        if isinstance(key, tuple):
+            if all(isinstance(k, int) for k in key):
+                _get_logger().warning(
+                    "Multi-dimensional integer indexing in setitem may not export correctly. "
+                    "Consider using functional operations instead."
+                )
+            else:
+                _get_logger().warning(
+                    "Complex multi-dimensional indexing in setitem may not export correctly. "
+                    "Consider restructuring to use simple slices."
+                )
+        else:
+            _get_logger().warning(
+                f"Indexing with {type(key).__name__} in setitem may not export correctly. "
+                "Consider using functional operations instead."
+            )
+        
+        # Fallback: record __setitem__ directly (may not export)
+        self._proxy = self._context.tracer.create_proxy(
+            "call_method", "__setitem__", (self._proxy, key, value_proxy), {}
         )
 
     # =========================================================================
