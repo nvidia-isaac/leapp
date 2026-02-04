@@ -429,6 +429,13 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
             "call_function", torch_func, proxy_args, proxy_kwargs
         )
 
+        # Handle torch functions that return (values, indices) when numpy returns only values
+        # torch.sort returns named tuple (values, indices), but np.sort returns only values
+        if torch_func == torch.sort:
+            proxy_out = traced_array._context.tracer.create_proxy(
+                "call_function", operator.getitem, (proxy_out, 0), {}
+            )
+
         # Handle multiple outputs (e.g., np.split returns a list)
         if isinstance(result_array, (tuple, list)):
             result = []

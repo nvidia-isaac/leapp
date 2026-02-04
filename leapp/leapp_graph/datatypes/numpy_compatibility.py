@@ -226,6 +226,8 @@ AXIS_TO_DIM_FUNCTIONS = {
     torch.unsqueeze,
     torch.flip,
     torch.roll,
+    torch.sort,
+    torch.argsort,
 }
 
 

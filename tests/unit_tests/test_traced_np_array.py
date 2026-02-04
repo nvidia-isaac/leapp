@@ -543,6 +543,40 @@ class TestTracedNpArray(unittest.TestCase):
         self.assertIsInstance(y, TracedNpArray)
         np.testing.assert_array_almost_equal(y, np.array([1.0, 0.0, 3.0]))
 
+    def test_np_sort(self):
+        """Test np.sort function."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(np.array([3.0, 1.0, 2.0]), name="x")
+        y = np.sort(x)
+        self.assertIsInstance(y, TracedNpArray)
+        np.testing.assert_array_almost_equal(y, np.array([1.0, 2.0, 3.0]))
+
+    def test_np_sort_axis(self):
+        """Test np.sort with axis parameter."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(np.array([[3.0, 1.0], [2.0, 4.0]]), name="x")
+        y = np.sort(x, axis=1)
+        self.assertIsInstance(y, TracedNpArray)
+        expected = np.array([[1.0, 3.0], [2.0, 4.0]])
+        np.testing.assert_array_almost_equal(y, expected)
+
+    def test_np_argsort(self):
+        """Test np.argsort function."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(np.array([3.0, 1.0, 2.0]), name="x")
+        y = np.argsort(x)
+        self.assertIsInstance(y, TracedNpArray)
+        np.testing.assert_array_equal(y, np.array([1, 2, 0]))
+
+    def test_np_nonzero(self):
+        """Test np.nonzero function."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(np.array([0.0, 1.0, 0.0, 2.0, 3.0]), name="x")
+        y = np.nonzero(x)
+        # nonzero returns a tuple of arrays
+        self.assertIsInstance(y, tuple)
+        np.testing.assert_array_equal(y[0], np.array([1, 3, 4]))
+
     # ==================== Indexing Tests ====================
 
     def test_getitem_single_index(self):
@@ -1143,6 +1177,34 @@ class TestCompiledGraphExecution(unittest.TestCase):
         input_data = np.array([1.0, 2.0, 3.0])
         expected = np.clip(input_data, 1.5, 2.5)
         self._test_operation("np_clip", lambda x: np.clip(x, 1.5, 2.5), input_data, expected)
+
+    # ==================== Sorting and Searching Operations ====================
+
+    def test_np_sort(self):
+        """Test: np.sort(x)"""
+        input_data = np.array([3.0, 1.0, 4.0, 1.0, 5.0, 9.0])
+        expected = np.sort(input_data)
+        self._test_operation("np_sort", lambda x: np.sort(x), input_data, expected)
+
+    def test_np_sort_axis(self):
+        """Test: np.sort(x, axis=1)"""
+        input_data = np.array([[3.0, 1.0, 2.0], [6.0, 4.0, 5.0]])
+        expected = np.sort(input_data, axis=1)
+        self._test_operation("np_sort_axis", lambda x: np.sort(x, axis=1), input_data, expected)
+
+    def test_np_argsort(self):
+        """Test: np.argsort(x)"""
+        input_data = np.array([3.0, 1.0, 4.0, 1.0, 5.0])
+        expected = np.argsort(input_data).astype(np.float32)  # Convert to float for comparison
+        # Note: argsort returns indices as int64, but we compare as float for consistency
+        self._test_operation("np_argsort", lambda x: np.argsort(x).astype(np.float32), 
+                            input_data, expected)
+
+    def test_np_where_compiled(self):
+        """Test: np.where(x > 2, x, 0)"""
+        input_data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        expected = np.where(input_data > 2, input_data, 0.0)
+        self._test_operation("np_where", lambda x: np.where(x > 2, x, 0.0), input_data, expected)
 
 
 if __name__ == "__main__":
