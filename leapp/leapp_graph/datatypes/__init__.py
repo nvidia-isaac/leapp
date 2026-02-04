@@ -16,15 +16,6 @@ from typing import Type, Union, Optional
 import numpy as np
 import torch
 
-from .numpy_compatibility import (
-    NUMPY_UFUNC_TO_TORCH,
-    NUMPY_FUNC_TO_TORCH,
-    AXIS_TO_DIM_FUNCTIONS,
-    convert_numpy_arg_to_torch,
-    get_torch_equivalent_ufunc,
-    get_torch_equivalent_func,
-)
-
 from .components import (
     TorchDtypeWrapper,
 )
@@ -197,13 +188,6 @@ __all__ = [
     "apply_traced_tensor_patches",
     "remove_traced_tensor_patches",
     "is_numpy_patching_enabled",
-    # NumPy compatibility
-    "NUMPY_UFUNC_TO_TORCH",
-    "NUMPY_FUNC_TO_TORCH",
-    "AXIS_TO_DIM_FUNCTIONS",
-    "convert_numpy_arg_to_torch",
-    "get_torch_equivalent_ufunc",
-    "get_torch_equivalent_func",
     # Components
     "TorchDtypeWrapper",
 ]

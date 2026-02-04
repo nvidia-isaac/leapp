@@ -21,11 +21,209 @@ from torch.fx.proxy import Proxy
 from leapp._logging import _get_logger
 from leapp.tracing_lock import TracingLock
 from .traced_data import TracedData
-from .numpy_compatibility import (
-    AXIS_TO_DIM_FUNCTIONS,
-    get_torch_equivalent_ufunc,
-    get_torch_equivalent_func,
-)
+
+
+# =============================================================================
+# NumPy to Torch Mappings
+# =============================================================================
+
+# Ufuncs are element-wise operations that numpy broadcasts automatically.
+# These are intercepted via __array_ufunc__ protocol.
+NUMPY_UFUNC_TO_TORCH = {
+    # Arithmetic operations
+    np.add: torch.add,
+    np.subtract: torch.sub,
+    np.multiply: torch.mul,
+    np.divide: torch.div,
+    np.true_divide: torch.div,
+    np.floor_divide: torch.floor_divide,
+    np.power: torch.pow,
+    np.negative: torch.neg,
+    np.positive: lambda x: x,  # No-op
+    np.mod: torch.remainder,
+    np.remainder: torch.remainder,
+    np.fmod: torch.fmod,
+
+    # Absolute and sign
+    np.absolute: torch.abs,
+    np.abs: torch.abs,
+    np.sign: torch.sign,
+
+    # Powers and roots
+    np.sqrt: torch.sqrt,
+    np.square: torch.square,
+    np.exp: torch.exp,
+    np.exp2: lambda x: torch.pow(2, x),
+    np.expm1: torch.expm1,
+
+    # Logarithms
+    np.log: torch.log,
+    np.log2: torch.log2,
+    np.log10: torch.log10,
+    np.log1p: torch.log1p,
+
+    # Trigonometric functions
+    np.sin: torch.sin,
+    np.cos: torch.cos,
+    np.tan: torch.tan,
+    np.arcsin: torch.asin,
+    np.arccos: torch.acos,
+    np.arctan: torch.atan,
+    np.arctan2: torch.atan2,
+    np.hypot: torch.hypot,
+
+    # Hyperbolic functions
+    np.sinh: torch.sinh,
+    np.cosh: torch.cosh,
+    np.tanh: torch.tanh,
+    np.arcsinh: torch.asinh,
+    np.arccosh: torch.acosh,
+    np.arctanh: torch.atanh,
+
+    # Rounding
+    np.floor: torch.floor,
+    np.ceil: torch.ceil,
+    np.trunc: torch.trunc,
+    np.round: torch.round,
+    np.rint: torch.round,
+
+    # Comparison (element-wise, return boolean tensor)
+    np.greater: torch.gt,
+    np.greater_equal: torch.ge,
+    np.less: torch.lt,
+    np.less_equal: torch.le,
+    np.equal: torch.eq,
+    np.not_equal: torch.ne,
+    np.maximum: torch.maximum,
+    np.minimum: torch.minimum,
+
+    # Logical operations
+    np.logical_and: torch.logical_and,
+    np.logical_or: torch.logical_or,
+    np.logical_xor: torch.logical_xor,
+    np.logical_not: torch.logical_not,
+
+    # Bitwise operations
+    np.bitwise_and: torch.bitwise_and,
+    np.bitwise_or: torch.bitwise_or,
+    np.bitwise_xor: torch.bitwise_xor,
+    np.invert: torch.bitwise_not,
+    np.left_shift: torch.bitwise_left_shift,
+    np.right_shift: torch.bitwise_right_shift,
+
+    # Special values
+    np.isnan: torch.isnan,
+    np.isinf: torch.isinf,
+    np.isfinite: torch.isfinite,
+
+    # Clipping
+    np.clip: torch.clamp,
+}
+
+# Higher-level array functions intercepted via __array_function__ protocol.
+NUMPY_FUNC_TO_TORCH = {
+    # Reduction operations
+    np.sum: torch.sum,
+    np.prod: torch.prod,
+    np.mean: torch.mean,
+    np.std: torch.std,
+    np.var: torch.var,
+    # Use amax/amin instead of max/min because torch.max/min with dim returns (values, indices)
+    # while numpy just returns values. amax/amin always return just values.
+    np.min: torch.amin,
+    np.max: torch.amax,
+    np.argmin: torch.argmin,
+    np.argmax: torch.argmax,
+    np.cumsum: torch.cumsum,
+    np.cumprod: torch.cumprod,
+    np.all: torch.all,
+    np.any: torch.any,
+
+    # Array manipulation
+    np.concatenate: torch.cat,
+    np.stack: torch.stack,
+    np.vstack: torch.vstack,
+    np.hstack: torch.hstack,
+    np.split: torch.split,
+    np.array_split: torch.tensor_split,
+    np.squeeze: torch.squeeze,
+    np.expand_dims: torch.unsqueeze,
+    np.reshape: torch.reshape,
+    np.transpose: torch.permute,
+    np.swapaxes: torch.swapaxes,
+    np.moveaxis: torch.moveaxis,
+    np.flip: torch.flip,
+    np.roll: torch.roll,
+    np.rot90: torch.rot90,
+
+    # Sorting and searching
+    np.sort: torch.sort,
+    np.argsort: torch.argsort,
+    np.where: torch.where,
+    np.nonzero: torch.nonzero,
+
+    # Element-wise (also available as ufuncs)
+    np.clip: torch.clamp,
+    np.abs: torch.abs,
+    np.absolute: torch.abs,
+    np.sqrt: torch.sqrt,
+    np.square: torch.square,
+    np.exp: torch.exp,
+    np.log: torch.log,
+    np.sin: torch.sin,
+    np.cos: torch.cos,
+    np.tan: torch.tan,
+    np.tanh: torch.tanh,
+
+    # Linear algebra
+    np.matmul: torch.matmul,
+    np.dot: torch.matmul,  # Note: torch.dot is only for 1D vectors
+    np.tensordot: torch.tensordot,
+    np.einsum: torch.einsum,
+    np.trace: torch.trace,
+    np.diagonal: torch.diagonal,
+    np.tril: torch.tril,
+    np.triu: torch.triu,
+
+    # Creation functions (when operating on TracedTensor)
+    np.zeros_like: torch.zeros_like,
+    np.ones_like: torch.ones_like,
+    np.full_like: torch.full_like,
+    np.empty_like: torch.empty_like,
+
+    # Standalone creation (less commonly needed with TracedTensor)
+    np.eye: torch.eye,
+    np.zeros: torch.zeros,
+    np.ones: torch.ones,
+    np.full: torch.full,
+    np.arange: torch.arange,
+    np.linspace: torch.linspace,
+}
+
+# Functions that need axis -> dim conversion
+AXIS_TO_DIM_FUNCTIONS = {
+    torch.sum,
+    torch.mean,
+    torch.std,
+    torch.var,
+    torch.min,
+    torch.max,
+    torch.amin,
+    torch.amax,
+    torch.argmin,
+    torch.argmax,
+    torch.cumsum,
+    torch.cumprod,
+    torch.all,
+    torch.any,
+    torch.cat,
+    torch.squeeze,
+    torch.unsqueeze,
+    torch.flip,
+    torch.roll,
+    torch.sort,
+    torch.argsort,
+}
 
 
 # Combined metaclass to resolve conflict between ABCMeta (from TracedData)
@@ -334,7 +532,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
             return NotImplemented
 
         # Get the torch equivalent
-        torch_func = get_torch_equivalent_ufunc(ufunc)
+        torch_func = NUMPY_UFUNC_TO_TORCH.get(ufunc)
         if torch_func is None:
             _get_logger().warning(
                 f"No torch equivalent for numpy ufunc {ufunc.__name__}. "
@@ -391,7 +589,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         and record the torch equivalent in the graph.
         """
         # Get the torch equivalent
-        torch_func = get_torch_equivalent_func(func)
+        torch_func = NUMPY_FUNC_TO_TORCH.get(func)
         if torch_func is None:
             _get_logger().warning(
                 f"No torch equivalent for numpy function {func.__name__}. "
