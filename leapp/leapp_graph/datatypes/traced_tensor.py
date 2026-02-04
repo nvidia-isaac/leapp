@@ -869,11 +869,10 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         return result_tensor
 
     def __setitem__(self, key, value):
-        """Indexed assignment operator for TracedTensor.
-
-        This allows assignments like `traced_tensor[:] = value` to be recorded
-        in the computation graph. The TracedTensor is updated in-place to reflect
-        the new values and proxy.
+        """Indexed assignment using functional operations for graph compatibility.
+        
+        Uses the shared _create_setitem_proxy helper from TracedData to convert
+        __setitem__ to torch.index_put for FX/TorchScript/ONNX compatibility.
         """
         # Unwrap value if it's a TracedTensor
         real_value = TracedTensor.unwrap_traced_tensor(value)
@@ -886,22 +885,37 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             return
 
         # Extract proxy from value if it's a TracedTensor
-        if isinstance(value, TracedTensor):
-            value_proxy = value.proxy
-        else:
-            value_proxy = value
+        value_proxy = value.proxy if isinstance(value, TracedTensor) else value
 
-        # For full slice assignment [:], we can treat it as the value itself
-        if key == slice(None) or (isinstance(key, tuple) and all(k == slice(None) for k in key)):
-            # Full replacement - the proxy becomes the value's proxy
-            if isinstance(value, TracedTensor):
-                self._proxy = value.proxy
-        else:
-            # Partial assignment - record as a call_method
-            proxy_out = self._context.tracer.create_proxy(
-                "call_method", "__setitem__", (self._proxy, key, value_proxy), {}
-            )
+        # Use shared helper to create the proxy
+        proxy_out = self._create_setitem_proxy(key, value_proxy)
+        
+        if proxy_out is not None:
             self._proxy = proxy_out
+            return
+        
+        # Handle unsupported cases with warnings
+        if isinstance(key, tuple):
+            if all(isinstance(k, int) for k in key):
+                _get_logger().warning(
+                    "Multi-dimensional integer indexing in setitem may not export correctly. "
+                    "Consider using torch.index_put directly."
+                )
+            else:
+                _get_logger().warning(
+                    "Complex multi-dimensional indexing in setitem may not export correctly. "
+                    "Consider restructuring to use simple slices or torch.index_put."
+                )
+        else:
+            _get_logger().warning(
+                f"Indexing with {type(key).__name__} in setitem may not export correctly. "
+                "Consider using torch.index_put or torch.masked_scatter directly."
+            )
+        
+        # Fallback: record __setitem__ directly (may not export)
+        self._proxy = self._context.tracer.create_proxy(
+            "call_method", "__setitem__", (self._proxy, key, value_proxy), {}
+        )
 
     # =========================================================================
     # Magic Methods

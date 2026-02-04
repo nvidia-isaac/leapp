@@ -404,6 +404,58 @@ class TensorArithmeticFunctions:
 class TestTracedTensor(unittest.TestCase):
     """Test TracedTensor operations."""
 
+    def validate_export(self, graph_module, inputs, expected, test_name="test"):
+        """Validate graph_module execution across FX, TorchScript, and ONNX.
+        
+        Args:
+            graph_module: The compiled FX GraphModule to test
+            inputs: Tuple of input tensors
+            expected: Expected output tensor
+            test_name: Name for the test (used in ONNX filename and error messages)
+        """
+        # Ensure inputs is a tuple
+        if not isinstance(inputs, tuple):
+            inputs = (inputs,)
+        
+        # Generate input names based on count
+        input_names = [f"input_{i}" for i in range(len(inputs))]
+        
+        # Test 1: FX GraphModule execution
+        output = graph_module(*inputs)
+        self.assertTrue(
+            torch.allclose(output, expected, atol=1e-5),
+            f"{test_name}: FX GraphModule output doesn't match expected"
+        )
+        
+        # Test 2: TorchScript export
+        scripted = torch.jit.script(graph_module)
+        output_ts = scripted(*inputs)
+        self.assertTrue(
+            torch.allclose(output_ts, expected, atol=1e-5),
+            f"{test_name}: TorchScript output doesn't match expected"
+        )
+        
+        # Test 3: ONNX export
+        with tempfile.TemporaryDirectory() as tmpdir:
+            onnx_path = pathlib.Path(tmpdir) / f"{test_name}.onnx"
+            torch.onnx.export(
+                graph_module,
+                inputs,
+                onnx_path,
+                dynamo=False,
+                export_params=True,
+                opset_version=17,
+                input_names=input_names,
+                output_names=['output'],
+            )
+            session = ort.InferenceSession(str(onnx_path))
+            onnx_inputs = {name: inp.numpy() for name, inp in zip(input_names, inputs)}
+            output_onnx = session.run(None, onnx_inputs)[0]
+            self.assertTrue(
+                torch.allclose(torch.from_numpy(output_onnx), expected, atol=1e-5),
+                f"{test_name}: ONNX output doesn't match expected"
+            )
+
     def test_shape(self):
         """Test shape property."""
         ctx = TracedTensorNode(name="test", node_index=0)
@@ -1850,6 +1902,66 @@ class TestTracedTensor(unittest.TestCase):
         self.assertIsInstance(x, TracedTensor)
         expected = torch.tensor([10.0, 20.0, 30.0])
         self.assertTrue(torch.allclose(x.tensor, expected))
+
+    # ==================== Setitem Export Tests ====================
+    # These tests verify that setitem operations can be exported to FX, TorchScript, and ONNX
+    # by using functional equivalents (index_put, arange) instead of in-place __setitem__.
+
+    def test_setitem_single_index_fx_torchscript_onnx(self):
+        """Test: x[0] = 10 exports correctly to FX, TorchScript, and ONNX."""
+        ctx = TracedTensorNode(name="test_setitem_export", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0]), name="x")
+        
+        x[0] = 10.0
+        y = x * 2
+        
+        ctx.compile_trace({'y': y})
+        
+        input_tensor = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
+        expected = torch.tensor([20.0, 4.0, 6.0, 8.0, 10.0])
+        self.validate_export(ctx.compiled_graph_module, (input_tensor,), expected, "setitem_single")
+
+    def test_setitem_slice_fx_torchscript_onnx(self):
+        """Test: x[1:3] = [10, 20] exports correctly to FX, TorchScript, and ONNX."""
+        ctx = TracedTensorNode(name="test_setitem_slice_export", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0]), name="x")
+        
+        x[1:3] = torch.tensor([10.0, 20.0])
+        y = x * 2
+        
+        ctx.compile_trace({'y': y})
+        
+        input_tensor = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
+        expected = torch.tensor([2.0, 20.0, 40.0, 8.0, 10.0])
+        self.validate_export(ctx.compiled_graph_module, (input_tensor,), expected, "setitem_slice")
+
+    def test_setitem_full_slice_constant_fx_torchscript_onnx(self):
+        """Test: x[:] = constant exports correctly to FX, TorchScript, and ONNX."""
+        ctx = TracedTensorNode(name="test_setitem_full_export", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+        
+        x[:] = torch.tensor([10.0, 20.0, 30.0])
+        y = x * 2
+        
+        ctx.compile_trace({'y': y})
+        
+        input_tensor = torch.tensor([1.0, 2.0, 3.0])
+        expected = torch.tensor([20.0, 40.0, 60.0])
+        self.validate_export(ctx.compiled_graph_module, (input_tensor,), expected, "setitem_full")
+
+    def test_setitem_step_slice_fx_torchscript_onnx(self):
+        """Test: x[::2] = [10, 20, 30] with step exports correctly."""
+        ctx = TracedTensorNode(name="test_setitem_step_export", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0]), name="x")
+        
+        x[::2] = torch.tensor([10.0, 30.0, 50.0])  # Assigns to indices 0, 2, 4
+        y = x * 2
+        
+        ctx.compile_trace({'y': y})
+        
+        input_tensor = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
+        expected = torch.tensor([20.0, 4.0, 60.0, 8.0, 100.0])
+        self.validate_export(ctx.compiled_graph_module, (input_tensor,), expected, "setitem_step")
 
     # ==================== Unsupported Operation error message ====================
     def test_boolean_indexing_raises_error(self):

@@ -279,3 +279,82 @@ class TracedData(ABC):
         """Format the TracedData by delegating to the underlying value."""
         return self._value.__format__(format_spec)
 
+    # =========================================================================
+    # Setitem Proxy Generation
+    # =========================================================================
+    
+    def _create_setitem_proxy(self, key, value_proxy):
+        """Create proxy for __setitem__ using functional torch operations.
+        
+        Converts indexed assignment to torch.index_put for graph compatibility.
+        This is shared logic that both TracedTensor and TracedNpArray can use.
+        
+        Args:
+            key: The indexing key (int, slice, tuple)
+            value_proxy: Proxy for the value, or a constant value
+            
+        Returns:
+            New proxy representing the modified tensor, or None if unsupported
+        """
+        # Full slice [:] with Proxy value - just return the value's proxy
+        if key == slice(None) or (isinstance(key, tuple) and all(k == slice(None) for k in key)):
+            if isinstance(value_proxy, Proxy):
+                return value_proxy
+            # For constant values, fall through to slice handling
+        
+        # Single index: x[i] = v → index_put(x, (tensor([i]),), v)
+        if isinstance(key, int):
+            indices_proxy = self._context.tracer.create_proxy(
+                "call_function", torch.tensor, ([key],), {"dtype": torch.long}
+            )
+            if not isinstance(value_proxy, Proxy):
+                value_tensor_proxy = self._context.tracer.create_proxy(
+                    "call_function", torch.tensor, ([value_proxy],), {}
+                )
+            else:
+                # Reshape to ensure 1D for index_put
+                value_tensor_proxy = self._context.tracer.create_proxy(
+                    "call_method", "reshape", (value_proxy, (-1,)), {}
+                )
+            return self._context.tracer.create_proxy(
+                "call_function", torch.index_put,
+                (self._proxy, (indices_proxy,), value_tensor_proxy), {}
+            )
+        
+        # Slice: x[start:end:step] = v → index_put with arange indices
+        elif isinstance(key, slice):
+            start = key.start if key.start is not None else 0
+            end = key.stop
+            step = key.step if key.step is not None else 1
+            
+            if end is None:
+                # Use tensor size to determine end
+                size_proxy = self._context.tracer.create_proxy(
+                    "call_method", "size", (self._proxy, 0), {}
+                )
+                indices_proxy = self._context.tracer.create_proxy(
+                    "call_function", torch.arange,
+                    (start, size_proxy, step), {"dtype": torch.long}
+                )
+            else:
+                indices_proxy = self._context.tracer.create_proxy(
+                    "call_function", torch.arange,
+                    (start, end, step), {"dtype": torch.long}
+                )
+            
+            # Handle constant values - register as buffer for TorchScript compatibility
+            if not isinstance(value_proxy, Proxy):
+                value_tensor = torch.tensor(value_proxy) if not isinstance(value_proxy, torch.Tensor) else value_proxy
+                attr_name = f"_setitem_value_{id(value_tensor)}"
+                self._context.tracer.root.register_buffer(attr_name, value_tensor)
+                value_proxy = self._context.tracer.create_proxy(
+                    "get_attr", attr_name, (), {}
+                )
+            
+            return self._context.tracer.create_proxy(
+                "call_function", torch.index_put,
+                (self._proxy, (indices_proxy,), value_proxy), {}
+            )
+        
+        # Unsupported key type - return None to signal caller should handle
+        return None
