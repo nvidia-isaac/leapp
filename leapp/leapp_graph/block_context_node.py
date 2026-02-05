@@ -151,7 +151,6 @@ class BlockContextNode(LeappNode):
             namespace, variable_name)
 
         self._check_for_active_traced_tensors(obj, variable_name)
-        obj = safe_deepcopy(obj)
 
         return final_variable_name, safe_deepcopy(obj)
 

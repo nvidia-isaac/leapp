@@ -28,7 +28,7 @@ from leapp.leapp_graph.function_decorator_node import FunctionDecoratorNode
 from leapp.leapp_graph.leapp_node import LeappNode
 from leapp.leapp_graph.traced_node import TracedTensorNode
 from leapp.leapp_graph.datatypes import (
-    TracedTensor,
+    is_traced_type,
     apply_traced_tensor_patches,
     remove_traced_tensor_patches,
 )
@@ -289,12 +289,13 @@ class ExportManager:
             _get_logger().warning(f"Warning: no tensor name provided for output_tensors call in node {node_name}\n"
                                   "Assuming default tensor name")
 
-        types = set(type(tensor) for tensor in flattened_tensors.values())
+        instances = set(is_traced_type(tensor) for tensor in flattened_tensors.values())
 
-        if not all([type is TracedTensor for type in types]):
+        if not all(instances):
+            types = set(type(tensor) for tensor in flattened_tensors.values())
             _get_logger().error(
-                f"Error: detected the following types when expected all outputs to be TracedTensors: {types}\n"
-                "**This could happen if you are not using TracedTensors in your computations.**\n"
+                f"Error: detected the following types when expected all outputs to be TracedData: {types}\n"
+                "**This could happen if you are not using TracedData in your computations.**\n"
                 "Please verify if you are using the returned wrapped tensors from input_tensors() to "
                 "correctly trace your computations.")
             raise Exception(
@@ -338,7 +339,7 @@ class ExportManager:
         """Register tensors as persistent buffers for a traced node.
 
         The tensors become part of the compiled module's state and persist
-        across forward calls. The returned TracedTensors can be used in traced
+        across forward calls. The returned TracedData can be used in traced
         computations, and modifications (via in-place ops) will be retained.
 
         Args:
@@ -346,7 +347,7 @@ class ExportManager:
             tensors: Dictionary mapping buffer names to tensors
 
         Returns:
-            dict: Dictionary mapping buffer names to TracedTensors
+            dict: Dictionary mapping buffer names to TracedData
 
         Example:
             ```python

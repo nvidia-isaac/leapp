@@ -134,3 +134,87 @@ class TestNumpyFunctionsWithPatchesApplied(unittest.TestCase):
         self.assertEqual(tensor.shape, torch.Size([6]))
         
         annotate.stop()
+
+
+class TestNumpyPatchingDisabled(unittest.TestCase):
+    """Test that patch_numpy=False correctly disables numpy patching.
+    
+    When patch_numpy=False is passed to start(), TracedTensor.numpy() and
+    np.array(traced_tensor) should return actual numpy arrays, not TracedTensors.
+    """
+
+    def setUp(self):
+        self.TEST_GRAPH_NAME = "test_graph"
+
+    def tearDown(self):
+        if os.path.exists(self.TEST_GRAPH_NAME):
+            shutil.rmtree(self.TEST_GRAPH_NAME)
+
+    def test_numpy_method_returns_array_when_patching_disabled(self):
+        """Test that .numpy() returns actual numpy array when patch_numpy=False."""
+        from leapp.leapp_graph.datatypes.traced_tensor import TracedTensor
+        
+        tensor = torch.tensor([1.0, 2.0, 3.0])
+        
+        # Start with patch_numpy=False
+        annotate.start(name=self.TEST_GRAPH_NAME, patch_numpy=False)
+        traced = annotate.input_tensors({'tensor': tensor}, 'test_node')
+        
+        # Verify we have a TracedTensor
+        self.assertIsInstance(traced, TracedTensor)
+        
+        # .numpy() should return actual numpy array, not TracedTensor
+        result = traced.numpy()
+        
+        self.assertIsInstance(result, np.ndarray)
+        self.assertNotIsInstance(result, TracedTensor)
+        np.testing.assert_array_almost_equal(result, [1.0, 2.0, 3.0])
+        
+        annotate.output_tensors('test_node', {'tensor': traced}, export_with="jit")
+        annotate.stop()
+
+    def test_np_array_returns_array_when_patching_disabled(self):
+        """Test that np.array() returns actual numpy array when patch_numpy=False."""
+        from leapp.leapp_graph.datatypes.traced_tensor import TracedTensor
+        
+        tensor = torch.tensor([4.0, 5.0, 6.0])
+        
+        # Start with patch_numpy=False
+        annotate.start(name=self.TEST_GRAPH_NAME, patch_numpy=False)
+        traced = annotate.input_tensors({'tensor': tensor}, 'test_node')
+        
+        # Verify we have a TracedTensor
+        self.assertIsInstance(traced, TracedTensor)
+        
+        # np.array() should return actual numpy array
+        result = np.array(traced)
+        
+        self.assertIsInstance(result, np.ndarray)
+        self.assertNotIsInstance(result, TracedTensor)
+        np.testing.assert_array_almost_equal(result, [4.0, 5.0, 6.0])
+        
+        annotate.output_tensors('test_node', {'tensor': traced}, export_with="jit")
+        annotate.stop()
+
+    def test_np_asarray_returns_array_when_patching_disabled(self):
+        """Test that np.asarray() returns actual numpy array when patch_numpy=False."""
+        from leapp.leapp_graph.datatypes.traced_tensor import TracedTensor
+        
+        tensor = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+        
+        # Start with patch_numpy=False
+        annotate.start(name=self.TEST_GRAPH_NAME, patch_numpy=False)
+        traced = annotate.input_tensors({'tensor': tensor}, 'test_node')
+        
+        # Verify we have a TracedTensor
+        self.assertIsInstance(traced, TracedTensor)
+        
+        # np.asarray() should return actual numpy array
+        result = np.asarray(traced)
+        
+        self.assertIsInstance(result, np.ndarray)
+        self.assertNotIsInstance(result, TracedTensor)
+        np.testing.assert_array_almost_equal(result, [[1.0, 2.0], [3.0, 4.0]])
+        
+        annotate.output_tensors('test_node', {'tensor': traced}, export_with="jit")
+        annotate.stop()

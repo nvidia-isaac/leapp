@@ -1136,6 +1136,7 @@ class TestAnnotateMixed(LEAPPFunctionalTestBase):
         annotate.stop()
         annotate.compile_graph(visualize=False)
 
+
         self.verify_num_connections(
             annotate, nodes=3, inputs=1, outputs=1, internal_connections=2)
         self.verify_all_models_exist('preprocess', 'funcA', 'postprocess')

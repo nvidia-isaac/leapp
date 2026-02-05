@@ -35,7 +35,7 @@ class ONNXExportBackend(ExportBackend):
         This is allowed and we update node_context.inputs accordingly.
         
         However, if ONNX renames inputs (which happens with identity/passthrough functions
-        when using dynamo=True), we raise an error and suggest using dynamo=False.
+        when using onnx-dynamo), we raise an error and suggest using onnx-torchscript instead.
         """
         onnx_model = self._get_onnx_model(onnx_program)
         
@@ -52,11 +52,11 @@ class ONNXExportBackend(ExportBackend):
         if renamed_inputs:
             raise ValueError(
                 f"[{self.node_context.name}] ONNX export renamed inputs: {renamed_inputs}. "
-                f"This typically happens with identity/passthrough functions when using dynamo=True. "
-                f"This usecase is not supported by LEAPP, please: \n"
-                f"1. use dynamo=False by setting backend_params={{'dynamo': False}} \n"
-                f"2. use a different backend, such as torch-script or torch-trace \n"
-                f"3. remove the inputs that are not used in the computation or directly returned as output"
+                "This typically happens with identity/passthrough functions with onnx-dynamo. "
+                "This usecase is not supported by LEAPP, please: \n"
+                "1. use the onnx-torchscript export backend instead\n"
+                "2. use a different backend, such as torch-script or torch-trace \n"
+                "3. remove the inputs that are not used in the computation or directly returned as output"
             )
         
         if removed_inputs:

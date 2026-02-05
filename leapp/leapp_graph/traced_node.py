@@ -3,7 +3,12 @@ import torch
 import torch.fx as fx
 from torch.fx.proxy import Proxy
 from leapp._logging import _get_logger
-from leapp.leapp_graph.datatypes import TracedTensor
+from leapp.leapp_graph.datatypes import (
+    TracedData,
+    TracedTensor,  # Still needed for isinstance checks in create_static_tensors
+    as_traced,
+    is_tracable_tensor_type,
+)
 from leapp.utils import resolve_tensor_descriptions_to_names
 
 
@@ -79,66 +84,61 @@ class TracedTensorNode(LeappNode):
                 new_data.append(self._create_io_helper(
                     value, child_name, to))
             return tuple(new_data)
-        elif isinstance(data, TracedTensor):
-            tensor_val = data.tensor
+
+        elif is_tracable_tensor_type(data):
+            is_traced = False
+            if isinstance(data, TracedData) and data.is_tracing:
+                is_traced = True # is already a traced tensor that is currently tracing AND the context is the same as the current node
+                # Check if the traced tensor is from the same context (node)
+                if data.context_obj is not self:
+                    # Different context: error - cannot use traced tensor from another node
+                    _get_logger().error(
+                        f"Error: when creating inputs for '{self.name}', "
+                        f"detected data '{name}' is an active TracedTensor from a different node '{data.context}'. "
+                        f"Cannot use TracedTensor from one node as input to another. "
+                        f"Call output_tensors() on the source node first."
+                    )
+                    raise Exception("Error in TracedTensorNode")
+
             if to=="traced":
-                if data.is_tracing:
-                    # Check if the traced tensor is from the same context (node)
-                    if data.context_obj is self:
-                        # Same context: allow override with warning
-                        _get_logger().warning(
-                            f"Input '{name}' for node '{self.name}' is an active TracedTensor "
-                            f"from the same node. Creating fresh input placeholder "
-                            f"(previous trace will be discarded for this branch)."
-                        )
-                    else:
-                        # Different context: error - cannot use traced tensor from another node
-                        _get_logger().error(
-                            f"Error: when creating inputs for '{self.name}', "
-                            f"detected data '{name}' is an active TracedTensor from a different node '{data.context}'. "
-                            f"Cannot use TracedTensor from one node as input to another. "
-                            f"Call output_tensors() on the source node first."
-                        )
-                        raise Exception("Error in TracedTensorNode")
-                return self._create_io_helper(tensor_val, name, to)
-            elif to=="tensor":
-                # return the underlying tensor value
-                if not data.is_tracing:
-                    _get_logger().warning(f"Warning: when creating outputs for {self.name}, \
-                                            detected data {name} is a TracedTensor but is not tracing")
+                if is_traced:
+                    # Same context: allow override with warning
+                    _get_logger().warning(
+                        f"Input '{name}' for node '{self.name}' is an active TracedTensor "
+                        f"from the same node. Creating fresh input placeholder "
+                        f"(previous trace will be discarded for this branch)."
+                    )
 
-                return tensor_val
-            elif to == "static":
-                _get_logger().error(f"Cannot create static output from TracedTensor '{name}'. "
-                                    "Static outputs must be raw tensors.")
-                raise Exception("Error in TracedTensorNode")
-
-
-        elif isinstance(data, torch.Tensor):
-            if to == "traced":  # convert the tensor to a TracedTensor (input placeholder)
-                """ Future warp support
-                    if isinstance(tensor, wp.array):
-                        tensor = wp.to_torch(tensor)
-                """
                 node = self.graph.create_node("placeholder", name, (), {})
                 proxy = Proxy(node, self.tracer)
-                return TracedTensor(data, name, self, proxy)
-            elif to == "static":  # embed as constant in the graph (get_attr node)
+                return as_traced(data, name, self, proxy)
+
+            elif to=="tensor":
+                if not is_traced:
+                    _get_logger().warning(
+                        f"Warning: when creating outputs for {self.name}, "
+                        f"detected data {name} is not a TracedTensor")
+                return data
+            
+            elif to=="static":
+                if is_traced:
+                    _get_logger().error(f"Cannot create static output from TracedTensor '{name}'. "
+                    "Static outputs must be raw tensors.")
+                    raise Exception("Error in TracedTensorNode")
+
                 # Create unique attribute name and store on root module
                 attr_name = f"_static_{name}".replace(".", "_")
                 self.tracer.root.register_buffer(attr_name, data.clone())
                 # Create get_attr node that retrieves the stored constant
                 node = self.graph.create_node("get_attr", attr_name, (), {})
                 proxy = Proxy(node, self.tracer)
-                return TracedTensor(data, name, self, proxy)
-            else:
-                _get_logger().warning(f"Warning: when creating outputs for {self.name}, \
-                                       detected data {name} is not a TracedTensor")
-                return data
+                return as_traced(data, name, self, proxy)
+
+
 
         else:
             _get_logger().error(f"Error: when creating inputs for {self.name}, detected data {name} is {type(data).__name__}"
-                                " which is not a dict, list, tuple, or torch.Tensor")
+                                " which is not a dict, list, tuple, or accepted tracable tensor type")
             raise Exception("Error in TracedTensorNode")
 
     def create_input(self, data, name: str) -> "TracedTensor":
