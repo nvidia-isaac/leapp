@@ -962,3 +962,59 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             "call_method", "to", (self._proxy,) + args, kwargs
         )
         return self._new(result_tensor, proxy_out)
+
+    def numpy(self):
+        """Convert to numpy array, preserving tracing as TracedNpArray.
+        
+        If tracing is active, returns a TracedNpArray that shares the proxy
+        and context, allowing the trace to continue across the conversion.
+        
+        If not tracing, returns a regular numpy array.
+        
+        Returns:
+            TracedNpArray if tracing, else np.ndarray
+        """
+        np_data = self.as_subclass(torch.Tensor).detach().cpu().numpy()
+        
+        # Skip tracing if context is not tracing - return raw numpy array
+        if not self.validate_status():
+            return np_data
+        
+        # Return TracedNpArray with inherited proxy/context
+        from . import as_traced #lazy import to avoid circular dependency
+        return as_traced(np_data, self.name, self.context_obj, self.proxy)
+
+    def __array__(self, dtype=None, copy=None):
+        """NumPy array protocol - called by np.array(), np.asarray(), etc.
+        
+        This allows seamless conversion to numpy while preserving tracing.
+        
+        Args:
+            dtype: Optional dtype for the resulting array
+            copy: Optional copy flag (NumPy 2.0+)
+                - None: Copy only if necessary (default)
+                - True: Always copy
+                - False: Never copy; raise ValueError if copy required
+            
+        Returns:
+            TracedNpArray if tracing, else np.ndarray
+        """
+        result = self.numpy()
+        
+        # Check if dtype change requires a copy
+        needs_dtype_copy = dtype is not None and dtype != result.dtype
+        
+        # copy=False but copy is required → raise error (NumPy 2.0 semantics)
+        if copy is False and needs_dtype_copy:
+            raise ValueError(
+                f"Unable to avoid copy while creating an array with dtype {dtype} "
+                f"from array with dtype {result.dtype}."
+            )
+        
+        if needs_dtype_copy:
+            result = result.astype(dtype)
+        
+        if copy is True:
+            result = result.copy()
+        
+        return result

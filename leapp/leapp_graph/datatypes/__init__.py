@@ -16,10 +16,6 @@ from typing import Type, Union, Optional
 import numpy as np
 import torch
 
-from .components import (
-    TorchDtypeWrapper,
-)
-
 from .traced_data import TracedData
 from .traced_tensor import TracedTensor
 from .traced_np_array import TracedNpArray
@@ -188,6 +184,4 @@ __all__ = [
     "apply_traced_tensor_patches",
     "remove_traced_tensor_patches",
     "is_numpy_patching_enabled",
-    # Components
-    "TorchDtypeWrapper",
 ]

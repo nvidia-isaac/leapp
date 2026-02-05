@@ -698,6 +698,47 @@ class TestTracedNpArray(unittest.TestCase):
         self.assertIsInstance(y, TracedNpArray)
         np.testing.assert_array_almost_equal(y, x)
 
+    def test_method_astype(self):
+        """Test .astype() method."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
+        y = x.astype(np.float32)
+        self.assertIsInstance(y, TracedNpArray)
+        self.assertEqual(y.dtype, np.float32)
+        np.testing.assert_array_almost_equal(y, x)
+
+    def test_method_astype_int(self):
+        """Test .astype() to integer type."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(np.array([1.5, 2.7, 3.2]), name="x")
+        y = x.astype(np.int32)
+        self.assertIsInstance(y, TracedNpArray)
+        self.assertEqual(y.dtype, np.int32)
+        np.testing.assert_array_equal(y, np.array([1, 2, 3]))
+
+    def test_method_view(self):
+        """Test .view() method returns TracedNpArray with same data."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(np.array([1.0, 2.0, 3.0, 4.0]), name="x")
+        # View as same dtype should return TracedNpArray
+        y = x.view(np.float64)
+        self.assertIsInstance(y, TracedNpArray)
+        np.testing.assert_array_almost_equal(y, x)
+
+    def test_method_copy_compiled(self):
+        """Test .copy() method compiles correctly."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
+        y = x.copy() * 2  # Use copied array in computation
+        
+        ctx.compile_trace({'output': y})
+        
+        # Test compiled graph works
+        input_tensor = torch.tensor([4.0, 5.0, 6.0])
+        expected = input_tensor.clone() * 2  # clone is torch equivalent of copy
+        output = ctx.compiled_graph_module(input_tensor)
+        self.assertTrue(torch.allclose(output, expected))
+
     # ==================== Graph Building Tests ====================
 
     def test_graph_basic_operations(self):

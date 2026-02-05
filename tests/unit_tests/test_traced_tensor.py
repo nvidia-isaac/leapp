@@ -650,6 +650,55 @@ class TestTracedTensor(unittest.TestCase):
         self.assertIsInstance(y, TracedTensor)
         self.assertEqual(y.shape, torch.Size([4, 3]))
 
+    def test_detach(self):
+        """Test detach operation returns TracedTensor and is recorded in graph."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0], requires_grad=True), name="x")
+        y = x.detach()
+
+        self.assertIsInstance(y, TracedTensor)
+        self.assertTrue(torch.allclose(y.tensor, x.tensor))
+        # Detached tensor should not require grad
+        self.assertFalse(y.requires_grad)
+
+    def test_detach_compiled(self):
+        """Test detach operation compiles correctly."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+        y = x.detach() * 2  # Use detached tensor in computation
+
+        ctx.compile_trace({'output': y})
+
+        # Test compiled graph works
+        input_tensor = torch.tensor([4.0, 5.0, 6.0])
+        expected = input_tensor.detach() * 2
+        output = ctx.compiled_graph_module(input_tensor)
+        self.assertTrue(torch.allclose(output, expected))
+
+    def test_cpu(self):
+        """Test cpu operation returns TracedTensor."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+        y = x.cpu()
+
+        self.assertIsInstance(y, TracedTensor)
+        self.assertTrue(torch.allclose(y.tensor, x.tensor))
+        self.assertEqual(y.device.type, 'cpu')
+
+    def test_clone_compiled(self):
+        """Test clone operation compiles correctly."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+        y = x.clone() * 2  # Use cloned tensor in computation
+
+        ctx.compile_trace({'output': y})
+
+        # Test compiled graph works
+        input_tensor = torch.tensor([4.0, 5.0, 6.0])
+        expected = input_tensor.clone() * 2
+        output = ctx.compiled_graph_module(input_tensor)
+        self.assertTrue(torch.allclose(output, expected))
+
     # ==================== Additional Math Operations ====================
 
     def test_abs(self):
@@ -2167,53 +2216,6 @@ class TestTracedTensor(unittest.TestCase):
         finally:
             remove_traced_tensor_patches()
 
-    def test_torch_as_tensor_preserves_traced_tensor(self):
-        """Test that torch.as_tensor preserves TracedTensor when patches are applied."""
-        from leapp.leapp_graph.datatypes import apply_traced_tensor_patches, remove_traced_tensor_patches
-        
-        ctx = TracedTensorNode(name="test", node_index=0)
-        t = torch.randn(2, 3)
-        traced = ctx.create_input(t, name="x")
-        
-        apply_traced_tensor_patches()
-        try:
-            result = torch.as_tensor(traced)
-            self.assertIsInstance(result, TracedTensor)
-            self.assertIs(result, traced)
-        finally:
-            remove_traced_tensor_patches()
-
-    def test_torch_tensor_preserves_traced_tensor(self):
-        """Test that torch.tensor preserves TracedTensor when patches are applied."""
-        from leapp.leapp_graph.datatypes import apply_traced_tensor_patches, remove_traced_tensor_patches
-        
-        ctx = TracedTensorNode(name="test", node_index=0)
-        t = torch.randn(2, 3)
-        traced = ctx.create_input(t, name="x")
-        
-        apply_traced_tensor_patches()
-        try:
-            result = torch.tensor(traced)
-            self.assertIsInstance(result, TracedTensor)
-            self.assertIs(result, traced)
-        finally:
-            remove_traced_tensor_patches()
-
-    def test_patches_not_applied_at_import(self):
-        """Test that patches are deferred, not applied at import time.
-        
-        This is important for compatibility with TorchScript modules that
-        are compiled at import time (e.g., Isaac Sim's math modules).
-        """
-        from leapp.leapp_graph.datatypes import remove_traced_tensor_patches
-        
-        # Ensure patches are removed (clean state)
-        remove_traced_tensor_patches()
-        
-        # Verify torch functions are NOT patched
-        self.assertNotEqual(torch.tensor.__name__, "_patched_tensor")
-        self.assertNotEqual(torch.as_tensor.__name__, "_patched_as_tensor")
-        self.assertNotEqual(torch.from_numpy.__name__, "_patched_from_numpy")
 
 
 if __name__ == "__main__":

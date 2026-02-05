@@ -988,12 +988,45 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
     # Conversion Methods
     # =========================================================================
 
-    def __array__(self, dtype=None):
-        """Convert to numpy array."""
-        arr = self.view(np.ndarray)
-        if dtype is not None:
-            return arr.astype(dtype)
-        return arr
+    def __array__(self, dtype=None, copy=None):
+        """Convert to numpy array (NumPy array protocol).
+        
+        When tracing is active, returns self (or a dtype-converted TracedNpArray)
+        to preserve tracing. When not tracing, returns a plain numpy array.
+        
+        Args:
+            dtype: Optional dtype for the resulting array
+            copy: Optional copy flag (NumPy 2.0+)
+                - None: Copy only if necessary (default)
+                - True: Always copy
+                - False: Never copy; raise ValueError if copy required
+        """
+        # Check if dtype change requires a copy
+        needs_dtype_copy = dtype is not None and dtype != self.dtype
+        
+        # copy=False but copy is required → raise error (NumPy 2.0 semantics)
+        if copy is False and needs_dtype_copy:
+            raise ValueError(
+                f"Unable to avoid copy while creating an array with dtype {dtype} "
+                f"from array with dtype {self.dtype}."
+            )
+        
+        # If not tracing, return plain numpy array
+        if not self.validate_status():
+            arr = self.view(np.ndarray)
+            if needs_dtype_copy:
+                arr = arr.astype(dtype)
+            if copy is True:
+                arr = arr.copy()
+            return arr
+        
+        # Tracing - preserve TracedNpArray
+        result = self
+        if needs_dtype_copy:
+            result = result.astype(dtype)
+        if copy is True:
+            result = result.copy()
+        return result
 
     def tolist(self):
         """Convert to Python list."""
