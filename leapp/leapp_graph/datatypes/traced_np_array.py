@@ -581,6 +581,35 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
     # List of numpy functions we implement
     HANDLED_FUNCTIONS = {}
 
+    def _patch_sort(self, torch_func, traced_array, proxy_args, args, kwargs):
+        """Patch sort/argsort to use torch.topk for ONNX compatibility.
+
+        torch.sort/argsort export to ONNX TopK with a dynamically computed K
+        (via Shape+Gather) that ONNX Runtime's shape inference cannot verify.
+        Using torch.topk with a concrete int k bakes K as a constant initializer
+        with the correct shape [1], which ONNX Runtime accepts.
+
+        Returns the proxy output if patched, or None if not applicable.
+        """
+        if torch_func not in (torch.sort, torch.argsort):
+            return None
+
+        input_array = args[0]
+        dim = kwargs.get('axis', -1)
+        if dim is None:
+            dim = -1
+        k = input_array.shape[dim]
+
+        topk_kwargs = {'dim': dim, 'largest': False, 'sorted': True}
+        proxy_out = traced_array._context.tracer.create_proxy(
+            "call_function", torch.topk, (proxy_args[0], k), topk_kwargs
+        )
+        # topk returns (values, indices): index 0 for sort, 1 for argsort
+        item_index = 0 if torch_func == torch.sort else 1
+        return traced_array._context.tracer.create_proxy(
+            "call_function", operator.getitem, (proxy_out, item_index), {}
+        )
+
     def __array_function__(self, func, types, args, kwargs):
         """Intercept numpy array functions.
 
@@ -623,15 +652,11 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
             args=args
         )
 
-        proxy_out = traced_array._context.tracer.create_proxy(
-            "call_function", torch_func, proxy_args, proxy_kwargs
-        )
-
-        # Handle torch functions that return (values, indices) when numpy returns only values
-        # torch.sort returns named tuple (values, indices), but np.sort returns only values
-        if torch_func == torch.sort:
+        # Apply sort/argsort patch if applicable, otherwise record normally
+        proxy_out = self._patch_sort(torch_func, traced_array, proxy_args, args, kwargs)
+        if proxy_out is None:
             proxy_out = traced_array._context.tracer.create_proxy(
-                "call_function", operator.getitem, (proxy_out, 0), {}
+                "call_function", torch_func, proxy_args, proxy_kwargs
             )
 
         # Handle multiple outputs (e.g., np.split returns a list)

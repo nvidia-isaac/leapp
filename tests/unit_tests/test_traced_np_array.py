@@ -5,6 +5,8 @@ import tempfile
 import unittest
 import warnings
 
+import pytest
+
 import numpy as np
 import onnxruntime as ort
 import torch
@@ -914,6 +916,10 @@ class TestArithmeticFunctions(unittest.TestCase):
         self._test_function(NpArrayArithmeticFunctions.reshape_function, "reshape_function")
 
 
+# Suppress TracerWarning from setitem tests where torch.tensor/torch.as_tensor constants
+# are baked into the trace (e.g. "torch.as_tensor results are registered as constants in the trace").
+# This is expected behavior for constant index/value assignments like x[0] = 10.0.
+@pytest.mark.filterwarnings("ignore::torch.jit.TracerWarning")
 class TestCompiledGraphExecution(unittest.TestCase):
     """Test that traced numpy operations compile and execute correctly.
     

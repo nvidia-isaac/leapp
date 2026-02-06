@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 import onnxruntime as ort
+import pytest
 import torch
 import warnings
 
@@ -401,6 +402,10 @@ class TensorArithmeticFunctions:
         return a
 
 
+# Suppress TracerWarning from setitem tests where torch.tensor/torch.as_tensor constants
+# are baked into the trace (e.g. "torch.tensor results are registered as constants in the trace").
+# This is expected behavior for constant index/value assignments like x[0] = 10.0.
+@pytest.mark.filterwarnings("ignore::torch.jit.TracerWarning")
 class TestTracedTensor(unittest.TestCase):
     """Test TracedTensor operations."""
 
@@ -2188,34 +2193,6 @@ class TestTracedTensor(unittest.TestCase):
         self.assertIn("TorchScript modules cannot be used", error_msg)
         self.assertIn("TracedTensor", error_msg)
         self.assertIn("during tracing", error_msg)
-
-    @unittest.skip("TensorDict is not supported yet")
-    def test_tensordict_preserves_traced_tensor(self):
-        """Test that TensorDict preserves TracedTensor when storing and retrieving."""
-        try:
-            from tensordict import TensorDict
-        except ImportError:
-            self.skipTest("tensordict not installed")
-        
-        from leapp.leapp_graph.datatypes import apply_traced_tensor_patches, remove_traced_tensor_patches
-        
-        ctx = TracedTensorNode(name="test", node_index=0)
-        t = torch.randn(2, 3)
-        traced = ctx.create_input(t, name="obs")
-        
-        # Apply patches (normally done by annotate.start())
-        apply_traced_tensor_patches()
-        try:
-            # Store in TensorDict
-            td = TensorDict({'obs': traced}, batch_size=[2])
-            
-            # Retrieve and verify it's still a TracedTensor
-            retrieved = td['obs']
-            self.assertIsInstance(retrieved, TracedTensor)
-            self.assertIs(retrieved, traced)  # Should be the exact same object
-        finally:
-            remove_traced_tensor_patches()
-
 
 
 if __name__ == "__main__":

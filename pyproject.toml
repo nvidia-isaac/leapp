@@ -94,4 +94,9 @@ filterwarnings = [
     "ignore:The feature will be removed.*:DeprecationWarning:torch.onnx",
     "ignore:The TorchScript type system doesn't support instance-level annotations:Warning",
     "ignore:You are using the legacy TorchScript-based ONNX export:Warning",
+    "ignore:`torch.jit.script` is deprecated:DeprecationWarning",
+    "ignore:`torch.jit.trace` is deprecated:DeprecationWarning",
+    "ignore:`torch.jit.trace_method` is deprecated:DeprecationWarning",
+    "ignore:`torch.jit.load` is deprecated:DeprecationWarning",
+    "ignore:`isinstance\\(treespec, LeafSpec\\)` is deprecated:FutureWarning",
 ]

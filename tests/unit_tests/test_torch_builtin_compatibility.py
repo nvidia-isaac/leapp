@@ -44,6 +44,8 @@ import tempfile
 import unittest
 from functools import partial
 
+import pytest
+
 import numpy as np
 import onnxruntime as ort
 import torch
@@ -53,6 +55,11 @@ from leapp.leapp_graph.traced_node import TracedTensorNode
 from leapp.leapp_graph.datatypes import TracedTensor
 
 
+# Suppress TracerWarning from torch.nn.functional internals where tensor-to-bool conversions
+# are baked into the trace (e.g. "Converting a tensor to a Python boolean might cause the trace
+# to be incorrect"). This comes from size checks inside F.binary_cross_entropy_with_logits and
+# F.mse_loss and is not actionable from user code.
+@pytest.mark.filterwarnings("ignore::torch.jit.TracerWarning")
 class TestFunctional(unittest.TestCase):
     """Test torch.nn.functional operations trace and compile correctly."""
     
