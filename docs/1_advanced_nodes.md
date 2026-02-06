@@ -251,11 +251,90 @@ class RobotController:
         return normalized_data
 ```
 
-**Important:** Register buffers ueses PyTorch's `register_buffer()` method. For more details on PyTorch buffers, see [the official documentation](https://docs.pytorch.org/docs/stable/generated/torch.nn.Module.html#torch.nn.Module.register_buffer).
+**Important:** Register buffers uses PyTorch's `register_buffer()` method. For more details on PyTorch buffers, see [the official documentation](https://docs.pytorch.org/docs/stable/generated/torch.nn.Module.html#torch.nn.Module.register_buffer).
 
 **Key Differences:**
 - `environment_constants`: Values frozen at export time, won't change
 - `register_buffers`: Mutable state that persists across calls, will be updated
+
+### Traced Tensor Pattern: `annotate.register_buffer()`
+
+The `register_buffers` parameter shown above works with decorators and context managers. For traced tensor nodes (`input_tensors` / `output_tensors`), use `annotate.register_buffer()` instead to make a pre-existing tensor participate in tracing. This is necessary when you need **in-place assignment** (`tensor[:] = ...`) on a tensor that was not returned by `input_tensors()`.
+
+```python
+import torch
+from leapp import annotate
+
+class Module:
+    def __init__(self):
+        self.values = torch.tensor([1.0, 2.0, 3.0])
+
+    def run(self, traced_input):
+        # Register the buffer — wraps self.values as a TracedTensor
+        buffers = annotate.register_buffer('my_node', {'values': self.values})
+        self.values = buffers['values']
+
+        # In-place assignment is now traced
+        self.values[:] = traced_input
+        # Subsequent operations are also traced
+        return self.values * 100.0
+
+module = Module()
+
+annotate.start(name="buffer_example")
+
+input_tensor = torch.tensor([4.0, 5.0, 6.0])
+traced_input = annotate.input_tensors({'input': input_tensor}, 'my_node')
+
+result = module.run(traced_input)
+
+annotate.output_tensors('my_node', {'result': result}, export_with="jit")
+
+annotate.stop()
+annotate.compile_graph()
+```
+
+**Key rules:**
+- `input_tensors()` **must** be called first to create the node before calling `register_buffer()`.
+- The returned dict contains traced wrappers — you **must** reassign them back (e.g. `self.values = buffers['values']`) for subsequent operations to be recorded.
+- The buffer tensors must be **raw `torch.Tensor`** values, not already-traced tensors.
+
+## Static Outputs: Constant Output Tensors
+
+Sometimes a node needs to output a **constant tensor that is not derived from any input**. Passing it as a regular output will fail because LEAPP expects all outputs to be traced computations. The `static_outputs` parameter on `output_tensors()` handles this case:
+
+```python
+import torch
+from leapp import annotate
+
+annotate.start(name="static_example")
+
+input_tensor = torch.tensor([1.0, 2.0, 3.0])
+traced_input = annotate.input_tensors({'input': input_tensor}, 'my_node')
+
+# Computed output — derived from the traced input
+computed_output = traced_input + 1.0
+
+# Static output — a constant, NOT derived from any input
+static_tensor = torch.tensor([4.0, 5.0, 6.0])
+
+annotate.output_tensors(
+    'my_node',
+    {'computed': computed_output},            # regular traced outputs
+    static_outputs={'static': static_tensor}, # constant outputs
+    export_with="jit"
+)
+
+annotate.stop()
+annotate.compile_graph()
+```
+
+The exported model will return both outputs: `computed` (input-dependent) and `static` (always `[4, 5, 6]`).
+
+**Key rules:**
+- Static outputs must be **raw `torch.Tensor`** values. Using a `TracedTensor` (anything derived from `input_tensors()`) as a static output will raise an error.
+- If you pass a single tensor without a dict, LEAPP assigns the default name `static_output` and logs a warning. Always prefer a named dict.
+- Static outputs are merged with the regular outputs in the compiled model — downstream nodes can consume them like any other output.
 
 ## Nested Data Connections
 
