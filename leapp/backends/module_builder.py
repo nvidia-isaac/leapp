@@ -70,14 +70,15 @@ class ModuleBuilder:
 
     def __call__(self):
         # validation
-        if self.node_context.input_frame is None or self.node_context.output_frame is None:
+        if self.node_context.input_namespace is None or self.node_context.output_namespace is None:
             raise Exception(
-                f"Input or output frame not found for {self.node_context.name}")
+                f"Input or output namespace not found for {self.node_context.name}")
 
         # if the function or snippet is a class method, we need to create a module that inherits
         # from the class to preserve class functions
-        if 'self' in self.node_context.input_frame.f_locals:
-            parent_class = type(self.node_context.input_frame.f_locals['self'])
+        input_namespace = self.node_context.input_namespace
+        if 'self' in input_namespace:
+            parent_class = type(input_namespace['self'])
         else:
             parent_class = None
         self.module_instance = get_module_template(
@@ -148,8 +149,9 @@ class ModuleBuilder:
 
     def _duplicate_attributes(self):
         # copy all the attributes from the original object to the module
-        if 'self' in self.node_context.input_frame.f_locals:
-            original_obj = self.node_context.input_frame.f_locals['self']
+        input_namespace = self.node_context.input_namespace
+        if 'self' in input_namespace:
+            original_obj = input_namespace['self']
 
             # Warning #1: Lazy modules may not transfer correctly
             if isinstance(original_obj, LazyModuleMixin) and original_obj.has_uninitialized_params():
@@ -188,8 +190,13 @@ class ModuleBuilder:
                     elif not callable(value):
                         self.module_instance.__dict__[attr_name] = value
                     elif callable(value):
-                        bound_method = types.MethodType(
-                            value, self.module_instance)
+                        # Check if value is already a bound method
+                        if isinstance(value, types.MethodType):
+                            # Use the underlying function, not the bound method
+                            func = value.__func__
+                            bound_method = types.MethodType(func, self.module_instance)
+                        else:
+                            bound_method = types.MethodType(value, self.module_instance)
                         setattr(self.module_instance, attr_name, bound_method)
                 except Exception as e:
                     _get_logger().error(
@@ -353,7 +360,7 @@ class ModuleBuilder:
         try:
             code = compile(function_string, filename, "exec")
 
-            # recreate the environment of the function
+            # recreate the environment of the function using stored namespace
             namespace = {
                 'Tensor': torch.Tensor,
                 "Tuple": Tuple,
@@ -361,9 +368,8 @@ class ModuleBuilder:
                 "Dict": Dict,
                 "NoneType": type(None),
             }
-            if self.node_context.input_frame is not None:
-                namespace.update(self.node_context.input_frame.f_locals)
-                namespace.update(self.node_context.input_frame.f_globals)
+            if self.node_context.input_namespace is not None:
+                namespace.update(self.node_context.input_namespace)
 
             exec(code, namespace)
         except Exception as e:

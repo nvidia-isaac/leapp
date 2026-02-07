@@ -25,7 +25,7 @@ class CompassImageProcessor:
         self.target_width = target_width
         self.target_height = target_height
 
-    @annotate.method(node_name="compass_image_processor", export_with="torch")
+    @annotate.method(node_name="compass_image_processor", export_with="jit")
     def process(self, raw_image: torch.Tensor) -> torch.Tensor:
         """
         Process raw image data following the original navigator._new_image logic.
@@ -108,12 +108,13 @@ class CompassOdometryProcessor:
             dyaw += 2 * torch.pi
 
         # Create angular velocity with consistent tensor shapes
-        ang_vel = torch.tensor(
-            [0.0, 0.0, (dyaw / dt_s).item()], dtype=torch.float32)
+        # Use tensor ops instead of .item() for TorchScript compatibility
+        ang_vel = torch.cat(
+            [torch.zeros(2, device=dyaw.device), (dyaw / dt_s).unsqueeze(0)])
 
         return ang_vel, lin_vel
 
-    @annotate.method(node_name="compass_odometry_processor", export_with="torch")
+    @annotate.method(node_name="compass_odometry_processor", export_with="jit")
     def process(self, odom_msg: torch.Tensor, transform: torch.Tensor,
                 prev_transform: torch.Tensor, ego_speed: torch.Tensor,
                 position_2d: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -160,7 +161,7 @@ class CompassGoalChecker:
     def __init__(self, goal_tolerance=1.0):
         self.goal_tolerance = goal_tolerance
 
-    @annotate.method(node_name="compass_goal_checker", export_with="torch")
+    @annotate.method(node_name="compass_goal_checker", export_with="jit")
     def check(self, position_2d: torch.Tensor, goal: torch.Tensor) -> torch.Tensor:
         """
         Check if goal is reached.
@@ -239,7 +240,7 @@ class CompassRouteCalculator:
         return torch.stack([transformed_x, transformed_y, transformed_z,
                            pose_qx, pose_qy, pose_qz, pose_qw])
 
-    @annotate.method(node_name="compass_route_calculator", export_with="torch")
+    @annotate.method(node_name="compass_route_calculator", export_with="jit")
     def calculate(self, goal_pose: torch.Tensor, transform: torch.Tensor,
                   max_distance: float = 1.0) -> torch.Tensor:
         """
@@ -375,7 +376,6 @@ class CompassNavigationModel:
         Returns:
             Final velocity commands [linear_x, linear_y, angular_z]
         """
-        print("Running compass navigation pipeline...")
 
         # Step 1: Process odometry
         prev_transform = self.transform.clone()
@@ -395,8 +395,7 @@ class CompassNavigationModel:
 
         # Step 5: Prepare inputs for mobility model
         # Add batch and time dimensions
-        start_time = time.time()
-        with annotate.block(node_name="process_and_run_inference", export_with="torch",
+        with annotate.block(node_name="process_and_run_inference", export_with="jit",
                             inputs=["processed_image",
                                     "route_vectors", "self.speed"],
                             outputs=["action_output"],
@@ -411,22 +410,16 @@ class CompassNavigationModel:
                 0).to(self.device)       # [1, 1, 1]
 
             # Step 6: Run mobility model
-            print("Running mobility model inference...")
-
             action_output, history_output, sample_output = self.mobility_model(
                 image_input, route_input, speed_input,
                 self.action, self.history, self.sample)
-            # Update state
-            self.action = action_output
+            # Update state - squeeze sequence dimension to match expected input shape
+            self.action = action_output.squeeze(1)      # [1, 1, 6] -> [1, 6]
             self.history = history_output
             self.sample = sample_output
 
-        end_time = time.time()
-        print(
-            f"Mobility model inference took {(end_time - start_time) * 1000:.2f} ms")
-
         # Step 7: Post-process commands
-        with annotate.block(node_name="post_process_commands", export_with="torch",
+        with annotate.block(node_name="post_process_commands", export_with="jit",
                             inputs=["action_output", "is_reached"],
                             outputs=["cmd"],
                             environment_constants=['self.cmd_processor']):
@@ -507,8 +500,9 @@ def main():
         annotate.start(name="sample_compass_navigation_pipeline", verbose=True)
         # Run navigation pipeline
         print("Running navigation pipeline...")
-        final_commands = compass_model.run_navigation_pipeline(
-            test_image, test_odom, goal_pose, test_transform, route_transform)
+        for i in range(2):
+            final_commands = compass_model.run_navigation_pipeline(
+                test_image, test_odom, goal_pose, test_transform, route_transform)
         annotate.stop()
         annotate.compile_graph()
 

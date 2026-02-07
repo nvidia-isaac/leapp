@@ -17,34 +17,37 @@
 
 from leapp.utils import (
     safe_deepcopy,
-    get_attribute_value_from_frame,
-    extract_source_from_line_range
+    extract_source_from_line_range,
+    find_with_block_end,
+    get_attribute_value_from_namespace,
 )
 from leapp._logging import _get_logger
 from leapp.leapp_graph.leapp_node import LeappNode
-from leapp.leapp_graph.traced_tensor import TracedTensor
+from leapp.leapp_graph.datatypes import TracedTensor
 
 
 class BlockContextNode(LeappNode):
-    def __init__(self, name, node_index, backend=None, use_trace=False,
-                backend_params=None, inputs=None, outputs=None,
-                environment_constants=None, register_buffers=None):
+    def __init__(self, name, node_index, backend=None,
+                 backend_params=None, inputs=None, outputs=None,
+                 environment_constants=None, register_buffers=None):
         super().__init__(name, node_index)
         # input parameters
         # this variable is for temporary use only,
         # all data will be stored in self.inputs after the function is executed
         if inputs is not None:
-            self._declared_inputs = inputs
+            # Deduplicate while preserving order (dict.fromkeys preserves insertion order)
+            self._declared_inputs = list(dict.fromkeys(inputs))
         else:
             self._declared_inputs = []
         # output parameters
         # this variable is for temporary use only,
         # all data will be stored in self.outputs after the function is executed
         if outputs is not None:
-            self._declared_outputs = outputs
+            # Deduplicate while preserving order (dict.fromkeys preserves insertion order)
+            self._declared_outputs = list(dict.fromkeys(outputs))
         else:
             self._declared_outputs = []
-        
+
         # node settings
         self.from_function = False
         if environment_constants is not None:
@@ -66,7 +69,7 @@ class BlockContextNode(LeappNode):
             )
 
         # model settings
-        self.setup_backend(backend, backend_params, use_trace)
+        self.setup_backend(backend, backend_params)
 
         # source code:
         self.executed_lines = {
@@ -78,18 +81,10 @@ class BlockContextNode(LeappNode):
             'source_code': None  # Store extracted source code here
         }
 
-        self.input_frame = None
-        self.output_frame = None
+        self.input_namespace = None  # Combined globals + locals from input frame
+        self.output_namespace = None  # Combined globals + locals from output frame
         self.cached_buffer_values = {}
         self.cached_constant_values = {}
-
-
-    def compile_model(self):
-        try:
-            self.compiled_model = self.export_backend.compile()
-        except Exception as e:
-            _get_logger().error(f"Error compiling model: {e}")
-            raise e
 
     def compile_trace(self, *args):
         # Extract source code when tracing stops
@@ -103,43 +98,13 @@ class BlockContextNode(LeappNode):
         else:
             _get_logger().error(message)
 
-    def create_trace_function(self, skip_file):
-        """Create and return the trace function for block context tracing.
-        
-        Args:
-            skip_file: Filename to skip when tracing (e.g., export_manager.py)
-        
-        Returns:
-            A trace function suitable for use with sys.settrace
-        """
-        def trace_code_snippet(frame, event, arg):
-            # Skip tracing the specified file
-            code = frame.f_code
-            if code.co_filename.split('/')[-1] == skip_file:
-                return trace_code_snippet
-
-            # Capture line events to determine the range of executed code
-            if event == 'line':
-                # Only track lines from the same file as the first line
-                if (self.executed_lines['filename'] == code.co_filename and 
-                    self.executed_lines['function_name'] == code.co_name):
-                    self.executed_lines['lines'].add(frame.f_lineno)
-                    self.executed_lines['min_line'] = min(
-                        self.executed_lines['min_line'], frame.f_lineno)
-                    self.snapshot_buffer_values(frame)
-                    self.executed_lines['max_line'] = max(
-                        self.executed_lines['max_line'], frame.f_lineno)
-
-            return trace_code_snippet
-        return trace_code_snippet
-    
     def _check_for_active_traced_tensors(self, data, variable_name, path=None):
         """Recursively check if data contains any TracedTensor instances.
-        
+
         Args:
             data: The data structure to check
             path: Current path in the data structure (for error messages)
-            
+
         Returns:
             tuple: (found, traced_tensor, location) where:
                 - found: True if TracedTensor was found
@@ -172,62 +137,126 @@ class BlockContextNode(LeappNode):
                 self._check_for_active_traced_tensors(
                     value, f"{path}['{key}']" if path else f"['{key}']")
 
-    def _capture_specified_value_from_frame(self, variable_name, frame):
-        # If variable_name matches *.* pattern, extract from nested objects in frame
-        final_variable_name = variable_name
-        if "." in variable_name:
-            obj, final_variable_name = get_attribute_value_from_frame(
-                frame, variable_name)
-        else:
-            if variable_name in frame.f_locals:
-                obj = frame.f_locals[variable_name]
-            elif variable_name in frame.f_globals:
-                obj = frame.f_globals[variable_name]
-            else:
-                raise Exception(
-                    f"Variable '{variable_name}' not found in frame locals or globals")
+    def _capture_specified_value_from_namespace(self, variable_name, namespace):
+        """Extract a variable value from a namespace dictionary.
+        
+        Args:
+            variable_name: Name of the variable (supports dotted names like 'self.attr')
+            namespace: Dictionary containing variable bindings
+            
+        Returns:
+            tuple: (final_variable_name, deepcopied_value)
+        """
+        obj, final_variable_name = get_attribute_value_from_namespace(
+            namespace, variable_name)
 
         self._check_for_active_traced_tensors(obj, variable_name)
-        obj = safe_deepcopy(obj)
 
         return final_variable_name, safe_deepcopy(obj)
 
-    def capture_inputs_from_frame(self, frame):
+    def capture_inputs_from_namespace(self, namespace):
+        """Capture declared inputs from a namespace dictionary.
+        
+        Args:
+            namespace: Dictionary containing variable bindings (globals + locals)
+        """
         try:
             for input_name in self._declared_inputs:
-                final_input_name, final_input_value = self._capture_specified_value_from_frame(
-                    input_name, frame)
+                final_input_name, final_input_value = self._capture_specified_value_from_namespace(
+                    input_name, namespace)
                 self.add_input(final_input_name, input_name,
                                final_input_value)
         except Exception as e:
-            _get_logger().error(f"Error capturing inputs from frame: {e}")
+            _get_logger().error(f"Error capturing inputs from namespace: {e}")
             raise e
-        self.input_frame = frame
+        self.input_namespace = namespace
 
-    def capture_outputs_from_frame(self, frame):
+    def capture_outputs_from_namespace(self, namespace):
+        """Capture declared outputs from a namespace dictionary.
+        
+        Args:
+            namespace: Dictionary containing variable bindings (globals + locals)
+        """
         try:
             for output_name in self._declared_outputs:
-                obj, _ = get_attribute_value_from_frame(frame, output_name)
+                obj, _ = get_attribute_value_from_namespace(namespace, output_name)
                 self.tag_data(obj, output_name)
 
-                final_output_name, final_output_value = self._capture_specified_value_from_frame(
-                    output_name, frame)
+                final_output_name, final_output_value = self._capture_specified_value_from_namespace(
+                    output_name, namespace)
                 self.add_output(final_output_name,
                                 output_name, final_output_value)
         except Exception as e:
-            _get_logger().error(f"Error capturing outputs from frame: {e}")
+            _get_logger().error(f"Error capturing outputs from namespace: {e}")
             raise e
-        self.output_frame = frame
+        self.output_namespace = namespace
 
-    def snapshot_buffer_values(self, frame):
+    def validate_outputs_from_namespace(self, namespace):
+        """Validate declared outputs against a namespace dictionary.
+        
+        Args:
+            namespace: Dictionary containing variable bindings (globals + locals)
+        """
+        try:
+            for output_name in self._declared_outputs:
+                obj, _ = get_attribute_value_from_namespace(namespace, output_name)
+                self.tag_data(obj, output_name)
+                final_output_name, final_output_value = self._capture_specified_value_from_namespace(
+                    output_name, namespace)
+                self.validate_output_and_update_tags(
+                    final_output_name, output_name, final_output_value)
+        except Exception as e:
+            _get_logger().error(f"Error validating outputs from namespace: {e}")
+            raise e
+        self.output_namespace = namespace
+
+    def validate_inputs_from_namespace(self, namespace):
+        """Validate declared inputs against a namespace dictionary.
+        
+        Args:
+            namespace: Dictionary containing variable bindings (globals + locals)
+        """
+        try:
+            for input_name in self._declared_inputs:
+                final_input_name, final_input_value = self._capture_specified_value_from_namespace(
+                    input_name, namespace)
+                self.validate_input_and_update_tags(
+                    final_input_name, input_name, final_input_value)
+        except Exception as e:
+            _get_logger().error(f"Error validating inputs from namespace: {e}")
+            raise e
+        self.input_namespace = namespace
+    
+    def validate_function_boundaries(self, caller_frame):
+        # Check if this is a re-entry - validate block boundaries match
+        new_executed_lines = {
+            'filename': caller_frame.f_code.co_filename,
+            'function_name': caller_frame.f_code.co_name,
+            'min_line': caller_frame.f_lineno,
+            'max_line': find_with_block_end(caller_frame.f_code.co_filename, caller_frame.f_lineno)
+        }
+
+        for key in ('filename', 'function_name', 'min_line', 'max_line'):
+            if self.executed_lines[key] != new_executed_lines[key]:
+                _get_logger().error(
+                    f"Error: {self.name} re-entered but block boundaries do not match\n"
+                    f"Original: {self.executed_lines}\n"
+                    f"New: {new_executed_lines}")
+                raise Exception(
+                    f"Error: {self.name} re-entered but block boundaries do not match")
+
+    def snapshot_buffer_values(self, namespace):
+        """Cache buffer and constant values from a namespace.
+        
+        Args:
+            namespace: Dictionary containing variable bindings
+        """
         for buffer_name in self.register_buffers:
-            value, _ = get_attribute_value_from_frame(
-                frame, buffer_name)
+            value, _ = get_attribute_value_from_namespace(namespace, buffer_name)
             self._cache_buffer_value(buffer_name, value)
 
         for constant_name in self.environment_constants:
-            value, _ = get_attribute_value_from_frame(
-                frame, constant_name)
+            value, _ = get_attribute_value_from_namespace(namespace, constant_name)
             self._cache_constant_value(constant_name, value)
 
     def _cache_buffer_value(self, buffer_name, value):

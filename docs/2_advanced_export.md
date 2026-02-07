@@ -79,7 +79,6 @@ In some situations, especially when your logic involves many submodules, you may
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `dynamo` | `True` | Use dynamo-based export (`True`) or TorchScript-based export (`False`) |
 | `prescript` | `False` | Pre-script the model before ONNX export (only applies when `dynamo=False`) |
 | `opset_version` | `None` | ONNX opset version (e.g., `17`). Uses PyTorch default if not specified |
 | `verify` | `True` | Verify the exported model (dynamo only) |

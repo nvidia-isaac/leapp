@@ -47,7 +47,7 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
     @pytest.mark.filterwarnings("ignore:You are using the legacy TorchScript-based ONNX export")
     @pytest.mark.filterwarnings("ignore:The feature will be removed")
     def test_onnx_backend_script(self):
-        @annotate.method(export_with="onnx", backend_params={"dynamo": False})
+        @annotate.method(export_with="onnx-torchscript")
         def funcA(inputA: torch.Tensor):
             return inputA*2.0
 
@@ -80,8 +80,8 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
         # Use the traced model in an annotated method with environment_constants
         # and conditional flow (using torch.where for TorchScript compatibility)
         @annotate.method(
-            export_with="onnx",
-            backend_params={"dynamo": False, "prescript": True},
+            export_with="onnx-torchscript",
+            backend_params={"prescript": True},
             environment_constants=["traced_model"]
         )
         def funcA(inputA: torch.Tensor, threshold: torch.Tensor):
@@ -132,8 +132,8 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
         traced_decoder = torch.jit.trace(decoder, decoder_input)
 
         @annotate.method(
-            export_with="onnx",
-            backend_params={"dynamo": False, "prescript": True},
+            export_with="onnx-torchscript",
+            backend_params={"prescript": True},
             environment_constants=["traced_encoder", "traced_decoder"]
         )
         def encode_decode(inputA: torch.Tensor):
@@ -182,8 +182,8 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
             raise
 
         @annotate.method(
-            export_with="onnx",
-            backend_params={"dynamo": False, "prescript": True},
+            export_with="onnx-torchscript",
+            backend_params={"prescript": True},
             environment_constants=["traced_conv"]
         )
         def process_image(image: torch.Tensor):
@@ -226,8 +226,8 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
         traced_attn = torch.jit.trace(attn_model, example_input)
 
         @annotate.method(
-            export_with="onnx",
-            backend_params={"dynamo": False, "prescript": True},
+            export_with="onnx-torchscript",
+            backend_params={"prescript": True},
             environment_constants=["traced_attn"]
         )
         def apply_attention(x: torch.Tensor):
@@ -277,16 +277,16 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
         traced_b = torch.jit.trace(proc_b, example)
 
         @annotate.method(
-            export_with="onnx",
-            backend_params={"dynamo": False, "prescript": True},
+            export_with="onnx-torchscript",
+            backend_params={"prescript": True},
             environment_constants=["traced_a"]
         )
         def step_a(inputA: torch.Tensor):
             return traced_a(inputA)
 
         @annotate.method(
-            export_with="onnx",
-            backend_params={"dynamo": False, "prescript": True},
+            export_with="onnx-torchscript",
+            backend_params={"prescript": True},
             environment_constants=["traced_b"]
         )
         def step_b(inputB: torch.Tensor):
@@ -320,8 +320,8 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
         traced_scale = torch.jit.trace(scale_model, example)
 
         @annotate.method(
-            export_with="onnx",
-            backend_params={"dynamo": False, "prescript": True},
+            export_with="onnx-torchscript",
+            backend_params={"prescript": True},
             environment_constants=["traced_scale"]
         )
         def scale_and_broadcast(inputA: torch.Tensor, mask: torch.Tensor):
@@ -366,8 +366,8 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
         traced_multi = torch.jit.trace(multi_model, example)
 
         @annotate.method(
-            export_with="onnx",
-            backend_params={"dynamo": False, "prescript": True},
+            export_with="onnx-torchscript",
+            backend_params={"prescript": True},
             environment_constants=["traced_multi"]
         )
         def sample_gaussian(inputA: torch.Tensor, noise: torch.Tensor):
@@ -746,9 +746,9 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
         @annotate.method(export_with="onnx")
         def bidirectional_io(dict_input: dict, list_input: list):
             # Dict input -> list output
-            list_out = [v for v in dict_input.values()]
+            list_out = [v+1 for v in dict_input.values()]
             # List input -> dict output
-            dict_out = {f'item_{i}': v for i, v in enumerate(list_input)}
+            dict_out = {f'item_{i}': v+1 for i, v in enumerate(list_input)}
             return list_out, dict_out
 
         dict_input = {
@@ -803,7 +803,7 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
     def test_onnx_torchscript_dict_list_io(self):
         """Test ONNX TorchScript export with dict/list I/O (non-dynamo)."""
 
-        @annotate.method(export_with="onnx", backend_params={"dynamo": False})
+        @annotate.method(export_with="onnx-torchscript")
         def torchscript_io(inputs: dict):
             a = inputs['a']
             b = inputs['b']
@@ -825,7 +825,7 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
     def test_onnx_torchscript_nested_inputs(self):
         """Test ONNX TorchScript export with nested list/dict inputs (non-dynamo)."""
 
-        @annotate.method(export_with="onnx", backend_params={"dynamo": False})
+        @annotate.method(export_with="onnx-torchscript")
         def torchscript_nested(data: list):
             # Nested list: [[tensor, tensor], [tensor]]
             a = data[0][0]

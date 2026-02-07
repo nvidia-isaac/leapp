@@ -1,19 +1,167 @@
 import torch
 from typing import Tuple
-from leapp.backends.export_backend import ExportBackend, SimplifiedONNXProgram, prepare_tensors_for_export
+from leapp.backends.export_backend import ExportBackend, prepare_tensors_for_export, SimplifiedONNXProgram
 from leapp._logging import _get_logger
 import os
 import onnx
 import tempfile
 
-
 class ONNXExportBackend(ExportBackend):
     def get_backed_model_type(self):
         return "onnx"
+    
+    def _get_onnx_model(self, onnx_program):
+        """Get the ONNX model proto from an ONNX program."""
+        if hasattr(onnx_program, 'model_proto'):
+            # dynamo export returns ONNXProgram with model_proto
+            return onnx_program.model_proto
+        else:
+            # SimplifiedONNXProgram - load from file
+            model_path = os.path.join(onnx_program._source_dir, onnx_program._source_filename)
+            return onnx.load(model_path)
 
-    def compile_dynamo(self, m):
+    def _get_actual_onnx_inputs(self, onnx_model):
+        """Get actual input names from ONNX model, excluding initializers (constants)."""
+        # Initializers are constants baked into the model - exclude them
+        initializer_names = {init.name for init in onnx_model.graph.initializer}
+        
+        # Return only true dynamic inputs
+        return [inp.name for inp in onnx_model.graph.input if inp.name not in initializer_names]
+
+    def _sync_inputs_with_onnx(self, onnx_program):
+        """Sync inputs with what ONNX actually exported.
+        
+        ONNX export can remove unused inputs (constant folding, dead code elimination).
+        This is allowed and we update node_context.inputs accordingly.
+        
+        However, if ONNX renames inputs (which happens with identity/passthrough functions
+        when using onnx-dynamo), we raise an error and suggest using onnx-torchscript instead.
+        """
+        onnx_model = self._get_onnx_model(onnx_program)
+        
+        expected_input_names = set(td.name for td in self.node_context.inputs)
+        actual_input_names = self._get_actual_onnx_inputs(onnx_model)
+        actual_input_set = set(actual_input_names)
+        
+        # Check for removed inputs (this is OK - ONNX optimized them away)
+        removed_inputs = [td.name for td in self.node_context.inputs if td.name not in actual_input_set]
+        
+        # Check for renamed/new inputs (this is NOT OK - we can't track them)
+        renamed_inputs = [name for name in actual_input_names if name not in expected_input_names]
+        
+        if renamed_inputs:
+            raise ValueError(
+                f"[{self.node_context.name}] ONNX export renamed inputs: {renamed_inputs}. "
+                "This typically happens with identity/passthrough functions with onnx-dynamo. "
+                "This usecase is not supported by LEAPP, please: \n"
+                "1. use the onnx-torchscript export backend instead\n"
+                "2. use a different backend, such as torch-script or torch-trace \n"
+                "3. remove the inputs that are not used in the computation or directly returned as output"
+            )
+        
+        if removed_inputs:
+            _get_logger().warning(
+                f"[{self.node_context.name}] ONNX export optimized away {len(removed_inputs)} inputs: {removed_inputs}. "
+                f"These inputs were unused or became constants. Updating node to match."
+            )
+            # Track trimmed inputs
+            self.node_context.trimmed_inputs.update(removed_inputs)
+            
+            # Filter inputs to only keep actual ONNX inputs (preserving order)
+            self.node_context.inputs = [
+                td for td in self.node_context.inputs if td.name in actual_input_set
+            ]
+
+
+    def load(self, model_path: str, sha256sum: str, device: str):
+        self._load_onnx(model_path, sha256sum, device)
+
+    def save(self, save_path: str) -> Tuple[str, str, str]:
+        onnx_path = os.path.join(save_path, f"{self.node_context.name}.onnx")
+
+        # Use ONNXProgram's save method
+        self.compiled_model.save(
+            onnx_path,
+            include_initializers=True,
+            keep_initializers_as_inputs=False,
+        )
+
+        # Validate model (skip for large models as it can fail with protobuf limits)
+        skip_validation = self.backend_params.get('skip_validation', False)
+        if not skip_validation:
+            try:
+                # Try to check model, but don't fail the export if validation fails
+                onnx.checker.check_model(onnx_path)
+            except Exception as e:
+                _get_logger().error(
+                    f"ONNX model validation warning (model still saved): {e}")
+
+        md5sum, sha256sum = self._verify_model_location_and_get_hash(onnx_path)
+
+        return onnx_path, md5sum, sha256sum
+
+    def compile(self,  m: torch.nn.Module = None) -> SimplifiedONNXProgram:
+        raise NotImplementedError(
+            "TorchExportBackend does not support compilation, please use torch-script or torch-trace instead")
+        return None
+
+class ONNXTorchScriptExportBackend(ONNXExportBackend):
+    def compile(self, m: torch.nn.Module = None):
+        if m is None:
+            m = self.module_builder().eval()
+        else:
+            m = m.eval()
+        
+        # Optionally pre-script the module before ONNX export
+        # This is useful when using traced models as environment constants
+        if self.backend_params.get('prescript', False):
+            m = torch.jit.script(m)
+        
         # Get flat tensor values directly from inputs (not input_formats which preserves nested structure)
-        input_values = tuple([tensor_desc.value for tensor_desc in self.node_context.inputs])
+        input_values = tuple(
+            [tensor_desc.value for tensor_desc in self.node_context.inputs])
+        # Clone tensors to escape inference mode (inference tensors can't participate in autograd)
+        input_values = prepare_tensors_for_export(input_values)
+
+        # Create temp directory manually (not context manager) so we can control its lifetime
+        tmpdir = tempfile.mkdtemp()
+        save_path = os.path.join(tmpdir, "model.onnx")
+
+        torch.onnx.export(
+            m,
+            input_values,
+            save_path,
+            dynamo=False,
+            input_names=[
+                tensor_desc.name for tensor_desc in self.node_context.inputs],
+            output_names=[
+                tensor_desc.name for tensor_desc in self.node_context.outputs],
+
+            verbose=_get_logger().is_verbose(),
+            report=self.backend_params.get('report', False),
+            opset_version=self.backend_params.get('opset_version', None),
+        )
+
+        # Create program from file path
+        # Temp dir will be cleaned up when program is deleted
+        onnx_program = SimplifiedONNXProgram(save_path, temp_dir=tmpdir)
+
+        # Sync inputs with what ONNX actually exported
+        # (ONNX can remove unused inputs during optimization)
+        self._sync_inputs_with_onnx(onnx_program)
+
+        self.compiled_model = onnx_program
+        self.compiled_module = m
+
+class ONNXDynamoExportBackend(ONNXExportBackend):
+    def compile(self, m: torch.nn.Module = None):
+        if m is None:
+            m = self.module_builder().eval()
+        else:
+            m = m.eval()
+        # Get flat tensor values directly from inputs (not input_formats which preserves nested structure)
+        input_values = tuple(
+            [tensor_desc.value for tensor_desc in self.node_context.inputs])
         # Clone tensors to escape inference mode (inference tensors can't participate in autograd)
         input_values = prepare_tensors_for_export(input_values)
         onnx_program = torch.onnx.export(
@@ -34,70 +182,10 @@ class ONNXExportBackend(ExportBackend):
             fallback=self.backend_params.get('fallback', None),
             opset_version=self.backend_params.get('opset_version', None),
         )
-
-        return onnx_program
-
-    def compile_torchscript(self, m):
-        # Get flat tensor values directly from inputs (not input_formats which preserves nested structure)
-        input_values = tuple([tensor_desc.value for tensor_desc in self.node_context.inputs])
-        # Clone tensors to escape inference mode (inference tensors can't participate in autograd)
-        input_values = prepare_tensors_for_export(input_values)
-
-        # Create temp directory manually (not context manager) so we can control its lifetime
-        tmpdir = tempfile.mkdtemp()
-        save_path = os.path.join(tmpdir, "model.onnx")
         
-        torch.onnx.export(
-            m,
-            input_values,
-            save_path,
-            dynamo=False,
-            input_names=[
-                tensor_desc.name for tensor_desc in self.node_context.inputs],
-            output_names=[
-                tensor_desc.name for tensor_desc in self.node_context.outputs],
+        # Sync inputs with what ONNX actually exported
+        # (ONNX can remove unused inputs during optimization)
+        self._sync_inputs_with_onnx(onnx_program)
 
-            verbose=_get_logger().is_verbose(),
-            report=self.backend_params.get('report', False),
-            opset_version=self.backend_params.get('opset_version', None),
-        )
-
-        # Create program from file path
-        # Temp dir will be cleaned up when program is deleted
-        onnx_program = SimplifiedONNXProgram(save_path, temp_dir=tmpdir)
-
-        return onnx_program
-
-    def compile(self):
-        m = self.module_builder().eval()
-        if self.backend_params.get('prescript', False): #TODO: make this conditional upon use_trace
-            m = torch.jit.script(m)
-
-        if self.backend_params.get('dynamo', True):
-            onnx_model = self.compile_dynamo(m)
-        else:
-            onnx_model = self.compile_torchscript(m)
-        return onnx_model
-
-    def save(self, save_path: str, compiled_model) -> Tuple[str, str, str]:
-        onnx_path = os.path.join(save_path, f"{self.node_context.name}.onnx")
-
-        # Use ONNXProgram's save method
-        compiled_model.save(
-            onnx_path,
-            include_initializers=True,
-            keep_initializers_as_inputs=False,
-        )
-        
-        # Validate model (skip for large models as it can fail with protobuf limits)
-        skip_validation = self.backend_params.get('skip_validation', False)
-        if not skip_validation:
-            try:
-                # Try to check model, but don't fail the export if validation fails
-                onnx.checker.check_model(onnx_path)
-            except Exception as e:
-                _get_logger().error(f"ONNX model validation warning (model still saved): {e}")
-        
-        md5sum, sha256sum = self._verify_model_location_and_get_hash(onnx_path)
-
-        return onnx_path, md5sum, sha256sum
+        self.compiled_model = onnx_program
+        self.compiled_module = m

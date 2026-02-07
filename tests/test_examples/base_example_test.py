@@ -24,6 +24,8 @@ import sys
 import shutil
 from pathlib import Path
 
+from leapp.inference_manager import InferenceManager
+
 
 class BaseExampleTest(unittest.TestCase):
     """Base class for example script tests with common functionality."""
@@ -50,6 +52,13 @@ class BaseExampleTest(unittest.TestCase):
     def tearDown(self):
         """Clean up after each test."""
         os.chdir(self.original_cwd)
+        
+        # Reset ExportManager singleton to avoid stale state between tests
+        # This is necessary because different examples may use the same node names
+        from leapp import annotate
+        if annotate._interpret_graph:
+            annotate._interpret_graph = False
+        annotate.nodes = {}
 
     def _run_example_script(self, script_name, expected_output_dir):
         """
@@ -152,3 +161,18 @@ class BaseExampleTest(unittest.TestCase):
         print(f"✓ {script_name} completed successfully")
         print(
             f"✓ Generated {len(expected_files)} expected files in {output_dir}")
+
+        self.run_generated_models(output_dir)
+
+    def run_generated_models(self, output_dir):
+        '''Run the generated full graph'''
+        graph_yaml = os.path.split(output_dir)[-1] + '.yaml'
+        graph_yaml_path = os.path.join(output_dir, graph_yaml)
+
+        # Load the inference manager (validates the graph structure)
+        inference_manager = InferenceManager(graph_yaml_path)
+
+        mock_inputs = inference_manager.get_mock_input()
+        outputs = inference_manager.run_policy(mock_inputs)
+
+        print(f"✓ Successfully loaded inference graph from {graph_yaml_path}")
