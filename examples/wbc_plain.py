@@ -108,7 +108,7 @@ def quat_to_rot_matrix(quat:
     return weight_scalar * identity + (1 - weight_scalar) * regular
 
 
-@annotate.method(export_with="torch")
+@annotate.method(export_with="jit")
 def post_process_actions(actions):
     _, _, _, action_scaling, default_pos = get_robot_params()
     action_scaling = action_scaling.to(actions.dtype).to(actions.device)
@@ -118,13 +118,13 @@ def post_process_actions(actions):
     return actions
 
 
-@annotate.method(export_with="torch")
+@annotate.method(export_with="jit")
 def process_odom(lin_vel_I: torch.Tensor, ang_vel_I: torch.Tensor, q_IB: torch.Tensor):
     R_IB = quat_to_rot_matrix(q_IB)
     R_BI = R_IB.transpose(0, 1)
     lin_vel_b = torch.matmul(R_BI, lin_vel_I)
     ang_vel_b = torch.matmul(R_BI, ang_vel_I)
-    gravity_I = torch.tensor([0, 0, -9.8], dtype=lin_vel_I.dtype,
+    gravity_I = torch.tensor([0.0, 0.0, -9.8], dtype=lin_vel_I.dtype,
                              device=lin_vel_I.device)
     projected_gravity_b = torch.matmul(R_BI, gravity_I)
 
@@ -134,14 +134,14 @@ def process_odom(lin_vel_I: torch.Tensor, ang_vel_I: torch.Tensor, q_IB: torch.T
 def run_model(model, joint_pos, joint_vel, velocity_commands, lin_vel_I, ang_vel_I, q_IB, previous_actions):
     _, _, _, _, default_pos = get_robot_params()
     default_pos = default_pos.to(joint_pos.dtype).to(joint_pos.device)
-    model.eval()
+
     with torch.no_grad():
         # process odom
         lin_vel_b, ang_vel_b, gravity_b = process_odom(
             lin_vel_I, ang_vel_I, q_IB)
 
         with annotate.block("process_joint_pos", inputs=["joint_pos"], outputs=["processed_joint_pos"],
-                            environment_constants=['default_pos'], export_with="torch"):
+                            environment_constants=['default_pos'], export_with="jit"):
             processed_joint_pos = joint_pos - \
                 default_pos.to(joint_pos.dtype).to(joint_pos.device)
 
@@ -151,7 +151,7 @@ def run_model(model, joint_pos, joint_vel, velocity_commands, lin_vel_I, ang_vel
                                     "processed_joint_pos", "joint_vel", "previous_actions"],
                             outputs=["actions"],
                             environment_constants=['model'],
-                            export_with="onnx", backend_params={"dynamo": False, "prescript": True}):
+                            export_with="onnx-torchscript", backend_params={"prescript": True}):
             concatenated_tensor = torch.cat([lin_vel_b, ang_vel_b,
                                             gravity_b, velocity_commands,
                                             processed_joint_pos, joint_vel, previous_actions])
@@ -161,9 +161,9 @@ def run_model(model, joint_pos, joint_vel, velocity_commands, lin_vel_I, ang_vel
                 transformed = transformed.unsqueeze(0)
             actions = model(transformed).detach().view(-1)
 
-        actions = post_process_actions(actions)
+        post_processed_actions = post_process_actions(actions)
 
-    return actions
+    return post_processed_actions, actions
 
 
 def get_model(model_path):
@@ -171,7 +171,7 @@ def get_model(model_path):
     model_path = os.path.join(os.path.dirname(
         __file__), "models", "isaac_velocity_flat_h1_v0.pt")
     model = torch.jit.load(model_path, map_location=DEVICE)
-    return model
+    return model.eval()
 
 
 def main():
@@ -187,8 +187,10 @@ def main():
     # get model
     model = get_model("models/isaac_velocity_flat_h1_v0.pt")
     # run model with data
-    action = run_model(model, **mock_observation_data)
-    print(action)
+    for i in range(5):
+        final_actions, raw_actions = run_model(model, **mock_observation_data)
+        print(final_actions)
+        mock_observation_data["previous_actions"] = raw_actions
     # show results
     print("finished running model")
 

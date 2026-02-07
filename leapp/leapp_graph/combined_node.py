@@ -17,151 +17,212 @@
 
 from .leapp_node import LeappNode
 from collections import OrderedDict
-from typing import List
+from typing import List, Dict, Tuple
 import torch
-from leapp.utils import CompactYamlList, reconstruct_from_named_dict, flatten_to_named_dict
 from leapp._logging import _get_logger
 
 
 class CombinedNodeModel(torch.nn.Module):
-    def __init__(self, name_order: List[str], models, input_names, output_names, io_configs):
+    """A combined model that chains multiple models together using pre-computed index routing.
+
+    All routing is computed at __init__ time as integer indices, so forward() only 
+    performs tensor operations and list indexing - no string lookups or Python functions.
+    This makes it fully compatible with TorchScript tracing.
+    """
+
+    def __init__(self,
+                 models: List[torch.nn.Module],
+                 num_external_inputs: int,
+                 model_input_indices: List[List[int]],
+                 model_output_indices: List[List[int]],
+                 final_output_indices: List[int],
+                 num_slots: int):
+        """
+        Args:
+            models: List of compiled models in execution order
+            num_external_inputs: Number of external inputs to the combined model
+            model_input_indices: For each model, list of slot indices to read inputs from
+            model_output_indices: For each model, list of slot indices to write outputs to  
+            final_output_indices: Slot indices for the final outputs
+            num_slots: Total number of slots needed (external inputs + all intermediate values)
+        """
         super().__init__()
-        self.input_names = input_names
-        self.output_names = output_names
-        self.models = {}
-        if (any(output_name is None for output_name in output_names)):
-            raise ValueError("Unexpected untagged output in combined node")
-        self.name_order = name_order
-        self.io_configs = io_configs
+
+        # Register models as submodules
         for idx, model in enumerate(models):
-            self.add_module(name_order[idx], model.eval())
-            self.models[name_order[idx]] = getattr(self, name_order[idx])
+            self.add_module(str(idx), model.eval())
 
-    def forward(self, *inputs):
-        variable_dict = {}
-        # initialize input_names
-        # TODO: we need to make the internal connections more robust
-        # TODO: to improve speed we need to preallocate all i/o tensors
-        for idx in range(len(self.input_names)):
-            input_name = self.input_names[idx]
-            variable_dict[input_name] = inputs[idx]
+        # Store routing info as buffers (not parameters, but will be saved with model)
+        # Using register_buffer with persistent=False since these are just routing info
+        self.num_models = len(models)
+        self.num_external_inputs = num_external_inputs
+        self.num_slots = num_slots
 
-        for name in self.name_order:
-            config = self.io_configs[name]
-            node_inputs = config['inputs']
-            # node_outputs = config['outputs']
-            input_formats = config['input_formats']
-            output_formats = config['output_formats']
-            # extract input values from variable dict
-            input_value_dict = {}
-            for input_val in node_inputs:
-                if input_val.name in variable_dict:
-                    input_value_dict[input_val.name] = variable_dict[input_val.name]
-                elif input_val.tag in variable_dict:
-                    input_value_dict[input_val.tag] = variable_dict[input_val.tag]
-                else:
-                    raise ValueError(
-                        f"Input {input_val.name} or {input_val.tag} not found in variable_dict")
-            # build the input format - reconstruct each input parameter from its ParameterFormat
-            reconstructed_inputs = []
-            for param_format in input_formats:
-                reconstructed_input = reconstruct_from_named_dict(
-                    input_value_dict, param_format)
-                reconstructed_inputs.append(reconstructed_input)
+        # Store routing as lists of lists (TorchScript compatible)
+        self.model_input_indices = model_input_indices
+        self.model_output_indices = model_output_indices
+        self.final_output_indices = final_output_indices
 
-            # run the model
-            model_outputs = self.models[name](*reconstructed_inputs)
+    def forward(self, *inputs) -> Tuple[torch.Tensor, ...]:
+        # Initialize slots with external inputs
+        # Using a list for slots - index-based access only
+        slots: List[torch.Tensor] = list(inputs)
 
-            # flatten the outputs and commit to variable_dict
+        # Extend slots to have room for intermediate values
+        # We pre-allocate with the first input as placeholder (will be overwritten)
+        for _ in range(self.num_slots - self.num_external_inputs):
+            slots.append(inputs[0])  # Placeholder, will be overwritten
+
+        # Execute each model in order
+        for model_idx in range(self.num_models):
+            # Gather inputs by index
+            input_indices = self.model_input_indices[model_idx]
+            model_inputs = [slots[i] for i in input_indices]
+
+            # Run the model
+            model_outputs = self._modules[str(model_idx)](*model_inputs)
+
+            # Normalize to tuple
             if not isinstance(model_outputs, tuple):
-                # if output formats is a single value, convert for unity
-                model_outputs = [model_outputs]
-            else:
-                model_outputs = list(model_outputs)
+                model_outputs = (model_outputs,)
 
-            # Flatten each output based on its corresponding ParameterFormat
-            output_value_dict = {}
-            for output_idx, (output_data, param_format) in enumerate(zip(model_outputs, output_formats)):
-                flattened = flatten_to_named_dict(output_data, param_format)
-                output_value_dict.update(flattened)
-            variable_dict.update(output_value_dict)
-        outputs = []
-        for output_name in self.output_names:
-            if output_name not in variable_dict:
-                raise ValueError(
-                    f"Output {output_name} not found in variable_dict")
-            outputs.append(variable_dict[output_name])
+            # Store outputs to their designated slots
+            output_indices = self.model_output_indices[model_idx]
+            for slot_idx, output_val in zip(output_indices, model_outputs):
+                slots[slot_idx] = output_val
 
-        return tuple(outputs)
+        # Gather final outputs
+        return tuple(slots[i] for i in self.final_output_indices)
 
 
 class CombinedNode(LeappNode):
-    def __init__(self, nodes: List[LeappNode],
-                 node_index: int, name, backend):
+    """A node that combines multiple sequential nodes into a single traced model.
+
+    The routing between nodes is pre-computed as integer indices at construction time,
+    making the combined model fully TorchScript-compatible.
+    """
+
+    def __init__(self, nodes: List[LeappNode], node_index: int, name: str, backend: str):
         LeappNode.__init__(self, name, node_index)
 
+        # Sort nodes by execution order
         self.nodes = sorted(nodes, key=lambda node: node.node_index)
-        self.node_execution_order = [node.name for node in nodes]
-        self.inputs, self.outputs = self._get_graph_level_io(self.nodes)
-        node_configs = self._get_per_node_io_formatting(self.nodes)
 
-        input_names = [input.name for input in self.inputs]
-        output_names = [output.tag for output in self.outputs]
-        models = [node.get_compiled_model() for node in self.nodes]
+        # Build external inputs/outputs and routing
+        self.inputs, self.outputs, routing = self._build_routing(self.nodes)
+
+        # Extract routing components
+        models = [node.compiled_module for node in self.nodes]
+        model_input_indices = routing['model_input_indices']
+        model_output_indices = routing['model_output_indices']
+        final_output_indices = routing['final_output_indices']
+        num_slots = routing['num_slots']
+        num_external_inputs = len(self.inputs)
+
+        # Create the combined model
         combined_model = CombinedNodeModel(
-            self.node_execution_order, models, input_names, output_names, node_configs)
-        input_values = [input_val.value for input_val in self.inputs]
+            models=models,
+            num_external_inputs=num_external_inputs,
+            model_input_indices=model_input_indices,
+            model_output_indices=model_output_indices,
+            final_output_indices=final_output_indices,
+            num_slots=num_slots
+        )
 
-        # create the backend
+        # Create the backend and compile
+        if 'jit' in backend:
+            backend = 'jit-trace' # this is more robust. jit script does not have any strengths over trace for this use case
+
         self.setup_backend(backend, {})
-        # TODO: This is a temporary hack to get the combined model working.
-        # the real solution is to allow the backend to handle existing models
-        if self.get_backend() == 'torch':
-            torch._C._jit_override_can_fuse_on_gpu(False)
-            torch._C._jit_override_can_fuse_on_cpu(False)
-            self.compiled_model = torch.jit.trace(
-                combined_model, input_values)
-            torch._C._jit_override_can_fuse_on_gpu(True)
-            torch._C._jit_override_can_fuse_on_cpu(True)
-        else:
-            raise NotImplementedError(
-                f"Combination node for backend {self.get_backend()} is not implemented")
+        self.export_backend.override_module_builder(lambda: combined_model)
 
-    def _get_graph_level_io(self, nodes: List[LeappNode]):
-        inputs = OrderedDict()
-        outputs = OrderedDict()
+        self.compile_model()
+
+    def _build_routing(self, nodes: List[LeappNode]) -> Tuple[List, List, Dict]:
+        """Build the index-based routing for the combined model.
+
+        Slots are organized as:
+        [0..num_external_inputs-1]: External inputs
+        [num_external_inputs..]: Intermediate values (outputs from each model)
+
+        Returns:
+            Tuple of (external_inputs, external_outputs, routing_dict)
+        """
+        # Track all tags and their slot indices
+        tag_to_slot: Dict[str, int] = {}
+
+        # First pass: identify external inputs (inputs with no internal source)
+        # and collect all output tags
+        internal_output_tags = set()
         for node in nodes:
-            for idx, input_val in enumerate(node.inputs):
-                if input_val.tag is not None and input_val.tag in outputs:
-                    del outputs[input_val.tag]
-                else:
-                    if input_val.tag in inputs:
-                        raise ValueError(
-                            f"Input {input_val.tag} tag values should be unique")
-                    tag_name = input_val.tag if input_val.tag is not None else input_val.name_str + \
-                        "["+str(idx)+"]"
-                    inputs[tag_name] = input_val
-            for output_val in node.outputs:
-                if output_val.tag is not None:
-                    outputs[output_val.tag] = output_val
-                else:
-                    tag_name = node.name + '/' + output_val.name_str
-                    outputs[tag_name] = output_val
+            for output in node.outputs:
+                if output.tag is not None:
+                    internal_output_tags.add(output.tag)
 
-        return list(inputs.values()), list(outputs.values())
+        # External inputs are inputs whose tags don't come from internal outputs
+        external_inputs = []
+        external_input_tags = OrderedDict()  # tag -> input_description
 
-    def _get_per_node_io_formatting(self, nodes: List[LeappNode]):
-        node_configs = {}
         for node in nodes:
-            # format
-            node_configs[node.name] = {
-                'input_formats': node.input_formats,
-                'output_formats': node.output_formats,
-                'inputs': node.inputs,
-                'outputs': node.outputs
-            }
+            for input_desc in node.inputs:
+                tag = input_desc.tag
+                if tag is None or tag not in internal_output_tags:
+                    # This is an external input
+                    if tag not in external_input_tags:
+                        external_input_tags[tag or input_desc.name] = input_desc
+                        external_inputs.append(input_desc)
 
-        return node_configs
+        # Assign slot indices to external inputs
+        for idx, tag in enumerate(external_input_tags.keys()):
+            tag_to_slot[tag] = idx
+
+        num_external_inputs = len(external_inputs)
+        next_slot = num_external_inputs
+
+        # Second pass: build routing for each model
+        model_input_indices = []
+        model_output_indices = []
+
+        for node in nodes:
+            # Input indices for this model
+            input_indices = []
+            for input_desc in node.inputs:
+                tag = input_desc.tag or input_desc.name
+                if tag in tag_to_slot:
+                    input_indices.append(tag_to_slot[tag])
+                else:
+                    raise ValueError(
+                        f"Input tag '{tag}' not found in slot mapping for node '{node.name}'")
+            model_input_indices.append(input_indices)
+
+            # Output indices for this model - assign new slots
+            output_indices = []
+            for output_desc in node.outputs:
+                tag = output_desc.tag or f"{node.name}/{output_desc.name}"
+                tag_to_slot[tag] = next_slot
+                output_indices.append(next_slot)
+                next_slot += 1
+            model_output_indices.append(output_indices)
+
+        # Identify final outputs (outputs from the last node, or outputs not consumed by other nodes)
+        # For simplicity, use outputs from the last node that have tags
+        last_node = nodes[-1]
+        external_outputs = []
+        final_output_indices = []
+
+        for output_desc in last_node.outputs:
+            tag = output_desc.tag or f"{last_node.name}/{output_desc.name}"
+            external_outputs.append(output_desc)
+            final_output_indices.append(tag_to_slot[tag])
+
+        routing = {
+            'model_input_indices': model_input_indices,
+            'model_output_indices': model_output_indices,
+            'final_output_indices': final_output_indices,
+            'num_slots': next_slot,
+        }
+
+        return external_inputs, external_outputs, routing
 
 
 def get_combined_node(nodes: List[LeappNode], name):
@@ -172,19 +233,23 @@ def get_combined_node(nodes: List[LeappNode], name):
     3. All nodes have undergone i/o reconciliation (input names and output names match)
     '''
     nodes = sorted(nodes, key=lambda node: node.node_index)
+    export_backends = set([node.backend for node in nodes])
     node_backends = [node.export_backend.get_backed_model_type()
                      for node in nodes]
-    if not all(backend == node_backends[0] for backend in node_backends):
+    node_backend = set(node_backends)
+    if len(node_backend) != 1:
         _get_logger().warning(
-            f"skipping combining {name} because not all nodes have the same backend")
+            f"skipping combining {name} because not all nodes have the same backend.\n"
+            f"got {node_backend}")
         return None
-    backend = node_backends[0]
-    # TODO: This is a temporary hack to get the combined model working.
-    # the real solution is to allow the backend to handle existing models
-    if not backend == 'torch':
-        return None
+    
+    if len(export_backends) != 1:
+        _get_logger().warning(
+            f"CombinedNode {name} has multiple declared export backends: {export_backends}. \n"
+            f"exporting with the default backend for {list(node_backend)[0]}")
+
+    backend = node_backend.pop()
     node_index = nodes[0].node_index
-    name_order = [node.name for node in nodes]
     try:
         combined_node = CombinedNode(
             nodes, node_index, name, backend)

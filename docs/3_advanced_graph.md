@@ -128,7 +128,7 @@ class DataProcessor:
     def __init__(self):
         self._buffer = torch.zeros(10)
     
-    @annotate.method(export_with="torch")
+    @annotate.method(export_with="jit")
     def process(self, input_data: torch.Tensor):
         # input_data comes from an upstream node and is tagged to trace graph connections
         # Copy data using in-place assignment
@@ -235,13 +235,13 @@ Two nodes can be merged automatically only if **ALL** of these conditions are me
 import torch
 from leapp import annotate, MergeCfgEnum
 
-@annotate.method(export_with="torch")
+@annotate.method(export_with="jit")
 def step_one(input_data: torch.Tensor):
     """First step produces one output."""
     result = input_data * 2.0
     return result
 
-@annotate.method(export_with="torch")
+@annotate.method(export_with="jit")
 def step_two(data: torch.Tensor):
     """Second step consumes ALL outputs from step_one."""
     result = data + 1.0
@@ -268,16 +268,16 @@ Nodes with outputs that have **multiple targets** or inputs from **multiple sour
 import torch
 from leapp import annotate, MergeCfgEnum
 
-@annotate.method(export_with="torch")
+@annotate.method(export_with="jit")
 def shared_processing(input_data: torch.Tensor):
     """This node's output goes to TWO different targets."""
     return input_data * 2.0
 
-@annotate.method(export_with="torch")
+@annotate.method(export_with="jit")
 def branch_a(data: torch.Tensor):
     return data + 1.0
 
-@annotate.method(export_with="torch")
+@annotate.method(export_with="jit")
 def branch_b(data: torch.Tensor):
     return data - 1.0
 
@@ -305,15 +305,15 @@ annotate.compile_graph(merge_nodes=MergeCfgEnum.AUTOMATIC)
 import torch
 from leapp import annotate, MergeCfgEnum
 
-@annotate.method(export_with="torch")
+@annotate.method(export_with="jit")
 def source_a(input_a: torch.Tensor):
     return input_a * 2.0
 
-@annotate.method(export_with="torch")
+@annotate.method(export_with="jit")
 def source_b(input_b: torch.Tensor):
     return input_b * 3.0
 
-@annotate.method(export_with="torch")
+@annotate.method(export_with="jit")
 def combine(data_a: torch.Tensor, data_b: torch.Tensor):
     """This node receives inputs from TWO different sources."""
     return data_a + data_b

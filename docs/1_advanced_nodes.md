@@ -23,7 +23,7 @@ class ActionProcessor:
         self._clip = torch.tensor([[[-1.0, 1.0]]])
         self.cfg = type('Config', (), {'clip': True})()
     
-    @annotate.method(outputs=["self._processed_actions"], export_with="torch", use_trace=True)
+    @annotate.method(outputs=["self._processed_actions"], export_with="jit-trace")
     def process_actions(self, actions: torch.Tensor):
         # Store the raw actions
         self._raw_actions[:] = actions
@@ -81,7 +81,7 @@ def process_with_external_model():
                         inputs=["sensor_input"],
                         outputs=["predictions"],
                         environment_constants=["pretrained_model"],
-                        export_with="torch"):
+                        export_with="jit"):
         # LEAPP captures the external model and makes it available
         predictions = pretrained_model(sensor_input)
     
@@ -104,7 +104,7 @@ class RobotProcessor:
         self.pretrained_model = torch.jit.load("path/to/model.pt")
         self.scaling_factor = 2.5
     
-    @annotate.method(export_with="torch")
+    @annotate.method(export_with="jit")
     def process_data(self, input_data):
         # self.* variables are automatically available - no need to declare them!
         scaled = input_data * self.scaling_factor
@@ -128,8 +128,7 @@ for term_name, term in self.terms.items():
         inputs=["action"],
         outputs=["term_actions"],
         environment_constants=['idx'],  # Freeze idx at current iteration value
-        export_with="torch",
-        use_trace=True
+        export_with="jit-trace",
     ):
         term_actions = action[:, idx : idx + term.action_dim]
     
@@ -144,7 +143,7 @@ class DataSlicer:
         self.idx = 0
         self.stride = 3
     
-    @annotate.method(export_with="torch", environment_constants=['self.idx', 'self.stride'])
+    @annotate.method(export_with="jit", environment_constants=['self.idx', 'self.stride'])
     def get_subset(self, inputA: torch.Tensor):
         retval = inputA[self.idx:self.idx+self.stride]
         self.idx += self.stride  # Changes after trace, but traced value is frozen
@@ -197,7 +196,7 @@ def run_pipeline():
     # all operatons for all the nodes in features are captured
     concatenated = torch.cat(features)
     # Single output call closes the node. both inputs are now part of the same node
-    annotate.output_tensors({'model_input', concatenated}, 'sensor_fusion', export_with='torch')
+    annotate.output_tensors('sensor_fusion', {'model_input': concatenated}, export_with="jit")
     
     output = model(concatenated)
     
@@ -234,7 +233,7 @@ class RobotController:
                             register_buffers=["self.running_mean", 
                                             "self.running_count",
                                             "self.action_history"],
-                            export_with="torch"):
+                            export_with="jit"):
             # Update running mean
             self.running_count += 1
             alpha = 1.0 / self.running_count
@@ -252,11 +251,90 @@ class RobotController:
         return normalized_data
 ```
 
-**Important:** Register buffers ueses PyTorch's `register_buffer()` method. For more details on PyTorch buffers, see [the official documentation](https://docs.pytorch.org/docs/stable/generated/torch.nn.Module.html#torch.nn.Module.register_buffer).
+**Important:** Register buffers uses PyTorch's `register_buffer()` method. For more details on PyTorch buffers, see [the official documentation](https://docs.pytorch.org/docs/stable/generated/torch.nn.Module.html#torch.nn.Module.register_buffer).
 
 **Key Differences:**
 - `environment_constants`: Values frozen at export time, won't change
 - `register_buffers`: Mutable state that persists across calls, will be updated
+
+### Traced Tensor Pattern: `annotate.register_buffer()`
+
+The `register_buffers` parameter shown above works with decorators and context managers. For traced tensor nodes (`input_tensors` / `output_tensors`), use `annotate.register_buffer()` instead to make a pre-existing tensor participate in tracing. This is necessary when you need **in-place assignment** (`tensor[:] = ...`) on a tensor that was not returned by `input_tensors()`.
+
+```python
+import torch
+from leapp import annotate
+
+class Module:
+    def __init__(self):
+        self.values = torch.tensor([1.0, 2.0, 3.0])
+
+    def run(self, traced_input):
+        # Register the buffer — wraps self.values as a TracedTensor
+        buffers = annotate.register_buffer('my_node', {'values': self.values})
+        self.values = buffers['values']
+
+        # In-place assignment is now traced
+        self.values[:] = traced_input
+        # Subsequent operations are also traced
+        return self.values * 100.0
+
+module = Module()
+
+annotate.start(name="buffer_example")
+
+input_tensor = torch.tensor([4.0, 5.0, 6.0])
+traced_input = annotate.input_tensors({'input': input_tensor}, 'my_node')
+
+result = module.run(traced_input)
+
+annotate.output_tensors('my_node', {'result': result}, export_with="jit")
+
+annotate.stop()
+annotate.compile_graph()
+```
+
+**Key rules:**
+- `input_tensors()` **must** be called first to create the node before calling `register_buffer()`.
+- The returned dict contains traced wrappers — you **must** reassign them back (e.g. `self.values = buffers['values']`) for subsequent operations to be recorded.
+- The buffer tensors must be **raw `torch.Tensor`** values, not already-traced tensors.
+
+## Static Outputs: Constant Output Tensors
+
+Sometimes a node needs to output a **constant tensor that is not derived from any input**. Passing it as a regular output will fail because LEAPP expects all outputs to be traced computations. The `static_outputs` parameter on `output_tensors()` handles this case:
+
+```python
+import torch
+from leapp import annotate
+
+annotate.start(name="static_example")
+
+input_tensor = torch.tensor([1.0, 2.0, 3.0])
+traced_input = annotate.input_tensors({'input': input_tensor}, 'my_node')
+
+# Computed output — derived from the traced input
+computed_output = traced_input + 1.0
+
+# Static output — a constant, NOT derived from any input
+static_tensor = torch.tensor([4.0, 5.0, 6.0])
+
+annotate.output_tensors(
+    'my_node',
+    {'computed': computed_output},            # regular traced outputs
+    static_outputs={'static': static_tensor}, # constant outputs
+    export_with="jit"
+)
+
+annotate.stop()
+annotate.compile_graph()
+```
+
+The exported model will return both outputs: `computed` (input-dependent) and `static` (always `[4, 5, 6]`).
+
+**Key rules:**
+- Static outputs must be **raw `torch.Tensor`** values. Using a `TracedTensor` (anything derived from `input_tensors()`) as a static output will raise an error.
+- If you pass a single tensor without a dict, LEAPP assigns the default name `static_output` and logs a warning. Always prefer a named dict.
+- Static outputs are merged with the regular outputs in the compiled model — downstream nodes can consume them like any other output.
 
 ## Nested Data Connections
 
@@ -268,7 +346,7 @@ LEAPP can track data connections through complex nested structures. Each individ
 import torch
 from leapp import annotate
 
-@annotate.method(export_with="torch", node_name="process_robot_state")
+@annotate.method(export_with="jit", node_name="process_robot_state")
 def process_robot_state(state_dict):
     """Process complex robot state dictionary."""
     # LEAPP tracks each tensor independently
@@ -306,7 +384,7 @@ def main():
     with annotate.block("decision_maker",
                         inputs=["processed"],
                         outputs=["action"],
-                        export_with="torch"):
+                        export_with="jit"):
         # You can access nested structures naturally
         position_factor = processed['position'].norm()
         velocity_factor = processed['velocity'].sum()

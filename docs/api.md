@@ -95,7 +95,6 @@ All parameters are optional keyword arguments (`**params`):
 - **`node_name`** (str): Custom name for the node. If not provided, uses the function's name.
 - **`export_with`** (str): Backend to use for exporting the model (e.g., `"torch"`, `"onnx"`).
 - **`backend_params`** (dict): Parameters specific to the export backend.
-- **`use_trace`** (bool): Whether to use `torch.jit.trace` for model compilation.
 - **`inputs`** (list[str]): Input specifications for the node.
 - **`outputs`** (list[str]): Output specifications for the node.
 - **`environment_constants`** (list[str]): External variables to capture as constants. Two main use cases: (1) capturing external dependencies like models or configs, (2) freezing variables that change over time (e.g., loop counters) to their value at node creation. See [Advanced Node Operations](1_advanced_nodes.md#environment-constants-referencing-external-data) for details.
@@ -136,7 +135,6 @@ with annotate.block(node_name: str, **kwargs):
 - **`**kwargs`**: Additional parameters (same as `@annotate.method()`)
   - `export_with`: Backend for exporting
   - `backend_params`: Backend-specific parameters
-  - `use_trace`: Use tracing for compilation
   - `inputs`: Input specifications (list of variable names)
   - `outputs`: Output specifications (list of variable names)
   - `environment_constants`: External variables to capture as constants (also used to freeze changing variables like loop counters)
@@ -196,7 +194,6 @@ traced_tensors = annotate.input_tensors(tensors: dict, node_name: str)
 
 ### Notes
 
-- **Backend limitation**: Traced tensor nodes currently only support `export_with="torch"` with TorchScript export (`use_trace=False`). ONNX export is not yet supported.
 - Graph interpretation must be enabled via `start()` before calling
 - TracedTensors support most PyTorch tensor operations
 - Cannot mix TracedTensors from different node contexts in a single operation
@@ -212,7 +209,7 @@ Mark traced tensor outputs and finalize a traced tensor node.
 ### Signature
 
 ```python
-annotate.output_tensors(tensors: dict, node_name: str, **kwargs)
+annotate.output_tensors(node_name: str, tensors: dict, **kwargs)
 ```
 
 ### Parameters
@@ -235,7 +232,6 @@ annotate.output_tensors(tensors: dict, node_name: str, **kwargs)
 
 ### Notes
 
-- **Backend limitation**: Traced tensor nodes currently only support `export_with="torch"` with `use_trace=False` (TorchScript). ONNX export is not yet supported for traced tensor nodes.
 - Must be called after `input_tensors()` with the same `node_name`
 - All output tensors must be derived from the corresponding input TracedTensors
 - Unused inputs are automatically detected and removed from the exported model
@@ -316,9 +312,9 @@ pipeline:
     - source: later_node/output_name
       targets:
         - earlier_node/input_name
-  dangling_inputs:
+  inputs:
     node_name: [input1, input2]
-  dangling_outputs:
+  outputs:
     node_name: [output1, output2]
 
 system_info:
@@ -395,7 +391,7 @@ model = SimpleNet()
 model.eval()
 
 # Preprocessing function
-@annotate.method(export_with="torch", node_name="preprocess")
+@annotate.method(export_with="jit", node_name="preprocess")
 def preprocess(raw_data):
     """Normalize input data."""
     normalized = (raw_data - raw_data.mean()) / (raw_data.std() + 1e-6)
@@ -403,7 +399,7 @@ def preprocess(raw_data):
 
 # Model inference function
 @annotate.method(
-    export_with="torch",
+    export_with="jit",
     node_name="inference",
     environment_constants=["model"]
 )
@@ -436,7 +432,7 @@ def main():
         "postprocess",
         inputs=["predictions"],
         outputs=["final_output"],
-        export_with="torch"
+        export_with="jit"
     ):
         probabilities = torch.softmax(predictions, dim=1)
         final_output = torch.argmax(probabilities, dim=1)

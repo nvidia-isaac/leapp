@@ -17,23 +17,29 @@
 
 import sys
 import functools
+import inspect
 import yaml
 import os
 import torch
-from typing import Any
 
 from leapp._logging import _get_logger
 from leapp.leapp_graph.leapp_graph import LeappGraph
 from leapp.leapp_graph.function_decorator_node import FunctionDecoratorNode
 from leapp.leapp_graph.leapp_node import LeappNode
 from leapp.leapp_graph.traced_node import TracedTensorNode
-from leapp.leapp_graph.traced_tensor import TracedTensor
+from leapp.leapp_graph.datatypes import (
+    is_traced_type,
+    apply_traced_tensor_patches,
+    remove_traced_tensor_patches,
+)
 from leapp.leapp_graph.block_context_node import BlockContextNode
+from leapp.utils import frame_to_namespace
 from leapp.enums import MergeCfgEnum
 from leapp.tracing_lock import TracingLock
 
 from .utils import (CompactYamlList,
                     CompactYamlDict,
+                    find_with_block_end,
                     get_relative_path,
                     get_system_info,
                     verify_data_exact_match,
@@ -51,6 +57,10 @@ class ExportManager:
     # initialization
     #########################################################
 
+    @property
+    def config_path(self):
+        return os.path.join(self.SAVE_PATH, f"{self.GRAPH_NAME}.yaml")
+
     def __new__(cls, *args, **kwargs):
         """Singleton implementation - only one instance allowed."""
         if cls._instance is None:
@@ -62,6 +72,8 @@ class ExportManager:
             # graph settings
             self.GRAPH_NAME = "my_graph"
             self.SAVE_PATH = None
+            self.dry_run = False
+            self._numpy_patches_applied = False
 
             # tracetime variables
             self.nodes = {}
@@ -82,7 +94,7 @@ class ExportManager:
     #########################################################
     # flow control
     #########################################################
-    def start(self, name, save_path=".", verbose=False):
+    def start(self, name, save_path=".", verbose=False, dry_run=False, patch_numpy=True):
         """Initialize and start LEAPP graph interpretation.
 
         This method prepares the export manager for tracing by setting up the graph name,
@@ -96,6 +108,11 @@ class ExportManager:
                 will be created. Defaults to "." (current directory).
             verbose (bool, optional): If True, enables verbose logging output. 
                 Defaults to False.
+            dry_run (bool, optional): If True, enables dry run mode which skips model
+                compilation and export. Defaults to False.
+            patch_numpy (bool, optional): If True, applies patches to torch.from_numpy,
+                torch.as_tensor, and torch.tensor to enable TracedTensor compatibility
+                with numpy operations. Defaults to True.
 
         Returns:
             None
@@ -114,8 +131,15 @@ class ExportManager:
                                   "calling start() again will reset the graph")
             _get_logger().warning("Resetting graph...")
             TracingLock().reset()
+        if dry_run:
+            _get_logger().info("Starting dry run mode")
+        self.dry_run = dry_run
         self.nodes = {}
         ExportManager._interpret_graph = True
+        # Apply patches for torch functions that bypass __torch_function__
+        self._numpy_patches_applied = patch_numpy
+        if patch_numpy:
+            apply_traced_tensor_patches()
 
     def stop(self):
         """Stop LEAPP graph interpretation and disable tracing.
@@ -143,6 +167,10 @@ class ExportManager:
         if not ExportManager._interpret_graph:
             raise Exception("ExportManager graph interpretation is disabled")
         ExportManager._interpret_graph = False
+        # Remove patches to restore original torch function behavior
+        if self._numpy_patches_applied:
+            remove_traced_tensor_patches()
+            self._numpy_patches_applied = False
 
     #########################################################
     # node setup
@@ -166,10 +194,13 @@ class ExportManager:
         self._verify_no_active_function_tracing()
         node_index = self.get_node_index(name)
 
+        if self.dry_run:
+            kwargs['export_with'] = "torch"
+            kwargs['backend_params'] = {}
+
         node = node_class(name, node_index,
                           backend=kwargs.get("export_with", None),
                           backend_params=kwargs.get("backend_params", None),
-                          use_trace=kwargs.get("use_trace", False),
                           inputs=kwargs.get("inputs", None),
                           outputs=kwargs.get("outputs", None),
                           environment_constants=kwargs.get(
@@ -177,45 +208,6 @@ class ExportManager:
                           register_buffers=kwargs.get("register_buffers", None))
 
         return node, name
-
-    #########################################################
-    # Tracing
-    #########################################################
-
-    def _start_tracing(self, frame, trace_function):
-        """Start the trace function."""
-        TracingLock().acquire()
-        frame.f_trace = trace_function
-        sys.settrace(trace_function)
-
-    def _stop_tracing(self, node_name, node_context):
-        if TracingLock().is_active:
-            """Stop the trace function."""
-            sys.settrace(None)
-
-            try:
-                if node_name in self.nodes.keys():
-                    # we have seen this node before, we need to check if all values match.
-                    original_node_data = {
-                        k: v for k, v in self.nodes[node_name].executed_lines.items() if k != 'source_code'}
-                    new_node_data = {
-                        k: v for k, v in node_context.executed_lines.items() if k != 'source_code'}
-
-                    if original_node_data != new_node_data:
-                        _get_logger().error(
-                            f"Error: {node_name} seen twice but detected lines do not match\n"
-                            f"Original node data: {original_node_data}\n"
-                            f"New node data: {new_node_data}")
-                        raise Exception(
-                            f"Error: {node_name} seen twice but detected lines do not match\n"
-                            f"Original node data: {original_node_data}\n"
-                            f"New node data: {new_node_data}")
-
-                self.nodes[node_name] = node_context
-
-            finally:
-                # Always reset tracing state, even if an exception occurred
-                TracingLock().release()
 
     #########################################################
     # annotation APIs
@@ -232,7 +224,7 @@ class ExportManager:
             traced_tensors_node, node_name = self._setup_new_node(
                 node_name, TracedTensorNode)
             self.nodes[node_name] = traced_tensors_node
-        
+
         # TODO: this is still confusing. we need to make it more explicit.
         tensors_changed = False
         if not isinstance(tensors, dict):
@@ -242,17 +234,18 @@ class ExportManager:
         # reason this is convoluted is to mirror the scheme in output_tensors
         if tensors_changed:
             _get_logger().warning(f"Warning: no tensor name provided for input_tensors call in node {node_name}\n"
-                        "Assuming default tensor name")
+                                  "Assuming default tensor name")
 
         # if the node is not tracing, we validate the inputs only and return the raw tensors
         if not traced_tensors_node.is_tracing:
             for tensor_name, tensor in tensors.items():
-                traced_tensors_node.validate_input_and_update_tags(tensor_name, tensor_name, tensor)
+                traced_tensors_node.validate_input_and_update_tags(
+                    tensor_name, tensor_name, tensor)
             values = list(tensors.values())
             return values[0] if len(values) == 1 else tuple(values)
 
             # TODO: need a scheme to update tags. in the future that scheme will be expanded to check
-            # the inputs and outputs for type equivalence. 
+            # the inputs and outputs for type equivalence.
 
         # we need to handle input tensors more carefully than outputs because
         # we need to ensure the inputs are returned in the original structure
@@ -265,7 +258,7 @@ class ExportManager:
         # if node is tracing we return the traced tensors
         return traced_tensors[0] if len(traced_tensors) == 1 else tuple(traced_tensors)
 
-    def output_tensors(self, tensors, node_name: str, **kwargs):
+    def output_tensors(self, node_name: str, tensors, static_outputs=None, **kwargs):
         if not ExportManager._interpret_graph:
             return
         self._verify_no_active_function_tracing()
@@ -276,15 +269,16 @@ class ExportManager:
             _get_logger().error(
                 f"Error: output tensors called for node {node_name} but not registered to the ExportManager")
             raise Exception(
-                "Error: exeption detected in output_tensors declaration")
-        
+                "Error: exception detected in output_tensors declaration")
+
+        # process outputs
         tensors_changed = False
         if not isinstance(tensors, dict):
             tensors_changed = True
             tensors = {'tensor': tensors}
 
         flattened_tensors = flatten_io_structure(tensors, '')
-        
+
         if not traced_tensors_node.is_tracing:
             # tag regardless of tracing status
             for tensor_name, tensor in flattened_tensors.items():
@@ -293,30 +287,113 @@ class ExportManager:
 
         if tensors_changed:
             _get_logger().warning(f"Warning: no tensor name provided for output_tensors call in node {node_name}\n"
-                        "Assuming default tensor name")
+                                  "Assuming default tensor name")
 
-        types = set(type(tensor) for tensor in flattened_tensors.values())
+        instances = set(is_traced_type(tensor) for tensor in flattened_tensors.values())
 
-        if not all([type is TracedTensor for type in types]):
+        if not all(instances):
+            types = set(type(tensor) for tensor in flattened_tensors.values())
             _get_logger().error(
-                f"Error: detected the following types when expected all outputs to be TracedTensors: {types}\n"
-                "**This could happen if you are not using TracedTensors in your computations.**\n" 
+                f"Error: detected the following types when expected all outputs to be TracedData: {types}\n"
+                "**This could happen if you are not using TracedData in your computations.**\n"
                 "Please verify if you are using the returned wrapped tensors from input_tensors() to "
                 "correctly trace your computations.")
             raise Exception(
-                "Error: exeption detected in output_tensors declaration")
-    
-        context_names = set([tensor.context for tensor in flattened_tensors.values()])
-        if not len(context_names) == 1 and context_names.pop() != traced_tensors_node.name:
+                "Error: exception detected in output_tensors declaration")
+
+        context_names = set(
+            [tensor.context for tensor in flattened_tensors.values()])
+        # Check that all tensors come from exactly one context matching the node name
+        if not (len(context_names) == 1 and next(iter(context_names)) == traced_tensors_node.name):
             _get_logger().error(
-                f"Error: expected all context names to match the node name: {node_name}"
+                f"Error: expected all context names to match the node name: {traced_tensors_node.name}"
                 f" but detected the following context names: {context_names}")
             raise Exception(
-                "Error: exeption detected in output_tensors declaration")
-        
+                "Error: exception detected in output_tensors declaration")
+
+        # process static outputs (constant tensors that should be returned but aren't derived from inputs)
+        if static_outputs is not None:
+            static_outputs_changed = False
+            if not isinstance(static_outputs, dict):
+                static_outputs_changed = True
+                static_outputs = {'static_output': static_outputs}
+
+            flattened_static_outputs = flatten_io_structure(static_outputs, '')
+
+            if static_outputs_changed:
+                _get_logger().warning(f"Warning: no tensor name provided for static_outputs in node {node_name}\n"
+                                      "Assuming default tensor name")
+
+            wrapped_static_outputs = traced_tensors_node.create_static_tensors(
+                flattened_static_outputs)
+
+            # Merge with traced outputs
+            flattened_tensors = {**flattened_tensors, **wrapped_static_outputs}
+
+        export_with = None if self.dry_run else kwargs.get("export_with", None)
         traced_tensors_node.compile_trace(flattened_tensors,
-                                   backend=kwargs.get("export_with", None),
-                                   backend_params=kwargs.get("backend_params", {}))
+                                          backend=export_with,
+                                          backend_params=kwargs.get("backend_params", {}))
+
+    def register_buffer(self, node_name: str, tensors: dict) -> dict:
+        """Register tensors as persistent buffers for a traced node.
+
+        The tensors become part of the compiled module's state and persist
+        across forward calls. The returned TracedData can be used in traced
+        computations, and modifications (via in-place ops) will be retained.
+
+        Args:
+            node_name: Name of the TracedTensorNode to register the buffers with
+            tensors: Dictionary mapping buffer names to tensors
+
+        Returns:
+            dict: Dictionary mapping buffer names to TracedData
+
+        Example:
+            ```python
+            class Module:
+                def __init__(self):
+                    self.values = torch.tensor([1, 2, 3])
+                    self.state = torch.tensor([0, 0, 0])
+
+                def run(self, input):
+                    # Make tensors participate in tracing
+                    buffers = annotate.register_buffer('my_node', {
+                        'values': self.values,
+                        'state': self.state
+                    })
+                    self.values = buffers['values']
+                    self.state = buffers['state']
+
+                    self.values[:] = input  # This assignment is now traced
+                    return self.values * 100
+            ```
+        """
+        if not ExportManager._interpret_graph:
+            return tensors  # Return unchanged when not tracing
+
+        self._verify_no_active_function_tracing()
+
+        if node_name not in self.nodes:
+            _get_logger().error(
+                f"Error: register_buffer called for node '{node_name}' but node not found. "
+                "Call input_tensors() first to create the node.")
+            raise Exception("Error: exception detected in register_buffer")
+
+        traced_node = self.nodes[node_name]
+
+        if not isinstance(traced_node, TracedTensorNode):
+            _get_logger().error(
+                f"Error: register_buffer only works with TracedTensorNode, "
+                f"but '{node_name}' is a {type(traced_node).__name__}")
+            raise Exception("Error: exception detected in register_buffer")
+
+        if not traced_node.is_tracing:
+            return tensors
+
+        # Flatten, validate, and wrap using create_static_tensors
+        flattened = flatten_io_structure(tensors, '')
+        return traced_node.create_static_tensors(flattened)
 
     def block(self, node_name, **kwargs):
         """Create a context manager for tracing a block of code in the computational graph.
@@ -330,7 +407,6 @@ class ExportManager:
             **kwargs: Additional parameters for node configuration. Supported options include:
                 - export_with: Backend to use for exporting the model.
                 - backend_params: Parameters for the export backend.
-                - use_trace: Whether to use tracing for model compilation.
                 - inputs: Input specifications for the node.
                 - outputs: Output specifications for the node.
                 - environment_constants: Constants to capture from the environment.
@@ -355,40 +431,58 @@ class ExportManager:
         if not ExportManager._interpret_graph:
             return self  # no-op context manager
 
-        node_context, name = self._setup_new_node(
-            node_name, BlockContextNode, **kwargs)
+        if node_name in self.nodes.keys():
+            new_node = False
+            name = node_name
+            node_context = self.nodes[node_name]
+        else:
+            new_node = True
+            node_context, name = self._setup_new_node(
+                node_name, BlockContextNode, **kwargs)
+            self.nodes[name] = node_context
         export_manager = self
-        skip_file = __file__.split('/')[-1]
 
         class BlockTraceContext:
             """Context manager for tracing a block of code."""
 
             def __enter__(self):
                 caller_frame = sys._getframe(1)
+                # Convert frame to namespace immediately
+                namespace = frame_to_namespace(caller_frame)
 
-                node_context.capture_inputs_from_frame(caller_frame)
+                if new_node:
+                    # First entry - set the executed_lines boundaries
+                    node_context.executed_lines.update({
+                        'filename': caller_frame.f_code.co_filename,
+                        'function_name': caller_frame.f_code.co_name,
+                        'min_line': caller_frame.f_lineno,
+                        'max_line': find_with_block_end(caller_frame.f_code.co_filename, caller_frame.f_lineno)
+                    })
+                    node_context.capture_inputs_from_namespace(namespace)
+                    node_context.snapshot_buffer_values(namespace)
+                    _get_logger().info(f"****Tracing started for {name}****")
+                    node_context.compile_trace()
+                else:
+                    # Re-entry - validate boundaries and inputs match
+                    node_context.validate_function_boundaries(caller_frame)
+                    node_context.validate_inputs_from_namespace(namespace)
+                # Acquire lock to prevent nested tracing and TracedTensor operations inside block
+                TracingLock().acquire()
 
-                _get_logger().info(f"****Tracing started for {name}****")
-
-                # Set up local tracing for the caller frame
-                if hasattr(caller_frame, 'f_trace_lines'):
-                    caller_frame.f_trace_lines = True
-                node_context.executed_lines['filename'] = caller_frame.f_code.co_filename
-                node_context.executed_lines['function_name'] = caller_frame.f_code.co_name
-                node_context.executed_lines['min_line'] = caller_frame.f_lineno
-                node_context.executed_lines['max_line'] = caller_frame.f_lineno
-
-                trace_fn = node_context.create_trace_function(skip_file)
-                export_manager._start_tracing(caller_frame, trace_fn)
                 return self
 
             def __exit__(self, exc_type, exc_value, traceback):
-                export_manager._stop_tracing(name, node_context)
-
-                node_context.compile_trace()
-                node_context.capture_outputs_from_frame(sys._getframe(1))
-                _get_logger().info(
-                    f"****Tracing stopped for {node_context.name}****\n\n")
+                TracingLock().release()
+                # Convert frame to namespace for output capture
+                output_namespace = frame_to_namespace(sys._getframe(1))
+                if new_node:
+                    _get_logger().info(
+                        f"****Tracing stopped for {node_context.name}****\n\n")
+                    node_context.capture_outputs_from_namespace(
+                        output_namespace)
+                else:
+                    node_context.validate_outputs_from_namespace(
+                        output_namespace)
 
         return BlockTraceContext()
 
@@ -412,7 +506,6 @@ class ExportManager:
                   function's name.
                 - export_with: Backend to use for exporting the model.
                 - backend_params: Parameters for the export backend.
-                - use_trace: Whether to use tracing for model compilation.
                 - inputs: Input specifications for the node.
                 - outputs: Output specifications for the node.
                 - environment_constants: Constants to capture from the environment.
@@ -439,40 +532,79 @@ class ExportManager:
                 if not ExportManager._interpret_graph:
                     return func(*args, **kwargs)
 
-                node_context, node_name = self._setup_new_node(
-                    name, FunctionDecoratorNode, **params)
+                # Check if this is a re-entry
+                if name in self.nodes:
+                    new_node = False
+                    node_context = self.nodes[name]
+                else:
+                    new_node = True
+                    node_context, _ = self._setup_new_node(
+                        name, FunctionDecoratorNode, **params)
+                    self.nodes[name] = node_context
 
-                _get_logger().info(f"****Tracing started for {name}****")
-                node_context.inspect_function_inputs(
-                    func, args, kwargs)
-                # tracing requires max and min lines to be configured already so this needs to be run before tracing
-                node_context.compile_trace(func)
+                caller_namespace = frame_to_namespace(sys._getframe(1))
 
-                # this tracing step captures the input and output frames
-                trace_fn = node_context.create_trace_function(
-                    __file__.split('/')[-1])
-                self._start_tracing(sys._getframe(1), trace_fn)
+                if new_node:
+                    _get_logger().info(f"****Tracing started for {name}****")
+                    sig = inspect.signature(func)
+                    bound_args = sig.bind(*args, **kwargs)
+                    bound_args.apply_defaults()
+
+                    node_context.inspect_function_inputs(func, args, kwargs)
+                    # Build merged namespace: caller frame + bound function arguments
+                    # This allows capture and snapshot to look up 'self' and other function
+                    # parameters that wouldn't be in the caller's frame.
+                    input_namespace = {
+                        **caller_namespace, **bound_args.arguments}
+                    # For bound methods, 'self' is not in bound_args (it's already bound)
+                    # We need to explicitly add it from the method's __self__ attribute
+                    if hasattr(func, '__self__'):
+                        input_namespace['self'] = func.__self__
+                    node_context.capture_inputs_from_namespace(input_namespace)
+                    # Sets up function boundaries - required before tracing
+                    node_context.compile_trace(func)
+                    # Use the same namespace (with 'self' if bound method) for buffer/constant lookup
+                    node_context.snapshot_buffer_values(input_namespace)
+
+                    trace_fn = node_context.create_trace_function(
+                        __file__.split('/')[-1], entry_hook=None)
+                else:
+                    node_context.validate_function_boundaries(func)
+                    node_context.validate_function_inputs(func, args, kwargs)
+                    # No entry_hook on re-entry - only need to capture output_namespace
+                    trace_fn = node_context.create_trace_function(
+                        __file__.split('/')[-1], entry_hook=None)
+
+                # Start sys.settrace to capture namespaces (and run entry_hook on new_node)
+                sys._getframe(1).f_trace = trace_fn
+
+                # Acquire lock to prevent nested tracing and TracedTensor operations
+                TracingLock().acquire()
+                sys.settrace(trace_fn)
 
                 try:
+                    ##### run the actual function #########
                     result = func(*args, **kwargs)
-                except Exception as e:
-                    raise e
+                    #### run the actual function #########
                 finally:
-                    self._stop_tracing(
-                        node_name, node_context)
-                    if name not in self.nodes.keys():
-                        _get_logger().error(
-                            f"Error: Tracing stopped for {name} but node not found in nodes dictionary")
-                        raise Exception("Error: in annotating method")
-                    node_context = self.nodes[name]
+                    sys.settrace(None)
+                    TracingLock().release()
+
+                if new_node:
                     _get_logger().info(
                         f"****Tracing stopped for {node_context.name}****\n\n")
+                    node_context.inspect_function_outputs(func, result)
+                    # capture outputs from the namespace for custom returns (declared via outputs=[...])
+                    if node_context.output_namespace is not None:
+                        node_context.capture_outputs_from_namespace(
+                            node_context.output_namespace)
+                else:
+                    node_context.validate_function_outputs(func, result)
+                    # validate outputs from namespace for declared outputs=[...]
+                    if node_context.output_namespace is not None:
+                        node_context.validate_outputs_from_namespace(
+                            node_context.output_namespace)
 
-                node_context.inspect_function_outputs(func, result)
-                # capture outputs from the frame for custom returns
-                if node_context.output_frame is not None:
-                    node_context.capture_outputs_from_frame(
-                        node_context.output_frame)
                 return result
             return wrapper
         return decorator
@@ -485,7 +617,8 @@ class ExportManager:
         if not ExportManager._interpret_graph:
             return
         if TracingLock().is_active:
-            raise Exception("Error: detected calling mirror_leapp_tags while tracing a function/block. this function is only valid outside of nodes")
+            raise Exception(
+                "Error: detected calling mirror_leapp_tags while tracing a function/block. this function is only valid outside of nodes")
         try:
             if not verify_data_exact_match(source, target):
                 _get_logger().error(
@@ -501,7 +634,9 @@ class ExportManager:
         _get_logger().section(
             f"Compiling graph parameters for {len(self.nodes)} nodes")
         models = {"models": {}}
-        for node in self.nodes.values():
+        nodes_to_describe = sorted(
+            self.nodes.values(), key=lambda x: x.node_index)
+        for node in nodes_to_describe:
             _get_logger().info(f"Compiling parameters for {node.name}")
             description = node.get_description()
             if 'parameters' in description and 'model_path' in description['parameters']:
@@ -537,7 +672,8 @@ class ExportManager:
     #########################################################
     # graph compilation
     #########################################################
-    def compile_graph(self, visualize=True, merge_nodes: MergeCfgEnum = MergeCfgEnum.NO_MERGE):
+    def compile_graph(self, visualize=True, verbose=None, merge_nodes: MergeCfgEnum = MergeCfgEnum.NO_MERGE,
+                      validate: bool = True, rtol: float = 1e-3, atol: float = 1e-5, strict=True):
         """Compile and save the computational graph from traced nodes.
 
         This method performs the complete pipeline of compiling traced nodes into exportable
@@ -575,17 +711,22 @@ class ExportManager:
             - Visualization errors are logged but don't stop the compilation process.
         """
         # compile models first before input name reconciliation
-        self.compile_models()
+        if verbose is not None:
+            _get_logger().set_verbose(verbose)
+        
+        if not self.dry_run:        
+            self.compile_models()
 
         # builds the graph connections. this may change input and output names
         if not isinstance(merge_nodes, MergeCfgEnum):
             raise Exception(
                 f"Error: merge_nodes must be an instance of MergeCfgEnum, got {type(merge_nodes)}")
-        graph = LeappGraph(self.nodes)
+        graph = LeappGraph(self.nodes, self.GRAPH_NAME)
         graph.merge_nodes(merge_nodes)
         pipeline = graph.get_full_pipeline_description()
 
-        self.save_models()
+        if not self.dry_run:
+            self.save_models()
 
         models = self.get_io_descriptions()
 
@@ -607,7 +748,7 @@ class ExportManager:
 
         system_info = get_system_info()
         with open(os.path.join(self.SAVE_PATH, f"{self.GRAPH_NAME}.yaml"), "w") as f:
-            yaml.dump(models, f)
+            yaml.dump(models, f, sort_keys=False)
             f.write("\n")  # Add a newline separator
             yaml.dump(pipeline, f)
             f.write("\n")
@@ -619,3 +760,191 @@ class ExportManager:
         # this is **ONLY USED FOR TESTING**
         self.detected_nodes = models['models']
         self.detected_pipeline = pipeline['pipeline']
+
+        # validate all the models in the compute graph
+        if validate:
+            return self.validate_all_models(rtol=rtol, atol=atol, strict=strict)
+
+        return True
+
+    def validate_all_models(self, rtol: float = 1e-3, atol: float = 1e-5, strict: bool = True):
+        """Validate all exported models by comparing computed outputs against captured outputs.
+
+        This method runs each compiled model with its captured input values and verifies
+        that the outputs match the captured output values within the specified tolerances.
+
+        Args:
+            rtol (float): Relative tolerance for torch.allclose comparison. Default: 1e-3
+            atol (float): Absolute tolerance for torch.allclose comparison. Default: 1e-5
+
+        Returns:
+            dict: A dictionary mapping node names to validation results:
+                - True: All outputs matched within tolerance
+                - False: At least one output did not match
+                - Exception object: If model execution failed
+
+        Raises:
+            Exception: If called before compile_models() has been run.
+
+        Example:
+            >>> annotate.start(name="my_graph")
+            >>> # ... run your code ...
+            >>> annotate.stop()
+            >>> annotate.compile_graph()
+            >>> results = annotate.validate_all_models()
+            >>> assert all(results.values()), "Some models failed validation"
+        """
+
+        if not self.nodes:
+            _get_logger().error("No nodes to validate")
+            return {}
+
+        results = {}
+
+        _get_logger().section(f"Validating {len(self.nodes)} models")
+
+        for node_name, node in self.nodes.items():
+
+            _get_logger().info(f"Validating {node_name}...")
+
+            try:
+                # Check that model has been compiled
+                if node.compiled_model is None:
+                    _get_logger().warning(f"Model {node_name} does not have a compiled model. "
+                                          "Skipping validation.")
+                    # model wasn't provided but we will skip validation
+                    results[node_name] = True
+                    continue
+
+                # 1. Extract input values from TensorDescriptions
+                # The compiled model expects flat tensor inputs in order
+                input_values = [
+                    tensor_desc.value for tensor_desc in node.inputs]
+
+                # 3. Run the compiled model
+                with torch.no_grad():
+                    exported_outputs = node.compiled_model(*input_values)
+
+                # 4. Normalize outputs to tuple for consistent handling
+                if not isinstance(exported_outputs, tuple):
+                    exported_outputs = (exported_outputs,)
+
+                # 5. Extract source code output values
+                source_outputs = tuple(
+                    tensor_desc.value for tensor_desc in node.outputs)
+
+                # 6. Validate output count matches
+                if len(exported_outputs) != len(source_outputs):
+                    _get_logger().error(
+                        f"{node_name}: Output count mismatch - "
+                        f"got {len(exported_outputs)}, expected {len(source_outputs)}")
+                    results[node_name] = True  # the model wasn't provided
+                    continue
+
+                # 7. Compare each output tensor
+                all_match = True
+                for idx, (exported, source) in enumerate(zip(exported_outputs, source_outputs)):
+                    output_name = node.outputs[idx].name if idx < len(
+                        node.outputs) else f"output_{idx}"
+
+                    # Ensure tensors are on the same device for comparison
+                    if exported.device != source.device:
+                        exported = exported.to(source.device)
+
+                    # Check for NaN/Inf values
+                    exported_nan = torch.isnan(exported).sum().item()
+                    exported_inf = torch.isinf(exported).sum().item()
+                    source_nan = torch.isnan(source).sum().item()
+                    source_inf = torch.isinf(source).sum().item()
+                    
+                    if exported_nan > 0 or exported_inf > 0 or source_nan > 0 or source_inf > 0:
+                        all_match = False
+                        num_elements = exported.numel()
+                        _get_logger().error(
+                            f"{node_name}/{output_name}: NaN/Inf detected!")
+                        if exported_nan > 0:
+                            _get_logger().error(
+                                f"  Exported has {exported_nan}/{num_elements} NaN values ({100*exported_nan/num_elements:.3f}%)")
+                        if exported_inf > 0:
+                            _get_logger().error(
+                                f"  Exported has {exported_inf}/{num_elements} Inf values ({100*exported_inf/num_elements:.3f}%)")
+                        if source_nan > 0:
+                            _get_logger().warning(
+                                f"  Source has {source_nan}/{num_elements} NaN values ({100*source_nan/num_elements:.3f}%)")
+                        if source_inf > 0:
+                            _get_logger().warning(
+                                f"  Source has {source_inf}/{num_elements} Inf values ({100*source_inf/num_elements:.3f}%)")
+                        continue
+
+                    if not torch.allclose(exported, source, rtol=rtol, atol=atol):
+                        all_match = False
+                        diff = (exported - source).abs()
+                        diff_flat = diff.flatten().float()
+                        
+                        # Basic stats
+                        max_diff = diff.max().item()
+                        mean_diff = diff.mean().item()
+                        
+                        # Percentile differences
+                        percentiles = torch.tensor([0.50, 0.75, 0.90, 0.99, 0.995], device=diff_flat.device)
+                        pct_values = torch.quantile(diff_flat, percentiles)
+                        p50, p75, p90, p99, p995 = pct_values.tolist()
+                        
+                        # Tensor value ranges
+                        source_min, source_max = source.min().item(), source.max().item()
+                        exported_min, exported_max = exported.min().item(), exported.max().item()
+                        
+                        log_path = _get_logger().path
+                        _get_logger().error(
+                            f"{node_name}/{output_name}: Mismatch detected (rtol={rtol}, atol={atol}). Please check {log_path} for more details.")
+                        _get_logger().info(
+                            f"  Source shape: {source.shape}, dtype: {source.dtype}")
+                        _get_logger().info(
+                            f"  Exported shape: {exported.shape}, dtype: {exported.dtype}")
+                        _get_logger().info(
+                            f"  Source range:   [{source_min:.6e}, {source_max:.6e}]")
+                        _get_logger().info(
+                            f"  Exported range: [{exported_min:.6e}, {exported_max:.6e}]")
+                        _get_logger().info(
+                            f"  Diff stats: max={max_diff:.6e}, mean={mean_diff:.6e}")
+                        _get_logger().info(
+                            f"  Diff percentiles: p50={p50:.6e}, p75={p75:.6e}, p90={p90:.6e}, p99={p99:.6e}, p995={p995:.6e}")
+
+                results[node_name] = all_match
+
+                if all_match:
+                    _get_logger().info(f"  ✓ {node_name} passed validation")
+
+            except Exception as e:
+                _get_logger().error(
+                    f"{node_name}: Validation failed with exception: {e}")
+                results[node_name] = e
+
+            finally:
+                # Free GPU memory after validating each model
+                # Delete the compiled model (validation is the last step)
+                node.delete_compiled_model()
+                # Clear CUDA cache to ensure GPU memory is released
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+        # Print summary
+        _get_logger().section("Validation Summary")
+        passed = sum(1 for v in results.values() if v is True)
+        failed = sum(1 for v in results.values() if v is False)
+        errors = sum(1 for v in results.values() if isinstance(v, Exception))
+
+        _get_logger().info(f"  Passed: {passed}/{len(results)}")
+        if failed > 0:
+            _get_logger().warning(f"  Failed: {failed}/{len(results)}")
+        if errors > 0:
+            _get_logger().error(f"  Errors: {errors}/{len(results)}")
+
+        if strict and (failed > 0 or errors > 0):
+            failed_nodes = [name for name,
+                            v in results.items() if v is not True]
+            raise Exception(
+                f"Model validation failed for {len(failed_nodes)} node(s): {failed_nodes}"
+            )
+
+        return results

@@ -24,11 +24,11 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
 
     def test_multiple_runs_of_same_graph(self):
         """tests the situation where the same graph is run multiple times"""
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def funcA(inputA: torch.Tensor):
             return inputA
 
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def funcC(inputB: torch.Tensor):
             return inputB+5.0
 
@@ -36,7 +36,7 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
         for i in range(10):
             outputA = funcA(torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32))
             with annotate.block(node_name="blockA", inputs=["outputA"],
-                                outputs=["outputB"], export_with="torch"):
+                                outputs=["outputB"], export_with="jit"):
                 outputB = outputA*2.
             outputC = funcC(outputB)
         annotate.stop()
@@ -114,15 +114,15 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
 
     def test_mirror_leapp_tags_with_inplace_assignment(self):
         """Test mirror_leapp_tags with in-place assignment operations between nodes"""
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def funcA(inputA: torch.Tensor):
             return inputA * 2.0
 
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def funcB(inputB: torch.Tensor):
             return inputB + 1.0
 
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def funcC(inputC: torch.Tensor):
             return inputC * 3.0
 
@@ -156,17 +156,17 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
                 annotate.mirror_leapp_tags(data, self._buffer)
                 return self._buffer
 
-            @annotate.method(export_with="torch")
+            @annotate.method(export_with="jit")
             def process(self, input_data: torch.Tensor):
                 # Process the buffered data
                 result = input_data * 2.0
                 return result
 
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def upstream_node(inputA: torch.Tensor):
             return inputA + 1.0
 
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def downstream_node(inputB: torch.Tensor):
             return inputB + 3.0
 
@@ -188,16 +188,16 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
 
     def test_mirror_leapp_tags_multiple_buffers(self):
         """Test mirror_leapp_tags with multiple buffers between nodes"""
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def funcA(inputA: torch.Tensor):
             return inputA, inputA + 1.0
 
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def funcB(inputB1: torch.Tensor, inputB2: torch.Tensor):
             # Process the inputs
             return inputB1 * 2.0, inputB2 * 3.0
 
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def funcC(inputC1: torch.Tensor, inputC2: torch.Tensor):
             return inputC1 + inputC2
 
@@ -227,19 +227,19 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
 
     def test_mirror_leapp_tags_preserves_tag_through_chain(self):
         """Test that mirror_leapp_tags preserves tags through a long chain of buffer operations"""
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def source_node(inputA: torch.Tensor):
             return inputA * 2.0
 
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def process_node1(inputB: torch.Tensor):
             return inputB + 1.0
 
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def process_node2(inputC: torch.Tensor):
             return inputC * 3.0
 
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def sink_node(inputD: torch.Tensor):
             return inputD
 

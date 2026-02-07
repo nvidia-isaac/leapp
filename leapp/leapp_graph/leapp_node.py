@@ -15,17 +15,14 @@
 # limitations under the License.
 #
 import collections
+import functools
+import os
 
 import torch
-from leapp.utils import (CompactYamlList,
-                         CompactYamlDict,
-                         resolve_tensor_descriptions_to_names,
-                         describe_io,
-                         tag_tensor,)
-from leapp.leapp_graph.traced_tensor import TracedTensor
+from leapp.utils import describe_io, tag_tensor
+from leapp.leapp_graph.datatypes import is_tracable_tensor_type
 from leapp.backends.export_backend import NoneExportBackend
 from leapp._logging import _get_logger
-import functools
 
 
 class LeappNode():
@@ -60,14 +57,18 @@ class LeappNode():
         self.name = name
         self.node_index = node_index
 
+        # Attributes expected by export backends (subclasses may override)
+        self.register_buffers = set()
+        self.environment_constants = set()
+
         # model settings
         self._model_captured = False
-        self.compiled_model = None
         self.model_path = None
         self.md5sum = None
         self.sha256sum = None
         self.model_device = None
         self.export_backend = NoneExportBackend(self, {})
+        self.backend = None
 
         # i/o settings
         self.inputs = []
@@ -81,36 +82,44 @@ class LeappNode():
     def captured(self):
         # this is defaulted to False. the compile_trace method should set this to true
         return self._model_captured
+    
+    @property
+    def compiled_model(self):
+        if self.export_backend is None:
+            return None
+        if self.export_backend.compiled_model is None:
+            return None
+        return self.export_backend.compiled_model
+        # assert self.export_backend is not None, f"Error: {self.name} has no export backend, please setup the backend first"
+        # assert self.export_backend.compiled_model is not None, f"Error: {self.name} has no compiled model, please compile the model first"
+        # return self.export_backend.compiled_model
+    
+    @property
+    def compiled_module(self):
+        if self.export_backend is None:
+            return None
+        if self.export_backend.compiled_module is None:
+            return None
+        return self.export_backend.compiled_module
+        # assert self.export_backend is not None, f"Error: {self.name} has no export backend, please setup the backend first"
+        # assert self.export_backend.compiled_module is not None, f"Error: {self.name} has no compiled module, please compile the model first"
+        # return self.export_backend.compiled_module
+    
+    def delete_compiled_model(self):
+        if self.export_backend is None:
+            return
+        if self.export_backend.compiled_model is not None:
+            del self.export_backend.compiled_model
+        if self.export_backend.compiled_module is not None:
+            del self.export_backend.compiled_module
 
     def get_description(self):
         # dynamically generate i/o descriptions depending on need
         # Directly use the TensorDescription objects in self.inputs
         input_descriptions = [input.dict() for input in self.inputs]
 
-        # Resolve ParameterFormat objects in input_formats to their string names
-        # input_formats is a list of ParameterFormat objects, resolve each one
-        resolved_input_formats = [resolve_tensor_descriptions_to_names(param_format)
-                                  for param_format in self.input_formats]
-        input_formats = CompactYamlList(resolved_input_formats)
-
         # Directly use the TensorDescription objects in self.outputs
         output_descriptions = [output.dict() for output in self.outputs]
-
-        # Resolve ParameterFormat objects in output_formats to their string names
-        # output_formats is a list of ParameterFormat objects, resolve each one
-        resolved_output_formats = [resolve_tensor_descriptions_to_names(param_format)
-                                   for param_format in self.output_formats]
-
-        # Handle single vs multiple outputs
-        if len(resolved_output_formats) == 1:
-            output_formats = resolved_output_formats[0]
-        else:
-            output_formats = resolved_output_formats
-
-        if isinstance(output_formats, list):
-            output_formats = CompactYamlList(output_formats)
-        elif isinstance(output_formats, dict):
-            output_formats = CompactYamlDict(output_formats)
 
         description = {}
         description['inputs'] = input_descriptions
@@ -122,37 +131,37 @@ class LeappNode():
             'device': self.model_device,
             'backend': self.get_backend(),
         }
-        # description['formatting'] = {
-        #     'input_format': input_formats,
-        #     'output_format': output_formats,
-        # }
 
         return description
 
-    def setup_backend(self, backend, backend_params, use_trace=False):
-        if backend == "torch":
-            if use_trace:
-                backend = "torch-trace"
-            else:
-                backend = "torch-script"
+    def setup_backend(self, backend, backend_params):
+        self._create_backend(backend, backend_params)
+
+    def _create_backend(self, backend, backend_params):
+        available_backends = ["jit-script", "jit-trace", "onnx-dynamo", "onnx-torchscript"]
         if backend is None:
+            self.backend = "None"
             self.export_backend = NoneExportBackend(
                 self, backend_params)
-        elif backend == "torch":
-            from leapp.backends.torch_export_backend import TorchExportBackend
-            self.export_backend = TorchExportBackend(
-                self, backend_params)
-        elif backend == "torch-script":
+        elif backend == "jit-script" or backend == "jit": # default jit export method
+            self.backend = "jit-script"
             from leapp.backends.torch_export_backend import TorchScriptExportBackend
             self.export_backend = TorchScriptExportBackend(
                 self, backend_params)
-        elif backend == "torch-trace":
+        elif backend == "jit-trace":
+            self.backend = "jit-trace"
             from leapp.backends.torch_export_backend import TorchTraceExportBackend
             self.export_backend = TorchTraceExportBackend(
                 self, backend_params)
-        elif backend == "onnx":
-            from leapp.backends.onnx_export_backend import ONNXExportBackend
-            self.export_backend = ONNXExportBackend(
+        elif backend == "onnx-dynamo" or backend == "onnx": #default onnx export method
+            self.backend = "onnx-dynamo"
+            from leapp.backends.onnx_export_backend import ONNXDynamoExportBackend
+            self.export_backend = ONNXDynamoExportBackend(
+                self, backend_params)
+        elif backend == "onnx-torchscript":
+            self.backend = "onnx-torchscript"
+            from leapp.backends.onnx_export_backend import ONNXTorchScriptExportBackend
+            self.export_backend = ONNXTorchScriptExportBackend(
                 self, backend_params)
         elif backend == "cpp":
             raise Exception("C++ backend not implemented")
@@ -161,16 +170,15 @@ class LeappNode():
         else:
             raise Exception(
                 f"{self.name} Unexpected backend: {backend}, \n"
-                "please use one of the following: torch, onnx, cpp, py")
+                f"please use one of the following: {available_backends}")
 
     def save_model(self, save_path: str):
-        self.model_path, self.md5sum, self.sha256sum = self.export_backend.save(
-            save_path, self.compiled_model)
+        self.model_path, self.md5sum, self.sha256sum = self.export_backend.save(save_path)
         self.model_device = 'cuda'
 
     def compile_model(self):
         try:
-            self.compiled_model = self.export_backend.compile()
+            self.export_backend.compile()
         except Exception as e:
             _get_logger().error(f"Error compiling model {self.name}: {e}")
             raise e
@@ -178,19 +186,13 @@ class LeappNode():
     def get_backend(self):
         return self.export_backend.get_backed_model_type()
 
-    def get_compiled_model(self):
-        if self.compiled_model is None:
-            raise Exception(
-                f"Error: {self.name} has no compiled model, please export the model first")
-        return self.compiled_model
-
     def tag_data(self, tensor, tag):
         # the tag is the name of the tensor, with the node name prepended
         tag = self.name + '/' + tag + '/'
 
-        if isinstance(tensor, torch.Tensor):
-            if isinstance(tensor, TracedTensor):
-                tensor = tensor.tensor
+        if is_tracable_tensor_type(tensor):
+            # Tag the tensor directly (works for both TracedTensor and regular tensors)
+            # For TracedTensor, we tag it directly so the tag is preserved through operations
             tag_tensor(tensor, tag)
         elif isinstance(tensor, collections.abc.Mapping):
             for key, value in tensor.items():
@@ -223,13 +225,16 @@ class LeappNode():
     def add_output(self, outout_name, raw_output_name, output_value):
         io_descriptions, output_format = describe_io(
             outout_name, raw_output_name, output_value)
-        self._validate_and_add_to_list(io_descriptions, self.outputs, self.name)
+        self._validate_and_add_to_list(
+            io_descriptions, self.outputs, self.name)
+        # used to rebuild the nested i/o
         self.output_formats.append(output_format)
 
     def add_input(self, input_name, raw_input_name, input_value):
         io_descriptions, input_format = describe_io(
             input_name, raw_input_name, input_value)
         self._validate_and_add_to_list(io_descriptions, self.inputs, self.name)
+        # used to rebuild the nested i/o
         self.input_formats.append(input_format)
 
     @staticmethod
@@ -238,7 +243,7 @@ class LeappNode():
             if io_description.name_str == name:
                 return io_description
         return None
-    
+
     def validate_io_and_update_tags(self, io_name, raw_io_name, io_value, current_io_list):
         '''
         this is used for rerunning the the tracing. each time we run it we 
@@ -250,7 +255,8 @@ class LeappNode():
             if io_description.name_str in self.trimmed_inputs:
                 # we skip validation for inputs that are not used in the model
                 continue
-            existing_io_description = LeappNode.get_io_description_by_name(io_description.name_str, current_io_list)
+            existing_io_description = LeappNode.get_io_description_by_name(
+                io_description.name_str, current_io_list)
             if existing_io_description is None:
                 _get_logger().error(
                     f"Error: Reentering {self.name} with new i/o {io_description.name_str} but failed to find it in the current i/o list.\n"
@@ -267,7 +273,7 @@ class LeappNode():
                     f"This can happen if some dynamic behavior is not captured by the annotations"
                 )
                 raise Exception("Validation error when reentering node")
-            
+
             existing_io_description_dict = existing_io_description.dict()
             current_io_description_dict = io_description.dict()
 
@@ -278,13 +284,15 @@ class LeappNode():
                     f"This can happen if some dynamic behavior is not captured by the annotations"
                 )
                 raise Exception("Validation error when reentering node")
-    
+
     def validate_input_and_update_tags(self, input_name, raw_input_name, input_value):
-        self.validate_io_and_update_tags(input_name, raw_input_name, input_value, self.inputs)
+        self.validate_io_and_update_tags(
+            input_name, raw_input_name, input_value, self.inputs)
+
     def validate_output_and_update_tags(self, output_name, raw_output_name, output_value):
-        self.validate_io_and_update_tags(output_name, raw_output_name, output_value, self.outputs)
-    
-    
+        self.validate_io_and_update_tags(
+            output_name, raw_output_name, output_value, self.outputs)
+
     def change_input_name(self, old_name, new_name):
         _get_logger().warning(
             f"changing input name from {old_name} to {new_name} for model {self.name}")

@@ -24,28 +24,28 @@ from leapp import MergeCfgEnum
 class TestNodeMerging(LEAPPFunctionalTestBase):
 
     def test_combine_two_nodes_automatically(self):
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def funcA(inputA: torch.Tensor, inputA2: torch.Tensor):
             return inputA + inputA2
 
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def funcB(inputB: torch.Tensor):
             output1 = inputB * 2.0
             output2 = inputB * 3.0
             return output1, output2
 
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def funcC(inputC: torch.Tensor):
             a = inputC - 1.0
             b = inputC
             return a, b
 
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def funcD(inputD: torch.Tensor):
             a = inputD - 1.0
             return a
 
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def funcE(inputE: torch.Tensor):
             a = inputE + 1.0
             return a
@@ -76,19 +76,19 @@ class TestNodeMerging(LEAPPFunctionalTestBase):
             input_tensor, expected_output, expected_feedback_node_name1)
 
     def test_combine_four_nodes_automatically(self):
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def funcA(inputA: torch.Tensor):
             return inputA + 1.0
 
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def funcB(inputB: torch.Tensor):
             return inputB*2.0
 
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def funcC(inputC: torch.Tensor):
             return inputC*3.0
 
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def funcD(inputD: torch.Tensor):
             return inputD*4.0
 
@@ -114,19 +114,19 @@ class TestNodeMerging(LEAPPFunctionalTestBase):
 
     def test_combine_graph_with_feedback_automatically(self):
 
-        @annotate.method(export_with='torch')
+        @annotate.method(export_with="jit")
         def funcA(inputA: torch.Tensor, loop_back: torch.Tensor):
             return inputA + loop_back
 
-        @annotate.method(export_with='torch')
+        @annotate.method(export_with="jit")
         def funcB(inputB: torch.Tensor):
             return inputB * 2.0
 
-        @annotate.method(export_with='torch')
+        @annotate.method(export_with="jit")
         def funcC(inputC: torch.Tensor):
             return inputC + 1.0
 
-        @annotate.method(export_with='torch')
+        @annotate.method(export_with="jit")
         def funcD(inputD: torch.Tensor):
             return inputD/2.0
         input_tensor = torch.tensor([1.0, 1.0, 1.0])

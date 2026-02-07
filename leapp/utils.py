@@ -15,19 +15,45 @@
 # limitations under the License.
 #
 
-import torch
-import inspect
 import ast
-import re
-import textwrap
+import collections.abc
 import copy
+import inspect
 import os
 import sys
-import collections.abc
+import textwrap
 from dataclasses import dataclass
 from typing import Optional, Any, Dict, Tuple
-from leapp.leapp_graph.traced_tensor import TracedTensor
+
+import torch
+
 from leapp._logging import _get_logger
+from leapp.leapp_graph.datatypes import TracedData, TracedTensor
+
+# Re-export from datatypes for backwards compatibility
+from leapp.leapp_graph.datatypes import is_tracable_tensor_type  # noqa: F401
+
+def find_with_block_end(filename, start_lineno):
+    """Use AST to find the end line of the with block starting at start_lineno.
+    
+    This is deterministic and doesn't depend on runtime tracing behavior.
+    
+    Args:
+        filename: Path to the source file
+        start_lineno: Line number where the 'with' statement starts
+        
+    Returns:
+        The end line number of the with block, or None if not found
+    """
+    with open(filename, 'r') as f:
+        source = f.read()
+    
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.With, ast.AsyncWith)):
+            if node.lineno == start_lineno:
+                return node.end_lineno
+    return None
 
 
 def extract_source_from_line_range(executed_lines, context_name, is_function=False):
@@ -111,7 +137,7 @@ def extract_source_from_line_range(executed_lines, context_name, is_function=Fal
                     best_candidate.body[0], 'lineno', None)
                 if body_start_line is not None:
                     body_start_idx = body_start_line - 1
-                
+
                 # Extend end_idx to capture multiline statements
                 # Python's line tracer only fires once for multiline statements (e.g., dict comprehensions),
                 # so max_line may not include the closing brace. Use AST's end_lineno instead.
@@ -521,7 +547,7 @@ def extract_return_names(func):
 
         if len(return_statements) > 1:
             # Multiple return statements - log warning and intelligently merge
-            print(f"Warning: Function {func.__name__} has {len(return_statements)} return statements. "
+            _get_logger().warning(f"Warning: Function {func.__name__} has {len(return_statements)} return statements. "
                   f"This may cause unexpected behavior if the return statements return different "
                   f"data types, shapes, or dtypes.")
 
@@ -558,26 +584,9 @@ def extract_return_names(func):
             f"Error extracting return names from {func.__name__}, reverting to defaults: {e}")
         return ["output1"]
 
-
-def map_from_torch_dtype(notation, dtype):
-    if notation == "prefix":
-        map = {
-            #common dtypes
-            torch.float64: "kFloat64",
-            torch.float32: "kFloat32",
-            torch.float16: "kFloat16",
-            torch.int32: "kInt32",
-            torch.int64: "kInt64",
-            torch.uint8: "kUInt8",
-            torch.int8: "kInt8",
-            torch.bool: "kBool",
-
-            # other dtypes
-            torch.bfloat16: "kBFloat16",
-        }
-    elif notation == "python":
-        map = {
-            #common dtypes
+def get_dtype_maps():
+    return {
+        "python": {
             torch.float64: "float64",
             torch.float32: "float32",
             torch.float16: "float16",
@@ -586,18 +595,43 @@ def map_from_torch_dtype(notation, dtype):
             torch.uint8: "uint8",
             torch.int8: "int8",
             torch.bool: "bool",
-
-            # other dtypes
             torch.bfloat16: "bfloat16",
-        }
-    else:
+        },
+        "prefix": {
+            torch.float64: "kFloat64",
+            torch.float32: "kFloat32",
+            torch.float16: "kFloat16",
+            torch.int32: "kInt32",
+            torch.int64: "kInt64",
+            torch.uint8: "kUInt8",
+            torch.int8: "kInt8",
+            torch.bool: "kBool",
+            torch.bfloat16: "kBFloat16",
+        },
+    }
+
+def map_from_torch_dtype(notation, dtype):
+    maps = get_dtype_maps()
+    if notation not in maps:
         raise ValueError(f"Unsupported notation: {notation}")
-    
+    map = maps[notation]
+
     if dtype not in map:
-        raise ValueError(f"{dtype} tensors detected but not supported for export.")
-    
+        raise ValueError(
+            f"{dtype} tensors detected but not supported for export.")
+
     return map[dtype]
 
+def map_to_torch_dtype(string):
+    maps = get_dtype_maps()
+    # Create reverse mapping: string -> dtype
+    reverse_map = {dtype_str: dtype 
+                   for notation in maps.values() 
+                   for dtype, dtype_str in notation.items()}
+    
+    if string in reverse_map:
+        return reverse_map[string]
+    raise ValueError(f"Unsupported string: {string}")
 
 def flatten_io_structure(data, name_str):
     flat_data = {}
@@ -650,6 +684,9 @@ def describe_io_helper(data, name_str, dtype_notation):
         tag = None
         if hasattr(data, 'leapp_tag'):
             tag = data.leapp_tag
+        
+        if isinstance(data, TracedData):
+            data = data.tensor
 
         # Create TensorDescription dataclass instance
         tensor_desc = TensorDescription(
@@ -664,8 +701,7 @@ def describe_io_helper(data, name_str, dtype_notation):
         # Return as a list containing the dataclass (for now, keep compatibility)
         data_description = [tensor_desc]
         io_format = tensor_desc  # Plain string
-    elif isinstance(data, TracedTensor):
-        return describe_io_helper(data.tensor, name_str, dtype_notation)
+
     else:
         # For non-tensor data types
         data_desc = TensorDescription(
@@ -885,10 +921,10 @@ def safe_deepcopy(data):
     # this is used to deepcopy a complex data structure.
     # running safe deepcopy also unwraps the TracedTensor to the underlying tensor.
     if isinstance(data, torch.Tensor):
-        return data.clone()
-    elif isinstance(data, TracedTensor):
-        return data.tensor.clone()
-
+        cloned_data = data.clone()
+        if hasattr(data, 'leapp_tag'):
+            tag_tensor(cloned_data, data.leapp_tag)
+        return cloned_data
     elif isinstance(data, list):
         return [safe_deepcopy(item) for item in data]
     elif isinstance(data, dict):
@@ -897,38 +933,50 @@ def safe_deepcopy(data):
         return copy.deepcopy(data)
 
 
-def get_attribute_value_from_frame(frame, attr_name):
+def frame_to_namespace(frame):
+    """Convert a Python frame object to a namespace dictionary.
+    
+    Args:
+        frame: A Python frame object from sys._getframe() or similar
+        
+    Returns:
+        dict: A namespace combining globals and locals from the frame
+    """
+    return {**frame.f_globals, **frame.f_locals}
+
+
+def get_attribute_value_from_namespace(namespace, attr_name):
+    """Look up a variable (possibly dotted like 'self.counter') from a namespace dict.
+    
+    Args:
+        namespace: dict containing variables to look up
+        attr_name: Variable name, possibly dotted (e.g., 'self.counter', 'my_var')
+    
+    Returns:
+        tuple: (value, final_attr_name) where final_attr_name is the last part of dotted name
+    """
     if "." in attr_name:
         parts = attr_name.split(".")
         final_attr_name = parts[-1]
-        if parts[0] in frame.f_locals:
-            obj = frame.f_locals[parts[0]]
-        elif parts[0] in frame.f_globals:
-            obj = frame.f_globals[parts[0]]
-        else:
-            raise Exception(
-                f"Variable '{parts[0]}' not found in frame locals or globals")
-
+        if parts[0] not in namespace:
+            raise Exception(f"Variable '{parts[0]}' not found in namespace")
+        
+        obj = namespace[parts[0]]
         for attr in parts[1:]:
             try:
                 obj = getattr(obj, attr)
             except Exception as e:
                 raise Exception(
                     f"Error attempting to find {attr_name}, "
-                    f"failed to get attribute {attr}\n",
-                    e)
-
+                    f"failed to get attribute {attr}\n", e)
     else:
-        if attr_name in frame.f_locals:
-            obj = frame.f_locals[attr_name]
-        elif attr_name in frame.f_globals:
-            obj = frame.f_globals[attr_name]
-        else:
-            raise Exception(
-                f"Variable '{attr_name}' not found in frame locals or globals")
+        if attr_name not in namespace:
+            raise Exception(f"Variable '{attr_name}' not found in namespace")
+        obj = namespace[attr_name]
         final_attr_name = attr_name
 
     return obj, final_attr_name
+
 
 #########################################################
 # Tagged datatype
@@ -936,54 +984,53 @@ def get_attribute_value_from_frame(frame, attr_name):
 
 
 def tag_tensor(tensor, tag):
+    """Tag a tensor instance with a leapp_tag and wrap methods to preserve the tag.
+    
+    This binds wrapper methods to the specific tensor INSTANCE only.
+    Works with both torch.Tensor and numpy arrays (including TracedNpArray).
+    """
     if hasattr(tensor, 'leapp_tag'):
+        # Already tagged - just update the tag
         tensor.leapp_tag = tag
         return tensor
 
     tensor.leapp_tag = tag
-    tensor.value = lambda: tensor
 
-    # Helper function to copy custom attributes from source to target tensor
-    def _copy_custom_attrs(source, target):
-        """Copy all custom attributes from source tensor to target tensor."""
-        for attr_name in dir(source):
-            if not attr_name.startswith('_') and not hasattr(torch.Tensor, attr_name):
-                if hasattr(source, attr_name):
-                    setattr(target, attr_name, getattr(source, attr_name))
-        return target
+    # Methods to wrap depend on tensor type
+    # torch.Tensor: clone, detach, contiguous, cpu, cuda, to
+    # numpy.ndarray: copy (numpy's equivalent of clone)
+    if isinstance(tensor, torch.Tensor):
+        methods_to_wrap = ['clone', 'detach', 'contiguous', 'cpu', 'cuda', 'to']
+    else:
+        # For numpy arrays (including TracedNpArray), only wrap methods that exist
+        methods_to_wrap = ['copy']  # numpy's equivalent of clone
 
-    # Helper function to create a monkey-patched method wrapper
-    def _make_wrapper(method_name, docstring):
-        """Create a wrapper function that preserves custom attributes."""
+    for method_name in methods_to_wrap:
+        # Only wrap if the method exists on the tensor
+        if not hasattr(tensor, method_name):
+            continue
+        # Store the original bound method on the instance
         original_attr = f'_original_{method_name}'
+        if not hasattr(tensor, original_attr):
+            setattr(tensor, original_attr, getattr(tensor, method_name))
 
-        def wrapper(self, *args, **kwargs):
-            original_method = getattr(self, original_attr)
-            result = original_method(*args, **kwargs)
-            return _copy_custom_attrs(self, result)
+        def make_wrapper(mname, source_tensor):
+            """Create a wrapper that preserves leapp_tag on the result tensor."""
+            orig_attr = f'_original_{mname}'
 
-        wrapper.__doc__ = docstring
-        return wrapper
+            def wrapper(*args, **kwargs):
+                original_method = getattr(source_tensor, orig_attr)
+                result = original_method(*args, **kwargs)
+                # Tag the result tensor with the same tag (and wrap its methods too)
+                if hasattr(source_tensor, 'leapp_tag'):
+                    tag_tensor(result, source_tensor.leapp_tag)
+                return result
 
-    # List of methods to monkey patch
-    methods_to_patch = [
-        ('clone', 'Clone tensor while preserving leapp_tag and other custom attributes.'),
-        ('detach', 'Detach tensor while preserving leapp_tag and other custom attributes.'),
-        ('contiguous', 'Make tensor contiguous while preserving leapp_tag and other custom attributes.'),
-        ('cpu', 'Move tensor to CPU while preserving leapp_tag and other custom attributes.'),
-        ('cuda', 'Move tensor to CUDA while preserving leapp_tag and other custom attributes.'),
-    ]
+            return wrapper
 
-    # Apply monkey patches
-    for method_name, docstring in methods_to_patch:
-        original_attr = f'_original_{method_name}'
-        if not hasattr(torch.Tensor, original_attr):
-            # Save original method
-            setattr(torch.Tensor, original_attr,
-                    getattr(torch.Tensor, method_name))
-            # Replace with wrapper
-            setattr(torch.Tensor, method_name,
-                    _make_wrapper(method_name, docstring))
+        # Bind wrapper to this specific instance (shadows the class method)
+        setattr(tensor, method_name, make_wrapper(method_name, tensor))
+
     return tensor
 
 
@@ -1025,74 +1072,6 @@ def mirror_all_tensor_tags(source, target):
             mirror_all_tensor_tags(item, target[idx])
 
 
-def get_tagged_subclass(base_class, value, tag):
-    if tag is None:
-        return value
-
-    # special case for torch tensors:
-    if isinstance(value, torch.Tensor):
-        tag_tensor(value, tag)
-        return value
-    elif hasattr(base_class, '__module__') and base_class.__module__ == 'torch' and 'Tensor' in base_class.__name__:
-        tag_tensor(value, tag)
-        return value
-
-    # For mutable types, try to preserve reference by adding attribute directly
-    # This works for list, dict, set, bytearray, and other mutable collections
-    if base_class in (list, set, bytearray) or hasattr(value, '__dict__'):
-        try:
-            value.leapp_tag = tag
-            # Add a method to get the original type (no lambda needed for identity)
-            value.value = lambda: value
-            return value  # Preserves original reference
-        except (AttributeError, TypeError):
-            # Fall back to subclassing if direct attribute assignment fails
-            pass
-
-    def __new__(cls, value, tag=None):
-        # bool is not subclassable; fall back to int while preserving bool semantics
-        if base_class is bool:
-            obj = int.__new__(cls, 1 if bool(value) else 0)
-            obj.leapp_tag = tag
-            return obj
-        obj = base_class.__new__(cls, value)
-        obj.leapp_tag = tag
-        return obj
-
-    def __init__(self, value, tag=None):
-        # Ensure base __init__ doesn't see the 'leapp_tag' kwarg (important for dict)
-        if base_class is bool:
-            # No-op; int.__init__ ignores args but don't forward leapp_tag
-            return
-        try:
-            base_class.__init__(self, value)
-        except TypeError:
-            # Some immutables ignore __init__ or have different signatures; safely ignore
-            pass
-
-        self.base_class = base_class
-
-    def get_base_class(self):
-        if base_class is bool:
-            return bool(int(self))
-        return self.base_class(self)
-
-    # all other python base classes need to be wrapped in a TaggedBaseClass function
-    new_cls = type(
-        "Tagged" + base_class.__name__,
-        (int,) if base_class is bool else (base_class,),
-        {
-            '__new__': __new__,
-            '__init__': __init__,
-            'value': get_base_class,
-        }
-    )
-
-    new_class = new_cls(value, tag)
-
-    return new_class
-
-
 def get_relative_path(model_path, yaml_save_path):
     """
     Convert a single model path to be relative to the YAML file location.
@@ -1113,7 +1092,6 @@ def get_relative_path(model_path, yaml_save_path):
     except ValueError:
         # If relative path calculation fails (e.g., different drives on Windows), keep absolute path
         return model_path
-
 
 def get_system_info():
     import leapp

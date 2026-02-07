@@ -43,57 +43,8 @@ LEAPP provides three methods for marking nodes in your computational graph:
 - **Context Managers**: Use `with annotate.block()` to mark code blocks as nodes
 - **Traced Tensors**: Use `annotate.input_tensors()` and `annotate.output_tensors()` to programmatically define nodes by tracking tensor operations
 
-### Method 1: Decorator Pattern
 
-```python
-import torch
-from leapp import annotate
-
-@annotate.method(export_with="torch")
-def process_data(input_tensor):
-    # Your computation here
-    result = input_tensor * 2 + 1
-    return result
-
-# Start tracing
-annotate.start(name="my_graph")
-# Run your functions
-output = process_data(torch.randn(10))
-# Stop tracing and compile graph
-annotate.stop()
-annotate.compile_graph()
-```
-
-### Method 2: Context Manager Pattern
-
-```python
-import torch
-from leapp import annotate
-
-annotate.start(name="my_graph")
-
-# Example data
-raw_data = torch.randn(100, 10)
-model = torch.nn.Linear(64, 3)
-
-with annotate.block("preprocessing",
-                     inputs=["raw_data"],
-                     outputs=["processed_data"],
-                     export_with="torch"):
-    processed_data = raw_data.normalize()
-    processed_data = processed_data.reshape(-1, 64)
-
-with annotate.block("inference",
-                     inputs=["processed_data"],
-                     outputs=["predictions"],
-                     export_with="torch"):
-    predictions = model(processed_data)
-
-annotate.stop()
-annotate.compile_graph()
-```
-
-### Method 3: Traced Tensors Pattern
+### Method 1: Traced Tensors Pattern
 
 TracedTensors provide the most flexible approach, allowing you to programmatically capture tensor operations without decorators or context managers. This is especially useful for dynamic workflows or when integrating with existing code.
 
@@ -115,24 +66,69 @@ normalized_vel = joint_vel / 10.0
 combined = torch.cat([normalized_pos, normalized_vel])
 
 # Mark outputs and specify export format
-annotate.output_tensors({
+annotate.output_tensors('preprocessing', {
     'features': combined
-}, 'preprocessing', export_with="torch")
+}, export_with="jit")
 
 # Chain to another node - traced tensors automatically connect nodes
 features = annotate.input_tensors({'features': combined}, 'inference')
 predictions = features @ torch.randn(24, 3)  # Simple linear transform
-annotate.output_tensors({'predictions': predictions}, 'inference', export_with="onnx")
+annotate.output_tensors('inference', {'predictions': predictions}, export_with="onnx")
 
 annotate.stop()
 annotate.compile_graph()
 ```
 
-**Key features of Traced Tensors:**
-- Supports complex nested inputs (dicts, lists, tuples of tensors)
-- Automatically prunes unused inputs from the exported model
-- Works seamlessly with `@annotate.method()` and `annotate.block()` in the same graph
-- Supports both PyTorch and ONNX export backends
+### Method 2: Decorator Pattern
+
+```python
+import torch
+from leapp import annotate
+
+@annotate.method(export_with="jit")
+def process_data(input_tensor):
+    # Your computation here
+    result = input_tensor * 2 + 1
+    return result
+
+# Start tracing
+annotate.start(name="my_graph")
+# Run your functions
+output = process_data(torch.randn(10))
+# Stop tracing and compile graph
+annotate.stop()
+annotate.compile_graph()
+```
+
+### Method 3: Context Manager Pattern
+
+```python
+import torch
+from leapp import annotate
+
+annotate.start(name="my_graph")
+
+# Example data
+raw_data = torch.randn(100, 10)
+model = torch.nn.Linear(64, 3)
+
+with annotate.block("preprocessing",
+                     inputs=["raw_data"],
+                     outputs=["processed_data"],
+                     export_with="jit"):
+    processed_data = raw_data.normalize()
+    processed_data = processed_data.reshape(-1, 64)
+
+with annotate.block("inference",
+                     inputs=["processed_data"],
+                     outputs=["predictions"],
+                     export_with="jit"):
+    predictions = model(processed_data)
+
+annotate.stop()
+annotate.compile_graph()
+```
+
 
 ## API Reference
 
@@ -144,9 +140,20 @@ from leapp import annotate  # Singleton, export manager
 ```
 
 #### Flow Control methods
-- `start(name, save_path=".", verbose = False)`: Begin tracing mode with graph name
+- `start(name, save_path=".", verbose=False, dry_run=False, patch_numpy=True)`: Begin tracing mode with graph name
+  - `dry_run` (bool): If True, skips model compilation and export. This is used to verify graph structure and i/o. Defaults to False.
+  - `patch_numpy` (bool): If True, patches torch numpy functions for TracedTensor compatibility. Defaults to True but under some cases this is known to cause errors. If not needed try setting this to false.
 - `stop()`: End tracing mode
-- `compile_graph(visualize=True)`: Generate final graph and exports, set visualize to false to skip graph generation
+
+
+- `compile_graph(visualize=True, verbose=None, merge_nodes=MergeCfgEnum.NO_MERGE, validate=True, rtol=1e-3, atol=1e-5, strict=True)`: Generate final graph and exports
+  - `visualize` (bool): Generate graph visualization. Defaults to True.
+  - `verbose` (bool | None): Override verbose logging. Defaults to None (unchanged).
+  - `merge_nodes` (MergeCfgEnum): Node merging strategy — `NO_MERGE` (default), `MERGE_ALL`, or `MERGE_SEQUENTIAL`.
+  - `validate` (bool): If True, validates exported models against captured outputs. Defaults to True.
+  - `rtol` (float): Relative tolerance for validation. Defaults to 1e-3.
+  - `atol` (float): Absolute tolerance for validation. Defaults to 1e-5.
+  - `strict` (bool): If True, raises an exception when validation fails. Defaults to True.
 
 #### Annotations
 - `method(**params)`: Decorator for functions/methods

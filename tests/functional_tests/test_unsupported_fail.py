@@ -65,7 +65,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         except Exception as e:
             annotate.stop()
             first_line = str(e).split('\n')[0]
-            expected = "Error: funcA seen twice but detected lines do not match"
+            expected = "Error: funcA seen twice but block boundaries do not match"
             self.assertEqual(first_line, expected)
             return
 
@@ -103,11 +103,11 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
 
     def test_mirror_leapp_tags_data_mismatch(self):
         """Test mirror_leapp_tags with various data mismatch scenarios"""
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def funcA(inputA: torch.Tensor):
             return inputA * 2.0
 
-        @annotate.method(export_with="torch")
+        @annotate.method(export_with="jit")
         def funcB(inputA: torch.Tensor):
             return inputA, inputA + 1.0
 
@@ -218,7 +218,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             def inner_func(inputA: torch.Tensor):
                 return inputA + tensors
             output_tensors = inner_func(input)
-            annotate.output_tensors({'outputA': output_tensors}, 'func', export_with="torch")
+            annotate.output_tensors('func', {'outputA': output_tensors}, export_with="jit")
             annotate.stop()
             self.fail("Expected an exception")
         except Exception as e:
@@ -234,7 +234,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             tensors = annotate.input_tensors({'inputA': torch.tensor([1.0, 2.0, 3.0])}, 'func')
             tensors += 100
             output_tensors = inner_func(tensors)
-            annotate.output_tensors({'outputA': output_tensors}, 'func', export_with="torch")
+            annotate.output_tensors('func', {'outputA': output_tensors}, export_with="jit")
             annotate.stop()
             self.fail("Expected an exception")
         except Exception as e:
@@ -249,7 +249,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             tensor1 = annotate.input_tensors({'inputA': torch.tensor([1.0, 2.0, 3.0])}, 'func1')
             tensor2 = annotate.input_tensors({'inputB': torch.tensor([1.0, 2.0, 3.0])}, 'func2')
             output_tensors = tensor1 + tensor2
-            annotate.output_tensors({'outputA': output_tensors}, 'func1', export_with="torch")
+            annotate.output_tensors('func1', {'outputA': output_tensors}, export_with="jit")
             annotate.stop()
             self.fail("Expected an exception")
         except Exception as e:
@@ -348,7 +348,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
                 tensor1 += i
                 output_tensors.append(tensor1)
 
-            annotate.output_tensors({'outputs': output_tensors}, 'func_combined', export_with="torch")
+            annotate.output_tensors('func_combined', {'outputs': output_tensors}, export_with="jit")
 
             annotate.stop()
             annotate.compile_graph(visualize=False)
@@ -375,13 +375,52 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             untraced_output = torch.tensor([4.0, 5.0, 6.0])
             
             # This should fail because untraced_output is not a TracedTensor
-            annotate.output_tensors({'output': untraced_output}, 'func', export_with="torch")
+            annotate.output_tensors('func', {'output': untraced_output}, export_with="jit")
             
             annotate.stop()
             self.fail("Expected an exception")
             
         except Exception as e:
-            self.assertIn("Error: exeption detected in output_tensors declaration", str(e))
+            self.assertIn("output_tensors declaration", str(e))
+
+    def test_traced_tensor_as_static_output_fails(self):
+        """Test that using a TracedTensor (derived from input) as a static output fails.
+        
+        Static outputs should be constant tensors that are NOT derived from inputs.
+        If a user accidentally marks a computed tensor as static, it should error.
+        """
+        try:
+            annotate.start(name=self.TEST_GRAPH_NAME)
+            
+            # Create input and trace it
+            input_tensor = torch.tensor([1.0, 2.0, 3.0])
+            traced_input = annotate.input_tensors({'input': input_tensor}, 'func')
+            
+            # Compute a tensor from the traced input
+            computed_tensor = traced_input + 1.0  # This is a TracedTensor
+            
+            # Create a proper output
+            proper_output = traced_input * 2.0
+            
+            # User error: trying to use a TracedTensor as a static output
+            # This should fail because static outputs must be raw tensors
+            annotate.output_tensors(
+                'func',
+                {'output': proper_output},
+                static_outputs={'bad_static': computed_tensor},  # Error: TracedTensor not allowed
+                export_with="jit"
+            )
+            
+            annotate.stop()
+            self.fail("Expected an exception when using TracedTensor as static output")
+            
+        except Exception as e:
+            error_msg = str(e)
+            # Should mention that static outputs cannot be TracedTensors
+            self.assertTrue(
+                "output_tensors declaration" in error_msg,
+                f"Expected error about output_tensors declaration, got: {error_msg}"
+            )
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
