@@ -25,7 +25,7 @@ various formats including PyTorch JIT, ONNX, and generate visualization and YAML
 """
 
 from .export_manager import ExportManager
-from .enums import MergeCfgEnum
+from .utils.enums import MergeCfgEnum
 # Create a global annotate instance that's ready to use
 annotate = ExportManager()
 

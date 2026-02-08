@@ -19,7 +19,8 @@ import functools
 import os
 
 import torch
-from leapp.utils import describe_io, tag_tensor
+from leapp.utils.tensor_description import describe_io
+from leapp.utils.utils import tag_tensor
 from leapp.leapp_graph.datatypes import is_tracable_tensor_type
 from leapp.backends.export_backend import NoneExportBackend
 from leapp._logging import _get_logger

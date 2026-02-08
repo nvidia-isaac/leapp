@@ -16,7 +16,7 @@
 #
 import unittest
 import torch
-from leapp.utils import describe_io
+from leapp.utils.tensor_description import describe_io
 
 
 class TestPackedTensorExpr(unittest.TestCase):

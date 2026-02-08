@@ -33,18 +33,16 @@ from leapp.leapp_graph.datatypes import (
     remove_traced_tensor_patches,
 )
 from leapp.leapp_graph.block_context_node import BlockContextNode
-from leapp.utils import frame_to_namespace
-from leapp.enums import MergeCfgEnum
+from leapp.utils.utils import frame_to_namespace
+from leapp.utils.enums import MergeCfgEnum
 from leapp.tracing_lock import TracingLock
 
-from .utils import (CompactYamlList,
-                    CompactYamlDict,
-                    find_with_block_end,
-                    get_relative_path,
-                    get_system_info,
-                    verify_data_exact_match,
-                    mirror_all_tensor_tags,
-                    flatten_io_structure)
+from leapp.utils.tensor_description import (verify_data_exact_match,
+                                             flatten_io_structure)
+from leapp.utils.utils import (find_with_block_end,
+                                get_relative_path,
+                                get_system_info,
+                                mirror_all_tensor_tags)
 
 
 class ExportManager:
@@ -77,17 +75,6 @@ class ExportManager:
 
             # tracetime variables
             self.nodes = {}
-
-            # Set up custom YAML representers before writing any YAML
-            def represent_shape_list(dumper, data):
-                return dumper.represent_sequence('tag:yaml.org,2002:seq', data, flow_style=True)
-
-            def represent_shape_dict(dumper, data):
-                return dumper.represent_mapping('tag:yaml.org,2002:map', data, flow_style=True)
-
-            # Register the custom representers
-            yaml.add_representer(CompactYamlList, represent_shape_list)
-            yaml.add_representer(CompactYamlDict, represent_shape_dict)
 
             ExportManager._initialized = True
 

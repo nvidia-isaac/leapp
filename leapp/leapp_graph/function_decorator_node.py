@@ -15,7 +15,7 @@
 # limitations under the License.
 #
 
-from leapp.utils import (
+from leapp.utils.utils import (
     extract_return_names,
     frame_to_namespace,
 )

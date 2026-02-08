@@ -5,7 +5,7 @@ import textwrap
 import re
 from torch.nn.modules.lazy import LazyModuleMixin
 from leapp._logging import _get_logger
-from leapp.utils import extract_source_from_line_range
+from leapp.utils.utils import extract_source_from_line_range
 
 from typing import Tuple, List, Dict
 

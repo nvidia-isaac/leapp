@@ -15,7 +15,7 @@
 # limitations under the License.
 #
 
-from leapp.utils import (
+from leapp.utils.utils import (
     safe_deepcopy,
     extract_source_from_line_range,
     find_with_block_end,

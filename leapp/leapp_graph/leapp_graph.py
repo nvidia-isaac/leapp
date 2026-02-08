@@ -15,8 +15,8 @@
 # limitations under the License.
 #
 
-from leapp.utils import CompactYamlList
-from leapp.enums import MergeCfgEnum
+from leapp.utils.tensor_description import CompactYamlList
+from leapp.utils.enums import MergeCfgEnum
 from leapp._logging import _get_logger
 from .graph_gui import visualize_graph
 from .combined_node import get_combined_node

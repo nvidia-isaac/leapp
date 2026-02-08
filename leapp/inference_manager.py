@@ -4,7 +4,7 @@ import torch
 import json
 from typing import Dict
 
-from leapp.utils import map_to_torch_dtype
+from leapp.utils.tensor_description import map_to_torch_dtype
 
 from leapp.backends.torch_export_backend import TorchExportBackend
 from leapp.backends.onnx_export_backend import ONNXExportBackend

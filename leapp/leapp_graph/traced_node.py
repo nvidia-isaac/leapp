@@ -9,7 +9,7 @@ from leapp.leapp_graph.datatypes import (
     as_traced,
     is_tracable_tensor_type,
 )
-from leapp.utils import resolve_tensor_descriptions_to_names
+from leapp.utils.tensor_description import resolve_tensor_descriptions_to_names
 
 
 class TracedTensorNode(LeappNode):
