@@ -37,6 +37,8 @@ __email__ = "frlai@nvidia.com"
 __all__ = [
     "ExportManager",
     "MergeCfgEnum",
+    "InputKindEnum",
+    "OutputKindEnum",
     "annotate",
     "__version__",
     "TensorDescription",

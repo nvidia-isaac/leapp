@@ -84,6 +84,10 @@ class TracedTensorNode(LeappNode):
                 new_data.append(self._create_io_helper(
                     value, child_name, to))
             return tuple(new_data)
+        
+        elif isinstance(data, TensorDescription):
+            new_data = self._create_io_helper(data.value, data.name, to)
+            return new_data
 
         elif is_tracable_tensor_type(data):
             is_traced = False
@@ -145,15 +149,14 @@ class TracedTensorNode(LeappNode):
         """Create a TrackedTensor as an input to this context.
 
         Args:
-            tensor: The tensor to track
-            name: Name for this input (e.g., "joint_pos")
+            data: The tensor or TensorDescription to track
+            name: Name for this input (e.g., "joint_pos").
+                  If data is a TensorDescription, its name takes priority.
 
         Returns:
             TracedTensor: A traced tensor in this context
         """
         self.add_input(name, name, data)
-        if isinstance(data, TensorDescription):
-            data = data.value
         traced_data = self._create_io_helper(data, name, to="traced")
         return traced_data
 

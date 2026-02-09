@@ -38,7 +38,9 @@ from leapp.utils.enums import MergeCfgEnum
 from leapp.tracing_lock import TracingLock
 from leapp.utils.tensor_description import TensorDescription
 from leapp.utils.tensor_description import (verify_data_exact_match,
-                                             flatten_io_structure)
+                                             flatten_io_structure,
+                                             unwrap_tensor_descriptions,
+                                             apply_semantic_metadata)
 from leapp.utils.utils import (find_with_block_end,
                                 get_relative_path,
                                 get_system_info,
@@ -200,6 +202,14 @@ class ExportManager:
     # annotation APIs
     #########################################################
     def input_tensors(self, tensors, node_name: str):
+        # If TensorDescriptions are passed (single or list), unwrap to dict
+        metadata = {}
+        if isinstance(tensors, (TensorDescription, list)) and (
+            isinstance(tensors, TensorDescription) or
+            any(isinstance(t, TensorDescription) for t in tensors)
+        ):
+            tensors, metadata = unwrap_tensor_descriptions(tensors)
+
         if not ExportManager._interpret_graph:
             values = list(tensors.values())
             return values[0] if len(values) == 1 else tuple(values)
@@ -241,10 +251,22 @@ class ExportManager:
                 tensor, tensor_name)
             traced_tensors.append(traced_tensor)
 
+        # Apply semantic metadata from TensorDescription wrappers
+        if metadata:
+            apply_semantic_metadata(traced_tensors_node, metadata)
+
         # if node is tracing we return the traced tensors
         return traced_tensors[0] if len(traced_tensors) == 1 else tuple(traced_tensors)
 
     def output_tensors(self, node_name: str, tensors, static_outputs=None, **kwargs):
+        # If TensorDescriptions are passed (single or list), unwrap to dict
+        metadata = {}
+        if isinstance(tensors, (TensorDescription, list)) and (
+            isinstance(tensors, TensorDescription) or
+            any(isinstance(t, TensorDescription) for t in tensors)
+        ):
+            tensors, metadata = unwrap_tensor_descriptions(tensors)
+
         if not ExportManager._interpret_graph:
             return
         self._verify_no_active_function_tracing()
@@ -320,6 +342,10 @@ class ExportManager:
         traced_tensors_node.compile_trace(flattened_tensors,
                                           backend=export_with,
                                           backend_params=kwargs.get("backend_params", {}))
+
+        # Apply semantic metadata from TensorDescription wrappers
+        if metadata:
+            apply_semantic_metadata(traced_tensors_node, metadata)
 
     def register_buffer(self, node_name: str, tensors: dict) -> dict:
         """Register tensors as persistent buffers for a traced node.

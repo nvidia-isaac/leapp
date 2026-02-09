@@ -52,8 +52,7 @@ import torch
 from leapp import annotate
 
 @annotate.method(
-    export_with="onnx",
-    backend_params={"dynamo": False}
+    export_with="onnx-torchscript",
 )
 def process_data(input_tensor: torch.Tensor):
     normalized = (input_tensor - input_tensor.mean()) / input_tensor.std()
