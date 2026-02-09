@@ -34,9 +34,9 @@ class inputKindEnum(Enum):
     BODY_ROTATION= "state/body/rotation"
     COMMAND_JOINT_POSITION= "command/joint/position"
     COMMAND_JOINT_VELOCITY= "command/joint/velocity"
-    COMMAND_BODY_ROTATION= "command/body/rotation"
     COMMAND_JOINT_TORQUES= "command/joint/torques"
-
+    COMMAND_BODY_ROTATION= "command/body/rotation"
+    COMMAND_BODY_VELOCITY= "command/body/velocity"
 
 class outputKindEnum(Enum):
     KP="kp"
