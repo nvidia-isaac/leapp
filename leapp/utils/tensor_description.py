@@ -17,14 +17,16 @@
 
 import collections.abc
 from dataclasses import dataclass
-from typing import Optional, Any, Dict, Tuple
+from typing import Optional, Any, Dict, Tuple, List
 
 import torch
+import numpy as np
 import yaml
 
 from leapp._logging import _get_logger
 from leapp.leapp_graph.datatypes import TracedData, TracedTensor
 from leapp.utils.utils import safe_deepcopy
+from leapp.utils.enums import inputKindEnum
 
 
 class CompactYamlList(list):
@@ -53,18 +55,51 @@ yaml.add_representer(
     lambda dumper, data: dumper.represent_mapping('tag:yaml.org,2002:map', data, flow_style=True))
 
 
-@dataclass
 class TensorDescription:
-    """Dataclass for describing tensor inputs/outputs in the computational graph."""
-    name: str
-    dtype: str
-    shape: CompactYamlList
-    type: str = "tensor"
-    tag: Optional[str] = None
-    value: Optional[Any] = None  # Will store torch.Tensor
+    """Describes a tensor input/output in the computational graph."""
+
+    def __init__(self, name: str, value: Any, tag: Optional[str] = None,
+                 kind: Optional[inputKindEnum] = None,
+                 element_names: Optional[List[List[str]]] = None):
+                 
+        # extract tag from the input if not overridden
+        if tag is None and hasattr(value, 'leapp_tag'):
+            tag = value.leapp_tag
+
+        # unwrap TracedData to the underlying tensor
+        if isinstance(value, TracedData):
+            value = value.tensor
+
+        dtype, shape = TensorDescription.get_shape_and_dtype(value)
+
+        self.name = name
+        self.value = safe_deepcopy(value)
+        self.dtype = dtype
+        self.shape = CompactYamlList(shape)
+        self.type = "tensor"
+        self.tag = tag
+        self.kind = kind
+        self.element_names = element_names
+
+    @staticmethod
+    def get_shape_and_dtype(value) -> Tuple[str, tuple]:
+        """Extract dtype string and shape from a torch.Tensor or numpy ndarray."""
+        dtype_map = get_dtype_map()
+
+        data_type = type(value)
+        if data_type == torch.Tensor:
+            dtype = dtype_map['torch'][value.dtype]
+            shape = value.shape
+        elif data_type == np.ndarray:
+            dtype = dtype_map['numpy'][value.dtype]
+            shape = value.shape
+        else:
+            raise ValueError(f"Unsupported type: {data_type}")
+
+        return dtype, shape
 
     def dict(self, ignore_tag=True, ignore_value=True) -> Dict[str, Any]:
-        """Convert the dataclass to a dictionary."""
+        """Convert to a dictionary."""
         result = {
             "name": self.name,
             "dtype": self.dtype,
@@ -75,19 +110,20 @@ class TensorDescription:
             result["tag"] = self.tag
         if self.value is not None and not ignore_value:
             result["value"] = self.value
+        if self.kind is not None:
+            result["kind"] = self.kind.value
+        if self.element_names is not None:
+            result["element_names"] = self.element_names
         return result
 
     def change_name(self, new_name: str):
-        """
-        Change the name of the tensor description.
-        """
+        """Change the name of the tensor description."""
         self.name = new_name
 
     @property
     def name_str(self) -> str:
         """Return just the name as a string."""
         return self.name
-
 
 @dataclass
 class ParameterFormat:
@@ -266,10 +302,9 @@ class ParameterFormat:
         _generate_unpacking(self.formatting, self.name_str, assignments)
         return "\n".join(assignments)
 
-
-def get_dtype_maps():
+def get_dtype_map():
     return {
-        "python": {
+        "torch": {
             torch.float64: "float64",
             torch.float32: "float32",
             torch.float16: "float16",
@@ -280,38 +315,21 @@ def get_dtype_maps():
             torch.bool: "bool",
             torch.bfloat16: "bfloat16",
         },
-        "prefix": {
-            torch.float64: "kFloat64",
-            torch.float32: "kFloat32",
-            torch.float16: "kFloat16",
-            torch.int32: "kInt32",
-            torch.int64: "kInt64",
-            torch.uint8: "kUInt8",
-            torch.int8: "kInt8",
-            torch.bool: "kBool",
-            torch.bfloat16: "kBFloat16",
+        "numpy": {
+            np.float64: "float64",
+            np.float32: "float32",
+            np.float16: "float16",
+            np.int32: "int32",
+            np.int64: "int64",
+            np.uint8: "uint8",
+            np.int8: "int8",
+            np.bool_: "bool",
         },
     }
 
-def map_from_torch_dtype(notation, dtype):
-    maps = get_dtype_maps()
-    if notation not in maps:
-        raise ValueError(f"Unsupported notation: {notation}")
-    map = maps[notation]
-
-    if dtype not in map:
-        raise ValueError(
-            f"{dtype} tensors detected but not supported for export.")
-
-    return map[dtype]
-
 def map_to_torch_dtype(string):
-    maps = get_dtype_maps()
-    # Create reverse mapping: string -> dtype
-    reverse_map = {dtype_str: dtype 
-                   for notation in maps.values() 
-                   for dtype, dtype_str in notation.items()}
-    
+    torch_map = get_dtype_map()['torch']
+    reverse_map = {dtype_str: dtype for dtype, dtype_str in torch_map.items()}
     if string in reverse_map:
         return reverse_map[string]
     raise ValueError(f"Unsupported string: {string}")
@@ -386,6 +404,7 @@ def flatten_io_structure(data, name_str):
 
 def describe_io_helper(data, name_str, dtype_notation):
     data_description = []
+    io_format = {}
     if isinstance(data, collections.abc.Sequence) and not isinstance(data, (str, bytes, torch.Tensor)):
         if not isinstance(data, list):
             type_name = type(data).__name__
@@ -416,39 +435,14 @@ def describe_io_helper(data, name_str, dtype_notation):
             io_format[k] = child_format
             data_description.extend(child_description)
     elif isinstance(data, torch.Tensor):
-        tag = None
-        if hasattr(data, 'leapp_tag'):
-            tag = data.leapp_tag
-        
-        if isinstance(data, TracedData):
-            data = data.tensor
-
-        # Create TensorDescription dataclass instance
-        tensor_desc = TensorDescription(
-            name=name_str,
-            dtype=map_from_torch_dtype(dtype_notation, data.dtype),
-            shape=CompactYamlList(data.shape),
-            type="tensor",
-            tag=tag,
-            value=safe_deepcopy(data)
-        )
+        tensor_desc = TensorDescription(name_str, data)
 
         # Return as a list containing the dataclass (for now, keep compatibility)
         data_description = [tensor_desc]
         io_format = tensor_desc  # Plain string
 
     else:
-        # For non-tensor data types
-        data_desc = TensorDescription(
-            name=name_str,
-            dtype=None,
-            shape=CompactYamlList([]),
-            type=type(data),
-            tag=None,
-            value=safe_deepcopy(data)
-        )
-        data_description = [data_desc]
-        io_format = data_desc
+        _get_logger().error(f"Input/Output '{name_str}' has unsupported type: {type(data)}")
 
     return data_description, io_format
 
