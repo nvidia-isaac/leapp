@@ -9,7 +9,7 @@ from leapp.leapp_graph.datatypes import (
     as_traced,
     is_tracable_tensor_type,
 )
-from leapp.utils.tensor_description import resolve_tensor_descriptions_to_names
+from leapp.utils.tensor_description import resolve_tensor_descriptions_to_names, TensorDescription
 
 
 class TracedTensorNode(LeappNode):
@@ -152,6 +152,8 @@ class TracedTensorNode(LeappNode):
             TracedTensor: A traced tensor in this context
         """
         self.add_input(name, name, data)
+        if isinstance(data, TensorDescription):
+            data = data.value
         traced_data = self._create_io_helper(data, name, to="traced")
         return traced_data
 

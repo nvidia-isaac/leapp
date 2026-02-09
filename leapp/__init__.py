@@ -26,6 +26,7 @@ various formats including PyTorch JIT, ONNX, and generate visualization and YAML
 
 from .export_manager import ExportManager
 from .utils.enums import MergeCfgEnum
+from .utils.tensor_description import TensorDescription
 # Create a global annotate instance that's ready to use
 annotate = ExportManager()
 
@@ -38,4 +39,5 @@ __all__ = [
     "MergeCfgEnum",
     "annotate",
     "__version__",
+    "TensorDescription",
 ]

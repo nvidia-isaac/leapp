@@ -402,7 +402,7 @@ def flatten_io_structure(data, name_str):
     return flat_data
 
 
-def describe_io_helper(data, name_str, dtype_notation):
+def describe_io_helper(data, name_str):
     data_description = []
     io_format = {}
     if isinstance(data, collections.abc.Sequence) and not isinstance(data, (str, bytes, torch.Tensor)):
@@ -416,7 +416,7 @@ def describe_io_helper(data, name_str, dtype_notation):
         for idx, item in enumerate(data):
             child_name = f"{name_str}_{idx}" if name_str else str(idx)
             child_description, child_format = describe_io_helper(
-                item, child_name, dtype_notation)
+                item, child_name)
             io_format.append(child_format)
             data_description.extend(child_description)
         return data_description, io_format
@@ -431,7 +431,7 @@ def describe_io_helper(data, name_str, dtype_notation):
         for k, v in data.items():
             child_name = f"{name_str}_{k}" if name_str else k
             child_description, child_format = describe_io_helper(
-                v, child_name, dtype_notation)
+                v, child_name)
             io_format[k] = child_format
             data_description.extend(child_description)
     elif isinstance(data, torch.Tensor):
@@ -440,6 +440,11 @@ def describe_io_helper(data, name_str, dtype_notation):
         # Return as a list containing the dataclass (for now, keep compatibility)
         data_description = [tensor_desc]
         io_format = tensor_desc  # Plain string
+    
+    elif isinstance(data, TensorDescription):
+        # if the data is already a description we just return it
+        data_description = [data]
+        io_format = data
 
     else:
         _get_logger().error(f"Input/Output '{name_str}' has unsupported type: {type(data)}")
@@ -447,9 +452,9 @@ def describe_io_helper(data, name_str, dtype_notation):
     return data_description, io_format
 
 
-def describe_io(name, raw_name, data, dtype_notation="python"):
+def describe_io(name, raw_name, data):
     data_description, io_format = describe_io_helper(
-        data, name, dtype_notation)
+        data, name)
     parameter_description = ParameterFormat(
         name=raw_name, formatting=io_format)
     return data_description, parameter_description

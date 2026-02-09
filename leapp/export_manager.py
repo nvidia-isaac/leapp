@@ -36,7 +36,7 @@ from leapp.leapp_graph.block_context_node import BlockContextNode
 from leapp.utils.utils import frame_to_namespace
 from leapp.utils.enums import MergeCfgEnum
 from leapp.tracing_lock import TracingLock
-
+from leapp.utils.tensor_description import TensorDescription
 from leapp.utils.tensor_description import (verify_data_exact_match,
                                              flatten_io_structure)
 from leapp.utils.utils import (find_with_block_end,
@@ -205,6 +205,7 @@ class ExportManager:
             return values[0] if len(values) == 1 else tuple(values)
         self._verify_no_active_function_tracing()
 
+        # create the node if it doesn't exist
         if node_name in self.nodes.keys():
             traced_tensors_node = self.nodes[node_name]
         else:
@@ -224,15 +225,13 @@ class ExportManager:
                                   "Assuming default tensor name")
 
         # if the node is not tracing, we validate the inputs only and return the raw tensors
+        # the node is not tracing if it is already compiled.
         if not traced_tensors_node.is_tracing:
             for tensor_name, tensor in tensors.items():
                 traced_tensors_node.validate_input_and_update_tags(
                     tensor_name, tensor_name, tensor)
             values = list(tensors.values())
             return values[0] if len(values) == 1 else tuple(values)
-
-            # TODO: need a scheme to update tags. in the future that scheme will be expanded to check
-            # the inputs and outputs for type equivalence.
 
         # we need to handle input tensors more carefully than outputs because
         # we need to ensure the inputs are returned in the original structure
