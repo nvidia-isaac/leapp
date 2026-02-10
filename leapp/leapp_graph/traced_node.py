@@ -24,20 +24,48 @@ class TracedTensorNode(LeappNode):
 
         self.compiled_graph_module = None
 
+        # State tensor tracking: name -> {"input": TracedTensor, "output": TracedTensor | None}
+        self._state_tensors: dict[str, dict] = {}
+
+        # Buffer tracker for auto-detecting stateful buffers (set by annotate.module())
+        self._buffer_tracker = None
+
     @property
     def is_tracing(self) -> bool:
         return not self._model_captured
 
     def compile_trace(self, tensors: dict[str, "TracedTensor"], backend=None, backend_params={}):
-        # No longer checking this because upstream will validate
-        # if any(not isinstance(tensor, TracedTensor) for tensor in tensors.values()):
-        #     _get_logger().error(
-        #         f"Error: Call to compile_trace for {self.name} using non-TracedTensors")
-        #     raise ValueError("Error in TracedTensorNode")
+        # Auto-collect buffer mutations before graph freeze
+        if self._buffer_tracker is not None and not self._buffer_tracker._collected:
+            self._buffer_tracker.collect()
+            self._buffer_tracker.restore()
+
+        # Merge state outputs into the tensor dict before processing
+        state_outputs = self.get_state_outputs()
+        if state_outputs:
+            _get_logger().info(f"Adding {len(state_outputs)} state outputs: {list(state_outputs.keys())}")
+            tensors = {**tensors, **state_outputs}
 
         unwrapped_tensors = []
         for name, tensor in tensors.items():
             unwrapped_tensors.append(self.create_output(tensor, name))
+
+        # Set matching leapp_tags on state input/output descriptions for feedback detection.
+        # Both the input and its corresponding _out output share the same tag so the graph
+        # automatically detects the feedback connection.
+        for state_name in self._state_tensors:
+            state_tag = f"{self.name}/{state_name}/"
+            for input_desc in self.inputs:
+                if input_desc.name == state_name:
+                    input_desc.tag = state_tag
+                    break
+            output_name = f"{state_name}_out"
+            for output_desc in self.outputs:
+                if output_desc.name == output_name:
+                    output_desc.tag = state_tag
+                    output_desc.is_state = True
+                    break
+
         self.build_graph_module(list(tensors.values()))
 
         self.compiled_graph_module = fx.GraphModule(
@@ -252,3 +280,87 @@ class TracedTensorNode(LeappNode):
                 self.graph.output(output_nodes[0])
             else:
                 self.graph.output(tuple(output_nodes))
+
+    def create_state_tensors(self, tensors: dict[str, torch.Tensor]) -> dict[str, TracedTensor]:
+        """Create state tensors that are both inputs and outputs."""
+        result = {}
+        for name, tensor in tensors.items():
+            if name in self._state_tensors:
+                _get_logger().warning(
+                    f"State tensor '{name}' already registered for node '{self.name}'. "
+                    "Returning existing TracedTensor.")
+                result[name] = self._state_tensors[name]["input"]
+                continue
+
+            # Create input placeholder for this state
+            traced_input = self.create_input(tensor, name)
+
+            # Mark the input as state in its description (for YAML metadata)
+            for input_desc in self.inputs:
+                if input_desc.name == name:
+                    input_desc.is_state = True
+                    break
+
+            # Track as state tensor
+            self._state_tensors[name] = {
+                "input": traced_input,
+                "output": None,  # Set via update_state_tensors()
+            }
+
+            result[name] = traced_input
+
+        return result
+
+    def update_state_tensors(self, tensors: dict[str, TracedTensor]) -> None:
+        """Set output values for state tensors."""
+        for name, value in tensors.items():
+            if name not in self._state_tensors:
+                _get_logger().error(
+                    f"Error: update_state called for '{name}' but it was not registered "
+                    f"as a state tensor. Call state_tensors() first.")
+                raise Exception("Error: exception detected in update_state_tensors")
+
+            # Validate shape and dtype match the input state
+            input_tensor = self._state_tensors[name]["input"]
+            input_underlying = input_tensor.tensor if isinstance(input_tensor, TracedTensor) else input_tensor
+            value_underlying = value.tensor if isinstance(value, TracedTensor) else value
+            if input_underlying.shape != value_underlying.shape:
+                _get_logger().error(
+                    f"Error: update_state for '{name}' has shape {value_underlying.shape} "
+                    f"but expected {input_underlying.shape} (must match input state shape).")
+                raise Exception("Error: exception detected in update_state_tensors")
+            if input_underlying.dtype != value_underlying.dtype:
+                _get_logger().error(
+                    f"Error: update_state for '{name}' has dtype {value_underlying.dtype} "
+                    f"but expected {input_underlying.dtype} (must match input state dtype).")
+                raise Exception("Error: exception detected in update_state_tensors")
+
+            self._state_tensors[name]["output"] = value
+
+    def get_state_outputs(self) -> dict[str, TracedTensor]:
+        """Get state outputs with '_out' suffix for ONNX SSA compliance.
+        Pass-through if update_state not called.
+        """
+        # Warn about state tensors that were not explicitly updated
+        missing_states = [name for name, info in self._state_tensors.items()
+                          if info["output"] is None]
+        if missing_states:
+            _get_logger().warning(
+                f"State tensors {missing_states} in node '{self.name}' were not updated via "
+                f"update_state(). They will pass through unchanged.")
+
+        result = {}
+        for name, state_info in self._state_tensors.items():
+            # Use {name}_out for output to avoid ONNX SSA conflict with input
+            output_name = f"{name}_out"
+            if state_info["output"] is not None:
+                result[output_name] = state_info["output"]
+            else:
+                # Pass-through: state unchanged, output equals input
+                result[output_name] = state_info["input"]
+        return result
+
+    @property
+    def state_names(self) -> list[str]:
+        """Get list of registered state tensor names."""
+        return list(self._state_tensors.keys())

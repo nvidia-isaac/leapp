@@ -28,6 +28,7 @@ from leapp.leapp_graph.function_decorator_node import FunctionDecoratorNode
 from leapp.leapp_graph.leapp_node import LeappNode
 from leapp.leapp_graph.traced_node import TracedTensorNode
 from leapp.leapp_graph.datatypes import (
+    TracedTensor,
     is_traced_type,
     apply_traced_tensor_patches,
     remove_traced_tensor_patches,
@@ -156,6 +157,10 @@ class ExportManager:
         if not ExportManager._interpret_graph:
             raise Exception("ExportManager graph interpretation is disabled")
         ExportManager._interpret_graph = False
+        # Restore model buffers for any pending buffer trackers
+        for node in self.nodes.values():
+            if hasattr(node, '_buffer_tracker') and node._buffer_tracker is not None:
+                node._buffer_tracker.restore()
         # Remove patches to restore original torch function behavior
         if self._numpy_patches_applied:
             remove_traced_tensor_patches()
@@ -407,6 +412,118 @@ class ExportManager:
         flattened = flatten_io_structure(tensors, '')
         return traced_node.create_static_tensors(flattened)
 
+    def state_tensors(self, node_name: str, tensors: dict[str, torch.Tensor]) -> TracedTensor | tuple[TracedTensor, ...]:
+        """Register state tensors (both inputs AND outputs) for a traced node.
+
+        Call input_tensors() first to create the node. Use update_state() to set output values.
+        """
+        if not ExportManager._interpret_graph:
+            values = list(tensors.values())
+            return values[0] if len(values) == 1 else tuple(values)
+
+        self._verify_no_active_function_tracing()
+
+        if node_name not in self.nodes:
+            _get_logger().error(
+                f"Error: state_tensors called for node '{node_name}' but node not found. "
+                "Call input_tensors() first to create the node.")
+            raise Exception("Error: exception detected in state_tensors")
+
+        traced_node = self.nodes[node_name]
+
+        if not isinstance(traced_node, TracedTensorNode):
+            _get_logger().error(
+                f"Error: state_tensors only works with TracedTensorNode, "
+                f"but '{node_name}' is a {type(traced_node).__name__}")
+            raise Exception("Error: exception detected in state_tensors")
+
+        if not traced_node.is_tracing:
+            values = list(tensors.values())
+            return values[0] if len(values) == 1 else tuple(values)
+
+        # Create state tensors (input placeholders that will also be outputs)
+        state_dict = traced_node.create_state_tensors(tensors)
+        values = list(state_dict.values())
+        return values[0] if len(values) == 1 else tuple(values)
+
+    def update_state(self, node_name: str, tensors: dict[str, TracedTensor]) -> None:
+        """Set output values for state tensors. If not called, state passes through unchanged."""
+        if not ExportManager._interpret_graph:
+            return  # No-op when not tracing
+
+        self._verify_no_active_function_tracing()
+
+        if node_name not in self.nodes:
+            _get_logger().error(
+                f"Error: update_state called for node '{node_name}' but node not found.")
+            raise Exception("Error: exception detected in update_state")
+
+        traced_node = self.nodes[node_name]
+
+        if not isinstance(traced_node, TracedTensorNode):
+            _get_logger().error(
+                f"Error: update_state only works with TracedTensorNode, "
+                f"but '{node_name}' is a {type(traced_node).__name__}")
+            raise Exception("Error: exception detected in update_state")
+
+        if not traced_node.is_tracing:
+            return
+
+        traced_node.update_state_tensors(tensors)
+
+    def module(self, node_name: str, model: torch.nn.Module,
+               buffer_names: list[str] | None = None) -> None:
+        """Register a module for automatic stateful buffer tracking.
+
+        Replaces registered buffers with TracedTensor inputs so the forward
+        pass is traced through them.  When ``output_tensors()`` triggers
+        ``compile_trace()``, mutations are auto-detected: reassigned buffers
+        become state outputs with feedback connections, non-mutated buffers are
+        baked as constants.  Model buffers are restored afterwards.
+
+        Must be called after ``input_tensors()`` creates the node and before
+        the model's forward pass.
+
+        Args:
+            node_name: Name of the TracedTensorNode (must already exist).
+            model: The ``nn.Module`` whose buffers to track.
+            buffer_names: Optional list of buffer names to track (dotted names
+                like ``"h_state"`` or ``"encoder.running_mean"``).
+                If ``None``, all registered buffers are tracked.
+
+        Example::
+
+            annotate.start("graph", save_path=output_dir)
+            obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+
+            annotate.module("policy", model)
+            action = model(obs_traced)
+
+            annotate.output_tensors("policy", {"action": action},
+                                    export_with="onnx-torchscript")
+            annotate.stop()
+            annotate.compile_graph()
+
+        Note:
+            Detects *reassignment* (``self.h = h_out``), not in-place mutation
+            (``self.h.copy_(h_out)``). Use ``state_tensors()``/``update_state()``
+            for in-place patterns.
+        """
+        if not ExportManager._interpret_graph:
+            return
+
+        if node_name not in self.nodes:
+            _get_logger().error(
+                f"Error: module() called for node '{node_name}' but node not found. "
+                "Call input_tensors() first to create the node.")
+            raise Exception("Error: exception detected in module")
+
+        from leapp.buffer_tracker import BufferTracker
+        tracker = BufferTracker(model, node_name, self, buffer_names=buffer_names)
+        tracker.inject()
+
+        self.nodes[node_name]._buffer_tracker = tracker
+
     def block(self, node_name, **kwargs):
         """Create a context manager for tracing a block of code in the computational graph.
 
@@ -497,12 +614,6 @@ class ExportManager:
                         output_namespace)
 
         return BlockTraceContext()
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        return
 
     def method(self, **params):
         """Create a decorator for tracing functions/methods in the computational graph.
