@@ -36,10 +36,10 @@ from leapp.leapp_graph.block_context_node import BlockContextNode
 from leapp.utils.utils import frame_to_namespace
 from leapp.utils.enums import MergeCfgEnum
 from leapp.tracing_lock import TracingLock
-from leapp.utils.tensor_description import TensorDescription
+from leapp.utils.tensor_description import TensorDescription, TensorSemantics
 from leapp.utils.tensor_description import (verify_data_exact_match,
                                              flatten_io_structure,
-                                             unwrap_tensor_descriptions,
+                                             unwrap_tensor_semantics,
                                              apply_semantic_metadata)
 from leapp.utils.utils import (find_with_block_end,
                                 get_relative_path,
@@ -202,13 +202,13 @@ class ExportManager:
     # annotation APIs
     #########################################################
     def input_tensors(self, tensors, node_name: str):
-        # If TensorDescriptions are passed (single or list), unwrap to dict
+        # If TensorSemantics are passed (single or list), unwrap to dict
         metadata = {}
-        if isinstance(tensors, (TensorDescription, list)) and (
-            isinstance(tensors, TensorDescription) or
-            any(isinstance(t, TensorDescription) for t in tensors)
+        if isinstance(tensors, (TensorSemantics, list)) and (
+            isinstance(tensors, TensorSemantics) or
+            any(isinstance(t, TensorSemantics) for t in tensors)
         ):
-            tensors, metadata = unwrap_tensor_descriptions(tensors)
+            tensors, metadata = unwrap_tensor_semantics(tensors)
 
         if not ExportManager._interpret_graph:
             values = list(tensors.values())
@@ -259,13 +259,13 @@ class ExportManager:
         return traced_tensors[0] if len(traced_tensors) == 1 else tuple(traced_tensors)
 
     def output_tensors(self, node_name: str, tensors, static_outputs=None, **kwargs):
-        # If TensorDescriptions are passed (single or list), unwrap to dict
+        # If TensorSemantics are passed (single or list), unwrap to dict
         metadata = {}
-        if isinstance(tensors, (TensorDescription, list)) and (
-            isinstance(tensors, TensorDescription) or
-            any(isinstance(t, TensorDescription) for t in tensors)
+        if isinstance(tensors, (TensorSemantics, list)) and (
+            isinstance(tensors, TensorSemantics) or
+            any(isinstance(t, TensorSemantics) for t in tensors)
         ):
-            tensors, metadata = unwrap_tensor_descriptions(tensors)
+            tensors, metadata = unwrap_tensor_semantics(tensors)
 
         if not ExportManager._interpret_graph:
             return

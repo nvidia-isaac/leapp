@@ -16,7 +16,7 @@
 #
 
 import collections.abc
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Optional, Any, Dict, Tuple, List
 
 import torch
@@ -24,9 +24,15 @@ import numpy as np
 import yaml
 
 from leapp._logging import _get_logger
-from leapp.leapp_graph.datatypes import TracedData, TracedTensor
+from leapp.leapp_graph.datatypes import (
+    TracedData,
+    TracedTensor,
+    is_tracable_tensor_type,
+    TRACABLE_BASE_TYPES,
+    TRACED_TYPES,
+)
 from leapp.utils.utils import safe_deepcopy
-from leapp.utils.enums import inputKindEnum
+from leapp.utils.enums import inputKindEnum, outputKindEnum
 
 
 class CompactYamlList(list):
@@ -55,47 +61,90 @@ yaml.add_representer(
     lambda dumper, data: dumper.represent_mapping('tag:yaml.org,2002:map', data, flow_style=True))
 
 
-def _normalize_element_names(element_names):
-    """Normalize element_names to CompactYamlList[CompactYamlList[str] | None].
+@dataclass
+class TensorSemantics:
+    """User-facing semantic metadata for a tensor.
 
-    Accepts:
-        - "hip"                        → [["hip"]]
-        - ["hip", "knee", "ankle"]     → [["hip", "knee", "ankle"]]
-        - [["batch"], ["x", "y", "z"]] → [["batch"], ["x", "y", "z"]]
-        - [None, None, ["r", "g", "b"]] → [None, None, ["r", "g", "b"]]
+    Add new semantic fields here — they automatically propagate to
+    TensorDescription, YAML serialization, and the unwrap/apply flow.
+
+    Convention:
+        - Internal fields (ref, name) are listed in _INTERNAL_FIELDS and excluded from serialization.
+        - Public fields (kind, element_names, ...) are semantic data that gets serialized to YAML.
     """
-    if isinstance(element_names, str):
-        return CompactYamlList([CompactYamlList([element_names])])
-    elif isinstance(element_names, list):
-        if all(isinstance(item, str) for item in element_names):
-            return CompactYamlList([CompactYamlList(element_names)])
-        elif all(isinstance(item, (list, type(None))) for item in element_names):
-            return CompactYamlList([
-                CompactYamlList(item) if item is not None else None
-                for item in element_names
-            ])
-        else:
-            _get_logger().warning(
-                f"element_names has mixed types, expected List[List[str]]")
-            return element_names
-    return element_names
+
+    # Fields excluded from serialization (internal use only)
+    _INTERNAL_FIELDS = frozenset({'ref', 'name'})
+
+    name: str = None
+    ref: Any = None
+
+    # Semantic fields
+    kind: Optional[inputKindEnum | outputKindEnum] = None
+    element_names: Optional[List] = None
+
+    def __post_init__(self):
+        '''error checking, auto conditioning'''
+        if not is_tracable_tensor_type(self.ref): # this checks for both base types and traced types
+            raise TypeError(
+                f"TensorSemantics 'ref' must be a traceable tensor type "
+                f"accepted types are: {TRACABLE_BASE_TYPES}, {TRACED_TYPES}"
+                f"got {type(self.ref).__name__}")
+        if self.element_names is not None:
+            self.element_names = self._normalize_element_names(self.element_names)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return all non-None semantic fields, excluding internal fields."""
+        return {
+            f.name: getattr(self, f.name)
+            for f in fields(self)
+            if f.name not in self._INTERNAL_FIELDS and getattr(self, f.name) is not None
+        }
+
+    def update(self, values: Dict[str, Any]):
+        """Set semantic fields from a dict."""
+        valid_fields = {f.name for f in fields(self)} - self._INTERNAL_FIELDS
+        for key, value in values.items():
+            if key not in valid_fields:
+                _get_logger().warning(
+                    f"Unknown semantic field '{key}' for TensorSemantics, ignoring")
+                continue
+            if key == 'element_names' and value is not None:
+                value = self._normalize_element_names(value)
+            setattr(self, key, value)
+
+    @staticmethod
+    def _normalize_element_names(element_names):
+        """Normalize element_names to CompactYamlList[CompactYamlList[str] | None].
+        """
+        if isinstance(element_names, str):
+            return CompactYamlList([CompactYamlList([element_names])])
+        elif isinstance(element_names, list):
+            if all(isinstance(item, str) for item in element_names):
+                return CompactYamlList([CompactYamlList(element_names)])
+            elif all(isinstance(item, (list, type(None))) for item in element_names):
+                return CompactYamlList([
+                    CompactYamlList(item) if item is not None else None
+                    for item in element_names
+                ])
+            else:
+                _get_logger().warning(
+                    f"element_names has mixed types, expected List[List[str]]")
+                return element_names
+        return element_names
 
 
 class TensorDescription:
-    """Describes a tensor input/output in the computational graph."""
+    """Describes a tensor input/output in the computational graph.
 
-    # Semantic fields that carry optional metadata about tensor meaning.
-    # These are separated from core fields (name, dtype, shape, etc.) so they
-    # can be extracted/applied in bulk via get_semantics()/set_semantics().
-    SEMANTIC_FIELDS = ('kind', 'element_names')
+    Composes TensorSemantics for semantic metadata (kind, element_names, etc.).
+    Access semantic fields directly via properties (td.kind, td.element_names)
+    or in bulk via get_semantics()/set_semantics().
+    """
 
     def __init__(self, name: str, value: Any, tag: Optional[str] = None,
-                 kind: Optional[inputKindEnum] = None,
-                 element_names: Optional[List[List[str]]] = None):
-
-        # Store original reference before any processing (e.g., TracedTensor with proxy)
-        self._ref = value
-
+                 semantics: Optional[TensorSemantics] = None,
+                 **semantic_kwargs):
         # extract tag from the input if not overridden
         if tag is None and hasattr(value, 'leapp_tag'):
             tag = value.leapp_tag
@@ -106,37 +155,38 @@ class TensorDescription:
 
         dtype, shape = TensorDescription.get_shape_and_dtype(value)
 
-        # Normalize element_names
-        if element_names is not None:
-            element_names = _normalize_element_names(element_names)
-
         self.name = name
         self.value = safe_deepcopy(value)
         self.dtype = dtype
         self.shape = CompactYamlList(shape)
         self.type = "tensor"
         self.tag = tag
-        self.kind = kind
-        self.element_names = element_names
+
+        self.init_semantics(semantics)
+
+    # --- Semantic field access ---
+
+    def init_semantics(self, semantics: Optional[TensorSemantics]):
+        self.semantics = semantics
+        if semantics is not None and semantics.name is not None:
+            self.change_name(semantics.name)
 
     def get_semantics(self) -> Dict[str, Any]:
         """Return all non-None semantic fields as a dict."""
-        return {
-            field: getattr(self, field)
-            for field in self.SEMANTIC_FIELDS
-            if getattr(self, field) is not None
-        }
+        if self.semantics is None:
+            return {}
+        return self.semantics.to_dict()
 
-    def set_semantics(self, semantics: Dict[str, Any]):
-        """Set semantic fields from a dict. Normalizes element_names if present."""
-        for field, value in semantics.items():
-            if field not in self.SEMANTIC_FIELDS:
-                _get_logger().warning(
-                    f"Unknown semantic field '{field}' for TensorDescription, ignoring")
-                continue
-            if field == 'element_names' and value is not None:
-                value = _normalize_element_names(value)
-            setattr(self, field, value)
+    def update_semantics(self, values: Dict[str, Any]):
+        """Set semantic fields from a dict."""
+        if self.semantics is not None:
+            semantics = self.semantics
+        else:
+            semantics = TensorSemantics(name=self.name, ref=self.value)
+        semantics.update(values)
+        self.init_semantics(semantics)
+
+    # --- Core methods ---
 
     @staticmethod
     def get_shape_and_dtype(value) -> Tuple[str, tuple]:
@@ -156,7 +206,7 @@ class TensorDescription:
         return dtype, shape
 
     def dict(self, ignore_tag=True, ignore_value=True) -> Dict[str, Any]:
-        """Convert to a dictionary."""
+        """Convert to a dictionary for YAML serialization."""
         result = {
             "name": self.name,
             "dtype": self.dtype,
@@ -167,10 +217,12 @@ class TensorDescription:
             result["tag"] = self.tag
         if self.value is not None and not ignore_value:
             result["value"] = self.value
-        if self.kind is not None:
-            result["kind"] = self.kind.value
-        if self.element_names is not None:
-            result["element_names"] = self.element_names
+        # Merge in all non-None semantic fields
+        for key, value in self.get_semantics().items():
+            if hasattr(value, 'value'):  # Enum → serialize to its .value string
+                result[key] = value.value
+            else:
+                result[key] = value
         return result
 
     def change_name(self, new_name: str):
@@ -453,69 +505,67 @@ def flatten_io_structure(data, name_str):
         for key, value in data.items():
             child_name = f"{name_str}_{key}" if name_str else key
             flat_data.update(flatten_io_structure(value, child_name))
-    elif isinstance(data, torch.Tensor) or isinstance(data, TracedTensor) or isinstance(data, TensorDescription):
+    elif isinstance(data, torch.Tensor) or isinstance(data, TracedTensor):
         flat_data[name_str] = data
 
     return flat_data
 
 
-def unwrap_tensor_descriptions(data):
-    """Unwrap TensorDescription(s) into a dict mapping names to tensors.
+def unwrap_tensor_semantics(data):
+    """Unwrap TensorSemantics object(s) into a dict mapping names to tensors.
 
-    Accepts a single TensorDescription or a list of TensorDescriptions.
-    All items must be TensorDescriptions — mixing with raw tensors is not allowed.
+    Accepts a single TensorSemantics or a list of TensorSemantics.
+    All items must be TensorSemantics — mixing with raw tensors is not allowed.
 
-    Uses each TensorDescription's .name as the dict key and ._ref as the tensor value.
-    Collects semantic metadata via get_semantics().
+    Uses each item's .name as the dict key and .ref as the tensor value.
+    Collects the TensorSemantics objects for later attachment to TensorDescriptions.
 
     Args:
-        data: A single TensorDescription or a list of TensorDescriptions.
+        data: A single TensorSemantics or a list of TensorSemantics.
 
     Returns:
-        tuple: (dict[str, tensor], dict[str, semantics])
+        tuple: (dict[str, tensor], dict[str, TensorSemantics])
     """
-    if isinstance(data, TensorDescription):
+    if isinstance(data, TensorSemantics):
         data = [data]
 
     if not isinstance(data, (list, tuple)):
         raise TypeError(
-            f"unwrap_tensor_descriptions expects a TensorDescription or list of TensorDescriptions, "
+            f"unwrap_tensor_semantics expects a TensorSemantics or list of TensorSemantics, "
             f"got {type(data).__name__}")
 
-    if not all(isinstance(item, TensorDescription) for item in data):
-        bad_types = {type(item).__name__ for item in data if not isinstance(item, TensorDescription)}
+    if not all(isinstance(item, TensorSemantics) for item in data):
+        bad_types = {type(item).__name__ for item in data if not isinstance(item, TensorSemantics)}
         raise TypeError(
-            f"All items must be TensorDescriptions when using TensorDescription inputs. "
-            f"Found non-TensorDescription types: {bad_types}")
+            f"All items must be TensorSemantics when using semantic inputs. "
+            f"Found non-TensorSemantics types: {bad_types}")
 
     # Check for duplicate names
-    names = [td.name for td in data]
+    names = [sem.name for sem in data]
     duplicates = {name for name in names if names.count(name) > 1}
     if duplicates:
         raise ValueError(
-            f"Duplicate TensorDescription names: {duplicates}. "
-            f"Each TensorDescription must have a unique name.")
+            f"Duplicate TensorSemantics names: {duplicates}. "
+            f"Each TensorSemantics must have a unique name.")
 
     tensors = {}
-    metadata = {}
-    for td in data:
-        tensors[td.name] = td._ref
-        semantics = td.get_semantics()
-        if semantics:
-            metadata[td.name] = semantics
+    semantics_map = {}
+    for sem in data:
+        tensors[sem.name] = sem.ref
+        semantics_map[sem.name] = sem
 
-    return tensors, metadata
+    return tensors, semantics_map
 
 
-def apply_semantic_metadata(node, metadata):
-    """Apply semantic metadata to stored TensorDescriptions on a node by name.
+def apply_semantic_metadata(node, semantics_map):
+    """Attach TensorSemantics objects to stored TensorDescriptions on a node by name.
 
     Args:
         node: A LeappNode with .inputs and .outputs lists of TensorDescriptions.
-        metadata: Dict mapping tensor names to semantic dicts (from unwrap_tensor_descriptions).
+        semantics_map: Dict mapping tensor names to TensorSemantics objects.
     """
     from leapp.leapp_graph.leapp_node import LeappNode
-    for tensor_name, semantics in metadata.items():
+    for tensor_name, semantics in semantics_map.items():
         desc = (LeappNode.get_io_description_by_name(tensor_name, node.inputs) or
                 LeappNode.get_io_description_by_name(tensor_name, node.outputs))
         if desc is None:
@@ -523,7 +573,7 @@ def apply_semantic_metadata(node, metadata):
                 f"Semantic metadata for '{tensor_name}' ignored: "
                 f"not found in node '{node.name}' inputs or outputs")
             continue
-        desc.set_semantics(semantics)
+        desc.init_semantics(semantics)
 
 
 def describe_io_helper(data, name_str):
@@ -563,12 +613,7 @@ def describe_io_helper(data, name_str):
 
         # Return as a list containing the dataclass (for now, keep compatibility)
         data_description = [tensor_desc]
-        io_format = tensor_desc  # Plain string
-    
-    elif isinstance(data, TensorDescription):
-        # if the data is already a description we just return it
-        data_description = [data]
-        io_format = data
+        io_format = tensor_desc
 
     else:
         _get_logger().error(f"Input/Output '{name_str}' has unsupported type: {type(data)}")
