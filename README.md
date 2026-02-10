@@ -130,6 +130,76 @@ annotate.compile_graph()
 ```
 
 
+#### State Tensors
+
+State tensors are traced tensors that are **both inputs AND outputs** - useful for history buffers, running statistics, or recurrent states.
+
+```python
+# After input_tensors, add state tensors to the same node
+obs = annotate.input_tensors({"observation": torch.randn(4)}, "policy")
+
+# Single state returns TracedTensor directly (multiple returns tuple)
+running_mean = annotate.state_tensors("policy", {"running_mean": torch.zeros(4)})
+
+# Update state (if not called, state passes through unchanged)
+new_mean = 0.9 * running_mean + 0.1 * obs
+annotate.update_state("policy", {"running_mean": new_mean})
+
+# State outputs (running_mean_out) added automatically
+annotate.output_tensors("policy", {"action": obs - new_mean}, export_with="jit")
+```
+
+State outputs use `{name}_out` suffix for ONNX SSA compliance. State inputs and outputs are tagged with the same `leapp_tag`, enabling automatic feedback connection detection in the graph.
+
+#### Auto Buffer Tracking (Stateful Neural Nets)
+
+For models that store hidden state as registered buffers (GRU, LSTM, custom RNNs), LEAPP can **auto-detect** which buffers are mutated during forward — no annotations needed inside the model:
+
+```python
+import torch.nn as nn
+
+class GRUPolicy(nn.Module):
+    """Standard PyTorch model — no LEAPP imports."""
+
+    def __init__(self):
+        super().__init__()
+        self.gru = nn.GRU(16, 32, num_layers=1, batch_first=False)
+        self.mlp = nn.Linear(32, 8)
+        self.register_buffer("h_state", torch.zeros(1, 1, 32))
+
+    def forward(self, obs):
+        gru_out, h_out = self.gru(obs.unsqueeze(0), self.h_state)
+        self.h_state = h_out  # reassignment — detected by LEAPP
+        return self.mlp(gru_out.squeeze(0))
+```
+
+Export with `annotate.module()`:
+
+```python
+model = GRUPolicy()
+model.eval()
+
+annotate.start("my_graph", save_path=".")
+obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+
+annotate.module("policy", model)
+action = model(obs_traced)
+
+annotate.output_tensors("policy", {"action": action}, export_with="onnx-torchscript")
+annotate.stop()
+annotate.compile_graph()
+```
+
+**How it works**: `annotate.module()` replaces registered buffers with TracedTensor inputs. When `output_tensors()` compiles the graph, it auto-detects which buffers were reassigned (mutated) during forward. Mutated buffers become state outputs with automatic feedback connections. Non-mutated buffers (e.g. normalizer mean/var) are baked as constants in the exported model, preserving their trained values.
+
+**Requirements**:
+- Hidden states must be registered as buffers via `register_buffer()` in the model's `__init__`.
+- The forward pass must use *reassignment* (`self.h = h_out`) to update state. In-place mutation (`self.h.copy_(h_out)`) is not detected — use the explicit `state_tensors()`/`update_state()` API for in-place patterns.
+- Use `export_with="onnx-torchscript"` for models containing `nn.GRU` or `nn.LSTM`.
+- Optionally pass `buffer_names=["h_state"]` to `module()` to track only specific buffers.
+
+See `examples/stateful_gru_export.py` for a complete runnable example.
+
 ## API Reference
 
 ### ExportManager
@@ -159,7 +229,10 @@ from leapp import annotate  # Singleton, export manager
 - `method(**params)`: Decorator for functions/methods
 - `block(name, **params)`: Context manager for code blocks
 - `input_tensors(tensors_dict, node_name)`: Create traced tensor inputs for a node
-- `output_tensors(tensors_dict, node_name, **params)`: Mark traced tensor outputs and finalize a node
+- `output_tensors(node_name, tensors_dict, **params)`: Mark traced tensor outputs and finalize a node
+- `state_tensors(node_name, tensors_dict)`: Create state tensors (both input and output) for a node
+- `update_state(node_name, tensors_dict)`: Set output values for state tensors
+- `module(node_name, model, buffer_names=None)`: Register a module for automatic stateful buffer tracking
 
 #### Annotations Parameters
 - `node_name`: name of the node to generate

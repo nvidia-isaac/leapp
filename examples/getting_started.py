@@ -9,12 +9,16 @@ def process_sensor_data(raw_readings):
     normalized = (processed - 0.5) * 2.0
     return normalized
 
-# Helper function for feature extraction (called within traced tensor context)
+# Helper functions work normally with traced tensors
 def compute_obstacle_features(sensor_data):
     """Compute obstacle-related features from sensor data."""
     obstacle_distance = torch.mean(torch.abs(sensor_data))
     obstacle_variance = torch.var(sensor_data)
     return obstacle_distance, obstacle_variance
+
+def update_running_mean(running_mean, new_value, alpha=0.1):
+    """Update running mean with exponential moving average."""
+    return (1 - alpha) * running_mean + alpha * new_value
 
 def main():
     # Start tracing our computational graph
@@ -28,40 +32,39 @@ def main():
     clean_data = process_sensor_data(raw_sensor_data)
     
     # ===== NODE 2: Traced tensors =====
-    # Extract navigation features using traced tensors
-    # This allows us to trace operations across function calls
-    sensor_input = annotate.input_tensors({
-        'sensor_data': clean_data
-    }, 'feature_extractor')
-    
-    # Operations are automatically traced - even through helper functions!
+    sensor_input = annotate.input_tensors({'sensor_data': clean_data}, 'feature_extractor')
+
+    # State tensors are both inputs AND outputs
+    running_mean = annotate.state_tensors('feature_extractor', {'running_mean': torch.zeros(5)})
+
+    # Helper functions work normally with traced tensors
     obstacle_dist, obstacle_var = compute_obstacle_features(sensor_input)
-    
-    # Additional inline operations are also traced
+    new_running_mean = update_running_mean(running_mean, sensor_input)
+
     safe_speed = torch.clamp(obstacle_dist, min=0.1, max=1.0)
     confidence = 1.0 / (1.0 + obstacle_var)
-    
-    # Mark outputs to finalize the traced node
+
+    # Set state output values
+    annotate.update_state('feature_extractor', {'running_mean': new_running_mean})
+
     annotate.output_tensors('feature_extractor', {
         'safe_speed': safe_speed,
         'confidence': confidence
     }, export_with="jit")
-    
+
     # ===== NODE 3: Block annotation =====
     # Control decisions using annotation block
     with annotate.block("control_decision",
                          inputs=["safe_speed", "confidence"],
                          outputs=["robot_action"],
                          export_with="jit"):
-        # Combine features into final robot action
-        # Action format: [forward_speed, turn_rate, caution_factor]
         forward_speed = safe_speed * confidence
         turn_rate = torch.zeros(1)
         caution_factor = 1.0 - confidence
-        robot_action = torch.cat([forward_speed.unsqueeze(0), 
-                                   turn_rate, 
+        robot_action = torch.cat([forward_speed.unsqueeze(0),
+                                   turn_rate,
                                    caution_factor.unsqueeze(0)])
-    
+
     # Stop tracing and compile the graph
     annotate.stop()
     annotate.compile_graph()
