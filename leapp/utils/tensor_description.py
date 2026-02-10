@@ -143,8 +143,7 @@ class TensorDescription:
     """
 
     def __init__(self, name: str, value: Any, tag: Optional[str] = None,
-                 semantics: Optional[TensorSemantics] = None,
-                 **semantic_kwargs):
+                 semantics: Optional[TensorSemantics] = None):
         # extract tag from the input if not overridden
         if tag is None and hasattr(value, 'leapp_tag'):
             tag = value.leapp_tag
