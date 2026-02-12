@@ -29,6 +29,44 @@ class TestExportSituation(LEAPPFunctionalTestBase):
 
     """
 
+    def test_export_script_function(self):
+        a = torch.randn(3, 8)
+        b = torch.randn(6, 8)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+
+        @torch.jit.script
+        def module(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+            """Applies a simple computation: softmax(x @ y^T + bias) * scale."""
+            out = torch.matmul(x, y.T)
+            bias = torch.ones(out.shape[-1]) * 0.5
+            out = out + bias
+            out = torch.softmax(out, dim=-1)
+            out = out * 2.0
+            return out
+        
+        x, y = annotate.input_tensors({
+            'x': a,
+            'y': b,
+        }, 'scripted_computation')
+
+        result = module(x, y)
+
+        annotate.output_tensors('scripted_computation', {
+            'result': result,
+        }, export_with="jit-script")
+
+        annotate.stop()
+        annotate.compile_graph()
+
+        # Use allclose instead of exact match because torch.jit.freeze
+        # (optimize_numerics=True) can cause tiny floating-point differences
+        import os
+        model = torch.jit.load(os.path.join(self.TEST_GRAPH_NAME, "scripted_computation.pt"))
+        output = model(a, b)
+        self.assertTrue(torch.allclose(output, result, atol=1e-6),
+                        f"Output mismatch: max diff = {(output - result).abs().max().item():.2e}")
+
     def test_export_nnModule_function(self):
         linear = torch.nn.Linear(3, 3)
 

@@ -12,13 +12,18 @@ subclasses by default.
 We use deferred patching to:
 1. Enable TracedTensor/TracedNpArray compatibility
 2. Avoid conflicts with TorchScript modules compiled at import time
+3. Disable torch.jit.script during tracing so new @torch.jit.script
+   decorators return the original Python function (traceable by TracedTensor)
 
 Patches are applied when tracing starts and removed when tracing stops.
 """
 
+import sys
 import functools
 import numpy as np
 import torch
+
+from leapp._logging import _get_logger
 
 
 # =============================================================================
@@ -141,11 +146,17 @@ def apply_traced_tensor_patches():
     compatibility with functions like:
     - torch.as_tensor, torch.tensor, torch.from_numpy
     - np.array, np.asarray
+    
+    Also disables torch.jit.script via torch.jit._state so that any new
+    @torch.jit.script decorators during tracing return the original Python
+    function, allowing TracedTensor.__torch_function__ to trace through them.
     """
     global _patches_applied
     if not _patches_applied:
         for (module, name), patched in _patches.items():
             setattr(module, name, patched)
+        #TODO: this is exparamental, if it causes issues, we should remove it
+        torch.jit._state.disable()
         _patches_applied = True
 
 
@@ -154,11 +165,13 @@ def remove_traced_tensor_patches():
     
     Call this when tracing stops to restore original function behavior.
     This prevents conflicts with TorchScript compilation.
+    Also re-enables torch.jit.script for normal JIT usage (e.g. export).
     """
     global _patches_applied
     if _patches_applied:
         for (module, name), original in _originals.items():
             setattr(module, name, original)
+        torch.jit._state.enable()
         _patches_applied = False
 
 
@@ -173,3 +186,44 @@ def is_patching_enabled():
 
 # Keep old name for backward compatibility
 is_numpy_patching_enabled = is_patching_enabled
+
+
+# =============================================================================
+# TorchScript Detection Utilities
+# =============================================================================
+
+def warn_if_script_functions_in_scope():
+    """Scan the caller's locals and globals for TorchScript ScriptFunctions.
+
+    Called from input_tensors/output_tensors to warn users about pre-compiled
+    ScriptFunctions that will silently break TracedTensor tracing (because
+    ScriptFunction.__call__ bypasses __torch_function__).
+
+    Only emits a warning — does not raise. Scans the immediate caller's
+    frame (2 levels up: this function → input/output_tensors → user code).
+    """
+    frame = sys._getframe(2)  # skip this function + input/output_tensors
+    suspects = []
+
+    # Check locals
+    for name, val in frame.f_locals.items():
+        if isinstance(val, torch._C.ScriptFunction):
+            suspects.append(f"{name} (local)")
+
+    # Check globals (skip duplicates already found in locals)
+    local_names = set(frame.f_locals.keys())
+    for name, val in frame.f_globals.items():
+        if name not in local_names and isinstance(val, torch._C.ScriptFunction):
+            suspects.append(f"{name} (global)")
+
+    if suspects:
+        _get_logger().warning(
+            f"Detected pre-compiled TorchScript ScriptFunction(s) in scope: {suspects}\n"
+            "ScriptFunction.__call__ bypasses TracedTensor tracing — outputs will be "
+            "plain torch.Tensors, breaking the trace chain.\n"
+            "To fix this, either:\n"
+            "  1. Call torch.jit._state.disable() before the @torch.jit.script "
+            "decorators run (e.g. before importing the module that defines them)\n"
+            "  2. Run the scripting code between annotate.start() and annotate.stop() signals"
+            "(leapp disables JIT during tracing automatically)"
+        )
