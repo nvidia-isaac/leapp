@@ -13,9 +13,9 @@ and graph recording.
 import operator
 from abc import ABCMeta
 
-import numpy as np
 import torch
 from torch.fx.proxy import Proxy
+from torch.fx.experimental.proxy_tensor import make_fx
 
 from leapp._logging import _get_logger
 from leapp.tracing_lock import TracingLock
@@ -344,42 +344,53 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             return tensor_out
 
         # Check if we're trying to call a TorchScript module/method
-        # This will fail when trying to script the graph later
-        # We check this here (after confirming we're tracing) to avoid unnecessary
-        # type introspection when not recording to the graph
-        # TODO: figure out a way to handle this. We should be able to incorporate this.
+        # If detected, decompose into individual aten ops via make_fx so the
+        # tracing chain is preserved transparently.
         func_type_name = type(func).__name__
         func_module = type(func).__module__ if hasattr(
             type(func), '__module__') else ''
 
-        # Detect TorchScript ScriptMethod, ScriptModule, or RecursiveScriptModule
-        if 'ScriptMethod' in func_type_name or 'ScriptModule' in func_type_name:
-            _get_logger().error(
-                f"TorchScript modules cannot be used with TracedTensor during tracing.\n"
-                f"Detected call to: {func_type_name}\n"
-                f"Issue: The FX graph will contain references to TorchScript objects that cannot be scripted later.\n"
-                f"Solutions:\n"
-                f"  1. Use the regular (non-scripted) nn.Module instead during tracing\n"
-                f"  2. Extract and call the underlying operations directly\n"
-                f"  3. break the chain by calling output_tensors first then annotate the scripted module usage with other LEAPP api"
-            )
-            raise ValueError(
-                f"TorchScript modules cannot be used with TracedTensor during tracing. Detected call to: {func_type_name}")
+        is_scripted = ('ScriptMethod' in func_type_name or 'ScriptModule' in func_type_name)
 
-        # Also check if the function comes from torch.jit module
-        if func_module.startswith('torch.jit') or func_module.startswith('torch._C'):
-            # Check if it's actually a ScriptMethod by trying to access __self__
-            if hasattr(func, '__self__') and hasattr(func.__self__, '__class__'):
-                self_class_name = func.__self__.__class__.__name__
-                if 'Script' in self_class_name:
-                    _get_logger().error(
-                        f"TorchScript modules cannot be used with TracedTensor during tracing.\n"
-                        f"Detected: {func} from {self_class_name}\n"
-                        f"The compiled FX graph will contain TorchScript references that prevent scripting.\n"
-                        f"Use the original nn.Module instead of the scripted version during tracing."
-                    )
-                    raise ValueError(
-                        f"TorchScript modules cannot be used with TracedTensor during tracing. Detected call to: {func}")
+        if not is_scripted:
+            # Also check if the function comes from torch.jit module
+            if func_module.startswith('torch.jit') or func_module.startswith('torch._C'):
+                if hasattr(func, '__self__') and hasattr(func.__self__, '__class__'):
+                    self_class_name = func.__self__.__class__.__name__
+                    is_scripted = 'Script' in self_class_name
+
+        if is_scripted:
+            # Decompose the scripted module/function into individual aten ops
+            # via make_fx (ProxyTensor dispatch), then replay with TracedTensors
+            # so each op gets recorded in our FX graph transparently.
+
+            _get_logger().info(
+                f"Detected TorchScript call to {func_type_name}. "
+                f"Decomposing via make_fx for transparent tracing."
+            )
+
+            try:
+                # make_fx traces through the scripted module at the aten dispatcher
+                # level, producing a standard FX GraphModule with individual ops.
+                # Wrap func so make_fx sees a plain callable — bound methods like
+                # ScriptModule.forward have 'self' in the signature which causes
+                # make_fx to expect an extra argument.
+                fx_module = make_fx(lambda *args, **kwargs: func(*args, **kwargs))(*real_args, **real_kwargs)
+
+                # Call the decomposed FX module with TracedTensors.
+                # Each aten op triggers __torch_function__, recording it in our graph.
+                return fx_module(*args, **kwargs)
+            except Exception as e:
+                _get_logger().error(
+                    f"Failed to decompose TorchScript call via make_fx: {e}\n"
+                    f"The TorchScript module/function could not be transparently traced.\n"
+                    f"Solutions:\n"
+                    f"  1. Use the regular (non-scripted) nn.Module instead during tracing\n"
+                    f"  2. Extract and call the underlying operations directly\n"
+                    f"  3. Break the chain by calling output_tensors() first then annotate "
+                    f"the scripted module usage with other LEAPP API"
+                )
+                raise
 
         # Helper to recursively extract proxies
         def extract_proxy(obj):

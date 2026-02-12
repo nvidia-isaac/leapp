@@ -81,6 +81,7 @@ class TorchScriptExportBackend(TorchExportBackend):
             m = self.module_builder().eval()
         else:
             m = m.eval()
+        torch.jit._state.enable
         compiled_model = torch.jit.script(m, **self.backend_params)
         self.compiled_model = compiled_model
         self.compiled_module = m

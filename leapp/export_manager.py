@@ -33,11 +33,12 @@ from leapp.leapp_graph.datatypes import (
     apply_traced_tensor_patches,
     remove_traced_tensor_patches,
 )
+from leapp.leapp_graph.datatypes.global_patching import warn_if_script_functions_in_scope
 from leapp.leapp_graph.block_context_node import BlockContextNode
 from leapp.utils.utils import frame_to_namespace
 from leapp.utils.enums import MergeCfgEnum
 from leapp.tracing_lock import TracingLock
-from leapp.utils.tensor_description import TensorDescription, TensorSemantics
+from leapp.utils.tensor_description import TensorSemantics
 from leapp.utils.tensor_description import (verify_data_exact_match,
                                              flatten_io_structure,
                                              unwrap_tensor_semantics,
@@ -248,6 +249,9 @@ class ExportManager:
             values = list(tensors.values())
             return values[0] if len(values) == 1 else tuple(values)
 
+        # Warn if pre-compiled ScriptFunctions are visible in the caller's scope
+        warn_if_script_functions_in_scope()
+
         # we need to handle input tensors more carefully than outputs because
         # we need to ensure the inputs are returned in the original structure
         traced_tensors = []
@@ -301,6 +305,9 @@ class ExportManager:
         if tensors_changed:
             _get_logger().warning(f"Warning: no tensor name provided for output_tensors call in node {node_name}\n"
                                   "Assuming default tensor name")
+
+        # Warn if pre-compiled ScriptFunctions are visible in the caller's scope
+        warn_if_script_functions_in_scope()
 
         instances = set(is_traced_type(tensor) for tensor in flattened_tensors.values())
 

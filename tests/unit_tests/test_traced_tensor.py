@@ -2068,32 +2068,7 @@ class TestTracedTensor(unittest.TestCase):
         self.assertIn("indices.tensor", error_msg)
 
     # ==================== TorchScript Module Interaction Tests ====================
-
-    def test_tracedtensor_with_torchscript_module_raises_error(self):
-        """Test that using TorchScript module with TracedTensor raises clear error."""
-        # Create a simple TorchScript module
-        class SimpleModule(torch.nn.Module):
-            def forward(self, x):
-                return x * 2 + 1
-
-        module = SimpleModule()
-        scripted_module = torch.jit.script(module)
-
-        # Use it with TracedTensor
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
-
-        # This should raise ValueError during tracing
-        with self.assertRaises(ValueError) as context:
-            y = scripted_module(x)
-
-        # Verify the error message is correct
-        error_msg = str(context.exception)
-        self.assertIn("TorchScript modules cannot be used", error_msg)
-        self.assertIn("TracedTensor", error_msg)
-        self.assertIn("during tracing", error_msg)
-
-    def test_torchscript_module_with_parameters_raises_error(self):
+    def test_tracing_through_torchscript_module(self):
         """Test that TorchScript module with parameters raises error with TracedTensor."""
         # Create a TorchScript module with parameters
         class LinearModule(torch.nn.Module):
@@ -2111,17 +2086,16 @@ class TestTracedTensor(unittest.TestCase):
         # Use it in tracing context
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+        y = scripted_module(x)
+        ctx.compile_trace({'y': y})
 
-        # Should raise ValueError during tracing
-        with self.assertRaises(ValueError) as context:
-            y = scripted_module(x)
+        torch.manual_seed(42)
+        input_tensor = torch.randn((3,))
+        expected = scripted_module(input_tensor)
+        output = ctx.compiled_graph_module(input_tensor)
+        self.assertTrue(torch.allclose(output, expected))
 
-        error_msg = str(context.exception)
-        self.assertIn("TorchScript modules cannot be used", error_msg)
-        self.assertIn("TracedTensor", error_msg)
-        self.assertIn("during tracing", error_msg)
-
-    def test_nested_torchscript_in_traced_operations_raises_error(self):
+    def test_torchscript_with_normal_normal_torch_operations(self):
         """Test that TorchScript module nested with traced ops raises error."""
         class ReLUModule(torch.nn.Module):
             def forward(self, x):
@@ -2132,19 +2106,23 @@ class TestTracedTensor(unittest.TestCase):
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(torch.tensor([-1.0, 0.0, 1.0, 2.0]), name="x")
 
-        # Regular operation first
-        y = x * 2  # This works fine
+        def operation_chain(x):
+            y = x * 2
+            z = torch.abs(y)-1
+            z = scripted_relu(z)
+            return z
+        z = operation_chain(x)
 
-        # TorchScript module should raise ValueError
-        with self.assertRaises(ValueError) as context:
-            z = scripted_relu(y)  # TorchScript module with TracedTensor
+        ctx.compile_trace({'z': z})
+        output = ctx.compiled_graph_module(torch.tensor([-1.0, 0.0, 1.0, 2.0]))
 
-        error_msg = str(context.exception)
-        self.assertIn("TorchScript modules cannot be used", error_msg)
-        self.assertIn("TracedTensor", error_msg)
-        self.assertIn("during tracing", error_msg)
+        torch.manual_seed(42)
+        input_tensor = torch.randn((4,))*2
+        expected = operation_chain(input_tensor)
+        output = ctx.compiled_graph_module(input_tensor)
+        self.assertTrue(torch.allclose(output, expected))
 
-    def test_torchscript_with_multiple_inputs_raises_error(self):
+    def test_torchscript_with_multiple_inputs(self):
         """Test that TorchScript module with multiple TracedTensor inputs raises error."""
         class AddModule(torch.nn.Module):
             def forward(self, x, y):
@@ -2156,16 +2134,18 @@ class TestTracedTensor(unittest.TestCase):
         x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
         y = ctx.create_input(torch.tensor([4.0, 5.0, 6.0]), name="y")
 
-        # Should raise ValueError when calling with TracedTensors
-        with self.assertRaises(ValueError) as context:
-            z = scripted_add(x, y)
 
-        error_msg = str(context.exception)
-        self.assertIn("TorchScript modules cannot be used", error_msg)
-        self.assertIn("TracedTensor", error_msg)
-        self.assertIn("during tracing", error_msg)
+        z = scripted_add(x, y)
 
-    def test_torchscript_module_with_state_raises_error(self):
+        ctx.compile_trace({'z': z})
+        input_x = torch.randn((3,))
+        input_y = torch.randn((3,))
+
+        expected = scripted_add(input_x, input_y)
+        output = ctx.compiled_graph_module(input_x, input_y)
+        self.assertTrue(torch.allclose(output, expected))
+
+    def test_torchscript_module_with_state_and_untraced_tensor_input(self):
         """Test that TorchScript module with state raises error with TracedTensor."""
         class StatefulModule(torch.nn.Module):
             def __init__(self):
@@ -2176,23 +2156,27 @@ class TestTracedTensor(unittest.TestCase):
                     [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
                 self.linear.bias.data = torch.tensor([0.0, 0.0])
 
-            def forward(self, x):
-                return self.linear(x)
+            def forward(self, x, y):
+                return self.linear(x) + y
 
         module = StatefulModule()
         scripted_module = torch.jit.script(module)
 
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+        y = torch.tensor([4.0, 5.0]) #<-- this should stay constant for the tests too
 
-        # Should raise ValueError when calling with TracedTensor
-        with self.assertRaises(ValueError) as context:
-            y = scripted_module(x)
+        z = scripted_module(x, y)
+        ctx.compile_trace({'z': z})
+        input_x = torch.randn((3,))
 
-        error_msg = str(context.exception)
-        self.assertIn("TorchScript modules cannot be used", error_msg)
-        self.assertIn("TracedTensor", error_msg)
-        self.assertIn("during tracing", error_msg)
+        # we expect the other input is actually inlined into the graph
+        torch.manual_seed(42)
+        input_x = torch.randn((3,))
+        expected = scripted_module(input_x, y)
+
+        output = ctx.compiled_graph_module(input_x)
+        self.assertTrue(torch.allclose(output, expected))
 
 
 if __name__ == "__main__":
