@@ -20,7 +20,7 @@ class TestNumpyCompatibilityTracedTensor(unittest.TestCase):
         tensor = torch.tensor([1.0, 2.0, 3.0])
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        tensor = annotate.input_tensors({'tensor': tensor}, 'basic_numpy_function')
+        tensor = annotate.input_tensors('basic_numpy_function', {'tensor': tensor})
 
         # numpy operations
         numpy_val = tensor.numpy()
@@ -158,7 +158,7 @@ class TestNumpyPatchingDisabled(unittest.TestCase):
         
         # Start with patch_numpy=False
         annotate.start(name=self.TEST_GRAPH_NAME, patch_numpy=False)
-        traced = annotate.input_tensors({'tensor': tensor}, 'test_node')
+        traced = annotate.input_tensors('test_node', {'tensor': tensor})
         
         # Verify we have a TracedTensor
         self.assertIsInstance(traced, TracedTensor)
@@ -181,7 +181,7 @@ class TestNumpyPatchingDisabled(unittest.TestCase):
         
         # Start with patch_numpy=False
         annotate.start(name=self.TEST_GRAPH_NAME, patch_numpy=False)
-        traced = annotate.input_tensors({'tensor': tensor}, 'test_node')
+        traced = annotate.input_tensors('test_node', {'tensor': tensor})
         
         # Verify we have a TracedTensor
         self.assertIsInstance(traced, TracedTensor)
@@ -204,7 +204,7 @@ class TestNumpyPatchingDisabled(unittest.TestCase):
         
         # Start with patch_numpy=False
         annotate.start(name=self.TEST_GRAPH_NAME, patch_numpy=False)
-        traced = annotate.input_tensors({'tensor': tensor}, 'test_node')
+        traced = annotate.input_tensors('test_node', {'tensor': tensor})
         
         # Verify we have a TracedTensor
         self.assertIsInstance(traced, TracedTensor)

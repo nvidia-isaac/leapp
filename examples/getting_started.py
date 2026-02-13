@@ -32,7 +32,7 @@ def main():
     clean_data = process_sensor_data(raw_sensor_data)
     
     # ===== NODE 2: Traced tensors =====
-    sensor_input = annotate.input_tensors({'sensor_data': clean_data}, 'feature_extractor')
+    sensor_input = annotate.input_tensors('feature_extractor', {'sensor_data': clean_data})
 
     # State tensors are both inputs AND outputs
     running_mean = annotate.state_tensors('feature_extractor', {'running_mean': torch.zeros(5)})

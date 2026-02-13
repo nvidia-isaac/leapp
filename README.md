@@ -55,10 +55,10 @@ from leapp import annotate
 annotate.start(name="my_graph")
 
 # Create traced inputs - returns TracedTensor objects that record operations
-joint_pos, joint_vel = annotate.input_tensors({
+joint_pos, joint_vel = annotate.input_tensors('preprocessing', {
     'joint_pos': torch.randn(12),
     'joint_vel': torch.randn(12)
-}, 'preprocessing')
+})
 
 # Perform operations - all ops are automatically traced
 normalized_pos = joint_pos / 3.14
@@ -71,7 +71,7 @@ annotate.output_tensors('preprocessing', {
 }, export_with="jit")
 
 # Chain to another node - traced tensors automatically connect nodes
-features = annotate.input_tensors({'features': combined}, 'inference')
+features = annotate.input_tensors('inference', {'features': combined})
 predictions = features @ torch.randn(24, 3)  # Simple linear transform
 annotate.output_tensors('inference', {'predictions': predictions}, export_with="onnx")
 
@@ -136,7 +136,7 @@ State tensors are traced tensors that are **both inputs AND outputs** - useful f
 
 ```python
 # After input_tensors, add state tensors to the same node
-obs = annotate.input_tensors({"observation": torch.randn(4)}, "policy")
+obs = annotate.input_tensors("policy", {"observation": torch.randn(4)})
 
 # Single state returns TracedTensor directly (multiple returns tuple)
 running_mean = annotate.state_tensors("policy", {"running_mean": torch.zeros(4)})
@@ -180,7 +180,7 @@ model = GRUPolicy()
 model.eval()
 
 annotate.start("my_graph", save_path=".")
-obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+obs_traced = annotate.input_tensors("policy", {"obs": obs})
 
 annotate.module("policy", model)
 action = model(obs_traced)

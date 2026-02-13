@@ -57,10 +57,10 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         joint_vel = torch.randn(1, 12)
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        traced_pos, traced_vel = annotate.input_tensors([
+        traced_pos, traced_vel = annotate.input_tensors("policy", [
             TensorSemantics(name="joint_pos", ref=joint_pos, kind=inputKindEnum.JOINT_POSITION),
             TensorSemantics(name="joint_vel", ref=joint_vel, kind=inputKindEnum.JOINT_VELOCITY),
-        ], "policy")
+        ])
 
         output = traced_pos + traced_vel
         annotate.output_tensors("policy", {"command": output})
@@ -87,8 +87,8 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         annotate.start(name=self.TEST_GRAPH_NAME)
         traced = annotate.input_tensors(
+            "single_node",
             TensorSemantics(name="pos", ref=tensor, kind=inputKindEnum.JOINT_POSITION),
-            "single_node"
         )
 
         output = traced * 2.0
@@ -111,8 +111,8 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         annotate.start(name=self.TEST_GRAPH_NAME)
         traced = annotate.input_tensors(
+            "elem_node",
             TensorSemantics(name="position", ref=tensor, element_names=names),
-            "elem_node"
         )
 
         output = traced + 1.0
@@ -135,10 +135,10 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         annotate.start(name=self.TEST_GRAPH_NAME)
         traced = annotate.input_tensors(
+            "full_meta_node",
             TensorSemantics(name="joint_pos", ref=tensor,
                             kind=inputKindEnum.JOINT_POSITION,
                             element_names=joint_names),
-            "full_meta_node"
         )
 
         output = traced * 0.5
@@ -163,10 +163,10 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         annotate.start(name=self.TEST_GRAPH_NAME)
         traced = annotate.input_tensors(
+            "full_meta_node",
             TensorSemantics(name="joint_pos", ref=tensor,
                             kind="my/custom/kind",
                             element_names=joint_names),
-            "full_meta_node"
         )
 
         output = traced * 0.5
@@ -193,7 +193,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         tensor = torch.randn(1, 6)
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        traced = annotate.input_tensors({"pos": tensor}, "out_kind_node")
+        traced = annotate.input_tensors("out_kind_node", {"pos": tensor})
 
         command = traced * 2.0
 
@@ -215,7 +215,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         tensor = torch.randn(1, 3)
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        traced = annotate.input_tensors({"input": tensor}, "out_elem_node")
+        traced = annotate.input_tensors("out_elem_node", {"input": tensor})
 
         result = traced + 1.0
 
@@ -242,10 +242,10 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         vel = torch.randn(1, 6)
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        traced_pos, traced_vel = annotate.input_tensors([
+        traced_pos, traced_vel = annotate.input_tensors("both_node", [
             TensorSemantics(name="pos", ref=pos, kind=inputKindEnum.JOINT_POSITION),
             TensorSemantics(name="vel", ref=vel, kind=inputKindEnum.JOINT_VELOCITY),
-        ], "both_node")
+        ])
 
         command = traced_pos + traced_vel
 
@@ -271,7 +271,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         tensor = torch.randn(1, 4)
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        traced = annotate.input_tensors({"input": tensor}, "plain_node")
+        traced = annotate.input_tensors("plain_node", {"input": tensor})
 
         output = traced + 1.0
         annotate.output_tensors("plain_node", {"output": output})
@@ -300,10 +300,10 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         annotate.start(name=self.TEST_GRAPH_NAME)
         with self.assertRaises(TypeError):
-            annotate.input_tensors([
+            annotate.input_tensors("fail_node", [
                 t1,
                 TensorSemantics(name="td", ref=t2, kind=inputKindEnum.JOINT_POSITION),
-            ], "fail_node")
+            ])
         annotate.stop()
 
     def test_duplicate_td_names_raises(self):
@@ -313,10 +313,10 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         annotate.start(name=self.TEST_GRAPH_NAME)
         with self.assertRaises(Exception):
-            annotate.input_tensors([
+            annotate.input_tensors("dup_node", [
                 TensorSemantics(name="same_name", ref=t1),
                 TensorSemantics(name="same_name", ref=t2),
-            ], "dup_node")
+            ])
         annotate.stop()
 
     # =========================================================================
@@ -329,10 +329,10 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         vel = torch.randn(1, 4)
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        traced_pos, traced_vel = annotate.input_tensors([
+        traced_pos, traced_vel = annotate.input_tensors("struct_node", [
             TensorSemantics(name="pos", ref=pos, kind=inputKindEnum.JOINT_POSITION),
             TensorSemantics(name="vel", ref=vel, kind=inputKindEnum.JOINT_VELOCITY),
-        ], "struct_node")
+        ])
 
         output = traced_pos + traced_vel
         annotate.output_tensors("struct_node", {"command": output})

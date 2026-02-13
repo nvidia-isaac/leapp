@@ -66,7 +66,7 @@ def main():
     annotate.start("stateful_gru", save_path=output_dir)
 
     # Register regular inputs
-    obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+    obs_traced = annotate.input_tensors("policy", {"obs": obs})
 
     # Register module: injects TracedTensors into buffers, mutations
     # are auto-detected when output_tensors() compiles the graph

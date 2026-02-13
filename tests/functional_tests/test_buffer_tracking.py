@@ -124,7 +124,7 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
         obs = torch.randn(1, 4)
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+        obs_traced = annotate.input_tensors("policy", {"obs": obs})
 
         annotate.module("policy", model)
         action = model(obs_traced)
@@ -148,7 +148,7 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
         obs = torch.randn(1, 4)
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+        obs_traced = annotate.input_tensors("policy", {"obs": obs})
 
         annotate.module("policy", model)
         action = model(obs_traced)
@@ -172,7 +172,7 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
         obs = torch.randn(1, 4)
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+        obs_traced = annotate.input_tensors("policy", {"obs": obs})
 
         annotate.module("policy", model)
         action = model(obs_traced)
@@ -197,7 +197,7 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
         obs = torch.randn(1, 4)
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+        obs_traced = annotate.input_tensors("policy", {"obs": obs})
 
         annotate.module("policy", model)
         action = model(obs_traced)
@@ -221,7 +221,7 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
         obs = torch.randn(1, 4)
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+        obs_traced = annotate.input_tensors("policy", {"obs": obs})
 
         annotate.module("policy", model)
         action = model(obs_traced)
@@ -243,7 +243,7 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
         obs = torch.randn(1, 4)
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+        obs_traced = annotate.input_tensors("policy", {"obs": obs})
 
         # Only track h_state, ignore c_state
         annotate.module("policy", model, buffer_names=["h_state"])
@@ -271,7 +271,7 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
         original_buffers = dict(model.named_buffers())
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+        obs_traced = annotate.input_tensors("policy", {"obs": obs})
 
         annotate.module("policy", model)
         action = model(obs_traced)
@@ -311,7 +311,7 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
         obs = torch.tensor([[1.0, 2.0, 3.0, 4.0]])
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+        obs_traced = annotate.input_tensors("policy", {"obs": obs})
 
         annotate.module("policy", model)
         result = model(obs_traced)
@@ -356,7 +356,7 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
         obs = torch.randn(1, 4)
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+        obs_traced = annotate.input_tensors("policy", {"obs": obs})
 
         annotate.module("policy", model)
         action = model(obs_traced)
@@ -396,7 +396,7 @@ class TestBufferTrackingEdgeCases(LEAPPFunctionalTestBase):
         obs = torch.randn(1, 8)
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+        obs_traced = annotate.input_tensors("policy", {"obs": obs})
 
         annotate.module("policy", model)
         action = model(obs_traced)
@@ -430,7 +430,7 @@ class TestBufferTrackingEdgeCases(LEAPPFunctionalTestBase):
         obs = torch.randn(1, 4)
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+        obs_traced = annotate.input_tensors("policy", {"obs": obs})
 
         annotate.module("policy", model)
         action = model(obs_traced)
@@ -462,7 +462,7 @@ class TestBufferTrackingEdgeCases(LEAPPFunctionalTestBase):
         obs = torch.randn(1, 4)
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+        obs_traced = annotate.input_tensors("policy", {"obs": obs})
 
         annotate.module("policy", model)
         action = model(obs_traced)
@@ -494,7 +494,7 @@ class TestBufferTrackingEdgeCases(LEAPPFunctionalTestBase):
         obs = torch.randn(1, 4)
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+        obs_traced = annotate.input_tensors("policy", {"obs": obs})
 
         annotate.module("policy", model)
         action = model(obs_traced)
@@ -528,7 +528,7 @@ class TestBufferTrackingEdgeCases(LEAPPFunctionalTestBase):
         obs = torch.randn(1, 4)
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+        obs_traced = annotate.input_tensors("policy", {"obs": obs})
 
         annotate.module("policy", model)
         action = model(obs_traced)
@@ -561,7 +561,7 @@ class TestBufferTrackingEdgeCases(LEAPPFunctionalTestBase):
         obs = torch.randn(1, 4)
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+        obs_traced = annotate.input_tensors("policy", {"obs": obs})
 
         annotate.module("policy", model)
         action = model(obs_traced)
@@ -592,7 +592,7 @@ class TestBufferTrackingEdgeCases(LEAPPFunctionalTestBase):
         obs = torch.randn(1, 4)
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+        obs_traced = annotate.input_tensors("policy", {"obs": obs})
 
         annotate.module("policy", model)
         action = model(obs_traced)
@@ -624,7 +624,7 @@ class TestBufferTrackingEdgeCases(LEAPPFunctionalTestBase):
         obs = torch.randn(1, 4)
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+        obs_traced = annotate.input_tensors("policy", {"obs": obs})
 
         annotate.module("policy", model)
         action = model(obs_traced)
@@ -658,7 +658,7 @@ class TestBufferTrackingEdgeCases(LEAPPFunctionalTestBase):
         obs = torch.randn(1, 4)
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+        obs_traced = annotate.input_tensors("policy", {"obs": obs})
 
         annotate.module("policy", model)
         out_a, out_b = model(obs_traced)
@@ -691,7 +691,7 @@ class TestBufferTrackingEdgeCases(LEAPPFunctionalTestBase):
         obs = torch.randn(1, 4)
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+        obs_traced = annotate.input_tensors("policy", {"obs": obs})
 
         annotate.module("policy", model)
         action = model(obs_traced)
@@ -736,7 +736,7 @@ class TestBufferTrackingErrors(LEAPPFunctionalTestBase):
         original_buffer_names = set(dict(model.named_buffers()).keys())
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+        obs_traced = annotate.input_tensors("policy", {"obs": obs})
         annotate.module("policy", model)
         action = model(obs_traced)
 
@@ -769,7 +769,7 @@ class TestBufferTrackingErrors(LEAPPFunctionalTestBase):
 
         # Trace
         annotate.start(name=self.TEST_GRAPH_NAME)
-        obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+        obs_traced = annotate.input_tensors("policy", {"obs": obs})
         annotate.module("policy", model)
         action = model(obs_traced)
         annotate.output_tensors("policy", {"action": action},
@@ -793,7 +793,7 @@ class TestBufferTrackingErrors(LEAPPFunctionalTestBase):
         obs = torch.randn(1, 4)
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+        obs_traced = annotate.input_tensors("policy", {"obs": obs})
 
         # "nonexistent" doesn't match any buffer — tracker injects nothing
         annotate.module("policy", model, buffer_names=["nonexistent"])

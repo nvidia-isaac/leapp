@@ -51,9 +51,9 @@ def main():
     # ===== NODE 2: Traced tensors =====
     # Extract navigation features using traced tensors
     # This allows us to trace operations across function calls
-    sensor_input = annotate.input_tensors({
+    sensor_input = annotate.input_tensors('feature_extractor', {
         'sensor_data': clean_data
-    }, 'feature_extractor')
+    })
     
     # Operations are automatically traced - even through helper functions!
     obstacle_dist, obstacle_var = compute_obstacle_features(sensor_input)
@@ -116,9 +116,9 @@ The `@annotate.method` decorator marks an entire function as a graph node. Key p
 
 ```python
 # Create traced inputs - returns TracedTensor objects
-sensor_input = annotate.input_tensors({
+sensor_input = annotate.input_tensors('feature_extractor', {
     'sensor_data': clean_data
-}, 'feature_extractor')
+})
 
 # All operations on TracedTensors are recorded - even through function calls!
 result = some_helper_function(sensor_input)

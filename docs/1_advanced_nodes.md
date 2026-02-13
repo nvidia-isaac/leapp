@@ -174,7 +174,7 @@ def get_lidar_data(env):
     # some environment setup this is not tracable because it involves the environment
     lidar_data = env.get('lidar_data')
     #reference the same node name
-    lidar_data = annotate.input_tensors({'lidar_data': lidar_data}, 'sensor_fusion') 
+    lidar_data = annotate.input_tensors('sensor_fusion', {'lidar_data': lidar_data}) 
     return lidar_data
 
 def get_camera_features(env):
@@ -182,7 +182,7 @@ def get_camera_features(env):
     # some environment setup this is not tracable because it involves the environment
     camera_features = env.get('camera_features')
     #reference the same node name
-    camera_features = annotate.input_tensors({'camera_features': camera_features}, 'sensor_fusion')
+    camera_features = annotate.input_tensors('sensor_fusion', {'camera_features': camera_features})
     return camera_features
 
 def run_pipeline():
@@ -284,7 +284,7 @@ module = Module()
 annotate.start(name="buffer_example")
 
 input_tensor = torch.tensor([4.0, 5.0, 6.0])
-traced_input = annotate.input_tensors({'input': input_tensor}, 'my_node')
+traced_input = annotate.input_tensors('my_node', {'input': input_tensor})
 
 result = module.run(traced_input)
 
@@ -310,7 +310,7 @@ from leapp import annotate
 annotate.start(name="static_example")
 
 input_tensor = torch.tensor([1.0, 2.0, 3.0])
-traced_input = annotate.input_tensors({'input': input_tensor}, 'my_node')
+traced_input = annotate.input_tensors('my_node', {'input': input_tensor})
 
 # Computed output — derived from the traced input
 computed_output = traced_input + 1.0

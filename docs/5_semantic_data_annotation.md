@@ -19,7 +19,7 @@ joint_vel = torch.randn(1, 12)
 annotate.start("my_robot")
 
 # Pass a list of TensorSemantics as inputs
-traced_pos, traced_vel = annotate.input_tensors([
+traced_pos, traced_vel = annotate.input_tensors("policy", [
     TensorSemantics("joint_pos", joint_pos,
                      kind=inputKindEnum.JOINT_POSITION,
                      element_names=["hip_l", "knee_l", "ankle_l",
@@ -28,7 +28,7 @@ traced_pos, traced_vel = annotate.input_tensors([
                                     "shoulder_r", "elbow_r", "wrist_r"]),
     TensorSemantics("joint_vel", joint_vel,
                      kind=inputKindEnum.JOINT_VELOCITY),
-], "policy")
+])
 
 # Compute output
 command = traced_pos + traced_vel
@@ -166,29 +166,29 @@ TensorSemantics are passed as a **single object** or as a **list**. They cannot 
 ```python
 # ✅ Single TensorSemantics
 annotate.input_tensors(
+    "node",
     TensorSemantics("pos", tensor, kind=inputKindEnum.JOINT_POSITION),
-    "node"
 )
 
 # ✅ List of TensorSemantics
-annotate.input_tensors([
+annotate.input_tensors("node", [
     TensorSemantics("pos", pos_tensor, kind=inputKindEnum.JOINT_POSITION),
     TensorSemantics("vel", vel_tensor, kind=inputKindEnum.JOINT_VELOCITY),
-], "node")
+])
 
 # ✅ Regular dict (no semantic metadata)
-annotate.input_tensors({"pos": pos_tensor, "vel": vel_tensor}, "node")
+annotate.input_tensors("node", {"pos": pos_tensor, "vel": vel_tensor})
 
 # ❌ TensorSemantics inside a dict — NOT supported
-annotate.input_tensors({
+annotate.input_tensors("node", {
     "pos": TensorSemantics("pos", pos_tensor, kind=inputKindEnum.JOINT_POSITION),
-}, "node")
+})
 
 # ❌ Mixing TensorSemantics and raw tensors — NOT supported
-annotate.input_tensors([
+annotate.input_tensors("node", [
     TensorSemantics("pos", pos_tensor, kind=inputKindEnum.JOINT_POSITION),
     vel_tensor,  # raw tensor mixed with semantics
-], "node")
+])
 ```
 
 ## Limitations

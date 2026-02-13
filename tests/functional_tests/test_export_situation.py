@@ -45,10 +45,10 @@ class TestExportSituation(LEAPPFunctionalTestBase):
             out = out * 2.0
             return out
         
-        x, y = annotate.input_tensors({
+        x, y = annotate.input_tensors('scripted_computation', {
             'x': a,
             'y': b,
-        }, 'scripted_computation')
+        })
 
         result = module(x, y)
 

@@ -207,7 +207,7 @@ class ExportManager:
     #########################################################
     # annotation APIs
     #########################################################
-    def input_tensors(self, tensors, node_name: str):
+    def input_tensors(self, node_name: str, tensors):
         # If TensorSemantics are passed (single or list), unwrap to dict
         metadata = {}
         if isinstance(tensors, (TensorSemantics, list)) and (
@@ -501,7 +501,7 @@ class ExportManager:
         Example::
 
             annotate.start("graph", save_path=output_dir)
-            obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+            obs_traced = annotate.input_tensors("policy", {"obs": obs})
 
             annotate.module("policy", model)
             action = model(obs_traced)

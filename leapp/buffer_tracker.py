@@ -28,7 +28,7 @@ The model just needs to use standard PyTorch patterns:
 
 Usage::
 
-    obs_traced = annotate.input_tensors({"obs": obs}, "policy")
+    obs_traced = annotate.input_tensors("policy", {"obs": obs})
 
     annotate.module("policy", model)
     action = model(obs_traced)

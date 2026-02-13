@@ -166,16 +166,16 @@ Create traced tensor inputs for programmatic node definition. Returns TracedTens
 ### Signature
 
 ```python
-traced_tensors = annotate.input_tensors(tensors: dict, node_name: str)
+traced_tensors = annotate.input_tensors(node_name: str, tensors: dict)
 ```
 
 ### Parameters
 
+- **`node_name`** (str, required): The unique name to identify this node in the computational graph.
+
 - **`tensors`** (dict, required): A dictionary mapping input names to tensor values. Keys become the input names in the exported model. Values can be:
   - `torch.Tensor`: Regular tensors
   - Nested structures: `dict`, `list`, or `tuple` containing tensors (will be flattened)
-  
-- **`node_name`** (str, required): The unique name to identify this node in the computational graph.
 
 ### Returns
 

@@ -31,7 +31,7 @@ class TestStateTensors(LEAPPFunctionalTestBase):
 
         # Create regular input
         obs = annotate.input_tensors(
-            {"observation": torch.tensor([1.0, 2.0, 3.0])}, "policy"
+            "policy", {"observation": torch.tensor([1.0, 2.0, 3.0])}
         )
 
         # Create state tensor (both input and output)
@@ -75,7 +75,7 @@ class TestStateTensors(LEAPPFunctionalTestBase):
 
         # Current observation
         current_obs = annotate.input_tensors(
-            {"current_obs": torch.tensor([1.0, 2.0, 3.0, 4.0])}, "obs_processor"
+            "obs_processor", {"current_obs": torch.tensor([1.0, 2.0, 3.0, 4.0])}
         )
 
         # History buffer as state [batch, history_len, obs_dim]
@@ -115,7 +115,7 @@ class TestStateTensors(LEAPPFunctionalTestBase):
 
         # Input
         obs = annotate.input_tensors(
-            {"observation": torch.tensor([1.0, 2.0, 3.0])}, "policy"
+            "policy", {"observation": torch.tensor([1.0, 2.0, 3.0])}
         )
 
         # Multiple state tensors - returns tuple
@@ -164,7 +164,7 @@ class TestStateTensors(LEAPPFunctionalTestBase):
 
         # Input
         obs = annotate.input_tensors(
-            {"observation": torch.tensor([1.0, 2.0, 3.0])}, "policy"
+            "policy", {"observation": torch.tensor([1.0, 2.0, 3.0])}
         )
 
         # State tensor without calling update_state
@@ -198,7 +198,7 @@ class TestStateTensors(LEAPPFunctionalTestBase):
         for step in range(5):
             # Current observation
             current_obs = annotate.input_tensors(
-                {"current_obs": torch.randn(1, 4)}, "policy"
+                "policy", {"current_obs": torch.randn(1, 4)}
             )
 
             # History as state
@@ -249,7 +249,7 @@ class TestStateTensorErrors(LEAPPFunctionalTestBase):
         annotate.start(name=self.TEST_GRAPH_NAME)
 
         # Create node and state
-        annotate.input_tensors({"obs": torch.zeros(3)}, "policy")
+        annotate.input_tensors("policy", {"obs": torch.zeros(3)})
         annotate.state_tensors("policy", {"registered_state": torch.zeros(3)})
 
         with self.assertRaises(Exception):

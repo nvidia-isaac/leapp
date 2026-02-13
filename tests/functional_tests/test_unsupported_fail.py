@@ -211,7 +211,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
     def test_reentrant_tracing_using_traced_tensors(self): #TODO: these both need to fail
         try:
             annotate.start(name=self.TEST_GRAPH_NAME)
-            tensors = annotate.input_tensors({'inputA': torch.tensor([1.0, 2.0, 3.0])}, 'func')
+            tensors = annotate.input_tensors('func', {'inputA': torch.tensor([1.0, 2.0, 3.0])})
             tensors += 100
             input = torch.tensor([1.0, 2.0, 3.0])
             @annotate.method()
@@ -231,7 +231,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             def inner_func(inputA: torch.Tensor):
                 return inputA + 5
             annotate.start(name=self.TEST_GRAPH_NAME)
-            tensors = annotate.input_tensors({'inputA': torch.tensor([1.0, 2.0, 3.0])}, 'func')
+            tensors = annotate.input_tensors('func', {'inputA': torch.tensor([1.0, 2.0, 3.0])})
             tensors += 100
             output_tensors = inner_func(tensors)
             annotate.output_tensors('func', {'outputA': output_tensors}, export_with="jit")
@@ -246,8 +246,8 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         """Basic test: addition of two TracedTensors from different contexts."""
         try:
             annotate.start(name=self.TEST_GRAPH_NAME)
-            tensor1 = annotate.input_tensors({'inputA': torch.tensor([1.0, 2.0, 3.0])}, 'func1')
-            tensor2 = annotate.input_tensors({'inputB': torch.tensor([1.0, 2.0, 3.0])}, 'func2')
+            tensor1 = annotate.input_tensors('func1', {'inputA': torch.tensor([1.0, 2.0, 3.0])})
+            tensor2 = annotate.input_tensors('func2', {'inputB': torch.tensor([1.0, 2.0, 3.0])})
             output_tensors = tensor1 + tensor2
             annotate.output_tensors('func1', {'outputA': output_tensors}, export_with="jit")
             annotate.stop()
@@ -260,8 +260,8 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         """Test torch.cat with a list containing TracedTensors from different contexts."""
         try:
             annotate.start(name=self.TEST_GRAPH_NAME)
-            tensor1 = annotate.input_tensors({'inputA': torch.tensor([1.0, 2.0, 3.0])}, 'func1')
-            tensor2 = annotate.input_tensors({'inputB': torch.tensor([4.0, 5.0, 6.0])}, 'func2')
+            tensor1 = annotate.input_tensors('func1', {'inputA': torch.tensor([1.0, 2.0, 3.0])})
+            tensor2 = annotate.input_tensors('func2', {'inputB': torch.tensor([4.0, 5.0, 6.0])})
             # torch.cat takes a list of tensors - should detect cross-context in the list
             output_tensors = torch.cat([tensor1, tensor2], dim=0)
             annotate.stop()
@@ -273,8 +273,8 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         """Test torch.stack with tensors from different contexts."""
         try:
             annotate.start(name=self.TEST_GRAPH_NAME)
-            tensor1 = annotate.input_tensors({'inputA': torch.tensor([1.0, 2.0, 3.0])}, 'func1')
-            tensor2 = annotate.input_tensors({'inputB': torch.tensor([4.0, 5.0, 6.0])}, 'func2')
+            tensor1 = annotate.input_tensors('func1', {'inputA': torch.tensor([1.0, 2.0, 3.0])})
+            tensor2 = annotate.input_tensors('func2', {'inputB': torch.tensor([4.0, 5.0, 6.0])})
             # torch.stack also takes a list
             output_tensors = torch.stack([tensor1, tensor2], dim=0)
             annotate.stop()
@@ -286,8 +286,8 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         """Test matrix multiplication with TracedTensors from different contexts."""
         try:
             annotate.start(name=self.TEST_GRAPH_NAME)
-            tensor1 = annotate.input_tensors({'inputA': torch.tensor([[1.0, 2.0], [3.0, 4.0]])}, 'func1')
-            tensor2 = annotate.input_tensors({'inputB': torch.tensor([[5.0, 6.0], [7.0, 8.0]])}, 'func2')
+            tensor1 = annotate.input_tensors('func1', {'inputA': torch.tensor([[1.0, 2.0], [3.0, 4.0]])})
+            tensor2 = annotate.input_tensors('func2', {'inputB': torch.tensor([[5.0, 6.0], [7.0, 8.0]])})
             # Matrix multiplication with two explicit args
             output_tensors = torch.matmul(tensor1, tensor2)
             annotate.stop()
@@ -299,8 +299,8 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         """Test torch.add with alpha kwarg - mixing contexts in positional args."""
         try:
             annotate.start(name=self.TEST_GRAPH_NAME)
-            tensor1 = annotate.input_tensors({'inputA': torch.tensor([1.0, 2.0, 3.0])}, 'func1')
-            tensor2 = annotate.input_tensors({'inputB': torch.tensor([4.0, 5.0, 6.0])}, 'func2')
+            tensor1 = annotate.input_tensors('func1', {'inputA': torch.tensor([1.0, 2.0, 3.0])})
+            tensor2 = annotate.input_tensors('func2', {'inputB': torch.tensor([4.0, 5.0, 6.0])})
             # torch.add(input, other, alpha=1) - tests kwargs handling
             output_tensors = torch.add(tensor1, tensor2, alpha=2.0)
             annotate.stop()
@@ -312,9 +312,9 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         """Test detection with three different contexts mixed together."""
         try:
             annotate.start(name=self.TEST_GRAPH_NAME)
-            tensor1 = annotate.input_tensors({'inputA': torch.tensor([1.0, 2.0, 3.0])}, 'func1')
-            tensor2 = annotate.input_tensors({'inputB': torch.tensor([4.0, 5.0, 6.0])}, 'func2')
-            tensor3 = annotate.input_tensors({'inputC': torch.tensor([7.0, 8.0, 9.0])}, 'func3')
+            tensor1 = annotate.input_tensors('func1', {'inputA': torch.tensor([1.0, 2.0, 3.0])})
+            tensor2 = annotate.input_tensors('func2', {'inputB': torch.tensor([4.0, 5.0, 6.0])})
+            tensor3 = annotate.input_tensors('func3', {'inputC': torch.tensor([7.0, 8.0, 9.0])})
             # Mix all three contexts
             output_tensors = torch.cat([tensor1, tensor2, tensor3], dim=0)
             annotate.stop()
@@ -327,9 +327,9 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         try:
             annotate.start(name=self.TEST_GRAPH_NAME)
             # condition from one context
-            cond_tensor = annotate.input_tensors({'cond': torch.tensor([True, False, True])}, 'cond_ctx')
+            cond_tensor = annotate.input_tensors('cond_ctx', {'cond': torch.tensor([True, False, True])})
             # x from another context
-            x_tensor = annotate.input_tensors({'x': torch.tensor([1.0, 2.0, 3.0])}, 'x_ctx')
+            x_tensor = annotate.input_tensors('x_ctx', {'x': torch.tensor([1.0, 2.0, 3.0])})
             # y is a regular tensor (should be fine)
             y_tensor = torch.tensor([10.0, 20.0, 30.0])
             # torch.where(condition, x, y) - two TracedTensors from different contexts
@@ -344,7 +344,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             annotate.start(name=self.TEST_GRAPH_NAME)
             output_tensors = []
             for i in range(10):
-                tensor1 = annotate.input_tensors({'input': torch.tensor([1.0, 2.0, 3.0])}, 'func_combined')
+                tensor1 = annotate.input_tensors('func_combined', {'input': torch.tensor([1.0, 2.0, 3.0])})
                 tensor1 += i
                 output_tensors.append(tensor1)
 
@@ -368,7 +368,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             annotate.start(name=self.TEST_GRAPH_NAME)
             
             # Get traced tensors but don't use them
-            traced_input = annotate.input_tensors({'input': torch.tensor([1.0, 2.0, 3.0])}, 'func')
+            traced_input = annotate.input_tensors('func', {'input': torch.tensor([1.0, 2.0, 3.0])})
             
             # Create a completely new tensor (not derived from traced_input)
             # This is the user error - they should be using traced_input
@@ -394,7 +394,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             
             # Create input and trace it
             input_tensor = torch.tensor([1.0, 2.0, 3.0])
-            traced_input = annotate.input_tensors({'input': input_tensor}, 'func')
+            traced_input = annotate.input_tensors('func', {'input': input_tensor})
             
             # Compute a tensor from the traced input
             computed_tensor = traced_input + 1.0  # This is a TracedTensor
