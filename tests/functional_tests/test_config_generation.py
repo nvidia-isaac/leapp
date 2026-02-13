@@ -155,6 +155,34 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         self.assertEqual(entry['element_names'], [joint_names])
         self.assertEqual(entry['dtype'], "float32")
         self.assertEqual(entry['shape'], [1, 6])
+    
+    def test_input_td_with_string_kind(self):
+        """Test that a string kind appears in YAML."""
+        tensor = torch.randn(1, 6)
+        joint_names = ["hip_l", "knee_l", "ankle_l", "hip_r", "knee_r", "ankle_r"]
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        traced = annotate.input_tensors(
+            TensorSemantics(name="joint_pos", ref=tensor,
+                            kind="my/custom/kind",
+                            element_names=joint_names),
+            "full_meta_node"
+        )
+
+        output = traced * 0.5
+        annotate.output_tensors("full_meta_node", {"out": output})
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+
+        config = self._load_yaml()
+        inputs, _ = self._get_node_io_from_yaml(config, "full_meta_node")
+
+        entry = self._find_io_by_name(inputs, "joint_pos")
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry['kind'], "my/custom/kind")
+        self.assertEqual(entry['element_names'], [joint_names])
+        self.assertEqual(entry['dtype'], "float32")
+        self.assertEqual(entry['shape'], [1, 6])
 
     # =========================================================================
     # Output TensorSemantics tests

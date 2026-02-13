@@ -80,7 +80,7 @@ class TensorSemantics:
     ref: Any = None
 
     # Semantic fields
-    kind: Optional[inputKindEnum | outputKindEnum] = None
+    kind: Optional[inputKindEnum | outputKindEnum | str] = None
     element_names: Optional[List] = None
 
     def __post_init__(self):
@@ -88,18 +88,21 @@ class TensorSemantics:
         if not is_tracable_tensor_type(self.ref): # this checks for both base types and traced types
             raise TypeError(
                 f"TensorSemantics 'ref' must be a traceable tensor type "
-                f"accepted types are: {TRACABLE_BASE_TYPES}, {TRACED_TYPES}"
+                f"accepted types are: {TRACABLE_BASE_TYPES}"
                 f"got {type(self.ref).__name__}")
         if self.element_names is not None:
             self.element_names = self._normalize_element_names(self.element_names)
 
+
     def to_dict(self) -> Dict[str, Any]:
         """Return all non-None semantic fields, excluding internal fields."""
-        return {
-            f.name: getattr(self, f.name)
-            for f in fields(self)
-            if f.name not in self._INTERNAL_FIELDS and getattr(self, f.name) is not None
-        }
+        result = {}
+        for f in fields(self):
+            if f.name not in self._INTERNAL_FIELDS:
+                value = getattr(self, f.name)
+                if value is not None:
+                    result[f.name] = value
+        return result
 
     def update(self, values: Dict[str, Any]):
         """Set semantic fields from a dict."""
@@ -109,9 +112,8 @@ class TensorSemantics:
                 _get_logger().warning(
                     f"Unknown semantic field '{key}' for TensorSemantics, ignoring")
                 continue
-            if key == 'element_names' and value is not None:
-                value = self._normalize_element_names(value)
             setattr(self, key, value)
+        self.__post_init__()
 
     @staticmethod
     def _normalize_element_names(element_names):
