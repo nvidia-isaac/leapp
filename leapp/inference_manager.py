@@ -4,6 +4,9 @@ import torch
 import json
 from typing import Dict
 
+from safetensors.torch import load_file
+
+
 from leapp.utils.tensor_description import map_to_torch_dtype
 
 from leapp.backends.torch_export_backend import TorchExportBackend
@@ -289,7 +292,34 @@ class InferenceManager:
                     )
 
     def _prepopulate_feedback_inputs(self):
-        pass
+        """Load feedback initial values from safetensors and populate input buffers.
+        
+        If the pipeline has an 'initial_values' field pointing to a safetensors file,
+        load it and overwrite the corresponding feedback input buffers so deployers
+        don't need to know what to initialize them as.
+        """
+        initial_values_file = self.pipeline.get('initial_values')
+        if not initial_values_file:
+            return
+
+        base_path = os.path.dirname(self.model_path)
+        safetensors_path = os.path.join(base_path, initial_values_file)
+
+        if not os.path.exists(safetensors_path):
+            raise FileNotFoundError(
+                f"Feedback initial values file not found at {safetensors_path}")
+
+        initial_values = load_file(safetensors_path)
+
+        for key, tensor in initial_values.items():
+            node_name, input_name = key.split('/')
+            if node_name in self.value_dict and input_name in self.value_dict[node_name]:
+                device = self.value_dict[node_name][input_name].device
+                self.value_dict[node_name][input_name] = tensor.to(device)
+            else:
+                raise ValueError(
+                    f"Feedback initial value key '{key}' does not match any node input. "
+                    f"Available nodes: {list(self.value_dict.keys())}")
 
     def run_policy(self, inputs: Dict[str, torch.Tensor], verbose: bool = False):
         # Update input tensors with provided values (keys are "node_name/input_name")

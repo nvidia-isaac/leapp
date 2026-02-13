@@ -70,17 +70,6 @@ class TestCompassNativePython(BaseExampleTest):
 
         # Load and run the exported pipeline
         exported_example = InferenceManager('sample_compass_navigation_pipeline/sample_compass_navigation_pipeline.yaml')
-        # Initialize feedback state values to match native model's initial state
-        exported_example.set_input_value(
-            "compass_odometry_processor", "prev_transform",
-            torch.tensor([0.05, 0.02, 0.01, 0.99, 0.0, 0.01, 0.0, 999.0, 0.0],
-                         dtype=torch.float32, device='cuda'))
-        exported_example.set_input_value(
-            "compass_odometry_processor", "ego_speed",
-            torch.zeros(1, dtype=torch.float32, device='cuda'))
-        exported_example.set_input_value(
-            "compass_odometry_processor", "position_2d",
-            torch.zeros(3, dtype=torch.float32, device='cuda'))
         exported_outputs = exported_example.run_policy(inputs)
         exported_action = exported_outputs['post_process_commands/cmd']
 

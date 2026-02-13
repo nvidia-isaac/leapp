@@ -34,9 +34,10 @@ class TestStateTensors(LEAPPFunctionalTestBase):
             "policy", {"observation": torch.tensor([1.0, 2.0, 3.0])}
         )
 
-        # Create state tensor (both input and output)
+        # Create state tensor (both input and output) — non-trivial initial value
+        initial_counter = torch.tensor([5.0, -3.0, 0.5])
         counter = annotate.state_tensors(
-            "policy", {"counter": torch.tensor([0.0, 0.0, 0.0])}
+            "policy", {"counter": initial_counter}
         )
 
         # Use state in computation
@@ -66,6 +67,11 @@ class TestStateTensors(LEAPPFunctionalTestBase):
         self.assertEqual(len(model_info["inputs"]), 3)  # self + 2 tensors
         self.assertEqual(len(model_info["outputs"]), 2)
 
+        # Verify feedback initial values safetensors file
+        self.verify_feedback_initial_values({
+            "policy/counter": initial_counter,
+        })
+
     def test_state_tensor_history_buffer(self):
         """Test state tensor for observation history buffer (shift and append pattern)."""
         history_length = 3
@@ -78,8 +84,8 @@ class TestStateTensors(LEAPPFunctionalTestBase):
             "obs_processor", {"current_obs": torch.tensor([1.0, 2.0, 3.0, 4.0])}
         )
 
-        # History buffer as state [batch, history_len, obs_dim]
-        initial_history = torch.zeros(1, history_length, obs_dim)
+        # History buffer as state [batch, history_len, obs_dim] — non-trivial initial value
+        initial_history = torch.arange(history_length * obs_dim, dtype=torch.float32).reshape(1, history_length, obs_dim)
         history = annotate.state_tensors(
             "obs_processor", {"observation_history": initial_history}
         )
@@ -109,6 +115,11 @@ class TestStateTensors(LEAPPFunctionalTestBase):
         )
         self.verify_all_models_exist("obs_processor")
 
+        # Verify feedback initial values safetensors file
+        self.verify_feedback_initial_values({
+            "obs_processor/observation_history": initial_history,
+        })
+
     def test_state_tensor_multiple_states(self):
         """Test multiple state tensors in a single node."""
         annotate.start(name=self.TEST_GRAPH_NAME)
@@ -118,13 +129,16 @@ class TestStateTensors(LEAPPFunctionalTestBase):
             "policy", {"observation": torch.tensor([1.0, 2.0, 3.0])}
         )
 
-        # Multiple state tensors - returns tuple
+        # Multiple state tensors - returns tuple — non-trivial initial values
+        initial_mean = torch.tensor([0.1, -0.2, 0.3])
+        initial_var = torch.tensor([1.5, 2.0, 0.8])
+        initial_count = torch.tensor([42.0])
         running_mean, running_var, step_count = annotate.state_tensors(
             "policy",
             {
-                "running_mean": torch.zeros(3),
-                "running_var": torch.ones(3),
-                "step_count": torch.tensor([0.0]),
+                "running_mean": initial_mean,
+                "running_var": initial_var,
+                "step_count": initial_count,
             },
         )
 
@@ -158,6 +172,13 @@ class TestStateTensors(LEAPPFunctionalTestBase):
         )
         self.verify_all_models_exist("policy")
 
+        # Verify feedback initial values safetensors file
+        self.verify_feedback_initial_values({
+            "policy/running_mean": initial_mean,
+            "policy/running_var": initial_var,
+            "policy/step_count": initial_count,
+        })
+
     def test_state_tensor_passthrough(self):
         """Test that state passes through unchanged when update_state is not called."""
         annotate.start(name=self.TEST_GRAPH_NAME)
@@ -167,8 +188,9 @@ class TestStateTensors(LEAPPFunctionalTestBase):
             "policy", {"observation": torch.tensor([1.0, 2.0, 3.0])}
         )
 
-        # State tensor without calling update_state
-        hidden = annotate.state_tensors("policy", {"hidden": torch.zeros(3)})
+        # State tensor without calling update_state — non-trivial initial value
+        initial_hidden = torch.tensor([-1.0, 0.5, 2.5])
+        hidden = annotate.state_tensors("policy", {"hidden": initial_hidden})
 
         # Use state but don't update it (passthrough)
         action = obs + hidden
@@ -188,12 +210,17 @@ class TestStateTensors(LEAPPFunctionalTestBase):
         )
         self.verify_all_models_exist("policy")
 
+        # Verify feedback initial values safetensors file
+        self.verify_feedback_initial_values({
+            "policy/hidden": initial_hidden,
+        })
+
     def test_state_tensor_multi_step_simulation(self):
         """Test state tensors with multiple simulation steps (like real usage)."""
         annotate.start(name=self.TEST_GRAPH_NAME)
 
-        # Simulate multiple steps
-        history = torch.zeros(1, 3, 4)  # Initial history
+        # Simulate multiple steps — non-trivial initial history
+        history = torch.linspace(-1.0, 1.0, 12).reshape(1, 3, 4)
 
         for step in range(5):
             # Current observation
@@ -229,6 +256,11 @@ class TestStateTensors(LEAPPFunctionalTestBase):
             feedback_connections=1
         )
         self.verify_all_models_exist("policy")
+
+        # Verify feedback initial values safetensors file
+        self.verify_feedback_initial_values({
+            "policy/history": torch.linspace(-1.0, 1.0, 12).reshape(1, 3, 4),
+        })
 
 
 class TestStateTensorErrors(LEAPPFunctionalTestBase):

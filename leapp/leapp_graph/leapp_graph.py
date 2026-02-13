@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
+import os
+from safetensors.torch import save_file
 
 from leapp.utils.tensor_description import CompactYamlList
 from leapp.utils.enums import MergeCfgEnum
@@ -39,6 +41,30 @@ class LeappGraph:
         _get_logger().section("Discovering graph inputs and outputs")
         self.graph_inputs, self.graph_outputs = self._compile_graph_io(
             self.nodes, self.connections, self.feedback_connections)
+
+    def get_feedback_initial_values(self):
+        feedback_initial_values = {}
+        for connection in self.feedback_connections:
+            for target in connection['targets']:
+                node = target['node']
+                input_desc = node.inputs[target['idx']]
+                key = f"{node.name}/{input_desc.name_str}"
+                value = input_desc.value
+                feedback_initial_values[key] = value
+        return feedback_initial_values
+
+    def save_feedback_initial_values(self, save_path, name):
+        feedback_initial_values = self.get_feedback_initial_values()
+        if not feedback_initial_values:
+            return
+
+        filename = f"{name}_initial_values.safetensors"
+        save_path = os.path.join(save_path, filename)
+        _get_logger().info(f"Saving feedback initial values to {save_path}")
+        save_file(feedback_initial_values, save_path)
+        return filename
+
+
 
     def merge_nodes(self, merge_nodes):
         if merge_nodes != MergeCfgEnum.NO_MERGE:

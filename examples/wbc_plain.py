@@ -182,7 +182,7 @@ def main():
         "lin_vel_I": torch.randn(3, device=DEVICE, dtype=DTYPE),
         "ang_vel_I": torch.randn(3, device=DEVICE, dtype=DTYPE),
         "q_IB": torch.randn(4, device=DEVICE, dtype=DTYPE),
-        "previous_actions": torch.randn(19, device=DEVICE, dtype=DTYPE)}
+        "previous_actions": torch.zeros(19, device=DEVICE, dtype=DTYPE)}
 
     # get model
     model = get_model("models/isaac_velocity_flat_h1_v0.pt")

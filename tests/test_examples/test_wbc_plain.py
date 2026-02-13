@@ -87,9 +87,6 @@ class TestWBCPlain(BaseExampleTest):
             print(f"Exported action: {exported_action}")
             raise e
 
-        # self.assertEqual(outputs.shape, (19,))
-        # self.assertEqual(previous_actions.shape, (19,))
-
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

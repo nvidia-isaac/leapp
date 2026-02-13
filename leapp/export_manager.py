@@ -83,6 +83,15 @@ class ExportManager:
             ExportManager._initialized = True
 
     #########################################################
+    # no-op context manager (used when block() is called outside tracing)
+    #########################################################
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return False
+
+    #########################################################
     # flow control
     #########################################################
     def start(self, name, save_path=".", verbose=False, dry_run=False, patch_numpy=True):
@@ -843,7 +852,7 @@ class ExportManager:
         # compile models first before input name reconciliation
         if verbose is not None:
             _get_logger().set_verbose(verbose)
-        
+
         if not self.dry_run:        
             self.compile_models()
 
@@ -854,6 +863,15 @@ class ExportManager:
         graph = LeappGraph(self.nodes, self.GRAPH_NAME)
         graph.merge_nodes(merge_nodes)
         pipeline = graph.get_full_pipeline_description()
+
+        inital_value_filename = None
+        if not self.dry_run:
+            # cache the initial values for feedback inputs
+            inital_value_filename = graph.save_feedback_initial_values(self.SAVE_PATH, self.GRAPH_NAME)
+
+
+        if inital_value_filename is not None:
+            pipeline['pipeline']['initial_values'] = inital_value_filename
 
         if not self.dry_run:
             self.save_models()
@@ -892,7 +910,7 @@ class ExportManager:
         self.detected_pipeline = pipeline['pipeline']
 
         # validate all the models in the compute graph
-        if validate:
+        if validate and not self.dry_run:
             return self.validate_all_models(rtol=rtol, atol=atol, strict=strict)
 
         return True

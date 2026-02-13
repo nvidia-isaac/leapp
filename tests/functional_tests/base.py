@@ -18,6 +18,7 @@ import unittest
 import os
 import shutil
 import torch
+from safetensors.torch import load_file
 
 
 class LEAPPFunctionalTestBase(unittest.TestCase):
@@ -295,6 +296,34 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
         
         _flatten(data)
         return tensors
+
+    def verify_feedback_initial_values(self, expected_values, graph_name=None):
+        """Verify that the feedback initial values safetensors file exists and contains expected values.
+
+        Args:
+            expected_values: Dict mapping key names (e.g. "policy/counter") to expected tensors.
+                Values can be:
+                - torch.Tensor: exact value match
+                - tuple: expected shape only (e.g. (1, 3, 4)) — useful when values are random
+            graph_name: Optional graph name. Defaults to TEST_GRAPH_NAME.
+        """
+        if graph_name is None:
+            graph_name = self.TEST_GRAPH_NAME
+        safetensors_path = os.path.join(graph_name, f"{graph_name}_initial_values.safetensors")
+        self.assertTrue(os.path.exists(safetensors_path),
+                        f"Feedback initial values safetensors file not found at {safetensors_path}")
+        loaded = load_file(safetensors_path)
+
+        for key, expected in expected_values.items():
+            self.assertIn(key, loaded, f"Key '{key}' not found in feedback initial values")
+            if isinstance(expected, tuple):
+                # Shape-only check
+                self.assertEqual(loaded[key].shape, torch.Size(expected),
+                                 f"Shape mismatch for '{key}': got {loaded[key].shape}, expected {expected}")
+            else:
+                # Exact value check
+                self.assertTrue(torch.equal(loaded[key], expected),
+                                f"Value mismatch for '{key}': got {loaded[key]}, expected {expected}")
 
     def verify_single_torchscript_model_expected_value(self, inputs, expected_outputs, model_name, model_path=None):
         if model_path is None:
