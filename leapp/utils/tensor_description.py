@@ -162,8 +162,6 @@ class TensorDescription:
         self.shape = CompactYamlList(shape)
         self.type = "tensor"
         self.tag = tag
-        self.is_state = False  # True for state tensors (both input and output)
-
         self.init_semantics(semantics)
 
     # --- Semantic field access ---
@@ -225,8 +223,6 @@ class TensorDescription:
                 result[key] = value.value
             else:
                 result[key] = value
-        if self.is_state:
-            result["is_state"] = True
         return result
 
     def change_name(self, new_name: str):

@@ -63,7 +63,6 @@ class TracedTensorNode(LeappNode):
             for output_desc in self.outputs:
                 if output_desc.name == output_name:
                     output_desc.tag = state_tag
-                    output_desc.is_state = True
                     break
 
         self.build_graph_module(list(tensors.values()))
@@ -294,12 +293,6 @@ class TracedTensorNode(LeappNode):
 
             # Create input placeholder for this state
             traced_input = self.create_input(tensor, name)
-
-            # Mark the input as state in its description (for YAML metadata)
-            for input_desc in self.inputs:
-                if input_desc.name == name:
-                    input_desc.is_state = True
-                    break
 
             # Track as state tensor
             self._state_tensors[name] = {
