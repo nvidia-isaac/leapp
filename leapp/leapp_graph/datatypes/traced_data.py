@@ -264,8 +264,32 @@ class TracedData(ABC):
         return len(self._value)
     
     def __bool__(self) -> bool:
-        """Boolean conversion."""
-        return bool(self._value)
+        """Boolean conversion for TracedNpArray.
+        
+        During tracing, this indicates tensor-dependent control flow which
+        produces a silently incorrect graph. Logs an error to alert the user.
+        """
+        if self.is_tracing:
+            _get_logger().error(
+                f"Attempted to use {self.__class__.__name__} '{self._name}' from node '{self.context}' "
+                f"in a boolean context (if/while/and/or/not) during tracing.\n"
+                f"\n"
+                f"This typically happens with array-value-dependent control flow:\n"
+                f"  - if array.mean() > 0.9: return early   (Early Exit)\n"
+                f"  - while error.sum() > eps: refine()      (Iterative Refinement)\n"
+                f"  - if array.any(): ...                     (Conditional on values)\n"
+                f"\n"
+                f"The traced graph is a static DAG and cannot represent dynamic branches.\n"
+                f"Only the branch taken during tracing would be recorded, producing a\n"
+                f"silently incorrect graph for other inputs.\n"
+                f"\n"
+                f"Alternatives:\n"
+                f"  1. Use np.where(condition, true_val, false_val) for simple if/else\n"
+                f"  2. Use fixed iteration counts instead of dynamic while loops\n"
+                f"  3. Break the trace: call output_tensors() before the conditional,\n"
+                f"     then start a new input_tensors() after it"
+            )
+        return bool(self.data)
     
     def __str__(self) -> str:
         """String representation."""

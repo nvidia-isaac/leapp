@@ -1054,11 +1054,31 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         return result
 
     def tolist(self):
-        """Convert to Python list."""
+        """Convert to Python list.
+        
+        Warning: During tracing, this extracts concrete values and breaks the trace.
+        If used in a conditional, the graph will only capture one branch.
+        """
+        if self.is_tracing:
+            _get_logger().warning(
+                f"TracedNpArray '{self._name}'.tolist() called during tracing. "
+                f"This extracts concrete Python values, breaking the trace chain. "
+                f"If used in a conditional (if/while), the graph will only capture one branch."
+            )
         return self.view(np.ndarray).tolist()
 
     def item(self):
-        """Return scalar value."""
+        """Return scalar value.
+        
+        Warning: During tracing, this extracts a concrete scalar and breaks the trace.
+        If used in a conditional, the graph will only capture one branch.
+        """
+        if self.is_tracing:
+            _get_logger().warning(
+                f"TracedNpArray '{self._name}'.item() called during tracing. "
+                f"This extracts a concrete Python scalar, breaking the trace chain. "
+                f"If used in a conditional (if/while), the graph will only capture one branch."
+            )
         return self.view(np.ndarray).item()
 
     # =========================================================================

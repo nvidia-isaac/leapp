@@ -936,29 +936,6 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         """Length operator for TracedTensor."""
         return self.tensor.__len__()
 
-    def __bool__(self) -> bool:
-        if self.is_tracing:
-            _get_logger().error(
-                f"Attempted to use TracedTensor '{self._name}' from node '{self.context}' "
-                f"in a boolean context (if/while/and/or/not) during tracing.\n"
-                f"\n"
-                f"This typically happens with tensor-dependent control flow:\n"
-                f"  - if confidence.max() > 0.9: return early   (Early Exit)\n"
-                f"  - while delta.abs().sum() > eps: refine()    (Iterative Refinement)\n"
-                f"  - proposals = filter(scores > 0.5)           (Dynamic Shapes)\n"
-                f"\n"
-                f"The traced graph is a static DAG and cannot represent dynamic branches.\n"
-                f"Only the branch taken during tracing would be recorded, producing a\n"
-                f"silently incorrect graph for other inputs.\n"
-                f"\n"
-                f"Alternatives:\n"
-                f"  1. Use torch.where(condition, true_val, false_val) for simple if/else\n"
-                f"  2. Use fixed iteration counts instead of dynamic while loops\n"
-                f"  3. Break the trace: call output_tensors() before the conditional,\n"
-                f"     then start a new input_tensors() after it"
-            )
-        return bool(self.tensor)
-
     def __str__(self) -> str:
         """String representation of TracedTensor."""
         return f"TracedTensor({self.tensor})"
