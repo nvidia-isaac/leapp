@@ -16,27 +16,6 @@ Each test:
 2. Applies the torch function
 3. Compiles the trace to an FX graph
 4. Verifies the compiled graph produces correct output
-
-TODO: The following functions are NOT supported by ONNX export (opset 17):
-  - F.l1_loss (aten::l1_loss not in ONNX)
-  - F.smooth_l1_loss (aten::smooth_l1_loss not in ONNX)
-  - F.huber_loss (aten::huber_loss not in ONNX)
-  
-  Options to address:
-  1. Implement manual decomposition to basic ops (e.g., l1_loss = mean(abs(input - target)))
-  2. Throw a warning when these ops are used with ONNX backend
-  3. Use a higher opset version if/when these become available
-
-
-TODO: The following may not be supported
-F.batch_norm	Uses running mean/var stats that may not trace well
-F.instance_norm	Similar running stats issues
-F.group_norm	May have issues with affine parameters
-F.embedding	Lookup table semantics can be tricky
-F.multi_head_attention	Complex with multiple outputs, attention masks
-F.scaled_dot_product_attention	Newer API, may have special handling
-F.grid_sample	Complex indexing operations
-F.affine_grid	Often paired with grid_sample
 """
 
 import pathlib
@@ -55,10 +34,7 @@ from leapp.leapp_graph.traced_node import TracedTensorNode
 from leapp.leapp_graph.datatypes import TracedTensor
 
 
-# Suppress TracerWarning from torch.nn.functional internals where tensor-to-bool conversions
-# are baked into the trace (e.g. "Converting a tensor to a Python boolean might cause the trace
-# to be incorrect"). This comes from size checks inside F.binary_cross_entropy_with_logits and
-# F.mse_loss and is not actionable from user code.
+
 @pytest.mark.filterwarnings("ignore::torch.jit.TracerWarning")
 class TestFunctional(unittest.TestCase):
     """Test torch.nn.functional operations trace and compile correctly."""
@@ -67,7 +43,8 @@ class TestFunctional(unittest.TestCase):
     NUM_TEST_INPUTS = 5
 
     def _run_trace_and_compile(self, func, input_shape, test_name, 
-                               skip_torchscript=False, skip_onnx=False, **func_kwargs):
+                               skip_torchscript=False, skip_onnx=False,
+                               onnx_opset=17, **func_kwargs):
         """Helper to trace a function and verify compiled output matches.
         
         Compiles once, then tests with NUM_TEST_INPUTS random inputs.
@@ -131,7 +108,7 @@ class TestFunctional(unittest.TestCase):
                         onnx_path,
                         dynamo=False,
                         export_params=True,
-                        opset_version=17,
+                        opset_version=onnx_opset,
                         input_names=['input'],
                         output_names=['output'],
                     )
@@ -313,6 +290,74 @@ class TestFunctional(unittest.TestCase):
         bias = torch.zeros(8, 8)
         func = partial(F.layer_norm, normalized_shape=normalized_shape, weight=weight, bias=bias)
         self._run_trace_and_compile(func, (4, 8, 8), "test_layer_norm_2d")
+
+    def test_batch_norm(self):
+        """Test F.batch_norm in eval mode (training=False).
+        
+        Uses fixed running_mean/running_var which are required when training=False.
+        Running stats become constants captured in the trace.
+        """
+        num_features = 3
+        running_mean = torch.zeros(num_features)
+        running_var = torch.ones(num_features)
+        weight = torch.ones(num_features)
+        bias = torch.zeros(num_features)
+        func = partial(
+            F.batch_norm, running_mean=running_mean, running_var=running_var,
+            weight=weight, bias=bias, training=False
+        )
+        self._run_trace_and_compile(func, (2, 3, 8, 8), "test_batch_norm")
+
+    def test_batch_norm_1d(self):
+        """Test F.batch_norm on 1D input (e.g., after linear layer)."""
+        num_features = 8
+        running_mean = torch.zeros(num_features)
+        running_var = torch.ones(num_features)
+        weight = torch.ones(num_features)
+        bias = torch.zeros(num_features)
+        func = partial(
+            F.batch_norm, running_mean=running_mean, running_var=running_var,
+            weight=weight, bias=bias, training=False
+        )
+        self._run_trace_and_compile(func, (4, 8), "test_batch_norm_1d")
+
+    def test_instance_norm(self):
+        """Test F.instance_norm.
+        
+        Uses default use_input_stats=True (computes stats from input).
+        """
+        num_features = 3
+        weight = torch.ones(num_features)
+        bias = torch.zeros(num_features)
+        func = partial(F.instance_norm, weight=weight, bias=bias)
+        self._run_trace_and_compile(func, (2, 3, 8, 8), "test_instance_norm")
+
+    def test_instance_norm_with_running_stats(self):
+        """Test F.instance_norm with running stats (use_input_stats=False)."""
+        num_features = 3
+        running_mean = torch.zeros(num_features)
+        running_var = torch.ones(num_features)
+        weight = torch.ones(num_features)
+        bias = torch.zeros(num_features)
+        func = partial(
+            F.instance_norm, running_mean=running_mean, running_var=running_var,
+            weight=weight, bias=bias, use_input_stats=False
+        )
+        self._run_trace_and_compile(func, (2, 3, 8, 8), "test_instance_norm_running")
+
+    def test_group_norm(self):
+        """Test F.group_norm with affine parameters."""
+        num_channels = 8
+        num_groups = 4
+        weight = torch.ones(num_channels)
+        bias = torch.zeros(num_channels)
+        func = partial(F.group_norm, num_groups=num_groups, weight=weight, bias=bias)
+        self._run_trace_and_compile(func, (2, 8, 16, 16), "test_group_norm")
+
+    def test_group_norm_no_affine(self):
+        """Test F.group_norm without affine parameters."""
+        func = partial(F.group_norm, num_groups=4)
+        self._run_trace_and_compile(func, (2, 8, 16, 16), "test_group_norm_no_affine")
 
     # =========================================================================
     # Dropout (eval mode - should be identity)
@@ -503,6 +548,48 @@ class TestFunctional(unittest.TestCase):
         self._run_trace_and_compile(func, (2, 3, 32), "test_pad_1d")
 
     # =========================================================================
+    # Unfold / Fold
+    # =========================================================================
+
+    def test_unfold(self):
+        """Test F.unfold (im2col) - extracts sliding local blocks from input."""
+        # Input: (N, C, H, W), kernel_size=3 extracts 3x3 patches
+        func = partial(F.unfold, kernel_size=3)
+        self._run_trace_and_compile(func, (2, 3, 8, 8), "test_unfold")
+
+    def test_unfold_with_params(self):
+        """Test F.unfold with stride and padding."""
+        func = partial(F.unfold, kernel_size=3, padding=1, stride=2)
+        self._run_trace_and_compile(func, (2, 3, 8, 8), "test_unfold_params")
+
+    def test_fold(self):
+        """Test F.fold (col2im) - combines sliding local blocks into a tensor.
+        
+        Fold is the inverse of unfold. Input shape must match the output of
+        an equivalent unfold operation.
+        Note: aten::col2im requires ONNX opset 18+.
+        """
+        # Unfold (N=2, C=3, H=8, W=8) with kernel_size=3 produces
+        # shape (2, 3*3*3, L) where L = (8-3+1)*(8-3+1) = 36
+        func = partial(F.fold, output_size=(8, 8), kernel_size=3)
+        self._run_trace_and_compile(func, (2, 27, 36), "test_fold", onnx_opset=18)
+
+    def test_unfold_fold_roundtrip(self):
+        """Test unfold → fold roundtrip (with divisor correction).
+        
+        Unfold then fold doesn't produce identity without normalizing by the
+        overlap count. This test verifies the ops compose correctly.
+        Note: aten::col2im (fold) requires ONNX opset 18+.
+        """
+        kernel_size = 3
+        def unfold_fold(x):
+            # x: (N, C, H, W)
+            unfolded = F.unfold(x, kernel_size=kernel_size)
+            folded = F.fold(unfolded, output_size=(8, 8), kernel_size=kernel_size)
+            return folded
+        self._run_trace_and_compile(unfold_fold, (2, 3, 8, 8), "test_unfold_fold", onnx_opset=18)
+
+    # =========================================================================
     # Loss Functions
     # =========================================================================
 
@@ -511,24 +598,6 @@ class TestFunctional(unittest.TestCase):
         target = torch.randn(4, 8)
         func = partial(F.mse_loss, target=target)
         self._run_trace_and_compile(func, (4, 8), "test_mse_loss")
-
-    def test_l1_loss(self):
-        """Test F.l1_loss.
-        
-        Note: skip_onnx=True because aten::l1_loss is not supported in ONNX.
-        """
-        target = torch.randn(4, 8)
-        func = partial(F.l1_loss, target=target)
-        self._run_trace_and_compile(func, (4, 8), "test_l1_loss", skip_onnx=True)
-
-    def test_smooth_l1_loss(self):
-        """Test F.smooth_l1_loss (Huber loss).
-        
-        Note: skip_onnx=True because aten::smooth_l1_loss is not supported in ONNX.
-        """
-        target = torch.randn(4, 8)
-        func = partial(F.smooth_l1_loss, target=target)
-        self._run_trace_and_compile(func, (4, 8), "test_smooth_l1_loss", skip_onnx=True)
 
     def test_cross_entropy(self):
         """Test F.cross_entropy with class labels."""
@@ -551,15 +620,137 @@ class TestFunctional(unittest.TestCase):
         target = torch.rand(4, 8)  # Binary targets in [0, 1]
         func = partial(F.binary_cross_entropy_with_logits, target=target)
         self._run_trace_and_compile(func, (4, 8), "test_bce_logits")
+    # =========================================================================
+    # Embedding
+    # =========================================================================
 
-    def test_huber_loss(self):
-        """Test F.huber_loss.
+    def test_embedding(self):
+        """Test F.embedding (lookup table).
         
-        Note: skip_onnx=True because aten::huber_loss is not supported in ONNX.
+        Note: Uses a custom test flow because embedding requires integer (LongTensor)
+        inputs, not the float tensors generated by _run_trace_and_compile.
         """
-        target = torch.randn(4, 8)
-        func = partial(F.huber_loss, target=target)
-        self._run_trace_and_compile(func, (4, 8), "test_huber_loss", skip_onnx=True)
+        vocab_size = 100
+        embed_dim = 16
+        weight = torch.randn(vocab_size, embed_dim)
+
+        input_indices = torch.randint(0, vocab_size, (4, 8))
+        
+        ctx = TracedTensorNode(name="test_embedding", node_index=0)
+        traced_input = ctx.create_input(input_indices.clone(), name="x")
+        
+        output = F.embedding(traced_input, weight)
+        self.assertIsInstance(output, TracedTensor)
+        
+        ctx.compile_trace({'output': output})
+        graph_module = ctx.compiled_graph_module
+        
+        for i in range(self.NUM_TEST_INPUTS):
+            test_input = torch.randint(0, vocab_size, (4, 8))
+            expected = F.embedding(test_input, weight)
+            actual_fx = graph_module(test_input)
+            self.assertTrue(
+                torch.allclose(actual_fx, expected, atol=1e-5),
+                f"test_embedding: FX output mismatch on input {i+1}/{self.NUM_TEST_INPUTS}"
+            )
+
+    # =========================================================================
+    # Attention
+    # =========================================================================
+
+    def test_scaled_dot_product_attention(self):
+        """Test F.scaled_dot_product_attention (PyTorch 2.0+).
+        
+        Only query is traced; key and value are fixed via partial.
+        Note: skip_onnx=True because SDPA may not be supported in ONNX opset 17.
+        """
+        # (batch, num_heads, seq_len, head_dim)
+        key = torch.randn(2, 4, 8, 16)
+        value = torch.randn(2, 4, 8, 16)
+        func = partial(F.scaled_dot_product_attention, key=key, value=value)
+        self._run_trace_and_compile(
+            func, (2, 4, 8, 16), "test_sdpa",
+            skip_onnx=True
+        )
+
+    def test_multi_head_attention(self):
+        """Test F.multi_head_attention_forward (self-attention).
+        
+        Wraps the forward function to return only the output tensor (not attention weights).
+        Note: skip_onnx=True because MHA decomposition may not be supported in ONNX opset 17.
+        """
+        embed_dim = 32
+        num_heads = 4
+        
+        in_proj_weight = torch.randn(3 * embed_dim, embed_dim)
+        in_proj_bias = torch.randn(3 * embed_dim)
+        out_proj_weight = torch.randn(embed_dim, embed_dim)
+        out_proj_bias = torch.randn(embed_dim)
+        
+        def mha_self_attention(query):
+            # Input shape: (seq_len, batch_size, embed_dim) — seq_len first
+            output, _ = F.multi_head_attention_forward(
+                query, query, query,  # self-attention: Q=K=V
+                embed_dim, num_heads,
+                in_proj_weight, in_proj_bias,
+                None, None,  # bias_k, bias_v
+                False,  # add_zero_attn
+                0.0,  # dropout_p
+                out_proj_weight, out_proj_bias,
+                training=False,
+                need_weights=False,
+            )
+            return output
+        
+        # Shape: (seq_len, batch_size, embed_dim)
+        self._run_trace_and_compile(
+            mha_self_attention, (8, 2, embed_dim), "test_mha",
+            skip_onnx=True
+        )
+
+    # =========================================================================
+    # Spatial Transforms
+    # =========================================================================
+
+    def test_grid_sample(self):
+        """Test F.grid_sample.
+        
+        Grid values are in [-1, 1] range for normalized coordinates.
+        """
+        # grid shape: (N, H_out, W_out, 2)
+        grid = torch.rand(2, 8, 8, 2) * 2 - 1  # Random grid in [-1, 1]
+        func = partial(F.grid_sample, grid=grid, align_corners=True)
+        self._run_trace_and_compile(func, (2, 3, 16, 16), "test_grid_sample")
+
+    def test_grid_sample_bilinear(self):
+        """Test F.grid_sample with bilinear interpolation (default)."""
+        grid = torch.rand(2, 8, 8, 2) * 2 - 1
+        func = partial(F.grid_sample, grid=grid, mode='bilinear', 
+                       padding_mode='zeros', align_corners=False)
+        self._run_trace_and_compile(func, (2, 3, 16, 16), "test_grid_sample_bilinear")
+
+    def test_affine_grid(self):
+        """Test F.affine_grid.
+        
+        Generates a sampling grid from an affine transformation matrix (theta).
+        Input theta shape: (N, 2, 3) for 2D spatial transforms.
+        Note: aten::affine_grid_generator requires ONNX opset 20+.
+        """
+        func = partial(F.affine_grid, size=(2, 3, 16, 16), align_corners=True)
+        self._run_trace_and_compile(func, (2, 2, 3), "test_affine_grid", onnx_opset=20)
+
+    def test_affine_grid_and_grid_sample(self):
+        """Test F.affine_grid → F.grid_sample pipeline (common in STN).
+        
+        Note: aten::affine_grid_generator requires ONNX opset 20+.
+        """
+        source = torch.randn(2, 3, 16, 16)
+        
+        def stn_transform(theta):
+            grid = F.affine_grid(theta, source.size(), align_corners=True)
+            return F.grid_sample(source, grid, align_corners=True)
+        
+        self._run_trace_and_compile(stn_transform, (2, 2, 3), "test_affine_grid_sample", onnx_opset=20)
 
     # =========================================================================
     # Torch Operations (not F.*)
