@@ -69,6 +69,16 @@ class TracedTensorNode(LeappNode):
 
         self.compiled_graph_module = fx.GraphModule(
             self.tracer.root, self.graph)
+
+        # Sanitize the FX graph for compatibility with all export backends.
+        # 1) method_descriptor targets (e.g. torch.Tensor.view) → call_method
+        #    nodes to avoid weak-ref failures in torch.jit.script.
+        # 2) aten OpOverload targets (e.g. torch.ops.aten.addmm.default) →
+        #    high-level torch.*/F.* equivalents that torch.jit.script recognizes.
+        self._rewrite_method_descriptors(self.compiled_graph_module.graph)
+        self._rewrite_aten_ops(self.compiled_graph_module.graph)
+        self.compiled_graph_module.recompile()
+
         _get_logger().debug(
             f"Compiled graph module for {self.name}: {self.compiled_graph_module.graph}")
         _get_logger().debug(
@@ -78,6 +88,71 @@ class TracedTensorNode(LeappNode):
         self.setup_backend(backend, backend_params)
 
         return unwrapped_tensors[0] if len(unwrapped_tensors) == 1 else tuple(unwrapped_tensors)
+
+    @staticmethod
+    def _rewrite_method_descriptors(graph: fx.Graph):
+        """Convert call_function nodes with method_descriptor targets to call_method.
+
+        Method descriptors (e.g. torch.Tensor.view, torch.Tensor.float) don't
+        support weak references, which causes torch.jit.script to fail with:
+            TypeError: cannot create weak reference to 'method_descriptor' object
+
+        Converting them to call_method nodes uses a string target instead,
+        sidestepping the issue entirely. The args layout is identical — args[0]
+        is already ``self`` for unbound method descriptors, which is exactly
+        what call_method expects.
+        """
+        rewritten = []
+        for node in graph.nodes:
+            if node.op == "call_function" and type(node.target).__name__ == "method_descriptor":
+                method_name = getattr(node.target, "__name__", None)
+                if method_name is not None:
+                    node.op = "call_method"
+                    node.target = method_name
+                    rewritten.append(method_name)
+        if rewritten:
+            _get_logger().debug(
+                f"Rewrote {len(rewritten)} method_descriptor call_function node(s) "
+                f"to call_method: {rewritten}")
+        graph.lint()
+
+    @staticmethod
+    def _rewrite_aten_ops(graph: fx.Graph):
+        """Replace low-level ``torch.ops.aten.*`` OpOverload targets with their
+        high-level ``torch.*`` or ``torch.nn.functional.*`` equivalents.
+
+        When a TorchScript model is decomposed via ``make_fx``, the resulting
+        graph contains aten-level ops (e.g. ``torch.ops.aten.addmm.default``).
+        These work fine for tracing and ONNX export, but ``torch.jit.script``
+        cannot resolve them.  This pass rewrites them to the public API
+        equivalents that TorchScript understands.
+        """
+        import torch.nn.functional as F
+
+        rewritten = []
+        for node in graph.nodes:
+            if node.op != "call_function":
+                continue
+            target = node.target
+            if not isinstance(target, torch._ops.OpOverload):
+                continue
+            op_name = target.overloadpacket.__name__
+            # Try torch.<op_name> first, then torch.nn.functional.<op_name>
+            replacement = getattr(torch, op_name, None)
+            if replacement is None or not callable(replacement):
+                replacement = getattr(F, op_name, None)
+            if replacement is not None and callable(replacement):
+                node.target = replacement
+                rewritten.append(op_name)
+            else:
+                _get_logger().warning(
+                    f"Could not find a high-level equivalent for aten op "
+                    f"'{target._name}'. torch.jit.script may fail.")
+        if rewritten:
+            _get_logger().debug(
+                f"Rewrote {len(rewritten)} aten OpOverload node(s) to "
+                f"high-level equivalents: {rewritten}")
+        graph.lint()
 
     def setup_backend(self, backend=None, backend_params={}):
         super().setup_backend(backend, backend_params)
