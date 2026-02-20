@@ -175,11 +175,11 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                     if torch_func is not None and callable(torch_func):
                         return torch_func
 
-                # Log warning if we couldn't find the equivalent torch function
                 if context is not None:
-                    _get_logger().warning(
+                    _get_logger().debug(
                         f"while tracing for {context} detected method_descriptor or builtin_function_or_method {func_name} "
-                        f"but failed to find equivalent torch function. this may cause issues during graph creation"
+                        f"but failed to find equivalent torch function. "
+                        f"downstream _rewrite_method_descriptors should handle this by converting to call_method"
                     )
         return func
 

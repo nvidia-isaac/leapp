@@ -174,7 +174,7 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
             output_names=[
                 tensor_desc.name for tensor_desc in self.node_context.outputs],
 
-            verify=self.backend_params.get('verify', True),
+            verify=self.backend_params.get('verify', False),
             optimize=self.backend_params.get('optimize', True),
 
             verbose=_get_logger().is_verbose(),
@@ -187,5 +187,10 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
         # (ONNX can remove unused inputs during optimization)
         self._sync_inputs_with_onnx(onnx_program)
 
-        self.compiled_model = onnx_program
+        # Wrap in SimplifiedONNXProgram so validation uses controlled
+        # ORT session options (ORT_ENABLE_BASIC avoids graph-opt corruption).
+        tmpdir = tempfile.mkdtemp()
+        tmp_path = os.path.join(tmpdir, f"{self.node_context.name}.onnx")
+        onnx_program.save(tmp_path)
+        self.compiled_model = SimplifiedONNXProgram(tmp_path, temp_dir=tmpdir)
         self.compiled_module = m

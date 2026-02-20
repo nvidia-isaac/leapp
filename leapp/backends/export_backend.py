@@ -173,8 +173,14 @@ class SimplifiedONNXProgram:
         if self._session is None:
             model_path = os.path.join(self._source_dir, self._source_filename)
             providers = self._get_providers(self._device)
+            sess_options = ort.SessionOptions()
+            # ORT_ENABLE_ALL can silently corrupt results for certain graph
+            # patterns (e.g. Gemm chains produced by FX make_fx decomposition).
+            # ORT_ENABLE_BASIC is safe and still applies constant folding.
+            sess_options.graph_optimization_level = (
+                ort.GraphOptimizationLevel.ORT_ENABLE_BASIC)
             self._session = ort.InferenceSession(
-                model_path, providers=providers)
+                model_path, sess_options, providers=providers)
             self._input_names = [
                 inp.name for inp in self._session.get_inputs()]
             self._active_provider = self._session.get_providers(

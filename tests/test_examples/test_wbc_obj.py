@@ -37,10 +37,7 @@ class TestWBCObj(BaseExampleTest):
 
         # Expected output files - these should be similar to wbc_plain but for sample_wbc_obj
         expected_files = [
-            'concatenate_and_run_model.pt',
-            'process_odom.pt',
-            'process_joint_pos.pt',
-            'post_process_actions.pt',
+            'wbc_obj.onnx',
             'sample_wbc_obj.png',
             'sample_wbc_obj.yaml'
         ]
@@ -63,12 +60,12 @@ class TestWBCObj(BaseExampleTest):
             'q_IB': torch.randn(4, device='cuda', dtype=torch.float32),
         }
         exported_pipeline_inputs = {
-            'concatenate_and_run_model/velocity_commands': inputs['velocity_commands'].clone(),
-            'concatenate_and_run_model/joint_vel': inputs['joint_vel'].clone(),
-            'process_joint_pos/joint_pos': inputs['joint_pos'].clone(),
-            'process_odom/lin_vel_I': inputs['lin_vel_I'].clone(),
-            'process_odom/ang_vel_I': inputs['ang_vel_I'].clone(),
-            'process_odom/q_IB': inputs['q_IB'].clone(),
+            'wbc_obj/velocity_commands': inputs['velocity_commands'].clone(),
+            'wbc_obj/joint_vel': inputs['joint_vel'].clone(),
+            'wbc_obj/joint_pos': inputs['joint_pos'].clone(),
+            'wbc_obj/lin_vel_I': inputs['lin_vel_I'].clone(),
+            'wbc_obj/ang_vel_I': inputs['ang_vel_I'].clone(),
+            'wbc_obj/q_IB': inputs['q_IB'].clone(),
         }
 
 
@@ -77,7 +74,7 @@ class TestWBCObj(BaseExampleTest):
         # Load and run the exported pipeline
         exported_example = InferenceManager('sample_wbc_obj/sample_wbc_obj.yaml')
         exported_outputs = exported_example.run_policy(exported_pipeline_inputs)
-        exported_action = exported_outputs['post_process_actions/actions']
+        exported_action = exported_outputs['wbc_obj/actions']
 
         try:
             torch.cuda.synchronize()  # Wait for GPU operations to complete

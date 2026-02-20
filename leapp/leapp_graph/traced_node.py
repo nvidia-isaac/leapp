@@ -77,6 +77,10 @@ class TracedTensorNode(LeappNode):
         #    high-level torch.*/F.* equivalents that torch.jit.script recognizes.
         self._rewrite_method_descriptors(self.compiled_graph_module.graph)
         self._rewrite_aten_ops(self.compiled_graph_module.graph)
+        # 3) Ensure all tensor constants have contiguous memory layout.
+        #    make_fx decomposition produces transposed weight views that
+        #    torch.onnx.export (dynamo=False) serializes incorrectly.
+        self._make_tensor_attrs_contiguous(self.compiled_graph_module)
         self.compiled_graph_module.recompile()
 
         _get_logger().debug(
@@ -153,6 +157,38 @@ class TracedTensorNode(LeappNode):
                 f"Rewrote {len(rewritten)} aten OpOverload node(s) to "
                 f"high-level equivalents: {rewritten}")
         graph.lint()
+
+    @staticmethod
+    def _make_tensor_attrs_contiguous(graph_module: fx.GraphModule):
+        """Make all tensor constant attributes contiguous.
+
+        make_fx decomposition of nn.Linear produces addmm(bias, x, weight.T)
+        where weight.T is a non-contiguous transposed view.  Serialization
+        backends (ONNX, TorchScript) may not respect non-standard strides,
+        resulting in corrupted weight data in the exported file.
+
+        FX GraphModule moves tensor constants into registered buffers during
+        construction, so we must check named_buffers() (not just vars()).
+        """
+        count = 0
+        for name in list(vars(graph_module)):
+            attr = getattr(graph_module, name)
+            if isinstance(attr, torch.Tensor) and not attr.is_contiguous():
+                setattr(graph_module, name, attr.contiguous())
+                count += 1
+        for name, buf in list(graph_module.named_buffers()):
+            if not buf.is_contiguous():
+                graph_module.register_buffer(name, buf.contiguous())
+                count += 1
+        for name, param in list(graph_module.named_parameters()):
+            if not param.is_contiguous():
+                graph_module.register_parameter(
+                    name, torch.nn.Parameter(param.contiguous(),
+                                             requires_grad=param.requires_grad))
+                count += 1
+        if count:
+            _get_logger().debug(
+                f"Made {count} non-contiguous tensor constant(s) contiguous")
 
     def setup_backend(self, backend=None, backend_params={}):
         super().setup_backend(backend, backend_params)
