@@ -175,7 +175,7 @@ def main():
         wbc.previous_actions = annotate.state_tensors("wbc_obj", {"previous_actions": wbc.previous_actions})
         actions = wbc.run_model(**observation_data)
         annotate.update_state("wbc_obj", {"previous_actions": actions})
-        annotate.output_tensors("wbc_obj", {"actions": actions}, export_with="onnx-torchscript")
+        annotate.output_tensors("wbc_obj", {"actions": actions}, export_with="onnx")
         print(actions)
 
 

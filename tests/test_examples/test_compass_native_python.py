@@ -27,12 +27,12 @@ def run_example():
     test_image, test_odom, test_transform, goal_pose, route_transform = create_test_data()
     compass_native_python = CompassNavigationModel(mobility_model_path="examples/models/digit_mobility.jit", device = 'cuda')
     inputs = {
-        'compass_goal_checker/goal': goal_pose.clone(),
-        'compass_image_processor/raw_image': test_image.clone(),
-        'compass_odometry_processor/odom_msg': test_odom.clone(),
-        'compass_odometry_processor/transform': test_transform.clone(),
-        'compass_route_calculator/goal_pose': goal_pose.clone(),
-        'compass_route_calculator/transform': route_transform.clone(),
+        'compass_model/goal': goal_pose.clone(),
+        'compass_model/raw_image': test_image.clone(),
+        'compass_model/odom_msg': test_odom.clone(),
+        'compass_model/transform': test_transform.clone(),
+        'compass_model/goal_pose': goal_pose.clone(),
+        'compass_model/transform': route_transform.clone(),
     }
 
     final_commands = compass_native_python.run_navigation_pipeline(test_image, test_odom, goal_pose, test_transform, route_transform)
@@ -46,22 +46,17 @@ class TestCompassNativePython(BaseExampleTest):
 
         # Expected output files based on the sample_compass_navigation_pipeline directory
         expected_files = [
-            'compass_goal_checker.pt',
-            'compass_image_processor.pt',
-            'compass_odometry_processor.pt',
-            'compass_route_calculator.pt',
-            'post_process_commands.pt',
-            'process_and_run_inference.pt',
+            'compass_model.pt',
             'sample_compass_navigation_pipeline.png',
             'sample_compass_navigation_pipeline.yaml'
         ]
 
         # Run the test
         self._run_and_verify_example(
-            script_name='compass_native_python.py',
+            script_name='compass_navigation.py',
             output_dir_name='sample_compass_navigation_pipeline',
             expected_files=expected_files,
-            test_description='Testing compass_native_python.py'
+            test_description='Testing compass_navigation.py'
         )
 
 
@@ -71,7 +66,7 @@ class TestCompassNativePython(BaseExampleTest):
         # Load and run the exported pipeline
         exported_example = InferenceManager('sample_compass_navigation_pipeline/sample_compass_navigation_pipeline.yaml')
         exported_outputs = exported_example.run_policy(inputs)
-        exported_action = exported_outputs['post_process_commands/cmd']
+        exported_action = exported_outputs['compass_model/final_commands']
 
         try:
             torch.cuda.synchronize()  # Wait for GPU operations to complete

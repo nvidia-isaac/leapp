@@ -15,7 +15,8 @@ from abc import ABCMeta
 
 import torch
 from torch.fx.proxy import Proxy
-from torch.fx.experimental.proxy_tensor import make_fx
+import io as _io
+from torch._export.converter import TS2EPConverter
 
 from leapp._logging import _get_logger
 from leapp.tracing_lock import TracingLock
@@ -344,8 +345,8 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             return tensor_out
 
         # Check if we're trying to call a TorchScript module/method
-        # If detected, decompose into individual aten ops via make_fx so the
-        # tracing chain is preserved transparently.
+        # If detected, decompose into individual aten ops via TS2EPConverter
+        # so the tracing chain is preserved transparently.
         func_type_name = type(func).__name__
         func_module = type(func).__module__ if hasattr(
             type(func), '__module__') else ''
@@ -360,37 +361,82 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                     is_scripted = 'Script' in self_class_name
 
         if is_scripted:
-            # Decompose the scripted module/function into individual aten ops
-            # via make_fx (ProxyTensor dispatch), then replay with TracedTensors
-            # so each op gets recorded in our FX graph transparently.
+            # Decompose the TorchScript module into individual aten ops via
+            # TS2EPConverter, then replay with TracedTensors so each op gets
+            # recorded in our FX graph transparently.
 
             _get_logger().info(
                 f"Detected TorchScript call to {func_type_name}. "
-                f"Decomposing via make_fx for transparent tracing."
+                f"Decomposing via TS2EPConverter for transparent tracing."
             )
 
             try:
-                # make_fx traces through the scripted module at the aten dispatcher
-                # level, producing a standard FX GraphModule with individual ops.
-                # Wrap func so make_fx sees a plain callable — bound methods like
-                # ScriptModule.forward have 'self' in the signature which causes
-                # make_fx to expect an extra argument.
-                fx_module = make_fx(lambda *args, **kwargs: func(*args, **kwargs))(*real_args, **real_kwargs)
+                # Obtain a fully-initialized RecursiveScriptModule from the
+                # ScriptMethod.  func.owner returns the C++ ScriptModule
+                # (not an nn.Module).  Save → reload via BytesIO so
+                # torch.jit.load performs full Python-level init.
+                script_module = getattr(func, '__self__', None)
+                if not isinstance(script_module, torch.nn.Module):
+                    cpp_module = getattr(func, 'owner', None)
+                    if cpp_module is not None:
+                        _buf = _io.BytesIO()
+                        _tmp = torch.jit.RecursiveScriptModule._construct(
+                            cpp_module, lambda self: None
+                        )
+                        torch.jit.save(_tmp, _buf)
+                        _buf.seek(0)
+                        _dev = next(
+                            (a.device for a in real_args
+                             if isinstance(a, torch.Tensor)),
+                            torch.device('cpu'),
+                        )
+                        script_module = torch.jit.load(
+                            _buf, map_location=_dev
+                        )
 
-                # Call the decomposed FX module with TracedTensors.
-                # Each aten op triggers __torch_function__, recording it in our graph.
-                return fx_module(*args, **kwargs)
+                #validate the script_module
+                if not isinstance(script_module, torch.nn.Module):
+                    raise RuntimeError(
+                        f"Could not obtain nn.Module from {func_type_name}. "
+                        f"func.__self__={type(getattr(func, '__self__', None))}, "
+                        f"func.owner={type(getattr(func, 'owner', None))}"
+                    )
+
+                # Clone+detach real_args so they are plain tensors with no
+                # shared storage back to TracedTensors.  Without this,
+                # as_subclass views can trigger __torch_function__ inside
+                # torch.export internals.
+                _clean = tuple(
+                    a.clone().detach() if isinstance(a, torch.Tensor) else a
+                    for a in real_args
+                )
+                _clean_kw = {
+                    k: v.clone().detach() if isinstance(v, torch.Tensor) else v
+                    for k, v in (real_kwargs or {}).items()
+                }
+                ep = TS2EPConverter(
+                    script_module, _clean, _clean_kw
+                ).convert()
+                fx_module = ep.module()
+
             except Exception as e:
                 _get_logger().error(
-                    f"Failed to decompose TorchScript call via make_fx: {e}\n"
-                    f"The TorchScript module/function could not be transparently traced.\n"
-                    f"Solutions:\n"
-                    f"  1. Use the regular (non-scripted) nn.Module instead during tracing\n"
-                    f"  2. Extract and call the underlying operations directly\n"
-                    f"  3. Break the chain by calling output_tensors() first then annotate "
-                    f"the scripted module usage with other LEAPP API"
+                    f"Failed to decompose TorchScript {func_type_name} via "
+                    f"TS2EPConverter: {e}\n"
+                    f"To resolve, consider one of:\n"
+                    f"  1. Use the regular (non-scripted) nn.Module instead "
+                    f"during tracing\n"
+                    f"  2. Extract and call the underlying operations "
+                    f"directly\n"
+                    f"  3. Break the chain by calling output_tensors() first "
+                    f"then annotate the scripted module usage with other "
+                    f"LEAPP API"
                 )
                 raise
+
+            # Replay the decomposed FX module with TracedTensors.
+            # Each aten op triggers __torch_function__, recording it in our graph.
+            return fx_module(*args, **kwargs)
 
         # Helper to recursively extract proxies
         def extract_proxy(obj):

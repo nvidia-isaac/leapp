@@ -4,6 +4,7 @@ from leapp.backends.export_backend import ExportBackend, prepare_tensors_for_exp
 from leapp._logging import _get_logger
 import os
 import onnx
+from onnx import numpy_helper
 import tempfile
 
 class ONNXExportBackend(ExportBackend):
@@ -75,6 +76,46 @@ class ONNXExportBackend(ExportBackend):
 
     def load(self, model_path: str, sha256sum: str, device: str):
         self._load_onnx(model_path, sha256sum, device)
+
+    @staticmethod
+    def _fix_scalar_slice_inputs(model: onnx.ModelProto) -> int:
+        """Fix scalar initializers used as Slice starts/ends/axes/steps.
+
+        The ONNX spec requires Slice inputs (starts, ends, axes, steps) to be
+        1-D tensors.  However, the dynamo-based ONNX exporter sometimes reuses
+        scalar (0-D) initializers that are also shared with Gather nodes (which
+        *do* need scalars).  This creates an invalid Slice node.
+
+        The fix creates **new** 1-D copies of the scalar initializer for each
+        affected Slice input, leaving the original scalar untouched for other
+        consumers (Gather, etc.).
+
+        Modifies the model proto in-place.
+        """
+        init_map = {init.name: init for init in model.graph.initializer}
+        num_fixed = 0
+
+        for node in model.graph.node:
+            if node.op_type != "Slice":
+                continue
+            for i in range(1, len(node.input)):  # skip input[0] (data)
+                inp_name = node.input[i]
+                if inp_name in init_map:
+                    arr = numpy_helper.to_array(init_map[inp_name])
+                    if arr.ndim == 0:
+                        role = ["data", "starts", "ends", "axes", "steps"][i] if i < 5 else f"input_{i}"
+                        new_name = f"{inp_name}_1d_{node.name}_{role}"
+                        new_tensor = numpy_helper.from_array(
+                            arr.reshape(1), name=new_name
+                        )
+                        model.graph.initializer.append(new_tensor)
+                        node.input[i] = new_name
+                        num_fixed += 1
+
+        if num_fixed > 0:
+            _get_logger().debug(
+                f"Fixed {num_fixed} scalar Slice initializer(s) "
+                f"(ONNX exporter bug: shared scalar initializers between Gather and Slice nodes)")
 
     def save(self, save_path: str) -> Tuple[str, str, str]:
         onnx_path = os.path.join(save_path, f"{self.node_context.name}.onnx")
@@ -187,10 +228,19 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
         # (ONNX can remove unused inputs during optimization)
         self._sync_inputs_with_onnx(onnx_program)
 
+        # Capture proto once — model_proto may be a property that rebuilds on
+        # each access, so we must fix and save from the same object.
+        model_proto = onnx_program.model_proto
+
+        # Fix scalar Slice initializers on the in-memory proto before saving
+        # (ONNX exporter bug: shared scalar initializers between Gather and Slice nodes).
+        self._fix_scalar_slice_inputs(model_proto)
+
         # Wrap in SimplifiedONNXProgram so validation uses controlled
         # ORT session options (ORT_ENABLE_BASIC avoids graph-opt corruption).
         tmpdir = tempfile.mkdtemp()
         tmp_path = os.path.join(tmpdir, f"{self.node_context.name}.onnx")
-        onnx_program.save(tmp_path)
+        onnx.save(model_proto, tmp_path)
+
         self.compiled_model = SimplifiedONNXProgram(tmp_path, temp_dir=tmpdir)
         self.compiled_module = m

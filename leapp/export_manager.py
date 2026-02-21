@@ -368,7 +368,7 @@ class ExportManager:
         if metadata:
             apply_semantic_metadata(traced_tensors_node, metadata)
 
-    def register_buffer(self, node_name: str, tensors: dict) -> dict:
+    def register_buffer(self, node_name: str, tensors: dict):
         """Register tensors as persistent buffers for a traced node.
 
         The tensors become part of the compiled module's state and persist
@@ -380,7 +380,7 @@ class ExportManager:
             tensors: Dictionary mapping buffer names to tensors
 
         Returns:
-            dict: Dictionary mapping buffer names to TracedData
+            Single TracedData if one buffer, or tuple of TracedData if multiple.
 
         Example:
             ```python
@@ -391,19 +391,18 @@ class ExportManager:
 
                 def run(self, input):
                     # Make tensors participate in tracing
-                    buffers = annotate.register_buffer('my_node', {
+                    self.values, self.state = annotate.register_buffer('my_node', {
                         'values': self.values,
                         'state': self.state
                     })
-                    self.values = buffers['values']
-                    self.state = buffers['state']
 
                     self.values[:] = input  # This assignment is now traced
                     return self.values * 100
             ```
         """
         if not ExportManager._interpret_graph:
-            return tensors  # Return unchanged when not tracing
+            values = list(tensors.values())
+            return values[0] if len(values) == 1 else tuple(values)
 
         self._verify_no_active_function_tracing()
 
@@ -422,11 +421,14 @@ class ExportManager:
             raise Exception("Error: exception detected in register_buffer")
 
         if not traced_node.is_tracing:
-            return tensors
+            values = list(tensors.values())
+            return values[0] if len(values) == 1 else tuple(values)
 
         # Flatten, validate, and wrap using create_static_tensors
         flattened = flatten_io_structure(tensors, '')
-        return traced_node.create_static_tensors(flattened)
+        result = traced_node.create_static_tensors(flattened)
+        values = list(result.values())
+        return values[0] if len(values) == 1 else tuple(values)
 
     def state_tensors(self, node_name: str, tensors: dict[str, torch.Tensor]) -> TracedTensor | tuple[TracedTensor, ...]:
         """Register state tensors (both inputs AND outputs) for a traced node.

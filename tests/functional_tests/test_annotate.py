@@ -430,8 +430,7 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
             
             def run(self, traced_input):
                 # Register the buffer - makes self.values a TracedTensor
-                buffers = annotate.register_buffer('buffer_test', {'values': self.values})
-                self.values = buffers['values']
+                self.values = annotate.register_buffer('buffer_test', {'values': self.values})
                 # In-place assignment - now traced because self.values is a TracedTensor
                 self.values[:] = traced_input
                 # Operations on the buffer are traced
