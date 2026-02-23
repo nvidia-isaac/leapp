@@ -323,7 +323,8 @@ class ExportManager:
         if not all(instances):
             types = set(type(tensor) for tensor in flattened_tensors.values())
             _get_logger().error(
-                f"Error: detected the following types when expected all outputs to be TracedData: {types}\n"
+                f"Error: in output_tensors call for the node {node_name} detected the following"
+                f" types when expected all outputs to be TracedData: {types}\n"
                 "**This could happen if you are not using TracedData in your computations.**\n"
                 "Please verify if you are using the returned wrapped tensors from input_tensors() to "
                 "correctly trace your computations.")
