@@ -79,6 +79,9 @@ class LeappNode():
         # trimmed inputs are inputs that are not used in the computation or directly returned as output
         self.trimmed_inputs = set()
 
+        # storage for the fx graph or compiled module
+        self.m = None
+
     @property
     def captured(self):
         # this is defaulted to False. the compile_trace method should set this to true
@@ -179,7 +182,7 @@ class LeappNode():
 
     def compile_model(self):
         try:
-            self.export_backend.compile()
+            self.export_backend.compile(self.m)
         except Exception as e:
             _get_logger().error(f"Error compiling model {self.name}: {e}")
             raise e

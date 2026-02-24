@@ -10,7 +10,6 @@ from typing import Any, Set, Optional
 
 from torch.fx.proxy import Proxy
 from leapp._logging import _get_logger
-from leapp.tracing_lock import TracingLock
 
 import torch
 
@@ -42,7 +41,6 @@ class TracedData(ABC):
         self._name = name
         self._context = context
         self._proxy = proxy
-        self._global_tracing_lock = TracingLock()
     
     # =========================================================================
     # Common Properties
@@ -101,15 +99,6 @@ class TracedData(ABC):
         """
         pass
     
-    @abstractmethod
-    def _unwrap(self) -> Any:
-        """Get the underlying raw value.
-        
-        Returns:
-            The underlying value (torch.Tensor, numpy.ndarray, etc.)
-        """
-        pass
-    
     # =========================================================================
     # Common Static Methods
     # =========================================================================
@@ -144,7 +133,7 @@ class TracedData(ABC):
             The unwrapped value with all TracedData replaced by their raw values
         """
         if isinstance(obj, TracedData):
-            return obj._unwrap()
+            return obj.data
         elif isinstance(obj, (list, tuple)):
             return type(obj)(TracedData.unwrap_traced_data(item) for item in obj)
         elif isinstance(obj, dict):
@@ -217,20 +206,7 @@ class TracedData(ABC):
         """
         if not self.is_tracing:
             return False
-        
-        if self.is_tracing and self._global_tracing_lock.is_active:
-            _get_logger().error(
-                f"Error: detected active TracedData {self._name} from node {self.context} inside of a traced function.\n"
-                f"\n"
-                f"This happens when you have an active TracedData and it is being used for computation inside of a traced function/block."
-                f"\n"
-                f"You must call output_tensors() to finalize the TracedData node first"
-            )
-            raise Exception(
-                "Cannot use TracedData inside of a traced function/block. "
-                "Call output_tensors() first to finalize the TracedData node"
-            )
-        
+
         contexts = set()
         if args is not None:
             for arg in args:
@@ -240,17 +216,19 @@ class TracedData(ABC):
                 contexts = TracedData.find_all_contexts(kwarg, contexts)
         
         if len(contexts) > 1:
+            cls_name = self.__class__.__name__
             _get_logger().error(
-                f"Error: detected multiple TracedData contexts: {contexts} inside of a traced function.\n"
+                f"Error: detected multiple {cls_name} contexts: {contexts} inside of a traced function.\n"
                 "\n"
-                "This happens when you mix multiple active TracedData from different contexts inside of a traced function/block."
+                f"This happens when you mix multiple active {cls_name}s from different contexts "
+                "inside of a traced function/block.\n"
                 "\n"
-                "You can call output_tensors() to finalize one of the TracedData nodes first "
+                "You can call output_tensors() to finalize one of the nodes first "
                 "or combine both nodes into a single node by calling input_tensors() with the same node name"
             )
             raise Exception(
-                "Cannot mix multiple active TracedData from different contexts inside of a traced function/block. "
-                "Call output_tensors() to finalize one of the TracedData nodes first "
+                f"Cannot mix multiple active {cls_name}s from different contexts inside of a traced function/block. "
+                "Call output_tensors() to finalize one of the nodes first "
                 "or combine both nodes into a single node by calling input_tensors() with the same node name"
             )
         return True

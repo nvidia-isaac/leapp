@@ -15,7 +15,6 @@
 # limitations under the License.
 #
 
-import sys
 import functools
 import inspect
 import yaml
@@ -24,7 +23,6 @@ import torch
 
 from leapp._logging import _get_logger
 from leapp.leapp_graph.leapp_graph import LeappGraph
-from leapp.leapp_graph.function_decorator_node import FunctionDecoratorNode
 from leapp.leapp_graph.leapp_node import LeappNode
 from leapp.leapp_graph.traced_node import TracedTensorNode
 from leapp.leapp_graph.datatypes import (
@@ -32,21 +30,19 @@ from leapp.leapp_graph.datatypes import (
     is_traced_type,
     apply_traced_tensor_patches,
     remove_traced_tensor_patches,
+    is_tracable_tensor_type,
 )
 from leapp.leapp_graph.datatypes.global_patching import warn_if_script_functions_in_scope
-from leapp.leapp_graph.block_context_node import BlockContextNode
-from leapp.utils.utils import frame_to_namespace
 from leapp.utils.enums import MergeCfgEnum
-from leapp.tracing_lock import TracingLock
 from leapp.utils.tensor_description import TensorSemantics
 from leapp.utils.tensor_description import (verify_data_exact_match,
                                              flatten_io_structure,
                                              unwrap_tensor_semantics,
                                              apply_semantic_metadata)
-from leapp.utils.utils import (find_with_block_end,
-                                get_relative_path,
-                                get_system_info,
-                                mirror_all_tensor_tags)
+from leapp.utils.utils import (get_relative_path,
+                               get_system_info,
+                               mirror_all_tensor_tags,
+                               extract_return_names)
 
 
 class ExportManager:
@@ -130,7 +126,6 @@ class ExportManager:
             _get_logger().warning("LEAPP graph interpretation is already enabled, "
                                   "calling start() again will reset the graph")
             _get_logger().warning("Resetting graph...")
-            TracingLock().reset()
         if dry_run:
             _get_logger().info("Starting dry run mode")
         self.dry_run = dry_run
@@ -162,8 +157,6 @@ class ExportManager:
             - This method should only be called after start() has been called.
             - Ensure all active tracing operations are completed before calling stop().
         """
-        if TracingLock().is_active:
-            raise Exception("ExportManager is currently tracing")
         if not ExportManager._interpret_graph:
             raise Exception("ExportManager graph interpretation is disabled")
         ExportManager._interpret_graph = False
@@ -187,15 +180,7 @@ class ExportManager:
             node_index = len(self.nodes)
         return node_index
 
-    def _verify_no_active_function_tracing(self):
-        if TracingLock().is_active:
-            _get_logger().error(
-                "Error when attempting to set up new trace\n"
-                "ExportManager is already tracing")
-            raise Exception("Error when attempting to set up new trace")
-
     def _setup_new_node(self, name, node_class: LeappNode, **kwargs):
-        self._verify_no_active_function_tracing()
         node_index = self.get_node_index(name)
 
         if self.dry_run:
@@ -228,7 +213,7 @@ class ExportManager:
         if not ExportManager._interpret_graph:
             values = list(tensors.values())
             return values[0] if len(values) == 1 else tuple(values)
-        self._verify_no_active_function_tracing()
+ 
 
         # create the node if it doesn't exist
         if node_name in self.nodes.keys():
@@ -287,7 +272,7 @@ class ExportManager:
 
         if not ExportManager._interpret_graph:
             return
-        self._verify_no_active_function_tracing()
+ 
 
         if node_name in self.nodes.keys():
             traced_tensors_node = self.nodes[node_name]
@@ -406,7 +391,7 @@ class ExportManager:
             values = list(tensors.values())
             return values[0] if len(values) == 1 else tuple(values)
 
-        self._verify_no_active_function_tracing()
+ 
 
         if node_name not in self.nodes:
             _get_logger().error(
@@ -441,7 +426,7 @@ class ExportManager:
             values = list(tensors.values())
             return values[0] if len(values) == 1 else tuple(values)
 
-        self._verify_no_active_function_tracing()
+ 
 
         if node_name not in self.nodes:
             _get_logger().error(
@@ -471,7 +456,7 @@ class ExportManager:
         if not ExportManager._interpret_graph:
             return  # No-op when not tracing
 
-        self._verify_no_active_function_tracing()
+ 
 
         if node_name not in self.nodes:
             _get_logger().error(
@@ -544,209 +529,94 @@ class ExportManager:
 
         self.nodes[node_name]._buffer_tracker = tracker
 
-    def block(self, node_name, **kwargs):
-        """Create a context manager for tracing a block of code in the computational graph.
-
-        This method initializes a context manager that traces a specific block of code when 
-        used with a 'with' statement. It captures inputs, outputs, and execution details of 
-        the code block to create a node in the LEAPP computational graph.
-
-        Args:
-            node_name (str): The unique name to identify this node in the computational graph.
-            **kwargs: Additional parameters for node configuration. Supported options include:
-                - export_with: Backend to use for exporting the model.
-                - backend_params: Parameters for the export backend.
-                - inputs: Input specifications for the node.
-                - outputs: Output specifications for the node.
-                - environment_constants: Constants to capture from the environment.
-                - register_buffers: Buffers to register with the model.
-
-        Returns:
-            BlockTraceContext: A context manager for tracing the block.
-
-        Example:
-            ```python
-            with export_manager.block("preprocessing_block"):
-                # Code to be traced
-                data = preprocess(raw_input)
-                result = transform(data)
-            ```
-
-        Note:
-            - Must be used with a 'with' statement to properly enter and exit tracing.
-            - Graph interpretation must be enabled via start() before using this method.
-            - The traced code block should not contain nested block() or method() annotations.
-        """
-        if not ExportManager._interpret_graph:
-            return self  # no-op context manager
-
-        if node_name in self.nodes.keys():
-            new_node = False
-            name = node_name
-            node_context = self.nodes[node_name]
-        else:
-            new_node = True
-            node_context, name = self._setup_new_node(
-                node_name, BlockContextNode, **kwargs)
-            self.nodes[name] = node_context
-
-        class BlockTraceContext:
-            """Context manager for tracing a block of code."""
-
-            def __enter__(self):
-                caller_frame = sys._getframe(1)
-                # Convert frame to namespace immediately
-                namespace = frame_to_namespace(caller_frame)
-
-                if new_node:
-                    # First entry - set the executed_lines boundaries
-                    node_context.executed_lines.update({
-                        'filename': caller_frame.f_code.co_filename,
-                        'function_name': caller_frame.f_code.co_name,
-                        'min_line': caller_frame.f_lineno,
-                        'max_line': find_with_block_end(caller_frame.f_code.co_filename, caller_frame.f_lineno)
-                    })
-                    node_context.capture_inputs_from_namespace(namespace)
-                    node_context.snapshot_buffer_values(namespace)
-                    _get_logger().info(f"****Tracing started for {name}****")
-                    node_context.compile_trace()
-                else:
-                    # Re-entry - validate boundaries and inputs match
-                    node_context.validate_function_boundaries(caller_frame)
-                    node_context.validate_inputs_from_namespace(namespace)
-                # Acquire lock to prevent nested tracing and TracedTensor operations inside block
-                TracingLock().acquire()
-
-                return self
-
-            def __exit__(self, exc_type, exc_value, traceback):
-                TracingLock().release()
-                # Convert frame to namespace for output capture
-                output_namespace = frame_to_namespace(sys._getframe(1))
-                if new_node:
-                    _get_logger().info(
-                        f"****Tracing stopped for {node_context.name}****\n\n")
-                    node_context.capture_outputs_from_namespace(
-                        output_namespace)
-                else:
-                    node_context.validate_outputs_from_namespace(
-                        output_namespace)
-
-        return BlockTraceContext()
 
     def method(self, **params):
-        """Create a decorator for tracing functions/methods in the computational graph.
-
-        This method returns a decorator that wraps functions to trace their execution,
-        capturing inputs, outputs, and execution details to create nodes in the LEAPP
-        computational graph. The decorated function becomes a traceable node that can
-        be connected with other nodes in the graph.
-
-        Args:
-            **params: Configuration parameters for the node. Supported options include:
-                - node_name (str): Custom name for the node. If not provided, uses the
-                  function's name.
-                - export_with: Backend to use for exporting the model.
-                - backend_params: Parameters for the export backend.
-                - inputs: Input specifications for the node.
-                - outputs: Output specifications for the node.
-                - environment_constants: Constants to capture from the environment.
-                - register_buffers: Buffers to register with the model.
-
-        Returns:
-            decorator: A decorator function that can be applied to functions/methods.
-
-        Note:
-            - Graph interpretation must be enabled via start() before decorated functions are called.
-            - The decorator preserves the original function's metadata using functools.wraps.
-            - Functions decorated with method() should not contain nested block() or method() annotations.
-            - If graph interpretation is disabled, decorated functions execute normally without tracing.
-        """
         def decorator(func):
-
             if "node_name" in params:
                 name = params["node_name"]
             else:
                 name = func.__name__
-
+            
+            export_with = params.get("export_with", None)
+            
             @functools.wraps(func)
             def wrapper(*args, **kwargs):
                 if not ExportManager._interpret_graph:
                     return func(*args, **kwargs)
+                
+                # ~~~~~~~~~~~~~~~~~~~ ensure node exists ~~~~~~~~~~~~~~~~~~~~~~~~ #
+                if name not in self.nodes:
+                    node, _ = self._setup_new_node(name, TracedTensorNode)
+                    self.nodes[name] = node
+                
+                is_first_trace = self.nodes[name].is_tracing
 
-                # Check if this is a re-entry
-                if name in self.nodes:
-                    new_node = False
-                    node_context = self.nodes[name]
+                def wrap_if_tracable(value, tensor_name, display_name=None):
+                    if display_name is None:
+                        display_name = tensor_name
+                    if is_tracable_tensor_type(value):
+                        return self.input_tensors(name, {tensor_name: value})
+                    if is_first_trace:
+                        _get_logger().warning(
+                            f"Detected non-tracable dynamic input (type={type(value).__name__}) "
+                            f"for parameter '{display_name}' in method '{name}'. "
+                            f"This value will be passed through as a constant.")
+                    return value
+                
+                # ~~~~~~~~~~~~~~~~~~~ set up inputs ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+
+                sig = inspect.signature(func)
+                bound_args = sig.bind(*args, **kwargs)
+                bound_args.apply_defaults()
+                
+                params_list = list(sig.parameters.items())
+                new_args = []
+                new_kwargs = {}
+                for i, arg in enumerate(args):
+                    param_name, param = params_list[i]
+                    if i == 0 and param_name in ('self', 'cls'):
+                        new_args.append(arg)
+                        continue
+                    if param.kind == inspect.Parameter.VAR_POSITIONAL:
+                        for j, a in enumerate(args[i:]):
+                            new_args.append(wrap_if_tracable(a, f"arg_{j}", display_name=f"*args[{j}]"))
+                        break
+                    new_args.append(wrap_if_tracable(arg, param_name))
+                
+                for key, value in kwargs.items():
+                    new_kwargs[key] = wrap_if_tracable(value, key)
+                
+                # ~~~~~~~~~~~~~~~~~~~ register default kwargs as buffers ~~~~~~~~ #
+                for param_name, param_value in bound_args.arguments.items():
+                    if param_name in ('self', 'cls'):
+                        continue
+                    param = sig.parameters[param_name]
+                    was_provided = (
+                        param_name in kwargs or
+                        (param.kind != inspect.Parameter.VAR_POSITIONAL and
+                        list(sig.parameters.keys()).index(param_name) < len(args))
+                    )
+                    if not was_provided and is_tracable_tensor_type(param_value):
+                        traced = self.register_buffer(name, {param_name: param_value})
+                        new_kwargs[param_name] = traced
+                
+                # ~~~~~~~~~~~~~~~~~~~ run the function ~~~~~~~~~~~~~~~~~~~~~~~~~ #
+                result = func(*new_args, **new_kwargs)
+                # ~~~~~~~~~~~~~~~~~~~ set up outputs ~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+                return_names = extract_return_names(func)
+
+                if result is None:
+                    raise Exception(f"Error: annotated method {name} returned None, but LEAPP expects a return value")
+                elif isinstance(result, tuple):
+                    if len(return_names) != len(result):
+                        _get_logger().error(
+                            f"Fatal: annotated method {name} returned {len(result)} values, "
+                            f"but LEAPP detected the following return names {return_names} from source")
+                    output_dict = {return_names[i]: result[i] for i in range(len(result))}
+                    self.output_tensors(name, output_dict, export_with=export_with)
                 else:
-                    new_node = True
-                    node_context, _ = self._setup_new_node(
-                        name, FunctionDecoratorNode, **params)
-                    self.nodes[name] = node_context
-
-                caller_namespace = frame_to_namespace(sys._getframe(1))
-
-                if new_node:
-                    _get_logger().info(f"****Tracing started for {name}****")
-                    sig = inspect.signature(func)
-                    bound_args = sig.bind(*args, **kwargs)
-                    bound_args.apply_defaults()
-
-                    node_context.inspect_function_inputs(func, args, kwargs)
-                    # Build merged namespace: caller frame + bound function arguments
-                    # This allows capture and snapshot to look up 'self' and other function
-                    # parameters that wouldn't be in the caller's frame.
-                    input_namespace = {
-                        **caller_namespace, **bound_args.arguments}
-                    # For bound methods, 'self' is not in bound_args (it's already bound)
-                    # We need to explicitly add it from the method's __self__ attribute
-                    if hasattr(func, '__self__'):
-                        input_namespace['self'] = func.__self__
-                    node_context.capture_inputs_from_namespace(input_namespace)
-                    # Sets up function boundaries - required before tracing
-                    node_context.compile_trace(func)
-                    # Use the same namespace (with 'self' if bound method) for buffer/constant lookup
-                    node_context.snapshot_buffer_values(input_namespace)
-
-                    trace_fn = node_context.create_trace_function(
-                        __file__.split('/')[-1], entry_hook=None)
-                else:
-                    node_context.validate_function_boundaries(func)
-                    node_context.validate_function_inputs(func, args, kwargs)
-                    # No entry_hook on re-entry - only need to capture output_namespace
-                    trace_fn = node_context.create_trace_function(
-                        __file__.split('/')[-1], entry_hook=None)
-
-                # Start sys.settrace to capture namespaces (and run entry_hook on new_node)
-                sys._getframe(1).f_trace = trace_fn
-
-                # Acquire lock to prevent nested tracing and TracedTensor operations
-                TracingLock().acquire()
-                sys.settrace(trace_fn)
-
-                try:
-                    ##### run the actual function #########
-                    result = func(*args, **kwargs)
-                    #### run the actual function #########
-                finally:
-                    sys.settrace(None)
-                    TracingLock().release()
-
-                if new_node:
-                    _get_logger().info(
-                        f"****Tracing stopped for {node_context.name}****\n\n")
-                    node_context.inspect_function_outputs(func, result)
-                    # capture outputs from the namespace for custom returns (declared via outputs=[...])
-                    if node_context.output_namespace is not None:
-                        node_context.capture_outputs_from_namespace(
-                            node_context.output_namespace)
-                else:
-                    node_context.validate_function_outputs(func, result)
-                    # validate outputs from namespace for declared outputs=[...]
-                    if node_context.output_namespace is not None:
-                        node_context.validate_outputs_from_namespace(
-                            node_context.output_namespace)
-
+                    self.output_tensors(name, {return_names[0]: result}, export_with=export_with)
+                # ~~~~~~~~~~~~~~~~~~~ set up outputs ~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
                 return result
             return wrapper
         return decorator
@@ -758,9 +628,6 @@ class ExportManager:
     def mirror_leapp_tags(self, source, target):
         if not ExportManager._interpret_graph:
             return
-        if TracingLock().is_active:
-            raise Exception(
-                "Error: detected calling mirror_leapp_tags while tracing a function/block. this function is only valid outside of nodes")
         try:
             if not verify_data_exact_match(source, target):
                 _get_logger().error(

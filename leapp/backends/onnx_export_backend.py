@@ -149,7 +149,10 @@ class ONNXExportBackend(ExportBackend):
 class ONNXTorchScriptExportBackend(ONNXExportBackend):
     def compile(self, m: torch.nn.Module = None):
         if m is None:
-            m = self.module_builder().eval()
+            _get_logger().error(
+                f"[{self.node_context.name}] No module provided for ONNX export, please provide a module to export")
+            raise ValueError(
+                f"[{self.node_context.name}] No module provided for ONNX export, please provide a module to export")
         else:
             m = m.eval()
         
@@ -197,7 +200,10 @@ class ONNXTorchScriptExportBackend(ONNXExportBackend):
 class ONNXDynamoExportBackend(ONNXExportBackend):
     def compile(self, m: torch.nn.Module = None):
         if m is None:
-            m = self.module_builder().eval()
+            _get_logger().error(
+                f"[{self.node_context.name}] No module provided for ONNX export, please provide a module to export")
+            raise ValueError(
+                f"[{self.node_context.name}] No module provided for ONNX export, please provide a module to export")
         else:
             m = m.eval()
         # Get flat tensor values directly from inputs (not input_formats which preserves nested structure)

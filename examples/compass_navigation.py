@@ -10,7 +10,6 @@
 
 import torch
 import torchvision.transforms.functional as TF
-import time
 import argparse
 import sys
 import os

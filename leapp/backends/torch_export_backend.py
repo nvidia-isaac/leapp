@@ -60,7 +60,10 @@ class TorchTraceExportBackend(TorchExportBackend):
                 "TorchTraceExportBackend does not support buffers, "
                 "consider using export_with='jit-trace'")
         if m is None:
-            m = self.module_builder().eval()
+            _get_logger().error(
+                f"[{self.node_context.name}] No module provided for TorchTrace export, please provide a module to export")
+            raise ValueError(
+                f"[{self.node_context.name}] No module provided for TorchTrace export, please provide a module to export")
         else:
             m = m.eval()
         # Get flat tensor values directly from inputs (not input_formats which preserves nested structure)
@@ -78,7 +81,10 @@ class TorchTraceExportBackend(TorchExportBackend):
 class TorchScriptExportBackend(TorchExportBackend):
     def compile(self, m: torch.nn.Module = None):
         if m is None:
-            m = self.module_builder().eval()
+            _get_logger().error(
+                f"[{self.node_context.name}] No module provided for TorchScript export, please provide a module to export")
+            raise ValueError(
+                f"[{self.node_context.name}] No module provided for TorchScript export, please provide a module to export")
         else:
             m = m.eval()
         torch.jit._state.enable

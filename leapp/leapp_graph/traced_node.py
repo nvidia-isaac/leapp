@@ -103,6 +103,8 @@ class TracedTensorNode(LeappNode):
         self.setup_backend(backend, backend_params)
         self.export_backend.override_module_builder(lambda: self.m)
 
+        self.m = self.fx_graph_module
+
         return unwrapped_tensors[0] if len(unwrapped_tensors) == 1 else tuple(unwrapped_tensors)
 
     @staticmethod
