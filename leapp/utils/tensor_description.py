@@ -590,8 +590,9 @@ def describe_io_helper(data, name_str):
             child_name = f"{name_str}_{idx}" if name_str else str(idx)
             child_description, child_format = describe_io_helper(
                 item, child_name)
-            io_format.append(child_format)
-            data_description.extend(child_description)
+            if child_format is not None:
+                io_format.append(child_format)
+                data_description.extend(child_description)
         return data_description, io_format
     elif isinstance(data, collections.abc.Mapping):
         if not isinstance(data, dict):
@@ -605,8 +606,9 @@ def describe_io_helper(data, name_str):
             child_name = f"{name_str}_{k}" if name_str else k
             child_description, child_format = describe_io_helper(
                 v, child_name)
-            io_format[k] = child_format
-            data_description.extend(child_description)
+            if child_format is not None:
+                io_format[k] = child_format
+                data_description.extend(child_description)
     elif isinstance(data, torch.Tensor):
         tensor_desc = TensorDescription(name_str, data)
 
@@ -615,7 +617,7 @@ def describe_io_helper(data, name_str):
         io_format = tensor_desc
 
     else:
-        _get_logger().error(f"Input/Output '{name_str}' has unsupported type: {type(data)}")
+        return [], None
 
     return data_description, io_format
 

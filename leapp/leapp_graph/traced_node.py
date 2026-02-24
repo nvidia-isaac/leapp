@@ -400,9 +400,6 @@ class TracedTensorNode(LeappNode):
                 node = self.graph.create_node("get_attr", attr_name, (), {})
                 proxy = Proxy(node, self.tracer)
                 return as_traced(data, name, self, proxy)
-
-
-
         else:
             if to == "traced":
                 _get_logger().warning(
@@ -503,10 +500,12 @@ class TracedTensorNode(LeappNode):
         for node in reversed(nodes_to_remove):
             if node.op == "placeholder":
                 input_description = LeappNode.get_io_description_by_name(
-                    node.name, self.inputs)
+                    node.target, self.inputs)
                 if input_description is None:
                     _get_logger().error(
-                        f"Error: when building the graph module for {self.name}")
+                        f"Error: when building the graph module for {self.name}, "
+                        f"could not find input description for placeholder '{node.target}'")
+                    continue
                 self.trimmed_inputs.add(input_description.name_str)
 
             if len(node.users) == 0:

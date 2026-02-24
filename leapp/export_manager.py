@@ -315,9 +315,10 @@ class ExportManager:
             _get_logger().error(
                 f"Error: in output_tensors call for the node {node_name} detected the following"
                 f" types when expected all outputs to be TracedData: {types}\n"
-                "**This could happen if you are not using TracedData in your computations.**\n"
-                "Please verify if you are using the returned wrapped tensors from input_tensors() to "
-                "correctly trace your computations.")
+                "This could happen if \n"
+                "1. You are not using TracedData in your computations.\n"
+                "2. You didn't replace your original tensors with the returned wrapped tensors from input_tensors()\n"
+                "3. Something in your computation breaks tracing\n")
             raise Exception(
                 "Error: exception detected in output_tensors declaration")
 
@@ -549,20 +550,6 @@ class ExportManager:
                     node, _ = self._setup_new_node(name, TracedTensorNode)
                     self.nodes[name] = node
                 
-                is_first_trace = self.nodes[name].is_tracing
-
-                def wrap_if_tracable(value, tensor_name, display_name=None):
-                    if display_name is None:
-                        display_name = tensor_name
-                    if is_tracable_tensor_type(value):
-                        return self.input_tensors(name, {tensor_name: value})
-                    if is_first_trace:
-                        _get_logger().warning(
-                            f"Detected non-tracable dynamic input (type={type(value).__name__}) "
-                            f"for parameter '{display_name}' in method '{name}'. "
-                            f"This value will be passed through as a constant.")
-                    return value
-                
                 # ~~~~~~~~~~~~~~~~~~~ set up inputs ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
 
                 sig = inspect.signature(func)
@@ -579,12 +566,12 @@ class ExportManager:
                         continue
                     if param.kind == inspect.Parameter.VAR_POSITIONAL:
                         for j, a in enumerate(args[i:]):
-                            new_args.append(wrap_if_tracable(a, f"arg_{j}", display_name=f"*args[{j}]"))
+                            new_args.append(self.input_tensors(name, {f"arg_{j}": a}))
                         break
-                    new_args.append(wrap_if_tracable(arg, param_name))
+                    new_args.append(self.input_tensors(name, {param_name: arg}))
                 
                 for key, value in kwargs.items():
-                    new_kwargs[key] = wrap_if_tracable(value, key)
+                    new_kwargs[key] = self.input_tensors(name, {key: value})
                 
                 # ~~~~~~~~~~~~~~~~~~~ register default kwargs as buffers ~~~~~~~~ #
                 for param_name, param_value in bound_args.arguments.items():

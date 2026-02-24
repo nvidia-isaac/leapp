@@ -441,10 +441,6 @@ def mirror_all_tensor_tags(source, target):
     '''
     Mirror all tensor tags from source to target.
     '''
-    if isinstance(source, TracedTensor):
-        source = source.tensor
-    if isinstance(target, TracedTensor):
-        target = target.tensor
     if isinstance(source, torch.Tensor) and isinstance(target, torch.Tensor):
         if hasattr(source, 'leapp_tag'):
             tag_tensor(target, source.leapp_tag)
