@@ -35,6 +35,8 @@ class TracedTensorNode(LeappNode):
         # Buffer tracker for auto-detecting stateful buffers (set by annotate.module())
         self._buffer_tracker = None
 
+        self._next_buffer_idx = 0
+
     @property
     def is_tracing(self) -> bool:
         return not self._model_captured

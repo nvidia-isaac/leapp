@@ -20,9 +20,10 @@ from leapp import annotate
 class CompassImageProcessor:
     """Processes raw camera images for the navigation model."""
 
-    def __init__(self, target_width=960, target_height=640):
+    def __init__(self, target_width=960, target_height=640, device="cuda"):
         self.target_width = target_width
         self.target_height = target_height
+        self.device = device
 
     @annotate.method(node_name="compass_image_processor", export_with="jit")
     def process(self, raw_image: torch.Tensor) -> torch.Tensor:
@@ -46,14 +47,14 @@ class CompassImageProcessor:
         # Normalize from [0, 255] to [0, 1]
         normalized_image = resized_image / 255.0
 
-        return normalized_image
+        return normalized_image.unsqueeze(0).unsqueeze(0).to(self.device)
 
 
 class CompassOdometryProcessor:
     """Processes odometry data and updates robot state."""
 
-    def __init__(self):
-        pass
+    def __init__(self, device="cuda"):
+        self.device = device
 
     def quaternion_to_matrix(self, quaternions: torch.Tensor) -> torch.Tensor:
         """Convert quaternions to rotation matrices."""
@@ -133,6 +134,9 @@ class CompassOdometryProcessor:
         # Create copy of current transform to return as new prev_transform
         new_transform = transform.clone()
 
+        # Normalize ego_speed to [1] in case it arrives as [1,1,1] from a previous iteration
+        ego_speed = ego_speed.reshape(1)
+
         # Update ego speed if we have valid previous transform
         if prev_transform is not None:
             dt_sec = transform[7] - prev_transform[7]
@@ -151,7 +155,7 @@ class CompassOdometryProcessor:
         position_2d[1] = odom_msg[1]  # y position
         position_2d[2] = odom_msg[5]  # qz (orientation z component)
 
-        return new_transform, ego_speed, position_2d
+        return new_transform, ego_speed.unsqueeze(0).unsqueeze(0).to(self.device), position_2d
 
 
 class CompassGoalChecker:
@@ -188,9 +192,10 @@ class CompassGoalChecker:
 class CompassRouteCalculator:
     """Calculates route vectors for navigation."""
 
-    def __init__(self, num_route_points=11, route_vector_size=4):
+    def __init__(self, num_route_points=11, route_vector_size=4, device="cuda"):
         self.num_route_points = num_route_points
         self.route_vector_size = route_vector_size
+        self.device = device
 
     def upsample_points(self, start_point: torch.Tensor, end_point: torch.Tensor,
                         max_distance: float) -> list[torch.Tensor]:
@@ -278,16 +283,13 @@ class CompassRouteCalculator:
         # Extract positions
         selected_positions = [route_poses[idx] for idx in indices]
 
-        # Create route vectors
-        route_vectors = torch.zeros(
-            (self.num_route_points - 1, self.route_vector_size))
-
+        # Create route vectors functionally (no in-place mutation)
+        rows = []
         for idx in range(self.num_route_points - 1):
-            # Start point
-            route_vectors[idx, 0:2] = selected_positions[idx]
-            route_vectors[idx, 2:4] = selected_positions[idx + 1]  # End point
+            rows.append(torch.cat([selected_positions[idx], selected_positions[idx + 1]]))
+        route_vectors = torch.stack(rows)
 
-        return route_vectors
+        return route_vectors.unsqueeze(0).unsqueeze(0).to(self.device)
 
 
 class CompassCommandProcessor(torch.nn.Module):
@@ -309,7 +311,7 @@ class CompassCommandProcessor(torch.nn.Module):
         Returns:
             Limited velocity commands [linear_x, linear_y, angular_z]
         """
-        cmd_vel = torch.zeros(3)
+        cmd_vel = annotate.register_buffer("post_process_commands", torch.zeros(3, device = 'cuda'))
 
         # Apply velocity limits
         cmd_vel[0] = torch.clamp(nav_commands[0], -self.max_linear_speed_x,
@@ -336,19 +338,20 @@ class CompassNavigationModel:
         self.device = device
 
         # Initialize all processors
-        self.image_processor = CompassImageProcessor()
-        self.odom_processor = CompassOdometryProcessor()
+        self.image_processor = CompassImageProcessor(device=device)
+        self.odom_processor = CompassOdometryProcessor(device=device)
         self.goal_checker = CompassGoalChecker()
-        self.route_calculator = CompassRouteCalculator()
+        self.route_calculator = CompassRouteCalculator(device=device)
         self.cmd_processor = CompassCommandProcessor()
 
         # Load mobility model
         self.mobility_model = torch.jit.load(
             mobility_model_path, map_location=device)
+        self.mobility_model_path = mobility_model_path
         print(f"Loaded mobility model from: {mobility_model_path}")
 
         # Initialize state variables
-        self.speed = torch.zeros(1, dtype=torch.float32, device=device)
+        self.speed = torch.zeros(1, 1, 1, dtype=torch.float32, device=device)
         self.position_2d = torch.zeros(3, dtype=torch.float32, device=device)
         self.transform = torch.tensor([0.05, 0.02, 0.01, 0.99, 0.0, 0.01, 0.0, 999.0, 0.0],
                                       dtype=torch.float32, device=device)
@@ -392,42 +395,28 @@ class CompassNavigationModel:
         route_vectors = self.route_calculator.calculate(
             goal_pose, route_transform)
 
-        # Step 5: Prepare inputs for mobility model
-        # Add batch and time dimensions
-        with annotate.block(node_name="process_and_run_inference", export_with="jit",
-                            inputs=["processed_image",
-                                    "route_vectors", "self.speed"],
-                            outputs=["action_output"],
-                            register_buffers=["self.action",
-                                              "self.history", "self.sample"],
-                            environment_constants=['self.mobility_model']):
-            image_input = processed_image.unsqueeze(0).unsqueeze(
-                0).to(self.device)  # [1, 1, 3, H, W]
-            route_input = route_vectors.unsqueeze(0).unsqueeze(
-                0).to(self.device)    # [1, 1, 29, 4]
-            speed_input = self.speed.unsqueeze(0).unsqueeze(
-                0).to(self.device)       # [1, 1, 1]
+        # Step 5: Run mobility model (no-compile node, inputs already shaped by previous nodes)
+        processed_image, route_vectors, self.speed = annotate.input_tensors("process_and_run_inference", {
+            "image_input": processed_image, "route_input": route_vectors, "speed_input": self.speed})
+        self.action, self.history, self.sample = annotate.state_tensors("process_and_run_inference", {
+            "action": self.action, "history": self.history, "sample": self.sample})
 
-            # Step 6: Run mobility model
-            action_output, history_output, sample_output = self.mobility_model(
-                image_input, route_input, speed_input,
-                self.action, self.history, self.sample)
-            # Update state - squeeze sequence dimension to match expected input shape
-            self.action = action_output.squeeze(1)      # [1, 1, 6] -> [1, 6]
-            self.history = history_output
-            self.sample = sample_output
+        action_output, history_output, sample_output = self.mobility_model(
+            processed_image, route_vectors, self.speed,
+            self.action, self.history, self.sample)
+        # Update state - squeeze sequence dimension to match expected input shape
+        self.action = action_output.squeeze(1)      # [1, 1, 6] -> [1, 6]
+        self.history = history_output
+        self.sample = sample_output
+        annotate.update_state("process_and_run_inference", {"action": self.action, "history": self.history, "sample": self.sample})
+        annotate.output_tensors("process_and_run_inference", {"action_output": action_output}, backend_params={"model_path":self.mobility_model_path})
 
-        # Step 7: Post-process commands
-        with annotate.block(node_name="post_process_commands", export_with="jit",
-                            inputs=["action_output", "is_reached"],
-                            outputs=["cmd"],
-                            environment_constants=['self.cmd_processor']):
-            if is_reached:
-                print("Goal reached! Stopping robot.")
-                cmd = self.cmd_processor(self.stop_cmd)
-            else:
-                raw_commands = action_output.squeeze()
-                cmd = self.cmd_processor(raw_commands)
+
+        action_output, is_reached = annotate.input_tensors("post_process_commands", {"action_output": action_output, "is_reached": is_reached})
+        raw_commands = action_output.squeeze()
+        cmd = torch.where(is_reached, self.stop_cmd, raw_commands)
+        cmd = self.cmd_processor(cmd)
+        annotate.output_tensors("post_process_commands", {"cmd": cmd}, export_with="jit")
 
         return cmd
 
@@ -477,7 +466,7 @@ def main():
         description='Run compass navigation model in native Python')
     parser.add_argument('--mobility-model', type=str,
                         default=os.path.join(os.path.dirname(
-                            abs_path), 'models', 'digit_mobility.jit'),
+                            abs_path), 'models', 'digit_mobility.pt'),
                         help='Path to the mobility model JIT file')
     parser.add_argument('--device', type=str, default='cuda',
                         help='Device to run on (cuda/cpu)')

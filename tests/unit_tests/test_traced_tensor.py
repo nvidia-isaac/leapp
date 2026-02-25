@@ -2023,6 +2023,24 @@ class TestTracedTensor(unittest.TestCase):
         expected = torch.tensor([20.0, 4.0, 60.0, 8.0, 100.0])
         self.validate_export(ctx.m, (input_tensor,), expected, "setitem_step")
 
+    def test_setitem_with_traced_tensor_slice_fx_torchscript_onnx(self):
+        """Test: x[0] = 1.0 then x[2:4] = other[1:3] exports correctly."""
+        ctx = TracedTensorNode(name="test_setitem_cross_tensor", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0]), name="x")
+        other = ctx.create_input(torch.tensor([10.0, 20.0, 30.0, 40.0, 50.0]), name="other")
+
+        x[0] = 1.0
+        x[2:4] = other[1:3]
+        y = x * 2
+
+        ctx.compile_trace({'y': y})
+
+        input_x = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
+        input_other = torch.tensor([10.0, 20.0, 30.0, 40.0, 50.0])
+        # x after mutations: [1.0, 2.0, 20.0, 30.0, 5.0]
+        expected = torch.tensor([2.0, 4.0, 40.0, 60.0, 10.0])
+        self.validate_export(ctx.fx_graph_module, (input_x, input_other), expected, "setitem_cross_tensor")
+        
     # ==================== Unsupported Operation error message ====================
     def test_boolean_indexing_raises_error(self):
         """Test that boolean indexing with TracedTensor raises a clear error."""

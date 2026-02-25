@@ -264,7 +264,7 @@ class TracedData(ABC):
                 f"silently incorrect graph for other inputs.\n"
                 f"\n"
                 f"Alternatives:\n"
-                f"  1. Use np.where(condition, true_val, false_val) for simple if/else\n"
+                f"  1. Use torch.where(condition, true_val, false_val) for simple if/else\n"
                 f"  2. Use fixed iteration counts instead of dynamic while loops\n"
                 f"  3. Break the trace: call output_tensors() before the conditional,\n"
                 f"     then start a new input_tensors() after it"

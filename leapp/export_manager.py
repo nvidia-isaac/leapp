@@ -376,7 +376,7 @@ class ExportManager:
         if metadata:
             apply_semantic_metadata(traced_tensors_node, metadata)
 
-    def register_buffer(self, node_name: str, tensors: dict):
+    def register_buffer(self, node_name: str, tensors):
         """Register tensors as persistent buffers for a traced node.
 
         The tensors become part of the compiled module's state and persist
@@ -385,40 +385,45 @@ class ExportManager:
 
         Args:
             node_name: Name of the TracedTensorNode to register the buffers with
-            tensors: Dictionary mapping buffer names to tensors
+            tensors: A single tensor, a list/tuple of tensors, or a dict
+                mapping buffer names to tensors. Names are auto-generated
+                when not provided.
 
         Returns:
             Single TracedData if one buffer, or tuple of TracedData if multiple.
 
         Example:
             ```python
-            class Module:
-                def __init__(self):
-                    self.values = torch.tensor([1, 2, 3])
-                    self.state = torch.tensor([0, 0, 0])
+            # With explicit names (dict):
+            self.values, self.state = annotate.register_buffer('node', {
+                'values': self.values, 'state': self.state
+            })
 
-                def run(self, input):
-                    # Make tensors participate in tracing
-                    self.values, self.state = annotate.register_buffer('my_node', {
-                        'values': self.values,
-                        'state': self.state
-                    })
+            # Without names (single tensor):
+            self.values = annotate.register_buffer('node', self.values)
 
-                    self.values[:] = input  # This assignment is now traced
-                    return self.values * 100
+            # Without names (list):
+            self.values, self.state = annotate.register_buffer(
+                'node', [self.values, self.state]
+            )
             ```
         """
         if not ExportManager._interpret_graph:
-            values = list(tensors.values())
-            return values[0] if len(values) == 1 else tuple(values)
-
- 
+            if isinstance(tensors, torch.Tensor):
+                return tensors
+            if isinstance(tensors, dict):
+                values = list(tensors.values())
+                return values[0] if len(values) == 1 else tuple(values)
+            return tensors[0] if len(tensors) == 1 else tuple(tensors)
 
         if node_name not in self.nodes:
             _get_logger().error(
                 f"Error: register_buffer called for node '{node_name}' but node not found. "
                 "Call input_tensors() first to create the node.")
             raise Exception("Error: exception detected in register_buffer")
+
+        # Normalize input to a dict with auto-generated names if needed
+        tensors, was_single = self._normalize_buffer_input(node_name, tensors)
 
         traced_node = self.nodes[node_name]
 
@@ -430,13 +435,35 @@ class ExportManager:
 
         if not traced_node.is_tracing:
             values = list(tensors.values())
-            return values[0] if len(values) == 1 else tuple(values)
+            return values[0] if was_single else tuple(values)
 
         # Flatten, validate, and wrap using create_static_tensors
         flattened = flatten_io_structure(tensors, '')
         result = traced_node.create_static_tensors(flattened)
         values = list(result.values())
-        return values[0] if len(values) == 1 else tuple(values)
+        return values[0] if was_single else tuple(values)
+
+    def _normalize_buffer_input(self, node_name, tensors):
+        """Normalize tensors arg into (dict, was_single).
+
+        Returns:
+            (dict mapping names to tensors, bool indicating single-tensor input)
+        """
+        if isinstance(tensors, dict):
+            return tensors, len(tensors) == 1
+
+        is_single = isinstance(tensors, torch.Tensor)
+        items = [tensors] if is_single else list(tensors)
+
+        node = self.nodes.get(node_name)
+        start_idx = node._next_buffer_idx if node is not None else 0
+        named = {}
+        for i, t in enumerate(items):
+            named[f"buffer_{start_idx + i}"] = t
+        if node is not None:
+            node._next_buffer_idx = start_idx + len(items)
+
+        return named, is_single
 
     def state_tensors(self, node_name: str, tensors: dict[str, torch.Tensor]) -> TracedTensor | tuple[TracedTensor, ...]:
         """Register state tensors (both inputs AND outputs) for a traced node.
