@@ -78,6 +78,8 @@ class LeappNode():
         self.output_formats = []
         # trimmed inputs are inputs that are not used in the computation or directly returned as output
         self.trimmed_inputs = set()
+        # caller identities track which call sites created this node's inputs
+        self._caller_identities = set()
 
         # storage for the fx graph or compiled module
         self.m = None

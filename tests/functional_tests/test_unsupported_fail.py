@@ -64,7 +64,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             func_copy(return_value)
         except Exception as e:
             annotate.stop()
-            expected = "Cannot create a new node with the same name."
+            expected = "Cannot reuse a node name from a different call site."
             self.assertIn(expected, str(e))
             return
 
@@ -405,7 +405,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             self.fail("Expected an exception for input_tensors after output_tensors on same node")
         except Exception as e:
             annotate.stop()
-            self.assertIn("Validation error when reentering node", str(e))
+            self.assertIn("Cannot reuse a node name from a different call site.", str(e))
 
     def test_input_tensors_after_method_same_name(self):
         """Test that calling input_tensors with a name already used by a method fails."""
@@ -421,7 +421,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             self.fail("Expected an exception for input_tensors reusing a method node name")
         except Exception as e:
             annotate.stop()
-            self.assertIn("Validation error when reentering node", str(e))
+            self.assertIn("Cannot reuse a node name from a different call site.", str(e))
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

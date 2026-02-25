@@ -20,6 +20,7 @@ import inspect
 import yaml
 import os
 import torch
+import sys
 
 from leapp._logging import _get_logger
 from leapp.leapp_graph.leapp_graph import LeappGraph
@@ -207,7 +208,7 @@ class ExportManager:
     #########################################################
     # annotation APIs
     #########################################################
-    def input_tensors(self, node_name: str, tensors):
+    def input_tensors(self, node_name: str, tensors, _caller_identity=None):
         # If TensorSemantics are passed (single or list), unwrap to dict
         metadata = {}
         if isinstance(tensors, (TensorSemantics, list)) and (
@@ -219,7 +220,10 @@ class ExportManager:
         if not ExportManager._interpret_graph:
             values = list(tensors.values())
             return values[0] if len(values) == 1 else tuple(values)
- 
+
+        if _caller_identity is None:
+            frame = sys._getframe(1)
+            _caller_identity = (frame.f_code.co_filename, frame.f_lineno)
 
         # create the node if it doesn't exist
         if node_name in self.nodes:
@@ -228,7 +232,6 @@ class ExportManager:
             traced_tensors_node = self._setup_new_node(
                 node_name, TracedTensorNode)
 
-        # TODO: this is still confusing. we need to make it more explicit.
         tensors_changed = False
         if not isinstance(tensors, dict):
             tensors_changed = True
@@ -242,11 +245,18 @@ class ExportManager:
         # if the node is not tracing, we validate the inputs only and return the raw tensors
         # the node is not tracing if it is already compiled.
         if not traced_tensors_node.is_tracing:
+            if _caller_identity not in traced_tensors_node._caller_identities:
+                raise Exception(
+                    f"Error: node '{node_name}' is being called from a new call site "
+                    f"{_caller_identity} that was not seen during the first trace. "
+                    f"Cannot reuse a node name from a different call site.")
             for tensor_name, tensor in tensors.items():
                 traced_tensors_node.validate_input_and_update_tags(
                     tensor_name, tensor_name, tensor)
             values = list(tensors.values())
             return values[0] if len(values) == 1 else tuple(values)
+
+        traced_tensors_node._caller_identities.add(_caller_identity)
 
         # Warn if pre-compiled ScriptFunctions are visible in the caller's scope
         # this is only a best effort warning, catching the error and ignoring if fault
@@ -546,6 +556,11 @@ class ExportManager:
 
             name = params.get("node_name", func.__name__)
             export_with = params.get("export_with", None)
+            unwrapped = inspect.unwrap(func)
+            caller_identity = (
+                inspect.getfile(unwrapped),
+                inspect.getsourcelines(unwrapped)[1]
+            )
             
             @functools.wraps(func)
             def wrapper(*args, **kwargs):
@@ -553,7 +568,9 @@ class ExportManager:
                     return func(*args, **kwargs)
                 
                 # ~~~~~~~~~~~~~~~~~~~ ensure node exists ~~~~~~~~~~~~~~~~~~~~~~~~ #
-                self._setup_new_node(name, TracedTensorNode)
+                if name not in self.nodes:
+                    self._setup_new_node(name, TracedTensorNode)
+                    self.nodes[name]._caller_identities.add(caller_identity)
                 
                 # ~~~~~~~~~~~~~~~~~~~ set up inputs ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
 
@@ -571,12 +588,12 @@ class ExportManager:
                         continue
                     if param.kind == inspect.Parameter.VAR_POSITIONAL:
                         for j, a in enumerate(args[i:]):
-                            new_args.append(self.input_tensors(name, {f"arg_{j}": a}))
+                            new_args.append(self.input_tensors(name, {f"arg_{j}": a}, _caller_identity=caller_identity))
                         break
-                    new_args.append(self.input_tensors(name, {param_name: arg}))
+                    new_args.append(self.input_tensors(name, {param_name: arg}, _caller_identity=caller_identity))
                 
                 for key, value in kwargs.items():
-                    new_kwargs[key] = self.input_tensors(name, {key: value})
+                    new_kwargs[key] = self.input_tensors(name, {key: value}, _caller_identity=caller_identity)
                 
                 # ~~~~~~~~~~~~~~~~~~~ register default kwargs as buffers ~~~~~~~~ #
                 for param_name, param_value in bound_args.arguments.items():

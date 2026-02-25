@@ -23,7 +23,11 @@ class TracedTensorNode(LeappNode):
         self.tracer.root = torch.nn.Module()
         self.tracer.tensor_attrs = {}
 
+<<<<<<< HEAD
         self.m = None
+=======
+        self.fx_graph_module = None
+>>>>>>> 3838d1e (passes all functional tests and unit tests)
 
         # State tensor tracking: name -> {"input": TracedTensor, "output": TracedTensor | None}
         self._state_tensors: dict[str, dict] = {}
