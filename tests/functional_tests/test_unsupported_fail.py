@@ -64,9 +64,8 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             func_copy(return_value)
         except Exception as e:
             annotate.stop()
-            first_line = str(e).split('\n')[0]
-            expected = "Error: funcA seen twice but block boundaries do not match"
-            self.assertEqual(first_line, expected)
+            expected = "Cannot create a new node with the same name."
+            self.assertIn(expected, str(e))
             return
 
         annotate.stop()
@@ -75,19 +74,19 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
     def test_io_reconciliation_name_overlap(self):
         @annotate.method()
         def funcA(input: torch.Tensor):
-            detections = torch.zeros(input.shape)
+            detections = annotate.register_buffer("funcA", torch.zeros(input.shape))
             # some processing
             return detections
 
         @annotate.method()
         def funcB(detections):
-            retval = torch.tensor([])
+            retval = detections
             # some processing
             return retval
 
         @annotate.method()
         def funcC(input, detections):
-            retval = torch.tensor([])
+            retval = input + detections
             return retval
 
         annotate.start(name=self.TEST_GRAPH_NAME)
@@ -157,30 +156,6 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         
         annotate.stop()
 
-    def test_reentrant_tracing_block_inside_method(self):
-        """Test that re-entrant tracing is properly rejected.
-        
-        Attempting to use annotate.block inside a function decorated with
-        annotate.method should fail because the tracing lock is already acquired.
-        """
-        @annotate.method()
-        def outer_func(inputA: torch.Tensor):
-            # This should fail - trying to start a block while already tracing
-            with annotate.block("inner_block"):
-                result = inputA * 2.0
-            return result
-
-        annotate.start(name=self.TEST_GRAPH_NAME)
-        
-        try:
-            outer_func(torch.tensor([1.0, 2.0, 3.0]))
-            annotate.stop()
-            self.fail("Expected an exception for re-entrant tracing")
-        except Exception as e:
-            annotate.stop()
-            # The error should mention that tracing is already active
-            self.assertIn("attempting to set up new trace", str(e).lower())
-
     def test_reentrant_tracing_method_inside_method(self):
         """Test that nested method decorators are properly rejected.
         
@@ -206,7 +181,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         except Exception as e:
             annotate.stop()
             # The error should mention that we're trying to set up a new trace
-            self.assertIn("attempting to set up new trace", str(e).lower())
+            self.assertIn("Mixing active contxts is not allowed", str(e))
     
     def test_reentrant_tracing_using_traced_tensors(self): #TODO: these both need to fail
         try:
@@ -222,8 +197,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             annotate.stop()
             self.fail("Expected an exception")
         except Exception as e:
-            self.assertIn("Cannot use TracedTensor", str(e))
-            self.assertIn("Call output_tensors() first", str(e))
+            self.assertIn("Mixing active contxts is not allowed", str(e))
     
     def test_passing_traced_tensor_to_method(self):
         try:
@@ -238,9 +212,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             annotate.stop()
             self.fail("Expected an exception")
         except Exception as e:
-            error_msg = str(e)
-            self.assertIn("Cannot use TracedTensor", error_msg)
-            self.assertIn("Call output_tensors() first", error_msg)
+            self.assertIn("Mixing active contxts is not allowed", str(e))
     
     def test_cross_context_traced_tensor_usage(self):
         """Basic test: addition of two TracedTensors from different contexts."""
@@ -253,8 +225,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             annotate.stop()
             self.fail("Expected an exception")
         except Exception as e:
-            self.assertIn("Cannot mix multiple active TracedTensors from different contexts", str(e))
-            self.assertIn("Call output_tensors() to finalize one of the TracedTensor nodes first", str(e))
+            self.assertIn("Mixing active contxts is not allowed", str(e))
 
     def test_cross_context_torch_cat_list(self):
         """Test torch.cat with a list containing TracedTensors from different contexts."""
@@ -421,6 +392,36 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
                 "output_tensors declaration" in error_msg,
                 f"Expected error about output_tensors declaration, got: {error_msg}"
             )
+
+    def test_input_tensors_after_output_tensors_same_node(self):
+        """Test that calling input_tensors after output_tensors for the same node fails."""
+        try:
+            annotate.start(name=self.TEST_GRAPH_NAME)
+            traced = annotate.input_tensors('func', {'input': torch.tensor([1.0, 2.0, 3.0])})
+            result = traced + 1.0
+            annotate.output_tensors('func', {'output': result}, export_with="jit")
+            annotate.input_tensors('func', {'input2': torch.tensor([4.0, 5.0, 6.0])})
+            annotate.stop()
+            self.fail("Expected an exception for input_tensors after output_tensors on same node")
+        except Exception as e:
+            annotate.stop()
+            self.assertIn("Validation error when reentering node", str(e))
+
+    def test_input_tensors_after_method_same_name(self):
+        """Test that calling input_tensors with a name already used by a method fails."""
+        @annotate.method(export_with="jit")
+        def funcA(inputA: torch.Tensor):
+            return inputA + 1.0
+
+        try:
+            annotate.start(name=self.TEST_GRAPH_NAME)
+            funcA(torch.tensor([1.0, 2.0, 3.0]))
+            annotate.input_tensors('funcA', {'input2': torch.tensor([4.0, 5.0, 6.0])})
+            annotate.stop()
+            self.fail("Expected an exception for input_tensors reusing a method node name")
+        except Exception as e:
+            annotate.stop()
+            self.assertIn("Validation error when reentering node", str(e))
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

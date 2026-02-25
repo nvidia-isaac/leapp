@@ -181,6 +181,11 @@ class ExportManager:
         return node_index
 
     def _setup_new_node(self, name, node_class: LeappNode, **kwargs):
+        if name in self.nodes:
+            raise Exception(
+                f"Error: node '{name}' already exists. "
+                f"Cannot create a new node with the same name.")
+
         node_index = self.get_node_index(name)
 
         if self.dry_run:
@@ -196,7 +201,8 @@ class ExportManager:
                               "environment_constants", None),
                           register_buffers=kwargs.get("register_buffers", None))
 
-        return node, name
+        self.nodes[name] = node
+        return node
 
     #########################################################
     # annotation APIs
@@ -216,12 +222,11 @@ class ExportManager:
  
 
         # create the node if it doesn't exist
-        if node_name in self.nodes.keys():
+        if node_name in self.nodes:
             traced_tensors_node = self.nodes[node_name]
         else:
-            traced_tensors_node, node_name = self._setup_new_node(
+            traced_tensors_node = self._setup_new_node(
                 node_name, TracedTensorNode)
-            self.nodes[node_name] = traced_tensors_node
 
         # TODO: this is still confusing. we need to make it more explicit.
         tensors_changed = False
@@ -244,7 +249,12 @@ class ExportManager:
             return values[0] if len(values) == 1 else tuple(values)
 
         # Warn if pre-compiled ScriptFunctions are visible in the caller's scope
-        warn_if_script_functions_in_scope()
+        # this is only a best effort warning, catching the error and ignoring if fault
+        try:
+            warn_if_script_functions_in_scope()
+        except Exception:
+            # ignore errors from warn_if_script_functions_in_scope
+            pass
 
         # we need to handle input tensors more carefully than outputs because
         # we need to ensure the inputs are returned in the original structure
@@ -533,11 +543,8 @@ class ExportManager:
 
     def method(self, **params):
         def decorator(func):
-            if "node_name" in params:
-                name = params["node_name"]
-            else:
-                name = func.__name__
-            
+
+            name = params.get("node_name", func.__name__)
             export_with = params.get("export_with", None)
             
             @functools.wraps(func)
@@ -546,9 +553,7 @@ class ExportManager:
                     return func(*args, **kwargs)
                 
                 # ~~~~~~~~~~~~~~~~~~~ ensure node exists ~~~~~~~~~~~~~~~~~~~~~~~~ #
-                if name not in self.nodes:
-                    node, _ = self._setup_new_node(name, TracedTensorNode)
-                    self.nodes[name] = node
+                self._setup_new_node(name, TracedTensorNode)
                 
                 # ~~~~~~~~~~~~~~~~~~~ set up inputs ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
 

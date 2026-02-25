@@ -134,8 +134,8 @@ class CombinedNode(LeappNode):
             backend = 'jit-trace' # this is more robust. jit script does not have any strengths over trace for this use case
 
         self.setup_backend(backend, {})
-        self.export_backend.override_module_builder(lambda: combined_model)
-
+        self.m = combined_model
+        
         self.compile_model()
 
     def _build_routing(self, nodes: List[LeappNode]) -> Tuple[List, List, Dict]:

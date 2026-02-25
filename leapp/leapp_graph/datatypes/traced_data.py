@@ -223,13 +223,15 @@ class TracedData(ABC):
                 f"This happens when you mix multiple active {cls_name}s from different contexts "
                 "inside of a traced function/block.\n"
                 "\n"
-                "You can call output_tensors() to finalize one of the nodes first "
-                "or combine both nodes into a single node by calling input_tensors() with the same node name"
+                "Mixing active contxts is not allowed. You can: \n"
+                "1. call output_tensors() to finalize one of the nodes first\n"
+                "2. combine both nodes into a single node by calling input_tensors() with the same node name"
             )
             raise Exception(
                 f"Cannot mix multiple active {cls_name}s from different contexts inside of a traced function/block. "
-                "Call output_tensors() to finalize one of the nodes first "
-                "or combine both nodes into a single node by calling input_tensors() with the same node name"
+                "Mixing active contxts is not allowed. You can: \n"
+                "1. call output_tensors() to finalize one of the nodes first\n"
+                "2. combine both nodes into a single node by calling input_tensors() with the same node name"
             )
         return True
     
