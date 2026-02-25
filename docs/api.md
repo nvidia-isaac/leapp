@@ -93,7 +93,7 @@ def your_function(...):
 All parameters are optional keyword arguments (`**params`):
 
 - **`node_name`** (str): Custom name for the node. If not provided, uses the function's name.
-- **`export_with`** (str): Backend to use for exporting the model (e.g., `"torch"`, `"onnx"`).
+- **`export_with`** (str): Backend to use for exporting the model (e.g., `"jit"`, `"onnx"`).
 - **`backend_params`** (dict): Parameters specific to the export backend.
 - **`inputs`** (list[str]): Input specifications for the node.
 - **`outputs`** (list[str]): Output specifications for the node.
@@ -219,7 +219,7 @@ annotate.output_tensors(node_name: str, tensors: dict, **kwargs)
 - **`node_name`** (str, required): The node name. Must match the name used in the corresponding `input_tensors()` call.
 
 - **`**kwargs`**: Export configuration options:
-  - **`export_with`** (str): Backend for exporting. **Currently only `"torch"` is supported** for traced tensor nodes.
+  - **`export_with`** (str): Backend for exporting. **Currently only `"jit"` and `"onnx"` is supported** for traced tensor nodes.
   - **`backend_params`** (dict): Backend-specific parameters.
 
 ### Behavior

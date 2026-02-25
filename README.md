@@ -236,7 +236,7 @@ from leapp import annotate  # Singleton, export manager
 
 #### Annotations Parameters
 - `node_name`: name of the node to generate
-- `export_with`: Export format ("torch", "onnx")
+- `export_with`: Export format ("jit", "onnx")
 - `inputs`: Input variable names (for context manager)
 - `outputs`: Output variable names (for context manager)
 - `environment_constants`: Variables to treat as constants
