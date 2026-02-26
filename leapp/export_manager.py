@@ -199,7 +199,7 @@ class ExportManager:
         node_index = self.get_node_index(name)
 
         if self.dry_run:
-            kwargs['export_with'] = "torch"
+            kwargs['export_with'] = None
             kwargs['backend_params'] = {}
 
         node = node_class(name, node_index,
@@ -309,6 +309,11 @@ class ExportManager:
             # tag regardless of tracing status
             for tensor_name, tensor in flattened_tensors.items():
                 traced_tensors_node.tag_data(tensor, tensor_name)
+            if static_outputs is not None:
+                if not isinstance(static_outputs, dict):
+                    static_outputs = {'static_output': static_outputs}
+                for tensor_name, tensor in flatten_io_structure(static_outputs, '').items():
+                    traced_tensors_node.tag_data(tensor, tensor_name)
             return
 
         if tensors_changed:
@@ -342,6 +347,7 @@ class ExportManager:
                 "Error: exception detected in output_tensors declaration")
 
         # process static outputs (constant tensors that should be returned but aren't derived from inputs)
+        flattened_static_outputs = None
         if static_outputs is not None:
             static_outputs_changed = False
             if not isinstance(static_outputs, dict):
@@ -354,16 +360,11 @@ class ExportManager:
                 _get_logger().warning(f"Warning: no tensor name provided for static_outputs in node {node_name}\n"
                                       "Assuming default tensor name")
 
-            wrapped_static_outputs = traced_tensors_node.create_static_tensors(
-                flattened_static_outputs)
-
-            # Merge with traced outputs
-            flattened_tensors = {**flattened_tensors, **wrapped_static_outputs}
-
         export_with = None if self.dry_run else kwargs.get("export_with", None)
         traced_tensors_node.compile_trace(flattened_tensors,
                                           backend=export_with,
-                                          backend_params=kwargs.get("backend_params", {}))
+                                          backend_params=kwargs.get("backend_params", {}),
+                                          static_tensors=flattened_static_outputs)
 
         # Apply semantic metadata from TensorDescription wrappers
         if metadata:
@@ -588,7 +589,6 @@ class ExportManager:
             node_context, name = self._setup_new_node(
                 node_name, BlockContextNode, **kwargs)
             self.nodes[name] = node_context
-        export_manager = self
 
         class BlockTraceContext:
             """Context manager for tracing a block of code."""

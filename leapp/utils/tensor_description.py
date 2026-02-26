@@ -29,7 +29,6 @@ from leapp.leapp_graph.datatypes import (
     TracedTensor,
     is_tracable_tensor_type,
     TRACABLE_BASE_TYPES,
-    TRACED_TYPES,
 )
 from leapp.utils.utils import safe_deepcopy
 from leapp.utils.enums import inputKindEnum, outputKindEnum

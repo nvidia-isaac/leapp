@@ -396,7 +396,7 @@ class NoneExportBackend(ExportBackend):
         path = self.backend_params['model_path']
         suffix = path.split('.')[-1]
         if suffix == 'pt':
-            return "torch"
+            return "torchscript"
         elif suffix == 'pt2':
             return "torchscript2"
         elif suffix == 'onnx':

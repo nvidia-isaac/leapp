@@ -25,7 +25,7 @@ various formats including PyTorch JIT, ONNX, and generate visualization and YAML
 """
 
 from .export_manager import ExportManager
-from .utils.enums import MergeCfgEnum
+from .utils.enums import MergeCfgEnum, inputKindEnum, outputKindEnum
 from .utils.tensor_description import TensorSemantics
 # Create a global annotate instance that's ready to use
 annotate = ExportManager()
@@ -37,8 +37,8 @@ __email__ = "frlai@nvidia.com"
 __all__ = [
     "ExportManager",
     "MergeCfgEnum",
-    "InputKindEnum",
-    "OutputKindEnum",
+    "inputKindEnum",
+    "outputKindEnum",
     "annotate",
     "__version__",
     "TensorSemantics",
