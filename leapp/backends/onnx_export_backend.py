@@ -240,7 +240,25 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
         # ORT session options (ORT_ENABLE_BASIC avoids graph-opt corruption).
         tmpdir = tempfile.mkdtemp()
         tmp_path = os.path.join(tmpdir, f"{self.node_context.name}.onnx")
-        onnx.save(model_proto, tmp_path)
+
+        PROTOBUF_LIMIT = 1.5 * 1024 * 1024 * 1024  # 1.5 GB — headroom below 2 GB protobuf limit
+        estimated_size = sum(
+            numpy_helper.to_array(init).nbytes
+            for init in model_proto.graph.initializer
+        )
+        if estimated_size > PROTOBUF_LIMIT:
+            data_filename = f"{self.node_context.name}.onnx.data"
+            onnx.save(
+                model_proto,
+                tmp_path,
+                save_as_external_data=True,
+                all_tensors_to_one_file=True,
+                location=data_filename,
+                size_threshold=1024,
+                convert_attribute=True,
+            )
+        else:
+            onnx.save(model_proto, tmp_path)
 
         self.compiled_model = SimplifiedONNXProgram(tmp_path, temp_dir=tmpdir)
         self.compiled_module = m
