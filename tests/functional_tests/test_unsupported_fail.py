@@ -14,10 +14,48 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
+import functools
 import unittest
 import torch
 from leapp import annotate
 from .base import LEAPPFunctionalTestBase
+
+
+# ---------------------------------------------------------------------------
+# Module-level helpers for caller identity tests
+# ---------------------------------------------------------------------------
+
+def _helper_path_a(name, tensor):
+    return annotate.input_tensors(name, {'input': tensor})
+
+def _helper_path_b(name, tensor):
+    return annotate.input_tensors(name, {'input': tensor})
+
+def _shared_helper(name, tensor):
+    return annotate.input_tensors(name, {'input': tensor})
+
+class _BasePipeline:
+    def annotate_input(self, tensor):
+        return annotate.input_tensors('func', {'input': tensor})
+
+class _PipelineA(_BasePipeline):
+    def run(self, tensor):
+        return self.annotate_input(tensor)
+
+class _PipelineB(_BasePipeline):
+    def run(self, tensor):
+        return self.annotate_input(tensor)
+
+def _timing_decorator(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+def _raw_annotate(tensor):
+    return annotate.input_tensors('func', {'input': tensor})
+
+_decorated_annotate = _timing_decorator(_raw_annotate)
 
 
 class TestUnsupportedFail(LEAPPFunctionalTestBase):
@@ -419,6 +457,136 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             annotate.input_tensors('funcA', {'input2': torch.tensor([4.0, 5.0, 6.0])})
             annotate.stop()
             self.fail("Expected an exception for input_tensors reusing a method node name")
+        except Exception as e:
+            annotate.stop()
+            self.assertIn("Cannot reuse a node name from a different call site.", str(e))
+
+    # -------------------------------------------------------------------
+    # Caller identity tests — verify stack-trace-based call site detection
+    # -------------------------------------------------------------------
+
+    def test_caller_identity_wrapper_indirection(self):
+        """Two different helpers calling input_tensors for the same node
+        should be detected as different call sites."""
+        try:
+            annotate.start(name=self.TEST_GRAPH_NAME)
+            inp = _helper_path_a('func', torch.tensor([1.0, 2.0, 3.0]))
+            result = inp + 1.0
+            annotate.output_tensors('func', {'output': result}, export_with="onnx")
+            _helper_path_b('func', torch.tensor([4.0, 5.0, 6.0]))
+            annotate.stop()
+            self.fail("Expected an exception for wrapper indirection")
+        except Exception as e:
+            annotate.stop()
+            self.assertIn("Cannot reuse a node name from a different call site.", str(e))
+
+    def test_caller_identity_same_helper_different_caller(self):
+        """A single helper called from two different lines in user code
+        should be detected as different call sites."""
+        try:
+            annotate.start(name=self.TEST_GRAPH_NAME)
+            inp = _shared_helper('func', torch.tensor([1.0]))
+            result = inp + 1.0
+            annotate.output_tensors('func', {'output': result}, export_with="onnx")
+            _shared_helper('func', torch.tensor([2.0]))
+            annotate.stop()
+            self.fail("Expected an exception for same helper from different caller")
+        except Exception as e:
+            annotate.stop()
+            self.assertIn("Cannot reuse a node name from a different call site.", str(e))
+
+    def test_caller_identity_same_path_in_loop(self):
+        """The same helper called from the same line in a loop should be
+        accepted — the stack trace is identical on every iteration."""
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        for i in range(3):
+            inp = _shared_helper('func', torch.tensor([float(i)]))
+            result = inp + 1.0
+            annotate.output_tensors('func', {'output': result}, export_with="onnx")
+        annotate.stop()
+
+    def test_caller_identity_conditional_branching(self):
+        """input_tensors called from different if/else branches (different
+        lines) should be detected as different call sites."""
+        try:
+            annotate.start(name=self.TEST_GRAPH_NAME)
+            if True:
+                inp = annotate.input_tensors('func', {'input': torch.tensor([1.0])})
+            else:
+                inp = annotate.input_tensors('func', {'input': torch.tensor([1.0])})
+            result = inp + 1.0
+            annotate.output_tensors('func', {'output': result}, export_with="onnx")
+            if False:
+                annotate.input_tensors('func', {'input': torch.tensor([2.0])})
+            else:
+                annotate.input_tensors('func', {'input': torch.tensor([2.0])})
+            annotate.stop()
+            self.fail("Expected an exception for conditional branching")
+        except Exception as e:
+            annotate.stop()
+            self.assertIn("Cannot reuse a node name from a different call site.", str(e))
+
+    def test_caller_identity_functools_partial(self):
+        """A functools.partial binding called from two different lines
+        should be detected as different call sites."""
+        try:
+            annotate.start(name=self.TEST_GRAPH_NAME)
+            input_func = functools.partial(annotate.input_tensors, 'func')
+            inp = input_func({'input': torch.tensor([1.0])})
+            result = inp + 1.0
+            annotate.output_tensors('func', {'output': result}, export_with="onnx")
+            input_func({'input': torch.tensor([2.0])})
+            annotate.stop()
+            self.fail("Expected an exception for functools.partial")
+        except Exception as e:
+            annotate.stop()
+            self.assertIn("Cannot reuse a node name from a different call site.", str(e))
+
+    def test_caller_identity_class_hierarchy(self):
+        """A base-class method called through different subclass methods
+        should be detected as different call sites."""
+        try:
+            annotate.start(name=self.TEST_GRAPH_NAME)
+            a = _PipelineA()
+            b = _PipelineB()
+            inp = a.run(torch.tensor([1.0]))
+            result = inp + 1.0
+            annotate.output_tensors('func', {'output': result}, export_with="onnx")
+            b.run(torch.tensor([2.0]))
+            annotate.stop()
+            self.fail("Expected an exception for class hierarchy indirection")
+        except Exception as e:
+            annotate.stop()
+            self.assertIn("Cannot reuse a node name from a different call site.", str(e))
+
+    def test_caller_identity_decorator_adds_frame(self):
+        """Calling a raw function vs its decorated version should be
+        detected as different call sites (the decorator adds a frame)."""
+        try:
+            annotate.start(name=self.TEST_GRAPH_NAME)
+            inp = _raw_annotate(torch.tensor([1.0]))
+            result = inp + 1.0
+            annotate.output_tensors('func', {'output': result}, export_with="onnx")
+            _decorated_annotate(torch.tensor([2.0]))
+            annotate.stop()
+            self.fail("Expected an exception for decorator adding frame")
+        except Exception as e:
+            annotate.stop()
+            self.assertIn("Cannot reuse a node name from a different call site.", str(e))
+
+    def test_caller_identity_lambda_vs_named(self):
+        """input_tensors called through a named helper vs a lambda should
+        be detected as different call sites."""
+        try:
+            annotate.start(name=self.TEST_GRAPH_NAME)
+            inp = _shared_helper('func', torch.tensor([1.0]))
+            result = inp + 1.0
+            annotate.output_tensors('func', {'output': result}, export_with="onnx")
+            def via_lambda(t):
+                return annotate.input_tensors('func', {'input': t})
+            via_lambda(torch.tensor([2.0]))
+            annotate.stop()
+            self.fail("Expected an exception for lambda vs named function")
         except Exception as e:
             annotate.stop()
             self.assertIn("Cannot reuse a node name from a different call site.", str(e))
