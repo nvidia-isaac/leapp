@@ -2039,7 +2039,7 @@ class TestTracedTensor(unittest.TestCase):
         input_other = torch.tensor([10.0, 20.0, 30.0, 40.0, 50.0])
         # x after mutations: [1.0, 2.0, 20.0, 30.0, 5.0]
         expected = torch.tensor([2.0, 4.0, 40.0, 60.0, 10.0])
-        self.validate_export(ctx.fx_graph_module, (input_x, input_other), expected, "setitem_cross_tensor")
+        self.validate_export(ctx.m, (input_x, input_other), expected, "setitem_cross_tensor")
         
     # ==================== Unsupported Operation error message ====================
     def test_boolean_indexing_raises_error(self):

@@ -23,11 +23,7 @@ class TracedTensorNode(LeappNode):
         self.tracer.root = torch.nn.Module()
         self.tracer.tensor_attrs = {}
 
-<<<<<<< HEAD
         self.m = None
-=======
-        self.fx_graph_module = None
->>>>>>> 3838d1e (passes all functional tests and unit tests)
 
         # State tensor tracking: name -> {"input": TracedTensor, "output": TracedTensor | None}
         self._state_tensors: dict[str, dict] = {}
@@ -107,9 +103,6 @@ class TracedTensorNode(LeappNode):
         _get_logger().debug(
             f"Graph module outputs: {[resolve_tensor_descriptions_to_names(output) for output in self.output_formats]}")
         self.setup_backend(backend, backend_params)
-        self.export_backend.override_module_builder(lambda: self.m)
-
-        self.m = self.fx_graph_module
 
         return unwrapped_tensors[0] if len(unwrapped_tensors) == 1 else tuple(unwrapped_tensors)
 
