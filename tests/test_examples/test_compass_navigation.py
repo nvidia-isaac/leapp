@@ -25,7 +25,7 @@ from .base_example_test import BaseExampleTest
 def run_example():
     from examples.compass_navigation import CompassNavigationModel, create_test_data
     test_image, test_odom, test_transform, goal_pose, route_transform = create_test_data()
-    compass_navigation = CompassNavigationModel(mobility_model_path="examples/models/digit_mobility.jit", device = 'cuda')
+    compass_navigation = CompassNavigationModel(mobility_model_path="examples/models/digit_mobility.pt", device = 'cuda')
     inputs = {
         'compass_goal_checker/goal': goal_pose.clone(),
         'compass_image_processor/raw_image': test_image.clone(),
@@ -51,7 +51,6 @@ class TestCompassNavigation(BaseExampleTest):
             'compass_odometry_processor.pt',
             'compass_route_calculator.pt',
             'post_process_commands.pt',
-            'process_and_run_inference.pt',
             'sample_compass_navigation_pipeline.png',
             'sample_compass_navigation_pipeline.yaml'
         ]

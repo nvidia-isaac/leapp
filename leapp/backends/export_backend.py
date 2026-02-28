@@ -383,7 +383,7 @@ class NoneExportBackend(ExportBackend):
             return
         if type == "onnx":
             self._load_onnx(model_path, sha256sum, device)
-        elif type == "torchscript":
+        elif type == "jit":
             self._load_torchscript(model_path, sha256sum, device)
         else:
             raise Exception(f"Unsupported model type: {type}")
@@ -395,7 +395,7 @@ class NoneExportBackend(ExportBackend):
         path = self.backend_params['model_path']
         suffix = path.split('.')[-1]
         if suffix == 'pt':
-            return "torchscript"
+            return "jit"
         elif suffix == 'pt2':
             return "torchscript2"
         elif suffix == 'onnx':
