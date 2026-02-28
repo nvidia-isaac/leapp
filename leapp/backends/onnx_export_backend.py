@@ -149,12 +149,8 @@ class ONNXExportBackend(ExportBackend):
 class ONNXTorchScriptExportBackend(ONNXExportBackend):
     def compile(self, m: torch.nn.Module = None):
         if m is None:
-            _get_logger().error(
-                f"[{self.node_context.name}] No module provided for ONNX export, please provide a module to export")
-            raise ValueError(
-                f"[{self.node_context.name}] No module provided for ONNX export, please provide a module to export")
-        else:
-            m = m.eval()
+            m = self.module_builder()
+        m = m.eval()
         
         # Optionally pre-script the module before ONNX export
         # This is useful when using traced models as environment constants
@@ -200,12 +196,8 @@ class ONNXTorchScriptExportBackend(ONNXExportBackend):
 class ONNXDynamoExportBackend(ONNXExportBackend):
     def compile(self, m: torch.nn.Module = None):
         if m is None:
-            _get_logger().error(
-                f"[{self.node_context.name}] No module provided for ONNX export, please provide a module to export")
-            raise ValueError(
-                f"[{self.node_context.name}] No module provided for ONNX export, please provide a module to export")
-        else:
-            m = m.eval()
+            m = self.module_builder()
+        m = m.eval()
         # Get flat tensor values directly from inputs (not input_formats which preserves nested structure)
         input_values = tuple(
             [tensor_desc.value for tensor_desc in self.node_context.inputs])

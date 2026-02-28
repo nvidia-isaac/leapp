@@ -15,6 +15,7 @@
 # limitations under the License.
 #
 
+import sys
 import functools
 import inspect
 import yaml
@@ -25,6 +26,8 @@ from leapp._logging import _get_logger
 from leapp.leapp_graph.leapp_graph import LeappGraph
 from leapp.leapp_graph.leapp_node import LeappNode
 from leapp.leapp_graph.traced_node import TracedTensorNode
+from leapp.leapp_graph.function_decorator_node import FunctionDecoratorNode
+from leapp.utils.tracing_lock import TracingLock
 from leapp.leapp_graph.datatypes import (
     TracedTensor,
     is_traced_type,
@@ -44,7 +47,8 @@ from leapp.utils.utils import (get_relative_path,
                                mirror_all_tensor_tags,
                                extract_return_names,
                                get_caller_stack_identity,
-                               format_caller_identity)
+                               format_caller_identity,
+                               frame_to_namespace)
 
 
 class ExportManager:
@@ -128,6 +132,7 @@ class ExportManager:
             _get_logger().warning("LEAPP graph interpretation is already enabled, "
                                   "calling start() again will reset the graph")
             _get_logger().warning("Resetting graph...")
+            TracingLock().reset()
         if dry_run:
             _get_logger().info("Starting dry run mode")
         self.dry_run = dry_run
@@ -159,6 +164,8 @@ class ExportManager:
             - This method should only be called after start() has been called.
             - Ensure all active tracing operations are completed before calling stop().
         """
+        if TracingLock().is_active:
+            raise Exception("ExportManager is currently tracing")
         if not ExportManager._interpret_graph:
             raise Exception("ExportManager graph interpretation is disabled")
         ExportManager._interpret_graph = False
@@ -218,6 +225,12 @@ class ExportManager:
             any(isinstance(t, TensorSemantics) for t in tensors)
         ):
             tensors, metadata = unwrap_tensor_semantics(tensors)
+
+        if TracingLock().is_active:
+            _get_logger().error(
+                "Cannot call input_tensors() while a _method()-traced function "
+                "is executing. Mixing active contexts is not allowed.")
+            raise Exception("Mixing active contxts is not allowed")
 
         if not ExportManager._interpret_graph:
             values = list(tensors.values())
@@ -648,6 +661,86 @@ class ExportManager:
                 else:
                     self.output_tensors(name, {return_names[0]: result}, export_with=export_with)
                 # ~~~~~~~~~~~~~~~~~~~ set up outputs ~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+                return result
+            return wrapper
+        return decorator
+
+    def _method(self, **params):
+        """Legacy decorator for tracing functions via sys.settrace + ModuleBuilder.
+
+        This uses the original source-code-capture approach (FunctionDecoratorNode)
+        and is kept for use cases where the newer TracedTensorNode-based method()
+        does not cover all patterns. Not advertised in the public API.
+        """
+        def decorator(func):
+
+            if "node_name" in params:
+                name = params["node_name"]
+            else:
+                name = func.__name__
+
+            @functools.wraps(func)
+            def wrapper(*args, **kwargs):
+                if not ExportManager._interpret_graph:
+                    return func(*args, **kwargs)
+
+                if name in self.nodes:
+                    new_node = False
+                    node_context = self.nodes[name]
+                else:
+                    new_node = True
+                    node_context = self._setup_new_node(
+                        name, FunctionDecoratorNode, **params)
+
+                caller_namespace = frame_to_namespace(sys._getframe(1))
+
+                if new_node:
+                    _get_logger().info(f"****Tracing started for {name}****")
+                    sig = inspect.signature(func)
+                    bound_args = sig.bind(*args, **kwargs)
+                    bound_args.apply_defaults()
+
+                    node_context.inspect_function_inputs(func, args, kwargs)
+                    input_namespace = {
+                        **caller_namespace, **bound_args.arguments}
+                    if hasattr(func, '__self__'):
+                        input_namespace['self'] = func.__self__
+                    node_context.capture_inputs_from_namespace(input_namespace)
+                    node_context.compile_trace(func)
+                    node_context.snapshot_buffer_values(input_namespace)
+
+                    trace_fn = node_context.create_trace_function(
+                        __file__.split('/')[-1], entry_hook=None)
+                else:
+                    node_context.validate_function_boundaries(func)
+                    node_context.validate_function_inputs(func, args, kwargs)
+                    trace_fn = node_context.create_trace_function(
+                        __file__.split('/')[-1], entry_hook=None)
+
+                sys._getframe(1).f_trace = trace_fn
+
+                TracingLock().acquire()
+                sys.settrace(trace_fn)
+
+                try:
+                    result = func(*args, **kwargs)
+                finally:
+                    sys.settrace(None)
+                    TracingLock().release()
+
+                if new_node:
+                    _get_logger().info(
+                        f"****Tracing stopped for {node_context.name}****\n\n")
+                    node_context.inspect_function_outputs(func, result)
+                    if node_context.output_namespace is not None:
+                        node_context.capture_outputs_from_namespace(
+                            node_context.output_namespace)
+                else:
+                    node_context.validate_function_outputs(func, result)
+                    if node_context.output_namespace is not None:
+                        node_context.validate_outputs_from_namespace(
+                            node_context.output_namespace)
+
                 return result
             return wrapper
         return decorator

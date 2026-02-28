@@ -23,6 +23,7 @@ from typing import Callable
 import torch
 
 from leapp._logging import _get_logger
+from leapp.backends.module_builder import ModuleBuilder
 
 
 
@@ -259,8 +260,13 @@ class ExportBackend(abc.ABC):
         else:
             self.backend_params = backend_params
 
+        self.module_builder = ModuleBuilder(node_context)
+
         self.compiled_model = None
         self.compiled_module = None
+
+    def override_module_builder(self, module_builder: Callable):
+        self.module_builder = module_builder
 
     def _verify_model_location_and_get_hash(self, model_path):
         if not os.path.exists(model_path):
