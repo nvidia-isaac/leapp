@@ -169,7 +169,7 @@ class TestConversionFXGraphCompilation(unittest.TestCase):
         
         # Compile
         ctx.compile_trace({'output': y})
-        graph_module = ctx.compiled_graph_module
+        graph_module = ctx.m
         
         # Test with torch tensor input
         input_tensor = torch.tensor([4.0, 5.0, 6.0])
@@ -196,7 +196,7 @@ class TestConversionFXGraphCompilation(unittest.TestCase):
         
         # Compile
         ctx.compile_trace({'output': y})
-        graph_module = ctx.compiled_graph_module
+        graph_module = ctx.m
         
         # Test
         input_tensor = torch.tensor([1.0, 2.0, 3.0, 4.0])
@@ -219,7 +219,7 @@ class TestConversionFXGraphCompilation(unittest.TestCase):
         
         # Compile
         ctx.compile_trace({'output': y})
-        graph_module = ctx.compiled_graph_module
+        graph_module = ctx.m
         
         # Test with torch tensor input
         input_tensor = torch.tensor([4.0, 5.0, 6.0])
@@ -245,7 +245,7 @@ class TestConversionFXGraphCompilation(unittest.TestCase):
         
         # Compile
         ctx.compile_trace({'output': y})
-        graph_module = ctx.compiled_graph_module
+        graph_module = ctx.m
         
         # Test
         input_tensor = torch.tensor([4.0, 5.0, 6.0])
@@ -266,7 +266,7 @@ class TestConversionFXGraphCompilation(unittest.TestCase):
         
         # Compile
         ctx.compile_trace({'output': y})
-        graph_module = ctx.compiled_graph_module
+        graph_module = ctx.m
         
         # Test
         input_tensor = torch.tensor([2.0, 3.0, 4.0])

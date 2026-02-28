@@ -10,6 +10,7 @@ from leapp.leapp_graph.datatypes import (
     is_tracable_tensor_type,
 )
 from leapp.utils.tensor_description import resolve_tensor_descriptions_to_names
+import collections
 
 
 class TracedTensorNode(LeappNode):
@@ -29,10 +30,6 @@ class TracedTensorNode(LeappNode):
 
         # Buffer tracker for auto-detecting stateful buffers (set by annotate.module())
         self._buffer_tracker = None
-
-    @property
-    def compiled_graph_module(self):
-        return self.m
 
     @property
     def is_tracing(self) -> bool:
@@ -333,27 +330,20 @@ class TracedTensorNode(LeappNode):
                 f"Made {count} non-contiguous tensor constant(s) contiguous")
 
     def _create_io_helper(self, data, name: str, to: str):
-        if isinstance(data, dict):
+        if isinstance(data, collections.abc.Mapping):
             new_data = {}
             for key, value in data.items():
                 child_name = "_".join([name, key]) if name else key
                 new_data[key] = self._create_io_helper(
                     value, child_name, to)
             return new_data
-        elif isinstance(data, list):
+        elif isinstance(data, (list, tuple)):
             new_data = []
             for idx, value in enumerate(data):
                 child_name = "_".join([name, str(idx)]) if name else str(idx)
                 new_data.append(self._create_io_helper(
                     value, child_name, to))
-            return new_data
-        elif isinstance(data, tuple):
-            new_data = []
-            for idx, value in enumerate(data):
-                child_name = "_".join([name, str(idx)]) if name else str(idx)
-                new_data.append(self._create_io_helper(
-                    value, child_name, to))
-            return tuple(new_data)
+            return type(data)(new_data)
         
         elif is_tracable_tensor_type(data):
             is_traced = False
