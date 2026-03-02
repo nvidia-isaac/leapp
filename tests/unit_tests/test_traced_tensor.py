@@ -129,6 +129,48 @@ class TensorArithmeticFunctions:
         return b
 
     @staticmethod
+    def var_operator_tensor(a: Tensor) -> Tensor:
+        """Var operation (scalar)."""
+        b = a.var()
+        return b
+
+    @staticmethod
+    def var_operator_torch(a: Tensor) -> Tensor:
+        """Var operation (scalar)."""
+        b = torch.var(a)
+        return b
+
+    @staticmethod
+    def std_operator_tensor(a: Tensor) -> Tensor:
+        """Std operation (scalar)."""
+        b = a.std()
+        return b
+
+    @staticmethod
+    def std_operator_torch(a: Tensor) -> Tensor:
+        """Std operation (scalar)."""
+        b = torch.std(a)
+        return b
+
+    @staticmethod
+    def prod_operator_tensor(a: Tensor) -> Tensor:
+        """Prod operation (scalar)."""
+        b = a.prod()
+        return b
+
+    @staticmethod
+    def prod_operator_torch(a: Tensor) -> Tensor:
+        """Prod operation (scalar)."""
+        b = torch.prod(a)
+        return b
+
+    @staticmethod
+    def norm_operator_linalg(a: Tensor) -> Tensor:
+        """Norm operation (scalar) via torch.linalg.norm."""
+        b = torch.linalg.norm(a)
+        return b
+
+    @staticmethod
     def argmax_operator_tensor(a: Tensor) -> Tensor:
         """Argmax operation."""
         b = a.argmax()

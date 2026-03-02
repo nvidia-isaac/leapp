@@ -441,6 +441,13 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
                 proxy_kwargs['keepdim'] = True
             # If keepdims=False without axis, we can just omit both (default behavior)
         
+        # np.var/std default to ddof=0 (population), torch defaults to correction=1 (sample)
+        if torch_func in (torch.var, torch.std):
+            if 'ddof' in proxy_kwargs:
+                proxy_kwargs['correction'] = proxy_kwargs.pop('ddof')
+            elif 'correction' not in proxy_kwargs:
+                proxy_kwargs['correction'] = 0
+
         # Handle np.transpose with axes=None or missing
         # torch.permute requires explicit dims, but numpy reverses all dims when axes is omitted
         if torch_func == torch.permute:
@@ -619,6 +626,8 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
             return type(result_array)(result)
         elif isinstance(result_array, np.ndarray):
             return traced_array._new(result_array, proxy_out)
+        elif isinstance(result_array, np.generic):
+            return traced_array._new(np.asarray(result_array), proxy_out)
         return result_array
 
     # =========================================================================

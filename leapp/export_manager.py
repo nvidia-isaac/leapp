@@ -96,7 +96,7 @@ class ExportManager:
     #########################################################
     # flow control
     #########################################################
-    def start(self, name, save_path=".", verbose=False, dry_run=False, patch_numpy=True):
+    def start(self, name, save_path=".", verbose=False, dry_run=False, max_cached_io=5, patch_numpy=True):
         """Initialize and start LEAPP graph interpretation.
 
         This method prepares the export manager for tracing by setting up the graph name,
