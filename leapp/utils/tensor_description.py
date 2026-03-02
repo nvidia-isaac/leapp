@@ -161,6 +161,7 @@ class TensorDescription:
         self.shape = CompactYamlList(shape)
         self.type = "tensor"
         self.tag = tag
+        self.cached_values = []
         self.init_semantics(semantics)
 
     # --- Semantic field access ---

@@ -289,7 +289,7 @@ class TestStateTensors(LEAPPFunctionalTestBase):
             history = new_history.tensor if hasattr(new_history, "tensor") else new_history
 
         annotate.stop()
-        annotate.compile_graph(visualize=False)
+        annotate.compile_graph(visualize=False, validate=True)
 
         # Should have traced just one iteration
         # 1 dangling input (current_obs), 1 dangling output (action),

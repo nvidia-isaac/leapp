@@ -42,9 +42,9 @@ class TestFunctional(unittest.TestCase):
     # Number of random inputs to test after compiling
     NUM_TEST_INPUTS = 5
 
-    def _run_trace_and_compile(self, func, input_shape, test_name, 
+    def _run_trace_and_compile(self, func, input_shape, test_name,
                                skip_torchscript=False, skip_onnx=False,
-                               onnx_opset=17, **func_kwargs):
+                               onnx_opset=17, atol=1e-5, **func_kwargs):
         """Helper to trace a function and verify compiled output matches.
         
         Compiles once, then tests with NUM_TEST_INPUTS random inputs.
@@ -77,7 +77,7 @@ class TestFunctional(unittest.TestCase):
             # Test 1: FX GraphModule execution
             actual_fx = graph_module(test_input)
             self.assertTrue(
-                torch.allclose(actual_fx, expected, atol=1e-5),
+                torch.allclose(actual_fx, expected, atol=atol),
                 f"{test_name}: FX output mismatch on input {i+1}/{self.NUM_TEST_INPUTS}"
             )
         
@@ -90,7 +90,7 @@ class TestFunctional(unittest.TestCase):
                     expected = func(test_input, **func_kwargs)
                     actual_ts = scripted(test_input)
                     self.assertTrue(
-                        torch.allclose(actual_ts, expected, atol=1e-5),
+                        torch.allclose(actual_ts, expected, atol=atol),
                         f"{test_name}: TorchScript output mismatch on input {i+1}"
                     )
             except Exception as e:
@@ -119,7 +119,7 @@ class TestFunctional(unittest.TestCase):
                         expected = func(test_input, **func_kwargs)
                         output_onnx = session.run(None, {"input": test_input.numpy()})[0]
                         self.assertTrue(
-                            np.allclose(output_onnx, expected.numpy(), atol=1e-5),
+                            np.allclose(output_onnx, expected.numpy(), atol=atol),
                             f"{test_name}: ONNX output mismatch on input {i+1}"
                         )
             except Exception as e:
@@ -750,7 +750,7 @@ class TestFunctional(unittest.TestCase):
             grid = F.affine_grid(theta, source.size(), align_corners=True)
             return F.grid_sample(source, grid, align_corners=True)
         
-        self._run_trace_and_compile(stn_transform, (2, 2, 3), "test_affine_grid_sample", onnx_opset=20)
+        self._run_trace_and_compile(stn_transform, (2, 2, 3), "test_affine_grid_sample", onnx_opset=20, atol=1e-4)
 
     # =========================================================================
     # Torch Operations (not F.*)

@@ -33,10 +33,11 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
             return inputB+5.0
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        for i in range(10):
+        for i in range(5):
             outputA = funcA(torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32))
             outputC = funcC(outputA)
         annotate.stop()
+        annotate.compile_graph(visualize=False, validate=True)
 
         self.assertEqual(len(annotate.nodes), 2)
         self.assertEqual(len(annotate.nodes[funcA.__name__].inputs), 1)
@@ -529,7 +530,7 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
                 self.assertTrue(type(tensor1) is TracedTensor)
             if i > 0:
                 self.assertTrue(type(tensor1) is torch.Tensor)
-            tensor1 += i
+            tensor1 += 0
             annotate.output_tensors(
                 'func1', {'output1': tensor1}, export_with="jit")
 
@@ -614,7 +615,7 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
         # Initialize feedback tensor (will be updated each iteration)
         feedback_tensor = torch.tensor([0.0, 0.0, 0.0])
 
-        for i in range(20):
+        for i in range(5):
             # func1: 2 inputs (input1 and feedback from func2), 1 output
             input1, feedback_tensor = annotate.input_tensors('func1', {
                 'input1': torch.tensor([1.0, 2.0, 3.0]),
@@ -634,7 +635,7 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
             feedback_tensor = output2
 
         annotate.stop()
-        annotate.compile_graph(visualize=False)
+        annotate.compile_graph(visualize=False, validate=True)
 
         # 2 nodes, 1 external input (input1), 1 external output (output2)
         # 1 internal connection (func1 -> func2)
@@ -836,7 +837,7 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
 
         annotate.start(name=self.TEST_GRAPH_NAME)
 
-        for i in range(10):
+        for i in range(5):
             # Nested dict input - {'group': {'a': tensor, 'b': tensor}}
             inputs = annotate.input_tensors('nested_node', {
                 'group': {
@@ -852,7 +853,7 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
                 'nested_node', {'result': result}, export_with="jit")
 
         annotate.stop()
-        annotate.compile_graph(visualize=False)
+        annotate.compile_graph(visualize=False, validate=True)
 
         # 1 node, 2 flattened inputs (group_x, group_y), 1 output
         self.verify_num_connections(

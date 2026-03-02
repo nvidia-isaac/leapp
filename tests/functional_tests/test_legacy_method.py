@@ -37,10 +37,10 @@ class TestLegacyMethod(LEAPPFunctionalTestBase):
             return x * 2.0
 
         annotate.start(name=self.TEST_GRAPH_NAME)
-        for _ in range(3):
+        for _ in range(5):
             out = double(torch.tensor([1.0, 2.0, 3.0]))
         annotate.stop()
-        annotate.compile_graph(visualize=False)
+        annotate.compile_graph(visualize=False, validate=True)
 
         self.assertEqual(len(annotate.nodes), 1)
         self.verify_all_models_exist("double")

@@ -81,6 +81,10 @@ class LeappNode():
         # caller identities track which call sites created this node's inputs
         self._caller_identities = set()
 
+        # i/o caching for multi-example validation
+        self._max_cached_io = 0
+        self._cache_write_idx = 0
+
         # storage for the fx graph or compiled module
         self.m = None
 
@@ -231,6 +235,8 @@ class LeappNode():
     def add_output(self, outout_name, raw_output_name, output_value):
         io_descriptions, output_format = describe_io(
             outout_name, raw_output_name, output_value)
+        for desc in io_descriptions:
+            desc.cached_values = [torch.zeros_like(desc.value) for _ in range(self._max_cached_io)]
         self._validate_and_add_to_list(
             io_descriptions, self.outputs, self.name)
         # used to rebuild the nested i/o
@@ -239,6 +245,8 @@ class LeappNode():
     def add_input(self, input_name, raw_input_name, input_value):
         io_descriptions, input_format = describe_io(
             input_name, raw_input_name, input_value)
+        for desc in io_descriptions:
+            desc.cached_values = [torch.zeros_like(desc.value) for _ in range(self._max_cached_io)]
         self._validate_and_add_to_list(io_descriptions, self.inputs, self.name)
         # used to rebuild the nested i/o
         self.input_formats.append(input_format)
@@ -272,7 +280,7 @@ class LeappNode():
             elif existing_io_description.tag is None:
                 # THIS STEP UPDATES THE TAG FOR FEEDBACK DETECTION
                 existing_io_description.tag = io_description.tag
-            elif existing_io_description.tag != io_description.tag:
+            elif io_description.tag is not None and existing_io_description.tag != io_description.tag:
                 _get_logger().error(
                     f"Error: Reentering {self.name} with new i/o {io_description.name_str} \n"
                     f"but the tag has changed from {existing_io_description.tag} to {io_description.tag}.\n"
@@ -290,6 +298,13 @@ class LeappNode():
                     f"This can happen if some dynamic behavior is not captured by the annotations"
                 )
                 raise Exception("Validation error when reentering node")
+
+            if self._cache_write_idx < self._max_cached_io:
+                existing_io_description.cached_values[self._cache_write_idx] = io_description.value
+
+    def increment_cache_idx(self):
+        if self._cache_write_idx < self._max_cached_io:
+            self._cache_write_idx += 1
 
     def validate_input_and_update_tags(self, input_name, raw_input_name, input_value):
         self.validate_io_and_update_tags(
