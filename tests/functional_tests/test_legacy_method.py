@@ -207,5 +207,192 @@ class TestLegacyMethod(LEAPPFunctionalTestBase):
             self.assertIn("Mixing active contxts is not allowed", str(e))
 
 
+    # ── Test 8: Dict input → list output ────────────────────────────────
+
+    def test_dict_input_list_output(self):
+        """Dict input flattened to 3 tensors, returned as a list of 3."""
+        @annotate._method(export_with="jit")
+        def fuse(sensors: dict):
+            return list(sensors.values())
+
+        input_dict = {
+            'lidar': torch.tensor([1.0, 2.0]),
+            'camera': torch.tensor([3.0, 4.0]),
+            'imu': torch.tensor([5.0, 6.0]),
+        }
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        expected = fuse(input_dict)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+
+        node = annotate.nodes["fuse"]
+        self.assertEqual(len(node.inputs), 3)
+        self.assertEqual(len(node.outputs), 3)
+        self.verify_all_models_exist("fuse")
+        self.verify_single_torchscript_model_expected_value(
+            [input_dict], [expected], "fuse")
+
+    # ── Test 9: List input → single output ───────────────────────────────
+
+    def test_list_input_single_output(self):
+        """List input flattened to 3 tensors, reduced to a single output."""
+        @annotate._method(export_with="jit")
+        def sum_all(items: list):
+            return items[0] + items[1] + items[2]
+
+        input_list = [
+            torch.tensor([1.0]),
+            torch.tensor([2.0]),
+            torch.tensor([3.0]),
+        ]
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        expected = sum_all(input_list)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+
+        node = annotate.nodes["sum_all"]
+        self.assertEqual(len(node.inputs), 3)
+        self.assertEqual(len(node.outputs), 1)
+        self.verify_all_models_exist("sum_all")
+        self.verify_single_torchscript_model_expected_value(
+            [input_list], [expected], "sum_all")
+
+    # ── Test 10: Dict + list inputs → dict output ────────────────────────
+
+    def test_dict_and_list_inputs_dict_output(self):
+        """Mixed dict and list args producing a dict return value.
+        4 flat input tensors, 2 flat output tensors."""
+        @annotate._method(export_with="jit")
+        def combine(state: dict, commands: list):
+            pos = state['pos'] + commands[0]
+            vel = state['vel'] + commands[1]
+            return {'pos': pos, 'vel': vel}
+
+        state = {'pos': torch.tensor([1.0, 2.0]), 'vel': torch.tensor([0.1, 0.2])}
+        commands = [torch.tensor([0.5, 0.5]), torch.tensor([0.01, 0.02])]
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        expected = combine(state, commands)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+
+        node = annotate.nodes["combine"]
+        self.assertEqual(len(node.inputs), 4)
+        self.assertEqual(len(node.outputs), 2)
+        self.verify_all_models_exist("combine")
+        self.verify_single_torchscript_model_expected_value(
+            [state, commands], [expected], "combine")
+
+    # ── Test 11: Nested dict input → single output ───────────────────────
+
+    def test_nested_dict_input(self):
+        """Nested dict-of-dicts flattened to 3 leaf tensors, single output."""
+        @annotate._method(export_with="jit")
+        def process(data: dict):
+            a = data['group_a']['x']
+            b = data['group_a']['y']
+            c = data['group_b']['z']
+            return a + b + c
+
+        nested = {
+            'group_a': {'x': torch.tensor([1.0]), 'y': torch.tensor([2.0])},
+            'group_b': {'z': torch.tensor([3.0])},
+        }
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        expected = process(nested)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+
+        node = annotate.nodes["process"]
+        self.assertEqual(len(node.inputs), 3)
+        self.assertEqual(len(node.outputs), 1)
+        self.verify_all_models_exist("process")
+        self.verify_single_torchscript_model_expected_value(
+            [nested], [expected], "process")
+
+    # ── Test 12: Dict input → dict output (bidirectional) ────────────────
+
+    def test_dict_input_dict_output(self):
+        """Dict in, dict out — both sides flatten to the same leaf count."""
+        @annotate._method(export_with="jit")
+        def transform(sensors: dict):
+            return {
+                'scaled_lidar': sensors['lidar'] * 2.0,
+                'scaled_camera': sensors['camera'] * 3.0,
+            }
+
+        input_dict = {
+            'lidar': torch.tensor([1.0, 2.0]),
+            'camera': torch.tensor([3.0, 4.0]),
+        }
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        expected = transform(input_dict)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+
+        node = annotate.nodes["transform"]
+        self.assertEqual(len(node.inputs), 2)
+        self.assertEqual(len(node.outputs), 2)
+        self.verify_all_models_exist("transform")
+        self.verify_single_torchscript_model_expected_value(
+            [input_dict], [expected], "transform")
+
+    # ── Test 13: List input → list output ────────────────────────────────
+
+    def test_list_input_list_output(self):
+        """List in, list out — element-wise transform preserving count."""
+        @annotate._method(export_with="jit")
+        def per_element(items: list):
+            return [items[0] + 10.0, items[1] + 20.0, items[2] + 30.0]
+
+        input_list = [
+            torch.tensor([1.0]),
+            torch.tensor([2.0]),
+            torch.tensor([3.0]),
+        ]
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        expected = per_element(input_list)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+
+        node = annotate.nodes["per_element"]
+        self.assertEqual(len(node.inputs), 3)
+        self.assertEqual(len(node.outputs), 3)
+        self.verify_all_models_exist("per_element")
+        self.verify_single_torchscript_model_expected_value(
+            [input_list], [expected], "per_element")
+
+    # ── Test 14: Dict + list inputs → list + dict outputs ────────────────
+
+    def test_bidirectional_complex_io(self):
+        """Dict and list inputs producing both list and dict outputs.
+        Verifies all 8 leaf tensors (4 in, 4 out) are handled."""
+        @annotate._method(export_with="jit")
+        def cross(state: dict, cmds: list):
+            list_out = [state['a'] + cmds[0], state['b'] + cmds[1]]
+            dict_out = {'sum_a': state['a'] + cmds[0], 'sum_b': state['b'] + cmds[1]}
+            return list_out, dict_out
+
+        state = {'a': torch.tensor([1.0]), 'b': torch.tensor([2.0])}
+        cmds = [torch.tensor([10.0]), torch.tensor([20.0])]
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        expected = cross(state, cmds)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+
+        node = annotate.nodes["cross"]
+        self.assertEqual(len(node.inputs), 4)
+        self.assertEqual(len(node.outputs), 4)
+        self.verify_all_models_exist("cross")
+        self.verify_single_torchscript_model_expected_value(
+            [state, cmds], [expected], "cross")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
