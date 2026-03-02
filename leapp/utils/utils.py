@@ -22,6 +22,7 @@ import inspect
 import os
 import sys
 import textwrap
+import traceback
 
 import torch
 
@@ -441,10 +442,6 @@ def mirror_all_tensor_tags(source, target):
     '''
     Mirror all tensor tags from source to target.
     '''
-    if isinstance(source, TracedTensor):
-        source = source.tensor
-    if isinstance(target, TracedTensor):
-        target = target.tensor
     if isinstance(source, torch.Tensor) and isinstance(target, torch.Tensor):
         if hasattr(source, 'leapp_tag'):
             tag_tensor(target, source.leapp_tag)
@@ -487,3 +484,34 @@ def get_system_info():
     metadata['system information']['os'] = os.uname().sysname
 
     return metadata
+
+
+_LEAPP_PKG_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def get_caller_stack_identity():
+    """Return a hashable tuple representing the caller's full stack trace.
+
+    Captures only frames outside the leapp package so that two calls reaching
+    the same leapp API through different user-code paths produce distinct
+    identities (e.g. user helper wrappers around input_tensors).
+    """
+    return tuple(
+        (f.filename, f.lineno, f.name) for f in traceback.extract_stack()
+        if not f.filename.startswith(_LEAPP_PKG_DIR)
+    )
+
+
+def format_caller_identity(identity):
+    """Pretty-print a caller identity for error messages."""
+    if not isinstance(identity, tuple) or not identity:
+        return str(identity)
+    if len(identity) == 2 and isinstance(identity[0], str) and isinstance(identity[1], int):
+        return f"{identity[0]}:{identity[1]}"
+    lines = []
+    for frame in identity:
+        if isinstance(frame, tuple) and len(frame) == 3:
+            lines.append(f"  {frame[0]}:{frame[1]} in {frame[2]}")
+        else:
+            lines.append(f"  {frame}")
+    return "\n".join(lines)

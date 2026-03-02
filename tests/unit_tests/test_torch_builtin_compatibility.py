@@ -67,7 +67,7 @@ class TestFunctional(unittest.TestCase):
         self.assertIsInstance(output, TracedTensor)
         
         ctx.compile_trace({'output': output})
-        graph_module = ctx.compiled_graph_module
+        graph_module = ctx.m
         
         # Test with multiple random inputs across all export formats
         for i in range(self.NUM_TEST_INPUTS):
@@ -643,7 +643,7 @@ class TestFunctional(unittest.TestCase):
         self.assertIsInstance(output, TracedTensor)
         
         ctx.compile_trace({'output': output})
-        graph_module = ctx.compiled_graph_module
+        graph_module = ctx.m
         
         for i in range(self.NUM_TEST_INPUTS):
             test_input = torch.randint(0, vocab_size, (4, 8))

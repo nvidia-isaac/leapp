@@ -246,6 +246,12 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
         print("\n" + "="*60)
 
     def verify_data_exact_match(self, source_data, target_data):
+        from leapp.leapp_graph.datatypes.traced_data import TracedData
+        if isinstance(source_data, TracedData):
+            source_data = source_data.data
+        if isinstance(target_data, TracedData):
+            target_data = target_data.data
+
         if type(source_data) is not type(target_data):
             return False
 

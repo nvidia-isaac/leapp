@@ -101,7 +101,7 @@ Use this when you have:
 
 ### Basic Usage
 
-Instead of providing a backend name like `"torch"` or `"onnx"`, you can set `export_with=None` and specify the model path in `backend_params`:
+Instead of providing a backend name like `"jit"` or `"onnx"`, you can set `export_with=None` and specify the model path in `backend_params`:
 
 ```python
 import torch

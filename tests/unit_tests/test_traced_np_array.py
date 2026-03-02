@@ -738,7 +738,7 @@ class TestTracedNpArray(unittest.TestCase):
         # Test compiled graph works
         input_tensor = torch.tensor([4.0, 5.0, 6.0])
         expected = input_tensor.clone() * 2  # clone is torch equivalent of copy
-        output = ctx.compiled_graph_module(input_tensor)
+        output = ctx.m(input_tensor)
         self.assertTrue(torch.allclose(output, expected))
 
     # ==================== Graph Building Tests ====================
@@ -752,7 +752,7 @@ class TestTracedNpArray(unittest.TestCase):
         
         # Compile and verify graph exists
         ctx.compile_trace({'output': z})
-        self.assertIsNotNone(ctx.compiled_graph_module)
+        self.assertIsNotNone(ctx.m)
         self.assertIsNotNone(ctx.graph)
 
     def test_graph_has_nodes(self):
@@ -776,7 +776,7 @@ class TestTracedNpArray(unittest.TestCase):
         z = x + y
         
         ctx.compile_trace({'output': z})
-        self.assertIsNotNone(ctx.compiled_graph_module)
+        self.assertIsNotNone(ctx.m)
 
     # ==================== Operations After Compile Tests ====================
 
@@ -952,7 +952,7 @@ class TestCompiledGraphExecution(unittest.TestCase):
         
         # Compile the trace
         ctx.compile_trace({'output': traced_result})
-        graph_module = ctx.compiled_graph_module
+        graph_module = ctx.m
         
         # Convert input to torch tensor for execution
         input_tensor = torch.from_numpy(input_data.copy()).float()
@@ -1273,7 +1273,7 @@ class TestCompiledGraphExecution(unittest.TestCase):
         
         # Compile the trace
         ctx.compile_trace({'output': traced_result})
-        graph_module = ctx.compiled_graph_module
+        graph_module = ctx.m
         
         # Convert input to torch tensor for execution
         torch_input = torch.from_numpy(input_data.copy()).float()

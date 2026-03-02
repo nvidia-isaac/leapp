@@ -278,11 +278,11 @@ class LeappGraph:
                 source['node'].change_output_name(
                     source['node'].outputs[source['idx']].name_str, desired_target_name)
         if names_changed:
-            _get_logger().warning("i/o names changed, this process edits the node specifications, and may produce "
+            _get_logger().debug("i/o names changed, this process edits the node specifications, and may produce "
                                 "unexpected behavior. Please check the graph for correctness. If this is not desired, "
                                 "please make sure to match io names in the source code")
         else:
-            _get_logger().info("no names changed")
+            _get_logger().debug("no names changed")
 
     def _merge_nodes_automatically(self):
         merged = 0

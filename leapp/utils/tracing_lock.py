@@ -61,4 +61,3 @@ class TracingLock:
         This is useful for error recovery or reset scenarios.
         """
         self._is_active_function_tracing = False
-

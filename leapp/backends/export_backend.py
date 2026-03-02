@@ -20,7 +20,6 @@ import os
 import hashlib
 import shutil
 from typing import Callable
-import functools
 import torch
 
 from leapp._logging import _get_logger
@@ -384,7 +383,7 @@ class NoneExportBackend(ExportBackend):
             return
         if type == "onnx":
             self._load_onnx(model_path, sha256sum, device)
-        elif type == "torchscript":
+        elif type == "jit":
             self._load_torchscript(model_path, sha256sum, device)
         else:
             raise Exception(f"Unsupported model type: {type}")
@@ -396,7 +395,7 @@ class NoneExportBackend(ExportBackend):
         path = self.backend_params['model_path']
         suffix = path.split('.')[-1]
         if suffix == 'pt':
-            return "torch"
+            return "jit"
         elif suffix == 'pt2':
             return "torchscript2"
         elif suffix == 'onnx':

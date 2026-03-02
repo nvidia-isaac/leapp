@@ -109,7 +109,7 @@ def process_sensor_data(raw_readings):
 ```
 
 The `@annotate.method` decorator marks an entire function as a graph node. Key parameters:
-- `export_with`: Export format ("torch" for TorchScript, "onnx" for ONNX)
+- `export_with`: Export format ("jit" for TorchScript, "onnx" for ONNX)
 - `node_name`: Optional custom name for the node (defaults to function name)
 
 ### 2. Traced Tensors (`annotate.input_tensors` / `annotate.output_tensors`)

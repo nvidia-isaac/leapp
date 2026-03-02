@@ -227,7 +227,7 @@ Two nodes can be merged automatically only if **ALL** of these conditions are me
 1. **Single target per output**: Each output from the source node goes to exactly one target
 2. **Complete output consumption**: ALL outputs from the source node connect to the target node
 3. **Exclusive input source**: ALL inputs to the target node come from the source node
-4. **Same backend**: Both nodes use the same export backend (e.g., both use "torch")
+4. **Same backend**: Both nodes use the same export backend (e.g., both use "jit")
 
 #### Example: Nodes That Can Be Merged
 

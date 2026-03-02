@@ -5,11 +5,12 @@ from torch.fx.proxy import Proxy
 from leapp._logging import _get_logger
 from leapp.leapp_graph.datatypes import (
     TracedData,
-    TracedTensor,  # Still needed for isinstance checks in create_static_tensors
+    TracedTensor,
     as_traced,
     is_tracable_tensor_type,
 )
 from leapp.utils.tensor_description import resolve_tensor_descriptions_to_names
+import collections
 
 
 class TracedTensorNode(LeappNode):
@@ -22,7 +23,7 @@ class TracedTensorNode(LeappNode):
         self.tracer.root = torch.nn.Module()
         self.tracer.tensor_attrs = {}
 
-        self.compiled_graph_module = None
+        self.m = None
 
         # State tensor tracking: name -> {"input": TracedTensor, "output": TracedTensor | None}
         self._state_tensors: dict[str, dict] = {}
@@ -30,11 +31,14 @@ class TracedTensorNode(LeappNode):
         # Buffer tracker for auto-detecting stateful buffers (set by annotate.module())
         self._buffer_tracker = None
 
+        self._next_buffer_idx = 0
+
     @property
     def is_tracing(self) -> bool:
         return not self._model_captured
 
-    def compile_trace(self, tensors: dict[str, "TracedTensor"], backend=None, backend_params={}):
+    def compile_trace(self, tensors: dict[str, "TracedTensor"], backend=None, backend_params={},
+                       static_tensors: dict[str, torch.Tensor] | None = None):
         # Auto-collect buffer mutations before graph freeze
         if self._buffer_tracker is not None and not self._buffer_tracker._collected:
             self._buffer_tracker.collect()
@@ -49,6 +53,12 @@ class TracedTensorNode(LeappNode):
         unwrapped_tensors = []
         for name, tensor in tensors.items():
             unwrapped_tensors.append(self.create_output(tensor, name))
+
+        # Static tensors go through the same create_output path with static=True
+        if static_tensors:
+            for name, tensor in static_tensors.items():
+                wrapped = self.create_output(tensor, name, static=True)
+                tensors[name] = wrapped
 
         # Set matching leapp_tags on state input/output descriptions for feedback detection.
         # Both the input and its corresponding _out output share the same tag so the graph
@@ -67,7 +77,7 @@ class TracedTensorNode(LeappNode):
 
         self.build_graph_module(list(tensors.values()))
 
-        self.compiled_graph_module = fx.GraphModule(
+        self.m = fx.GraphModule(
             self.tracer.root, self.graph)
 
         # Sanitize the FX graph for compatibility with export backends.
@@ -78,16 +88,16 @@ class TracedTensorNode(LeappNode):
         # 2) method_descriptor targets (e.g. torch.Tensor.view) → call_method
         #    nodes to avoid weak-ref failures in torch.jit.script.
         #    Must run AFTER aten_ops since that pass may insert new ones.
-        self._rewrite_aten_ops(self.compiled_graph_module.graph)
-        self._rewrite_method_descriptors(self.compiled_graph_module.graph)
+        self._rewrite_aten_ops(self.m.graph)
+        self._rewrite_method_descriptors(self.m.graph)
         # 3) Ensure all tensor constants have contiguous memory layout.
         #    make_fx decomposition produces transposed weight views that
         #    torch.onnx.export (dynamo=False) serializes incorrectly.
-        self._make_tensor_attrs_contiguous(self.compiled_graph_module)
-        self.compiled_graph_module.recompile()
+        self._make_tensor_attrs_contiguous(self.m)
+        self.m.recompile()
 
         _get_logger().debug(
-            f"Compiled graph module for {self.name}: {self.compiled_graph_module.graph}")
+            f"Compiled graph module for {self.name}")
         _get_logger().debug(
             f"Graph module inputs: {[resolve_tensor_descriptions_to_names(input) for input in self.input_formats]}")
         _get_logger().debug(
@@ -320,38 +330,21 @@ class TracedTensorNode(LeappNode):
             _get_logger().debug(
                 f"Made {count} non-contiguous tensor constant(s) contiguous")
 
-    def setup_backend(self, backend=None, backend_params={}):
-        super().setup_backend(backend, backend_params)
-        if self.compiled_graph_module is None:
-            _get_logger().error(
-                f"Error: TracedTensorNode {self.name} has no compiled graph module, please compile the trace first")
-            raise ValueError("Error in TracedTensorNode")
-
-        self.export_backend.override_module_builder(
-            lambda: self.compiled_graph_module)
-
     def _create_io_helper(self, data, name: str, to: str):
-        if isinstance(data, dict):
+        if isinstance(data, collections.abc.Mapping):
             new_data = {}
             for key, value in data.items():
                 child_name = "_".join([name, key]) if name else key
                 new_data[key] = self._create_io_helper(
                     value, child_name, to)
             return new_data
-        elif isinstance(data, list):
+        elif isinstance(data, (list, tuple)):
             new_data = []
             for idx, value in enumerate(data):
                 child_name = "_".join([name, str(idx)]) if name else str(idx)
                 new_data.append(self._create_io_helper(
                     value, child_name, to))
-            return new_data
-        elif isinstance(data, tuple):
-            new_data = []
-            for idx, value in enumerate(data):
-                child_name = "_".join([name, str(idx)]) if name else str(idx)
-                new_data.append(self._create_io_helper(
-                    value, child_name, to))
-            return tuple(new_data)
+            return type(data)(new_data)
         
         elif is_tracable_tensor_type(data):
             is_traced = False
@@ -362,11 +355,16 @@ class TracedTensorNode(LeappNode):
                     # Different context: error - cannot use traced tensor from another node
                     _get_logger().error(
                         f"Error: when creating inputs for '{self.name}', "
-                        f"detected data '{name}' is an active TracedTensor from a different node '{data.context}'. "
-                        f"Cannot use TracedTensor from one node as input to another. "
+                        f"detected data '{name}' is an active {data.__class__.__name__} from a different node '{data.context}'. \n"
+                        f"Mixing active contxts is not allowed. "
                         f"Call output_tensors() on the source node first."
                     )
-                    raise Exception("Error in TracedTensorNode")
+                    raise Exception(
+                        f"Error: when creating inputs for '{self.name}', "
+                        f"detected data '{name}' is an active {data.__class__.__name__} from a different node '{data.context}'. \n"
+                        f"Mixing active contxts is not allowed. "
+                        f"Call output_tensors() on the source node first."
+                    )
 
             if to=="traced":
                 if is_traced:
@@ -401,13 +399,12 @@ class TracedTensorNode(LeappNode):
                 node = self.graph.create_node("get_attr", attr_name, (), {})
                 proxy = Proxy(node, self.tracer)
                 return as_traced(data, name, self, proxy)
-
-
-
         else:
-            _get_logger().error(f"Error: when creating inputs for {self.name}, detected data {name} is {type(data).__name__}"
-                                " which is not a dict, list, tuple, or accepted tracable tensor type")
-            raise Exception("Error in TracedTensorNode")
+            if to == "traced":
+                _get_logger().warning(
+                    f"Non-tracable input '{name}' (type={type(data).__name__}) in node '{self.name}' "
+                    f"will be passed through as a constant.")
+            return data
 
     def create_input(self, data, name: str) -> "TracedTensor":
         """Create a TrackedTensor as an input to this context.
@@ -423,34 +420,44 @@ class TracedTensorNode(LeappNode):
         traced_data = self._create_io_helper(data, name, to="traced")
         return traced_data
 
-    def create_output(self, data, name: str):
-        unwrapped_data = self._create_io_helper(data, name, to="tensor")
-        self.tag_data(unwrapped_data, name)
-        self.add_output(name, name, unwrapped_data)
-        return unwrapped_data
-    
+    def create_output(self, data, name: str, static: bool = False):
+        if static:
+            self._validate_static_tensor(data, name)
+            wrapped = self._create_io_helper(data, name, to="static")
+            self.tag_data(data, name)
+            self.add_output(name, name, data)
+            return wrapped
+        else:
+            unwrapped_data = self._create_io_helper(data, name, to="tensor")
+            self.tag_data(unwrapped_data, name)
+            self.add_output(name, name, unwrapped_data)
+            return unwrapped_data
+
+    def _validate_static_tensor(self, tensor, name: str):
+        if not isinstance(tensor, torch.Tensor):
+            _get_logger().error(
+                f"Error: static output '{name}' has type {type(tensor).__name__} "
+                "but expected torch.Tensor.\n"
+                "**Static outputs must be raw tensors, not derived from input tensors.**\n"
+                "If this value depends on inputs, use it as a regular output tensor instead.")
+            raise Exception("Error: exception detected in output_tensors declaration")
+        if isinstance(tensor, TracedTensor):
+            _get_logger().error(
+                f"Error: static output '{name}' is a TracedTensor. "
+                "Static outputs should be constant tensors, not traced computations.")
+            raise Exception("Error: exception detected in output_tensors declaration")
+
     def create_static_tensors(self, flattened_static_outputs):
-        ''' assumes the input is already flattened in the form of Dict[str, torch.Tensor] '''
-        # Validate all static outputs are raw tensors (not TracedTensors)
+        """Wrap raw tensors as static graph nodes (for register_buffer).
+
+        Unlike create_output(static=True), this does NOT tag or register
+        outputs — it only validates and wraps.
+        """
         for tensor_name, tensor in flattened_static_outputs.items():
-            if not isinstance(tensor, torch.Tensor):
-                _get_logger().error(
-                    f"Error: static output '{tensor_name}' has type {type(tensor).__name__} "
-                    "but expected torch.Tensor.\n"
-                    "**Static outputs must be raw tensors, not derived from input tensors.**\n"
-                    "If this value depends on inputs, use it as a regular output tensor instead.")
-                raise Exception("Error: exception detected in output_tensors declaration")
-            if isinstance(tensor, TracedTensor):
-                _get_logger().error(
-                    f"Error: static output '{tensor_name}' is a TracedTensor. "
-                    "Static outputs should be constant tensors, not traced computations.")
-                raise Exception("Error: exception detected in output_tensors declaration")
-        
-        # Wrap static tensors as TracedTensors so they appear in the graph output
-        wrapped_static_outputs = self._create_io_helper(
+            self._validate_static_tensor(tensor, tensor_name)
+
+        return self._create_io_helper(
             flattened_static_outputs, '', to="static")
-        
-        return wrapped_static_outputs
 
     def build_graph_module(self, outputs: list["TracedTensor"]) -> fx.GraphModule:
         """Convert the traced computation to a torch.fx.GraphModule.
@@ -492,10 +499,12 @@ class TracedTensorNode(LeappNode):
         for node in reversed(nodes_to_remove):
             if node.op == "placeholder":
                 input_description = LeappNode.get_io_description_by_name(
-                    node.name, self.inputs)
+                    node.target, self.inputs)
                 if input_description is None:
                     _get_logger().error(
-                        f"Error: when building the graph module for {self.name}")
+                        f"Error: when building the graph module for {self.name}, "
+                        f"could not find input description for placeholder '{node.target}'")
+                    continue
                 self.trimmed_inputs.add(input_description.name_str)
 
             if len(node.users) == 0:

@@ -149,9 +149,8 @@ class ONNXExportBackend(ExportBackend):
 class ONNXTorchScriptExportBackend(ONNXExportBackend):
     def compile(self, m: torch.nn.Module = None):
         if m is None:
-            m = self.module_builder().eval()
-        else:
-            m = m.eval()
+            m = self.module_builder()
+        m = m.eval()
         
         # Optionally pre-script the module before ONNX export
         # This is useful when using traced models as environment constants
@@ -197,9 +196,8 @@ class ONNXTorchScriptExportBackend(ONNXExportBackend):
 class ONNXDynamoExportBackend(ONNXExportBackend):
     def compile(self, m: torch.nn.Module = None):
         if m is None:
-            m = self.module_builder().eval()
-        else:
-            m = m.eval()
+            m = self.module_builder()
+        m = m.eval()
         # Get flat tensor values directly from inputs (not input_formats which preserves nested structure)
         input_values = tuple(
             [tensor_desc.value for tensor_desc in self.node_context.inputs])
@@ -240,7 +238,25 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
         # ORT session options (ORT_ENABLE_BASIC avoids graph-opt corruption).
         tmpdir = tempfile.mkdtemp()
         tmp_path = os.path.join(tmpdir, f"{self.node_context.name}.onnx")
-        onnx.save(model_proto, tmp_path)
+
+        PROTOBUF_LIMIT = 1.5 * 1024 * 1024 * 1024  # 1.5 GB — headroom below 2 GB protobuf limit
+        estimated_size = sum(
+            numpy_helper.to_array(init).nbytes
+            for init in model_proto.graph.initializer
+        )
+        if estimated_size > PROTOBUF_LIMIT:
+            data_filename = f"{self.node_context.name}.onnx.data"
+            onnx.save(
+                model_proto,
+                tmp_path,
+                save_as_external_data=True,
+                all_tensors_to_one_file=True,
+                location=data_filename,
+                size_threshold=1024,
+                convert_attribute=True,
+            )
+        else:
+            onnx.save(model_proto, tmp_path)
 
         self.compiled_model = SimplifiedONNXProgram(tmp_path, temp_dir=tmpdir)
         self.compiled_module = m

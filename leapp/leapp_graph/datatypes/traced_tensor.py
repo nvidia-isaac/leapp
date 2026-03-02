@@ -19,7 +19,6 @@ import io as _io
 from torch._export.converter import TS2EPConverter
 
 from leapp._logging import _get_logger
-from leapp.tracing_lock import TracingLock
 from .traced_data import TracedData
 
 
@@ -75,7 +74,6 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         self._name = name
         self._context = context
         self._proxy = proxy
-        self._global_tracing_lock = TracingLock()
 
     # =========================================================================
     # Properties
@@ -124,10 +122,6 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     # =========================================================================
     # Abstract method implementations from TracedData
     # =========================================================================
-
-    def _unwrap(self) -> torch.Tensor:
-        """Get the underlying raw tensor."""
-        return self.as_subclass(torch.Tensor)
 
     def _new(self, tensor: torch.Tensor, proxy: Proxy = None) -> "TracedTensor":
         """Create a new TracedTensor in the same context.
@@ -335,51 +329,6 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         # Replay the decomposed FX module with TracedTensors.
         # Each aten op triggers __torch_function__, recording it in our graph.
         return fx_module
-
-    # =========================================================================
-    # Validation
-    # =========================================================================
-
-    def validate_status(self, args=None, kwargs=None):
-        """Validate that this TracedTensor can be used in the current context."""
-        if not self.is_tracing:
-            return False
-        if self.is_tracing and self._global_tracing_lock.is_active:
-            _get_logger().error(
-                f"Error: detected active TracedTensor {self._name} from node {self.context} inside of a traced function.\n"
-                f"\n"
-                f"This happens when you have an active TracedTensor and it is being used for computation inside of a traced function/block."
-                f"\n"
-                f"You must call output_tensors() to finalize the TracedTensor node first"
-            )
-            raise Exception(
-                "Cannot use TracedTensor inside of a traced function/block. "
-                "Call output_tensors() first to finalize the TracedTensor node"
-            )
-
-        contexts = set()
-        if args is not None:
-            for arg in args:
-                contexts = TracedTensor.find_all_contexts(arg, contexts)
-        if kwargs is not None:
-            for kwarg in kwargs.values():
-                contexts = TracedTensor.find_all_contexts(kwarg, contexts)
-
-        if len(contexts) > 1:
-            _get_logger().error(
-                f"Error: detected multiple TracedTensor contexts: {contexts} inside of a traced function.\n"
-                "\n"
-                "This happens when you mix multiple active TracedTensors from different contexts inside of a traced function/block."
-                "\n"
-                "You can call output_tensors() to finalize one of the TracedTensor nodes first "
-                "or combine both nodes into a single node by calling input_tensors() with the same node name"
-            )
-            raise Exception(
-                "Cannot mix multiple active TracedTensors from different contexts inside of a traced function/block. "
-                "Call output_tensors() to finalize one of the TracedTensor nodes first"
-                "or combine both nodes into a single node by calling input_tensors() with the same node name"
-            )
-        return True
 
     # =========================================================================
     # Torch Function Interception

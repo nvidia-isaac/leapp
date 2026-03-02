@@ -35,9 +35,9 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
         annotate.start(name=self.TEST_GRAPH_NAME)
         for i in range(10):
             outputA = funcA(torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32))
-            with annotate.block(node_name="blockA", inputs=["outputA"],
-                                outputs=["outputB"], export_with="jit"):
-                outputB = outputA*2.
+            outputA = annotate.input_tensors("blockA", {"outputA": outputA})
+            outputB = outputA*2.
+            annotate.output_tensors("blockA", {"outputB": outputB}, export_with="jit")
             outputC = funcC(outputB)
         annotate.stop()
         annotate.compile_graph(visualize=False)
@@ -109,8 +109,8 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
         annotate.stop()
         annotate.compile_graph()
 
-        self.verify_num_connections(annotate, nodes=5, inputs=1, outputs=1,
-                                    internal_connections=5, feedback_connections=0)
+        self.verify_num_connections(annotate, nodes=5, inputs=1, outputs=2,
+                                    internal_connections=4, feedback_connections=0)
 
     def test_mirror_leapp_tags_with_inplace_assignment(self):
         """Test mirror_leapp_tags with in-place assignment operations between nodes"""

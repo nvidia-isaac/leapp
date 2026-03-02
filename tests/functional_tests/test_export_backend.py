@@ -891,6 +891,762 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
         annotate.stop()
         annotate.compile_graph(visualize=False)
         self.verify_all_models_exist('split_process')
+    
+class TestTorchBackend(LEAPPFunctionalTestBase):
+    """
+    Unit tests to see if export situation is properly handled
+
+    These tests test for things that are put inside of the code
+    snippet that we want to support
+
+    """
+
+    def test_torch_trace_backend(self):
+        @annotate.method(export_with="jit-trace")
+        def funcA(inputA: torch.Tensor):
+            return inputA*2.0
+
+        input_tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+        expected_output = input_tensor*2.0
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        funcA(input_tensor)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_single_torchscript_model_expected_value(
+            [input_tensor], [expected_output], funcA.__name__)
+
+    def test_torch_script_backend(self):
+        @annotate.method(export_with="jit")
+        def funcA(inputA: torch.Tensor):
+            return inputA*2
+
+        input_tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+        expected_output = input_tensor*2.0
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        funcA(input_tensor)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_single_torchscript_model_expected_value(
+            [input_tensor], [expected_output], funcA.__name__)
+
+    # -----------------------------------------------------------------
+    # Complex math operations
+    # -----------------------------------------------------------------
+
+    def test_torch_trace_complex_math(self):
+        """Test jit-trace export with complex mathematical operations."""
+
+        @annotate.method(export_with="jit-trace")
+        def complex_math(x: torch.Tensor, y: torch.Tensor):
+            result = torch.sin(x) + torch.cos(y)
+            result = result * torch.exp(-torch.abs(x - y))
+            result = torch.clamp(result, -1.0, 1.0)
+            result = torch.pow(result, 2)
+            return result
+
+        x = torch.randn(3, 4, dtype=torch.float32)
+        y = torch.randn(3, 4, dtype=torch.float32)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        complex_math(x, y)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('complex_math')
+
+    def test_torch_script_complex_math(self):
+        """Test jit-script export with complex mathematical operations."""
+
+        @annotate.method(export_with="jit")
+        def complex_math(x: torch.Tensor, y: torch.Tensor):
+            result = torch.sin(x) + torch.cos(y)
+            result = result * torch.exp(-torch.abs(x - y))
+            result = torch.clamp(result, -1.0, 1.0)
+            result = torch.pow(result, 2)
+            return result
+
+        x = torch.randn(3, 4, dtype=torch.float32)
+        y = torch.randn(3, 4, dtype=torch.float32)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        complex_math(x, y)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('complex_math')
+
+    # -----------------------------------------------------------------
+    # Reduction operations
+    # -----------------------------------------------------------------
+
+    def test_torch_trace_reduction_operations(self):
+        """Test jit-trace export with reduction operations."""
+
+        @annotate.method(export_with="jit-trace")
+        def reduction_ops(x: torch.Tensor):
+            mean = x.mean(dim=-1, keepdim=True)
+            std = x.std(dim=-1, keepdim=True)
+            normalized = (x - mean) / (std + 1e-5)
+            max_val = normalized.max(dim=1).values
+            sum_val = normalized.sum(dim=1)
+            return max_val + sum_val
+
+        x = torch.randn(4, 8, dtype=torch.float32)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        reduction_ops(x)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('reduction_ops')
+
+    def test_torch_script_reduction_operations(self):
+        """Test jit-script export with reduction operations."""
+
+        @annotate.method(export_with="jit")
+        def reduction_ops(x: torch.Tensor):
+            mean = x.mean(dim=-1, keepdim=True)
+            std = x.std(dim=-1, keepdim=True)
+            normalized = (x - mean) / (std + 1e-5)
+            max_val = normalized.max(dim=1).values
+            sum_val = normalized.sum(dim=1)
+            return max_val + sum_val
+
+        x = torch.randn(4, 8, dtype=torch.float32)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        reduction_ops(x)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('reduction_ops')
+
+    # -----------------------------------------------------------------
+    # Dict / list I/O
+    # -----------------------------------------------------------------
+
+    def test_torch_trace_dict_inputs_to_list_outputs(self):
+        """Test jit-trace export with dict inputs and list outputs."""
+
+        @annotate.method(export_with="jit-trace")
+        def dict_to_list(inputs: dict):
+            a = inputs['a']
+            b = inputs['b']
+            sum_result = a + b
+            diff_result = a - b
+            return [sum_result, diff_result]
+
+        input_dict = {
+            'a': torch.randn(3, 4, dtype=torch.float32),
+            'b': torch.randn(3, 4, dtype=torch.float32),
+        }
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        dict_to_list(input_dict)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('dict_to_list')
+
+    def test_torch_trace_list_inputs_to_dict_outputs(self):
+        """Test jit-trace export with list inputs and dict outputs."""
+
+        @annotate.method(export_with="jit-trace")
+        def list_to_dict(inputs: list):
+            a = inputs[0]
+            b = inputs[1]
+            return {
+                'sum': a + b,
+                'product': a * b,
+            }
+
+        input_list = [
+            torch.randn(3, 4, dtype=torch.float32),
+            torch.randn(3, 4, dtype=torch.float32),
+        ]
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        list_to_dict(input_list)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('list_to_dict')
+
+    def test_torch_trace_nested_dict_input(self):
+        """Test jit-trace export with nested dict input."""
+
+        @annotate.method(export_with="jit-trace")
+        def process_nested_dict(nested: dict):
+            a = nested['level1']['a']
+            b = nested['level1']['b']
+            c = nested['level2']['c']
+            return a + b + c
+
+        nested_input = {
+            'level1': {
+                'a': torch.randn(3, 4, dtype=torch.float32),
+                'b': torch.randn(3, 4, dtype=torch.float32),
+            },
+            'level2': {
+                'c': torch.randn(3, 4, dtype=torch.float32),
+            }
+        }
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        process_nested_dict(nested_input)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('process_nested_dict')
+
+    def test_torch_trace_nested_list_input(self):
+        """Test jit-trace export with nested list input."""
+
+        @annotate.method(export_with="jit-trace")
+        def process_nested_list(nested: list):
+            a = nested[0][0]
+            b = nested[0][1]
+            c = nested[1][0]
+            return a * b + c
+
+        nested_input = [
+            [torch.randn(3, 4, dtype=torch.float32), torch.randn(3, 4, dtype=torch.float32)],
+            [torch.randn(3, 4, dtype=torch.float32)],
+        ]
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        process_nested_list(nested_input)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('process_nested_list')
+
+    def test_torch_trace_mixed_dict_list_input(self):
+        """Test jit-trace export with mixed dict and list inputs."""
+
+        @annotate.method(export_with="jit-trace")
+        def process_mixed_inputs(dict_input: dict, list_input: list):
+            a = dict_input['a']
+            b = dict_input['b']
+            c = list_input[0]
+            d = list_input[1]
+            return a + b, c * d
+
+        dict_input = {
+            'a': torch.randn(3, 4, dtype=torch.float32),
+            'b': torch.randn(3, 4, dtype=torch.float32),
+        }
+        list_input = [
+            torch.randn(3, 4, dtype=torch.float32),
+            torch.randn(3, 4, dtype=torch.float32),
+        ]
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        process_mixed_inputs(dict_input, list_input)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('process_mixed_inputs')
+
+    def test_torch_trace_nested_list_output(self):
+        """Test jit-trace export with nested list output structure."""
+
+        @annotate.method(export_with="jit-trace")
+        def create_nested_list_output(x: torch.Tensor):
+            return [[x[0:1], x[1:2]], [x[2:3], x[3:4]]]
+
+        input_tensor = torch.randn(4, 4, dtype=torch.float32)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        create_nested_list_output(input_tensor)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('create_nested_list_output')
+
+    def test_torch_trace_dict_of_lists_output(self):
+        """Test jit-trace export with dict containing list values as output."""
+
+        @annotate.method(export_with="jit-trace")
+        def create_dict_of_lists(x: torch.Tensor):
+            return {
+                'group_a': [x[0:1], x[1:2]],
+                'group_b': [x[2:3], x[3:4]],
+            }
+
+        input_tensor = torch.randn(4, 4, dtype=torch.float32)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        create_dict_of_lists(input_tensor)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('create_dict_of_lists')
+
+    def test_torch_trace_list_of_dicts_output(self):
+        """Test jit-trace export with list containing dict values as output."""
+
+        @annotate.method(export_with="jit-trace")
+        def create_list_of_dicts(x: torch.Tensor):
+            return [
+                {'a': x[0:1], 'b': x[1:2]},
+                {'a': x[2:3], 'b': x[3:4]},
+            ]
+
+        input_tensor = torch.randn(4, 4, dtype=torch.float32)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        create_list_of_dicts(input_tensor)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('create_list_of_dicts')
+
+    def test_torch_trace_mixed_return_types(self):
+        """Test jit-trace export with mixed return types: tensor, list, and dict."""
+
+        @annotate.method(export_with="jit-trace")
+        def mixed_outputs(x: torch.Tensor):
+            single = x[0:1]
+            list_out = [x[1:2], x[2:3]]
+            dict_out = {'a': x[3:4], 'b': x[4:5]}
+            return single, list_out, dict_out
+
+        input_tensor = torch.randn(5, 4, dtype=torch.float32)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        mixed_outputs(input_tensor)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('mixed_outputs')
+
+    def test_torch_trace_bidirectional_dict_list_io(self):
+        """Test jit-trace export with dict and list inputs producing list and dict outputs."""
+
+        @annotate.method(export_with="jit-trace")
+        def bidirectional_io(dict_input: dict, list_input: list):
+            list_out = [v + 1 for v in dict_input.values()]
+            dict_out = {f'item_{i}': v + 1 for i, v in enumerate(list_input)}
+            return list_out, dict_out
+
+        dict_input = {
+            'a': torch.randn(3, 4, dtype=torch.float32),
+            'b': torch.randn(3, 4, dtype=torch.float32),
+            'c': torch.randn(3, 4, dtype=torch.float32),
+        }
+        list_input = [
+            torch.randn(3, 4, dtype=torch.float32),
+            torch.randn(3, 4, dtype=torch.float32),
+        ]
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        bidirectional_io(dict_input, list_input)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('bidirectional_io')
+
+    # -----------------------------------------------------------------
+    # Deeply nested and stress tests
+    # -----------------------------------------------------------------
+
+    def test_torch_trace_deeply_nested_dict_input(self):
+        """Test jit-trace export with deeply nested dict input (3+ levels)."""
+
+        @annotate.method(export_with="jit-trace")
+        def process_deep_dict(nested: dict):
+            a = nested['l1']['l2']['l3']['a']
+            b = nested['l1']['l2']['l3']['b']
+            return a + b
+
+        deep_input = {
+            'l1': {
+                'l2': {
+                    'l3': {
+                        'a': torch.randn(3, 4, dtype=torch.float32),
+                        'b': torch.randn(3, 4, dtype=torch.float32),
+                    }
+                }
+            }
+        }
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        process_deep_dict(deep_input)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('process_deep_dict')
+
+    def test_torch_trace_many_tensor_inputs(self):
+        """Test jit-trace export with many individual tensor inputs."""
+
+        @annotate.method(export_with="jit-trace")
+        def sum_many_tensors(t0: torch.Tensor, t1: torch.Tensor, t2: torch.Tensor,
+                             t3: torch.Tensor, t4: torch.Tensor, t5: torch.Tensor,
+                             t6: torch.Tensor, t7: torch.Tensor, t8: torch.Tensor,
+                             t9: torch.Tensor):
+            return t0 + t1 + t2 + t3 + t4 + t5 + t6 + t7 + t8 + t9
+
+        tensors = [torch.randn(3, 4, dtype=torch.float32) for _ in range(10)]
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        sum_many_tensors(*tensors)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('sum_many_tensors')
+
+    def test_torch_trace_many_dict_tensor_inputs(self):
+        """Test jit-trace export with dict containing many tensors."""
+
+        @annotate.method(export_with="jit-trace")
+        def sum_dict_tensors(data: dict):
+            total = data['t0']
+            for i in range(1, 10):
+                total = total + data[f't{i}']
+            return total
+
+        input_dict = {f't{i}': torch.randn(3, 4, dtype=torch.float32) for i in range(10)}
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        sum_dict_tensors(input_dict)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('sum_dict_tensors')
+
+    def test_torch_trace_split_tensor_to_many_outputs(self):
+        """Test jit-trace export that splits one tensor into many outputs."""
+
+        @annotate.method(export_with="jit-trace")
+        def split_to_many(x: torch.Tensor):
+            return [x[i:i+1] for i in range(8)]
+
+        input_tensor = torch.randn(8, 4, dtype=torch.float32)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        split_to_many(input_tensor)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('split_to_many')
+
+    def test_torch_trace_large_nested_structure(self):
+        """Test jit-trace export with large nested dict/list structure."""
+
+        @annotate.method(export_with="jit-trace")
+        def process_large_structure(data: dict):
+            results = []
+            for i in range(4):
+                group = data[f'group_{i}']
+                for j in range(2):
+                    results.append(group[j] * 2.0)
+            return torch.stack(results).sum(dim=0)
+
+        large_input = {
+            f'group_{i}': [
+                torch.randn(3, 4, dtype=torch.float32) for _ in range(2)
+            ] for i in range(4)
+        }
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        process_large_structure(large_input)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('process_large_structure')
+
+    def test_torch_trace_complex_nested_dict_with_extra_input(self):
+        """Test jit-trace export with nested dict input plus additional tensor input."""
+
+        @annotate.method(export_with="jit-trace")
+        def nested_with_extra(nested_input: dict, extra_tensor: torch.Tensor):
+            nested = nested_input[0]['nested']
+            a = nested['a']
+            b = nested['b']
+            return [a + extra_tensor, b * extra_tensor]
+
+        nested = [
+            {
+                'nested': {
+                    'a': torch.randn(3, 4, dtype=torch.float32),
+                    'b': torch.randn(3, 4, dtype=torch.float32),
+                }
+            }
+        ]
+        extra = torch.randn(3, 4, dtype=torch.float32)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        nested_with_extra(nested, extra)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('nested_with_extra')
+
+    # -----------------------------------------------------------------
+    # Chained nodes
+    # -----------------------------------------------------------------
+
+    def test_torch_trace_chained_nodes(self):
+        """Test jit-trace export with two chained traced nodes."""
+
+        @annotate.method(export_with="jit-trace")
+        def step_a(inputA: torch.Tensor):
+            return torch.relu(inputA * 2.0)
+
+        @annotate.method(export_with="jit-trace")
+        def step_b(inputB: torch.Tensor):
+            return torch.sigmoid(inputB + 1.0)
+
+        input_tensor = torch.randn(4, dtype=torch.float32)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        intermediate = step_a(input_tensor)
+        step_b(intermediate.detach())
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('step_a', 'step_b')
+
+    def test_torch_script_chained_nodes(self):
+        """Test jit-script export with two chained scripted nodes."""
+
+        @annotate.method(export_with="jit")
+        def step_a(inputA: torch.Tensor):
+            return torch.relu(inputA * 2.0)
+
+        @annotate.method(export_with="jit")
+        def step_b(inputB: torch.Tensor):
+            return torch.sigmoid(inputB + 1.0)
+
+        input_tensor = torch.randn(4, dtype=torch.float32)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        intermediate = step_a(input_tensor)
+        step_b(intermediate.detach())
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('step_a', 'step_b')
+
+    # -----------------------------------------------------------------
+    # nn.Module tests
+    # -----------------------------------------------------------------
+
+    def test_torch_trace_nn_module_with_dict_input(self):
+        """Test jit-trace export with nn.Module method that takes dict input."""
+
+        class ProcessingModule(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.linear = torch.nn.Linear(4, 4)
+
+            @annotate.method(export_with="jit-trace")
+            def process(self, inputs: dict):
+                a = inputs['a']
+                b = inputs['b']
+                return self.linear(a + b)
+
+        module = ProcessingModule()
+        input_dict = {
+            'a': torch.randn(3, 4, dtype=torch.float32),
+            'b': torch.randn(3, 4, dtype=torch.float32),
+        }
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        module.process(input_dict)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('process')
+
+    def test_torch_trace_nn_module_with_list_output(self):
+        """Test jit-trace export with nn.Module method that returns list output."""
+
+        class SplitModule(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.linear1 = torch.nn.Linear(4, 4)
+                self.linear2 = torch.nn.Linear(4, 4)
+
+            @annotate.method(export_with="jit-trace")
+            def split_process(self, x: torch.Tensor):
+                return [self.linear1(x), self.linear2(x)]
+
+        module = SplitModule()
+        input_tensor = torch.randn(3, 4, dtype=torch.float32)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        module.split_process(input_tensor)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('split_process')
+
+    def test_torch_script_nn_module_with_dict_input(self):
+        """Test jit-script export with nn.Module method that takes dict input."""
+
+        class ProcessingModule(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.linear = torch.nn.Linear(4, 4)
+
+            @annotate.method(export_with="jit")
+            def process(self, inputs: dict):
+                a = inputs['a']
+                b = inputs['b']
+                return self.linear(a + b)
+
+        module = ProcessingModule()
+        input_dict = {
+            'a': torch.randn(3, 4, dtype=torch.float32),
+            'b': torch.randn(3, 4, dtype=torch.float32),
+        }
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        module.process(input_dict)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('process')
+
+    def test_torch_script_nn_module_with_list_output(self):
+        """Test jit-script export with nn.Module method that returns list output."""
+
+        class SplitModule(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.linear1 = torch.nn.Linear(4, 4)
+                self.linear2 = torch.nn.Linear(4, 4)
+
+            @annotate.method(export_with="jit")
+            def split_process(self, x: torch.Tensor):
+                return [self.linear1(x), self.linear2(x)]
+
+        module = SplitModule()
+        input_tensor = torch.randn(3, 4, dtype=torch.float32)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        module.split_process(input_tensor)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('split_process')
+
+    # -----------------------------------------------------------------
+    # Multiple outputs / broadcasting
+    # -----------------------------------------------------------------
+
+    def test_torch_trace_multiple_outputs(self):
+        """Test jit-trace export with multiple tensor outputs (tuple return)."""
+
+        @annotate.method(export_with="jit-trace")
+        def multi_output(x: torch.Tensor):
+            return torch.relu(x), torch.sigmoid(x), torch.tanh(x)
+
+        input_tensor = torch.randn(3, 4, dtype=torch.float32)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        multi_output(input_tensor)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('multi_output')
+
+    def test_torch_script_multiple_outputs(self):
+        """Test jit-script export with multiple tensor outputs (tuple return)."""
+
+        @annotate.method(export_with="jit")
+        def multi_output(x: torch.Tensor):
+            return torch.relu(x), torch.sigmoid(x), torch.tanh(x)
+
+        input_tensor = torch.randn(3, 4, dtype=torch.float32)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        multi_output(input_tensor)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('multi_output')
+
+    def test_torch_trace_tensor_broadcasting(self):
+        """Test jit-trace export with tensor broadcasting operations."""
+
+        @annotate.method(export_with="jit-trace")
+        def broadcast_ops(inputA: torch.Tensor, mask: torch.Tensor):
+            scaled = inputA * 2.0
+            masked_output = torch.where(
+                mask.unsqueeze(-1) > 0,
+                scaled,
+                torch.zeros_like(scaled)
+            )
+            return masked_output
+
+        input_tensor = torch.randn(2, 4, dtype=torch.float32)
+        mask = torch.tensor([1.0, 0.0], dtype=torch.float32)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        broadcast_ops(input_tensor, mask)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('broadcast_ops')
+
+    def test_torch_script_tensor_broadcasting(self):
+        """Test jit-script export with tensor broadcasting operations."""
+
+        @annotate.method(export_with="jit")
+        def broadcast_ops(inputA: torch.Tensor, mask: torch.Tensor):
+            scaled = inputA * 2.0
+            masked_output = torch.where(
+                mask.unsqueeze(-1) > 0,
+                scaled,
+                torch.zeros_like(scaled)
+            )
+            return masked_output
+
+        input_tensor = torch.randn(2, 4, dtype=torch.float32)
+        mask = torch.tensor([1.0, 0.0], dtype=torch.float32)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        broadcast_ops(input_tensor, mask)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_all_models_exist('broadcast_ops')
+
+    # -----------------------------------------------------------------
+    # Value verification tests
+    # -----------------------------------------------------------------
+
+    def test_torch_trace_value_verification_complex(self):
+        """Test jit-trace export and verify output values for a non-trivial function."""
+
+        @annotate.method(export_with="jit-trace")
+        def compute(x: torch.Tensor, y: torch.Tensor):
+            return torch.relu(x) + torch.sigmoid(y)
+
+        x = torch.tensor([[-1.0, 2.0], [3.0, -4.0]], dtype=torch.float32)
+        y = torch.tensor([[0.0, 1.0], [-1.0, 0.5]], dtype=torch.float32)
+        expected = torch.relu(x) + torch.sigmoid(y)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        compute(x, y)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_single_torchscript_model_expected_value(
+            [x, y], [expected], 'compute')
+
+    def test_torch_script_value_verification_complex(self):
+        """Test jit-script export and verify output values for a non-trivial function."""
+
+        @annotate.method(export_with="jit")
+        def compute(x: torch.Tensor, y: torch.Tensor):
+            return torch.relu(x) + torch.sigmoid(y)
+
+        x = torch.tensor([[-1.0, 2.0], [3.0, -4.0]], dtype=torch.float32)
+        y = torch.tensor([[0.0, 1.0], [-1.0, 0.5]], dtype=torch.float32)
+        expected = torch.relu(x) + torch.sigmoid(y)
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        compute(x, y)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_single_torchscript_model_expected_value(
+            [x, y], [expected], 'compute')
+
+    def test_torch_trace_value_verification_multi_output(self):
+        """Test jit-trace export and verify values for a multi-output function."""
+
+        @annotate.method(export_with="jit-trace")
+        def split_and_scale(x: torch.Tensor):
+            half1 = x[:2] * 2.0
+            half2 = x[2:] * 3.0
+            return half1, half2
+
+        x = torch.tensor([1.0, 2.0, 3.0, 4.0], dtype=torch.float32)
+        expected_half1 = x[:2] * 2.0
+        expected_half2 = x[2:] * 3.0
+
+        annotate.start(name=self.TEST_GRAPH_NAME)
+        split_and_scale(x)
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+        self.verify_single_torchscript_model_expected_value(
+            [x], [expected_half1, expected_half2], 'split_and_scale')
 
 
 # ============================================================================

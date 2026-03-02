@@ -19,7 +19,6 @@ import torch
 from torch.fx.proxy import Proxy
 
 from leapp._logging import _get_logger
-from leapp.tracing_lock import TracingLock
 from .traced_data import TracedData
 
 
@@ -261,7 +260,6 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         obj._name = name
         obj._context = context
         obj._proxy = proxy
-        obj._global_tracing_lock = TracingLock()
         return obj
 
     def __array_finalize__(self, obj):
@@ -278,7 +276,6 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         self._name = getattr(obj, '_name', 'derived')
         self._context = getattr(obj, '_context', None)
         self._proxy = getattr(obj, '_proxy', None)
-        self._global_tracing_lock = getattr(obj, '_global_tracing_lock', None)
 
     # =========================================================================
     # Properties
@@ -327,10 +324,6 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
     # TracedData abstract method implementations
     # =========================================================================
 
-    def _unwrap(self) -> np.ndarray:
-        """Get the underlying raw array."""
-        return self.view(np.ndarray)
-
     # =========================================================================
     # Array Properties - inherited from np.ndarray
     # shape, dtype, ndim, size, T are all inherited automatically
@@ -357,10 +350,8 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
     @staticmethod
     def unwrap_traced_array(obj):
         """Recursively unwrap TracedNpArrays to get underlying numpy arrays."""
-        if isinstance(obj, TracedNpArray):
-            return obj.view(np.ndarray)
-        elif isinstance(obj, TracedData):
-            return obj._unwrap()
+        if isinstance(obj, TracedData):
+            return obj.data
         elif isinstance(obj, (list, tuple)):
             return type(obj)(TracedNpArray.unwrap_traced_array(item) for item in obj)
         elif isinstance(obj, dict):
@@ -470,51 +461,6 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
             # If axes_in_args is True, it will be passed as positional arg, don't add to kwargs
         
         return proxy_kwargs
-
-    def validate_status(self, args=None, kwargs=None):
-        """Validate that this TracedNpArray can be used in the current context."""
-        if not self.is_tracing:
-            return False
-        if self.is_tracing and self._global_tracing_lock.is_active:
-            _get_logger().error(
-                f"Error: detected active TracedNpArray {self._name} from node {self.context} "
-                f"inside of a traced function.\n"
-                f"\n"
-                f"This happens when you have an active TracedNpArray and it is being used "
-                f"for computation inside of a traced function/block.\n"
-                f"\n"
-                f"You must call output_tensors() to finalize the TracedNpArray node first"
-            )
-            raise Exception(
-                "Cannot use TracedNpArray inside of a traced function/block. "
-                "Call output_tensors() first to finalize the TracedNpArray node"
-            )
-
-        # Check for multiple contexts in args/kwargs
-        contexts = set()
-        if args is not None:
-            for arg in args:
-                contexts = TracedNpArray.find_all_contexts(arg, contexts)
-        if kwargs is not None:
-            for kwarg in kwargs.values():
-                contexts = TracedNpArray.find_all_contexts(kwarg, contexts)
-
-        if len(contexts) > 1:
-            _get_logger().error(
-                f"Error: detected multiple TracedNpArray contexts: {contexts} inside of a traced function.\n"
-                "\n"
-                "This happens when you mix multiple active TracedNpArrays from different contexts "
-                "inside of a traced function/block.\n"
-                "\n"
-                "You can call output_tensors() to finalize one of the TracedNpArray nodes first "
-                "or combine both nodes into a single node by calling input_tensors() with the same node name"
-            )
-            raise Exception(
-                "Cannot mix multiple active TracedNpArrays from different contexts inside of a traced function/block. "
-                "Call output_tensors() to finalize one of the TracedNpArray nodes first "
-                "or combine both nodes into a single node by calling input_tensors() with the same node name"
-            )
-        return True
 
     # =========================================================================
     # NumPy Ufunc Interception (__array_ufunc__)
