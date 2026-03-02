@@ -331,6 +331,99 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
                 self.assertTrue(torch.equal(loaded[key], expected),
                                 f"Value mismatch for '{key}': got {loaded[key]}, expected {expected}")
 
+    def verify_safetensors_matches_feedback(self, leapp_annotation, graph_name=None):
+        """Verify safetensors keys exactly match the feedback targets in the pipeline.
+
+        When feedback_flow is non-empty, a safetensors file must exist and its
+        keys must correspond 1-to-1 with the feedback target inputs. When
+        feedback_flow is empty, the safetensors file must NOT exist.
+        """
+        if graph_name is None:
+            graph_name = self.TEST_GRAPH_NAME
+        safetensors_path = os.path.join(
+            graph_name, f"{graph_name}_initial_values.safetensors")
+
+        feedback_flow = leapp_annotation.detected_pipeline.get(
+            'feedback_flow', {})
+
+        # Collect all feedback target keys (node_name/input_name)
+        expected_keys = set()
+        for targets in feedback_flow.values():
+            for target in targets:
+                expected_keys.add(target)
+
+        if not expected_keys:
+            self.assertFalse(
+                os.path.exists(safetensors_path),
+                "No feedback connections exist, but safetensors file was created")
+            return
+
+        self.assertTrue(
+            os.path.exists(safetensors_path),
+            f"Feedback connections exist but safetensors file not found at {safetensors_path}")
+
+        loaded = load_file(safetensors_path)
+        actual_keys = set(loaded.keys())
+
+        self.assertEqual(
+            expected_keys, actual_keys,
+            f"Safetensors keys do not match feedback targets.\n"
+            f"  Expected: {sorted(expected_keys)}\n"
+            f"  Actual:   {sorted(actual_keys)}")
+
+    def verify_inference_manager(self, source_inputs, source_outputs,
+                                 graph_name=None, rtol=1e-3, atol=1e-5):
+        """Load the exported graph via InferenceManager, run it, and compare outputs.
+
+        Args:
+            source_inputs: Dict mapping 'node/input' to tensors used during tracing.
+            source_outputs: Dict mapping 'node/output' to expected output tensors.
+            graph_name: Override for TEST_GRAPH_NAME.
+            rtol: Relative tolerance for allclose.
+            atol: Absolute tolerance for allclose.
+        """
+        from leapp.inference_manager import InferenceManager
+
+        if graph_name is None:
+            graph_name = self.TEST_GRAPH_NAME
+        yaml_path = os.path.join(graph_name, f"{graph_name}.yaml")
+        self.assertTrue(os.path.exists(yaml_path),
+                        f"YAML not found at {yaml_path}")
+
+        manager = InferenceManager(yaml_path)
+
+        # Verify expected input/output keys exist
+        for key in source_inputs:
+            self.assertIn(key, manager.inputs,
+                          f"Input key '{key}' not found in InferenceManager inputs: {manager.inputs}")
+        for key in source_outputs:
+            self.assertIn(key, manager.outputs,
+                          f"Output key '{key}' not found in InferenceManager outputs: {manager.outputs}")
+
+        # Move inputs to the device the InferenceManager expects
+        device_inputs = {}
+        for key, tensor in source_inputs.items():
+            node_name = key.split('/')[0]
+            target_device = manager.nodes[node_name].device
+            device_inputs[key] = tensor.to(target_device)
+
+        # Run inference
+        exported_outputs = manager.run_policy(device_inputs)
+
+        # Compare each expected output
+        for key, expected in source_outputs.items():
+            self.assertIn(key, exported_outputs,
+                          f"Output key '{key}' missing from InferenceManager results")
+            actual = exported_outputs[key]
+            if expected.device != actual.device:
+                actual = actual.to(expected.device)
+            self.assertTrue(
+                torch.allclose(expected, actual, rtol=rtol, atol=atol),
+                f"Output mismatch for '{key}':\n"
+                f"  Expected: {expected}\n"
+                f"  Actual:   {actual}\n"
+                f"  Max diff: {(expected - actual).abs().max().item():.6e}")
+
     def verify_single_torchscript_model_expected_value(self, inputs, expected_outputs, model_name, model_path=None):
         if model_path is None:
             model_path = self.TEST_GRAPH_NAME
