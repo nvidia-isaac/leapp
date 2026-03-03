@@ -136,7 +136,7 @@ class ExportManager:
         if dry_run:
             _get_logger().info("Starting dry run mode")
         self.dry_run = dry_run
-        self._max_cached_io = max_cached_io
+        self._max_cached_io = max_cached_io-1
         self.nodes = {}
         ExportManager._interpret_graph = True
         # Apply patches for torch functions that bypass __torch_function__
@@ -961,107 +961,7 @@ class ExportManager:
             _get_logger().info(f"Validating {node_name}...")
 
             try:
-                # Check that model has been compiled
-                if node.compiled_model is None:
-                    _get_logger().warning(f"Model {node_name} does not have a compiled model. "
-                                          "Skipping validation.")
-                    # model wasn't provided but we will skip validation
-                    results[node_name] = True
-                    continue
-
-                # Build list of (label, inputs, expected_outputs) examples to validate
-                examples = [("trace", 
-                    [td.value for td in node.inputs],
-                    tuple(td.value for td in node.outputs))]
-
-                for cache_idx in range(node._cache_write_idx):
-                    cached_inputs = [td.cached_values[cache_idx] for td in node.inputs]
-                    cached_outputs = tuple(td.cached_values[cache_idx] for td in node.outputs)
-                    examples.append((f"cached[{cache_idx}]", cached_inputs, cached_outputs))
-
-                all_match = True
-                for example_label, input_values, source_outputs in examples:
-
-                    with torch.no_grad():
-                        exported_outputs = node.compiled_model(*input_values)
-
-                    if not isinstance(exported_outputs, tuple):
-                        exported_outputs = (exported_outputs,)
-
-                    if len(exported_outputs) != len(source_outputs):
-                        _get_logger().error(
-                            f"{node_name} ({example_label}): Output count mismatch - "
-                            f"got {len(exported_outputs)}, expected {len(source_outputs)}")
-                        all_match = False
-                        continue
-
-                    for idx, (exported, source) in enumerate(zip(exported_outputs, source_outputs)):
-                        output_name = node.outputs[idx].name if idx < len(
-                            node.outputs) else f"output_{idx}"
-
-                        if exported.device != source.device:
-                            exported = exported.to(source.device)
-
-                        exported_nan = torch.isnan(exported).sum().item()
-                        exported_inf = torch.isinf(exported).sum().item()
-                        source_nan = torch.isnan(source).sum().item()
-                        source_inf = torch.isinf(source).sum().item()
-                        
-                        if exported_nan > 0 or exported_inf > 0 or source_nan > 0 or source_inf > 0:
-                            all_match = False
-                            num_elements = exported.numel()
-                            _get_logger().error(
-                                f"{node_name}/{output_name} ({example_label}): NaN/Inf detected!")
-                            if exported_nan > 0:
-                                _get_logger().error(
-                                    f"  Exported has {exported_nan}/{num_elements} NaN values ({100*exported_nan/num_elements:.3f}%)")
-                            if exported_inf > 0:
-                                _get_logger().error(
-                                    f"  Exported has {exported_inf}/{num_elements} Inf values ({100*exported_inf/num_elements:.3f}%)")
-                            if source_nan > 0:
-                                _get_logger().warning(
-                                    f"  Source has {source_nan}/{num_elements} NaN values ({100*source_nan/num_elements:.3f}%)")
-                            if source_inf > 0:
-                                _get_logger().warning(
-                                    f"  Source has {source_inf}/{num_elements} Inf values ({100*source_inf/num_elements:.3f}%)")
-                            continue
-
-                        if not torch.allclose(exported, source, rtol=rtol, atol=atol):
-                            all_match = False
-                            diff = (exported - source).abs()
-                            diff_flat = diff.flatten().float()
-                            
-                            max_diff = diff.max().item()
-                            mean_diff = diff.mean().item()
-                            
-                            percentiles = torch.tensor([0.50, 0.75, 0.90, 0.99, 0.995], device=diff_flat.device)
-                            pct_values = torch.quantile(diff_flat, percentiles)
-                            p50, p75, p90, p99, p995 = pct_values.tolist()
-                            
-                            source_min, source_max = source.min().item(), source.max().item()
-                            exported_min, exported_max = exported.min().item(), exported.max().item()
-                            
-                            log_path = _get_logger().path
-                            _get_logger().error(
-                                f"{node_name}/{output_name} ({example_label}): Mismatch detected (rtol={rtol}, atol={atol}). Please check {log_path} for more details.")
-                            _get_logger().info(
-                                f"  Source shape: {source.shape}, dtype: {source.dtype}")
-                            _get_logger().info(
-                                f"  Exported shape: {exported.shape}, dtype: {exported.dtype}")
-                            _get_logger().info(
-                                f"  Source range:   [{source_min:.6e}, {source_max:.6e}]")
-                            _get_logger().info(
-                                f"  Exported range: [{exported_min:.6e}, {exported_max:.6e}]")
-                            _get_logger().info(
-                                f"  Diff stats: max={max_diff:.6e}, mean={mean_diff:.6e}")
-                            _get_logger().info(
-                                f"  Diff percentiles: p50={p50:.6e}, p75={p75:.6e}, p90={p90:.6e}, p99={p99:.6e}, p995={p995:.6e}")
-
-                results[node_name] = all_match
-
-                if all_match:
-                    num_examples = len(examples)
-                    _get_logger().info(f"  ✓ {node_name} passed validation ({num_examples} example{'s' if num_examples > 1 else ''})")
+                results[node_name] = node.validate_compiled_model(rtol=rtol, atol=atol)
 
             except Exception as e:
                 _get_logger().error(

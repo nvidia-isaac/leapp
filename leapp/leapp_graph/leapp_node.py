@@ -16,8 +16,6 @@
 #
 import collections
 import functools
-import os
-
 import torch
 from leapp.utils.tensor_description import describe_io
 from leapp.utils.utils import tag_tensor
@@ -305,6 +303,107 @@ class LeappNode():
     def increment_cache_idx(self):
         if self._cache_write_idx < self._max_cached_io:
             self._cache_write_idx += 1
+
+    def _build_validation_examples(self):
+        examples = [("trace",
+            [td.value for td in self.inputs],
+            tuple(td.value for td in self.outputs))]
+
+        for cache_idx in range(self._cache_write_idx):
+            cached_inputs = [td.cached_values[cache_idx] for td in self.inputs]
+            cached_outputs = tuple(td.cached_values[cache_idx] for td in self.outputs)
+            examples.append((f"cached[{cache_idx}]", cached_inputs, cached_outputs))
+        return examples
+
+    def validate_compiled_model(self, rtol: float = 1e-3, atol: float = 1e-5) -> bool:
+        if self.compiled_model is None:
+            _get_logger().warning(
+                f"Model {self.name} does not have a compiled model. Skipping validation.")
+            return True
+
+        examples = self._build_validation_examples()
+        all_match = True
+        for example_label, input_values, source_outputs in examples:
+            with torch.no_grad():
+                exported_outputs = self.compiled_model(*input_values)
+
+            if not isinstance(exported_outputs, tuple):
+                exported_outputs = (exported_outputs,)
+
+            if len(exported_outputs) != len(source_outputs):
+                _get_logger().error(
+                    f"{self.name} ({example_label}): Output count mismatch - "
+                    f"got {len(exported_outputs)}, expected {len(source_outputs)}")
+                all_match = False
+                continue
+
+            for idx, (exported, source) in enumerate(zip(exported_outputs, source_outputs)):
+                output_name = self.outputs[idx].name if idx < len(
+                    self.outputs) else f"output_{idx}"
+
+                if exported.device != source.device:
+                    exported = exported.to(source.device)
+
+                exported_nan = torch.isnan(exported).sum().item()
+                exported_inf = torch.isinf(exported).sum().item()
+                source_nan = torch.isnan(source).sum().item()
+                source_inf = torch.isinf(source).sum().item()
+
+                if exported_nan > 0 or exported_inf > 0 or source_nan > 0 or source_inf > 0:
+                    all_match = False
+                    num_elements = exported.numel()
+                    _get_logger().error(
+                        f"{self.name}/{output_name} ({example_label}): NaN/Inf detected!")
+                    if exported_nan > 0:
+                        _get_logger().error(
+                            f"  Exported has {exported_nan}/{num_elements} NaN values ({100*exported_nan/num_elements:.3f}%)")
+                    if exported_inf > 0:
+                        _get_logger().error(
+                            f"  Exported has {exported_inf}/{num_elements} Inf values ({100*exported_inf/num_elements:.3f}%)")
+                    if source_nan > 0:
+                        _get_logger().warning(
+                            f"  Source has {source_nan}/{num_elements} NaN values ({100*source_nan/num_elements:.3f}%)")
+                    if source_inf > 0:
+                        _get_logger().warning(
+                            f"  Source has {source_inf}/{num_elements} Inf values ({100*source_inf/num_elements:.3f}%)")
+                    continue
+
+                if not torch.allclose(exported, source, rtol=rtol, atol=atol):
+                    all_match = False
+                    diff = (exported - source).abs()
+                    diff_flat = diff.flatten().float()
+
+                    max_diff = diff.max().item()
+                    mean_diff = diff.mean().item()
+
+                    percentiles = torch.tensor([0.50, 0.75, 0.90, 0.99, 0.995], device=diff_flat.device)
+                    pct_values = torch.quantile(diff_flat, percentiles)
+                    p50, p75, p90, p99, p995 = pct_values.tolist()
+
+                    source_min, source_max = source.min().item(), source.max().item()
+                    exported_min, exported_max = exported.min().item(), exported.max().item()
+
+                    log_path = _get_logger().path
+                    _get_logger().error(
+                        f"{self.name}/{output_name} ({example_label}): Mismatch detected (rtol={rtol}, atol={atol}). Please check {log_path} for more details.")
+                    _get_logger().info(
+                        f"  Source shape: {source.shape}, dtype: {source.dtype}")
+                    _get_logger().info(
+                        f"  Exported shape: {exported.shape}, dtype: {exported.dtype}")
+                    _get_logger().info(
+                        f"  Source range:   [{source_min:.6e}, {source_max:.6e}]")
+                    _get_logger().info(
+                        f"  Exported range: [{exported_min:.6e}, {exported_max:.6e}]")
+                    _get_logger().info(
+                        f"  Diff stats: max={max_diff:.6e}, mean={mean_diff:.6e}")
+                    _get_logger().info(
+                        f"  Diff percentiles: p50={p50:.6e}, p75={p75:.6e}, p90={p90:.6e}, p99={p99:.6e}, p995={p995:.6e}")
+
+        if all_match:
+            num_examples = len(examples)
+            _get_logger().info(
+                f"  ✓ {self.name} passed validation ({num_examples} example{'s' if num_examples > 1 else ''})")
+        return all_match
 
     def validate_input_and_update_tags(self, input_name, raw_input_name, input_value):
         self.validate_io_and_update_tags(
