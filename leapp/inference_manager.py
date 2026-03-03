@@ -386,7 +386,10 @@ class InferenceManager:
 
     @property
     def feedback_inputs(self) -> list:
-        return list(self.pipeline['feedback_flow'].values())
+        keys = []
+        for targets in self.pipeline['feedback_flow'].values():
+            keys.extend(targets)
+        return keys
 
     def set_input_value(self, node_name: str, input_name: str, value: torch.Tensor):
         self.value_dict[node_name][input_name].copy_(value)
