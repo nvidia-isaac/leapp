@@ -49,14 +49,15 @@ class TestWBCPlain(BaseExampleTest):
             test_description='Testing wbc_plain.py'
         )
 
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
         inputs = {
-            'joint_pos': torch.randn(19, device='cuda', dtype=torch.float32),
-            'joint_vel': torch.randn(19, device='cuda', dtype=torch.float32),
-            'velocity_commands': torch.randn(3, device='cuda', dtype=torch.float32),
-            'lin_vel_I': torch.randn(3, device='cuda', dtype=torch.float32),
-            'ang_vel_I': torch.randn(3, device='cuda', dtype=torch.float32),
-            'q_IB': torch.randn(4, device='cuda', dtype=torch.float32),
-            'previous_actions': torch.zeros(19, device='cuda', dtype=torch.float32),
+            'joint_pos': torch.randn(19, device=device, dtype=torch.float32),
+            'joint_vel': torch.randn(19, device=device, dtype=torch.float32),
+            'velocity_commands': torch.randn(3, device=device, dtype=torch.float32),
+            'lin_vel_I': torch.randn(3, device=device, dtype=torch.float32),
+            'ang_vel_I': torch.randn(3, device=device, dtype=torch.float32),
+            'q_IB': torch.randn(4, device=device, dtype=torch.float32),
+            'previous_actions': torch.zeros(19, device=device, dtype=torch.float32),
         }
         exported_pipeline_inputs = {
             'wbc_plain/velocity_commands': inputs['velocity_commands'].clone(),
@@ -76,7 +77,8 @@ class TestWBCPlain(BaseExampleTest):
         exported_action = exported_outputs['wbc_plain/final_actions']
 
         try:
-            torch.cuda.synchronize()  # Wait for GPU operations to complete
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()  # Wait for GPU operations to complete
             self.assertTrue(torch.allclose(outputs, exported_action, rtol=1e-3, atol=1e-6))
         except AssertionError as e:
             print("Outputs do not match:")
