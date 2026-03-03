@@ -19,6 +19,7 @@ import matplotlib.pyplot as plt
 import networkx as nx
 import matplotlib.patches as patches
 from matplotlib.widgets import Button
+from leapp._logging import _get_logger
 
 
 class InteractiveGraphVisualizer:
@@ -398,6 +399,7 @@ class InteractiveGraphVisualizer:
     
     def show(self):
         """Show the interactive plot."""
+        # keep the print here. 
         print("Interactive graph displayed! Drag nodes to reposition them.")
         print("Close the window when you're satisfied with the layout to save the image.")
         plt.show()
@@ -525,7 +527,7 @@ class InteractiveGraphVisualizer:
         
         plt.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
         plt.close(fig)
-        print(f"Graph visualization saved as: {save_path}")
+        _get_logger().info(f"Graph visualization saved as: {save_path}")
 
 
 def visualize_graph(nodes, connections, feedback_connections, inputs, outputs, save_path, graph_name):

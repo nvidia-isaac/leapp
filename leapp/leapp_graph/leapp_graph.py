@@ -16,6 +16,7 @@
 #
 import os
 from safetensors.torch import save_file
+from collections import Counter
 
 from leapp.utils.tensor_description import CompactYamlList
 from leapp.utils.enums import MergeCfgEnum
@@ -156,7 +157,8 @@ class LeappGraph:
         for node in nodes.values():
             # first check if any duplicate tags. duplicates are not suppported
             tags = [input.tag for input in node.inputs if input.tag is not None]
-            duplicates = set([tag for tag in tags if tags.count(tag) > 1])
+            tag_counts = Counter(tags)
+            duplicates = {tag for tag, count in tag_counts.items() if count > 1}
             if duplicates:
                 for duplicate in duplicates:
                     _get_logger().error(

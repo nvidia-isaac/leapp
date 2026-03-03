@@ -245,7 +245,7 @@ class ParameterFormat:
             # Warn if not a native list
             if not isinstance(data, list):
                 type_name = type(data).__name__
-                print(
+                _get_logger().debug(
                     f"Parameter '{self.name}' has list-like type '{type_name}' which will be "
                     f"treated as 'list' in the generated function signature. This may cause "
                     f"issues if the exact type is required.")
@@ -267,7 +267,7 @@ class ParameterFormat:
             # Warn if not a native dict
             if not isinstance(data, dict):
                 type_name = type(data).__name__
-                print(
+                _get_logger().debug(
                     f"Parameter '{self.name}' has dict-like type '{type_name}' which will be "
                     f"treated as 'dict' in the generated function signature. This may cause "
                     f"issues if the exact type is required.")

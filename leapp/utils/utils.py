@@ -297,7 +297,7 @@ def extract_return_names(func):
 
     except Exception as e:
         # Fallback to generic names if parsing fails
-        print(
+        _get_logger().error(
             f"Error extracting return names from {func.__name__}, reverting to defaults: {e}")
         return ["output1"]
 
@@ -434,7 +434,7 @@ def tag_data(data, tag):
         for idx, item in enumerate(data):
             tag_data(item, tag + "[" + str(idx) + "]")
     else:
-        print(
+        _get_logger().warning(
             f"\033[93mWarning: Untaggable datatype in i/o: {type(data)}\033[0m")
 
 

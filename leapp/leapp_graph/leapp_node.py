@@ -210,7 +210,7 @@ class LeappNode():
             for idx, item in enumerate(tensor):
                 self.tag_data(item, tag + "[" + str(idx) + "]")
         else:
-            print(
+            _get_logger().warning(
                 f"\033[93mWarning: Untaggable datatype in i/o: {type(tensor)}\033[0m")
 
     @staticmethod

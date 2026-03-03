@@ -388,8 +388,3 @@ class ModuleBuilder:
         module_class = type(self.module_instance)
         module_class._core = _core
         module_class.forward = forward
-
-
-if __name__ == "__main__":
-    module_builder = ModuleBuilder("TestModule", None, {})
-    print(module_builder.module)
