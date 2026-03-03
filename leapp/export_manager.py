@@ -36,7 +36,6 @@ from leapp.leapp_graph.datatypes import (
     is_tracable_tensor_type,
 )
 from leapp.leapp_graph.datatypes.global_patching import warn_if_script_functions_in_scope
-from leapp.utils.enums import MergeCfgEnum
 from leapp.utils.tensor_description import TensorSemantics
 from leapp.utils.tensor_description import (verify_data_exact_match,
                                              flatten_io_structure,
@@ -816,8 +815,8 @@ class ExportManager:
     #########################################################
     # graph compilation
     #########################################################
-    def compile_graph(self, visualize=True, verbose=None, merge_nodes: MergeCfgEnum = MergeCfgEnum.NO_MERGE,
-                      validate: bool = True, rtol: float = 1e-3, atol: float = 1e-5, strict=True):
+    def compile_graph(self, visualize=True, verbose=None, validate: bool = True,
+                      rtol: float = 1e-3, atol: float = 1e-5, strict=True):
         """Compile and save the computational graph from traced nodes.
 
         This method performs the complete pipeline of compiling traced nodes into exportable
@@ -830,13 +829,6 @@ class ExportManager:
                 graph structure and saves it to the output directory. The visualization 
                 will be created even if an error occurs during the process. 
                 Defaults to True.
-            merge_nodes (MergeCfgEnum, optional): Strategy for merging nodes in the graph.
-                Options from MergeCfgEnum include:
-                - NO_MERGE: Keep all nodes separate (default)
-                - MERGE_ALL: Merge all possible nodes
-                - MERGE_SEQUENTIAL: Merge only sequentially connected nodes (not available yet)
-                Defaults to MergeCfgEnum.NO_MERGE.
-
         Returns:
             None
 
@@ -862,11 +854,7 @@ class ExportManager:
             self.compile_models()
 
         # builds the graph connections. this may change input and output names
-        if not isinstance(merge_nodes, MergeCfgEnum):
-            raise Exception(
-                f"Error: merge_nodes must be an instance of MergeCfgEnum, got {type(merge_nodes)}")
         graph = LeappGraph(self.nodes, self.GRAPH_NAME)
-        graph.merge_nodes(merge_nodes)
         pipeline = graph.get_full_pipeline_description()
 
         inital_value_filename = None

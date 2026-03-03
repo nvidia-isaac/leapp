@@ -5,14 +5,14 @@ This document provides a comprehensive reference for LEAPP's core API methods. L
 ## Quick Reference
 
 ```python
-from leapp import annotate, MergeCfgEnum
+from leapp import annotate
 
 # Core workflow
 annotate.start(name="my_graph", save_path=".", verbose=False)
 # ... trace your code using @annotate.method(), with annotate.block(), 
 #     or annotate.input_tensors() / annotate.output_tensors()
 annotate.stop()
-annotate.compile_graph(visualize=True, merge_nodes=MergeCfgEnum.NO_MERGE)
+annotate.compile_graph(visualize=True)
 ```
 
 ---
@@ -245,20 +245,12 @@ Compile and save the computational graph from traced nodes.
 ### Signature
 
 ```python
-annotate.compile_graph(visualize: bool = True, 
-                       merge_nodes: MergeCfgEnum = MergeCfgEnum.NO_MERGE)
+annotate.compile_graph(visualize: bool = True)
 ```
 
 ### Parameters
 
 - **`visualize`** (bool, optional): If `True`, generates a visual representation of the graph structure and saves it to the output directory. Visualization errors are logged but don't stop compilation. Defaults to `True`.
-
-- **`merge_nodes`** (MergeCfgEnum, optional): Strategy for merging nodes in the graph. Options:
-  - `MergeCfgEnum.NO_MERGE`: Keep all nodes separate (default)
-  - `MergeCfgEnum.AUTOMATIC`: Automatically merge completely sequential nodes
-  - `MergeCfgEnum.SIGNATURE`: Merge nodes by signature (not yet implemented)
-  
-  Defaults to `MergeCfgEnum.NO_MERGE`.
 
 ### Behavior
 
@@ -266,11 +258,10 @@ This method performs the complete pipeline:
 
 1. **Compiles models**: Converts traced nodes into exportable models using configured backends
 2. **Builds connections**: Analyzes data flow to connect nodes in the graph
-3. **Merges nodes**: Applies the specified node merging strategy (if not `NO_MERGE`)
-4. **Saves models**: Exports compiled models to `{save_path}/{name}/` directory
-5. **Generates YAML**: Creates `{name}.yaml` with complete graph description
-6. **Creates visualization**: Generates graph visualization (if `visualize=True`)
-7. **Logs statistics**: Prints graph statistics (nodes, connections, etc.)
+3. **Saves models**: Exports compiled models to `{save_path}/{name}/` directory
+4. **Generates YAML**: Creates `{name}.yaml` with complete graph description
+5. **Creates visualization**: Generates graph visualization (if `visualize=True`)
+6. **Logs statistics**: Prints graph statistics (nodes, connections, etc.)
 
 ### Generated Artifacts
 
@@ -338,7 +329,6 @@ The method logs statistics including:
 - All traced nodes must have completed successfully
 - Visualization errors are logged but don't stop the compilation
 - The YAML file can be used by downstream deployment frameworks
-- Automatic merging only works for completely sequential nodes (see Advanced Graph Operations documentation)
 
 ---
 
@@ -375,7 +365,7 @@ Here's a complete example demonstrating all API methods:
 ```python
 import torch
 import torch.nn as nn
-from leapp import annotate, MergeCfgEnum
+from leapp import annotate
 
 # Define a simple model
 class SimpleNet(nn.Module):
@@ -443,10 +433,7 @@ def main():
     annotate.stop()
     
     # 6. Compile and export the graph
-    annotate.compile_graph(
-        visualize=True,
-        merge_nodes=MergeCfgEnum.AUTOMATIC
-    )
+    annotate.compile_graph(visualize=True)
     
     print("Pipeline exported successfully!")
     print("Check ./exports/complete_pipeline/ for outputs")

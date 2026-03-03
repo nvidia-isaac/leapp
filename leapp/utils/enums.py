@@ -18,12 +18,6 @@
 from enum import Enum
 
 
-class MergeCfgEnum(Enum):
-    NO_MERGE = "no_merge"
-    AUTOMATIC = "automatic"
-    ALL = "all" # planned but not implemented yet
-    SIGNATURE = "signature"  # planned but not implemented yet
-
 class inputKindEnum(Enum):
     JOINT_POSITION= "state/joint/position"
     JOINT_VELOCITY= "state/joint/velocity"

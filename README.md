@@ -216,10 +216,9 @@ from leapp import annotate  # Singleton, export manager
 - `stop()`: End tracing mode
 
 
-- `compile_graph(visualize=True, verbose=None, merge_nodes=MergeCfgEnum.NO_MERGE, validate=True, rtol=1e-3, atol=1e-5, strict=True)`: Generate final graph and exports
+- `compile_graph(visualize=True, verbose=None, validate=True, rtol=1e-3, atol=1e-5, strict=True)`: Generate final graph and exports
   - `visualize` (bool): Generate graph visualization. Defaults to True.
   - `verbose` (bool | None): Override verbose logging. Defaults to None (unchanged).
-  - `merge_nodes` (MergeCfgEnum): Node merging strategy — `NO_MERGE` (default), `MERGE_ALL`, or `MERGE_SEQUENTIAL`.
   - `validate` (bool): If True, validates exported models against captured outputs. Defaults to True.
   - `rtol` (float): Relative tolerance for validation. Defaults to 1e-3.
   - `atol` (float): Absolute tolerance for validation. Defaults to 1e-5.
