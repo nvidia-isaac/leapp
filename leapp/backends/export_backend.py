@@ -264,7 +264,7 @@ class ExportBackend(abc.ABC):
 
         self.compiled_model = None
         self.compiled_module = None
-
+    
     def override_module_builder(self, module_builder: Callable):
         self.module_builder = module_builder
 
@@ -303,6 +303,11 @@ class ExportBackend(abc.ABC):
     @abc.abstractmethod
     def get_backed_model_type(self):
         raise NotImplementedError
+
+    @abc.abstractmethod
+    def get_backend_metadata(self) -> dict:
+        """Optional backend-specific metadata to include in node YAML parameters."""
+        return {}
 
     @abc.abstractmethod
     def compile(self, m: torch.nn.Module = None) -> Any:
@@ -353,6 +358,9 @@ class ExportBackend(abc.ABC):
 
 
 class NoneExportBackend(ExportBackend):
+    def get_backend_metadata(self):
+        return {}
+
     def compile(self, m: torch.nn.Module = None):
         if "model_path" not in self.backend_params or self.backend_params['model_path'] is None:
             _get_logger().warning(

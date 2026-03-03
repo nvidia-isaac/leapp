@@ -7,7 +7,14 @@ import onnx
 from onnx import numpy_helper
 import tempfile
 
+from torch.onnx import _constants
+
 class ONNXExportBackend(ExportBackend):
+    def get_backend_metadata(self):
+        metadata = {}
+        metadata['opset_version'] = getattr(self, 'opset_version', _constants.ONNX_DEFAULT_OPSET)
+        return metadata
+
     def get_backed_model_type(self):
         return "onnx"
     
@@ -147,6 +154,7 @@ class ONNXExportBackend(ExportBackend):
         return None
 
 class ONNXTorchScriptExportBackend(ONNXExportBackend):
+
     def compile(self, m: torch.nn.Module = None):
         if m is None:
             m = self.module_builder()
@@ -166,6 +174,7 @@ class ONNXTorchScriptExportBackend(ONNXExportBackend):
         # Create temp directory manually (not context manager) so we can control its lifetime
         tmpdir = tempfile.mkdtemp()
         save_path = os.path.join(tmpdir, "model.onnx")
+        self.opset_version = self.backend_params.get('opset_version', _constants.ONNX_DEFAULT_OPSET)
 
         torch.onnx.export(
             m,
@@ -179,7 +188,7 @@ class ONNXTorchScriptExportBackend(ONNXExportBackend):
 
             verbose=_get_logger().is_verbose(),
             report=self.backend_params.get('report', False),
-            opset_version=self.backend_params.get('opset_version', None),
+            opset_version=self.opset_version,
         )
 
         # Create program from file path
@@ -203,6 +212,7 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
             [tensor_desc.value for tensor_desc in self.node_context.inputs])
         # Clone tensors to escape inference mode (inference tensors can't participate in autograd)
         input_values = prepare_tensors_for_export(input_values)
+        self.opset_version = self.backend_params.get('opset_version', _constants.ONNX_DEFAULT_OPSET)
         onnx_program = torch.onnx.export(
             m,
             input_values,
@@ -219,7 +229,7 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
             verbose=_get_logger().is_verbose(),
             report=self.backend_params.get('report', False),
             fallback=self.backend_params.get('fallback', None),
-            opset_version=self.backend_params.get('opset_version', None),
+            opset_version=self.opset_version,
         )
         
         # Sync inputs with what ONNX actually exported

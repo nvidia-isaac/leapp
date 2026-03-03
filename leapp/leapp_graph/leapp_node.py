@@ -65,7 +65,6 @@ class LeappNode():
         self.model_path = None
         self.md5sum = None
         self.sha256sum = None
-        self.model_device = None
         self.export_backend = NoneExportBackend(self, {})
         self.backend = None
 
@@ -129,16 +128,21 @@ class LeappNode():
         # Directly use the TensorDescription objects in self.outputs
         output_descriptions = [output.dict() for output in self.outputs]
 
-        description = {}
-        description['inputs'] = input_descriptions
-        description['outputs'] = output_descriptions
-        description['parameters'] = {
+        parameters = {
             'model_path': self.model_path,
             'md5sum': self.md5sum,
             'sha256sum': self.sha256sum,
-            'device': self.model_device,
             'backend': self.get_backend(),
         }
+
+        backend_metadata = self.export_backend.get_backend_metadata()
+        if backend_metadata:
+            parameters.update(backend_metadata)
+
+        description = {}
+        description['inputs'] = input_descriptions
+        description['outputs'] = output_descriptions
+        description['parameters'] = parameters
 
         return description
 
@@ -182,7 +186,6 @@ class LeappNode():
 
     def save_model(self, save_path: str):
         self.model_path, self.md5sum, self.sha256sum = self.export_backend.save(save_path)
-        self.model_device = 'cuda'
 
     def compile_model(self):
         try:

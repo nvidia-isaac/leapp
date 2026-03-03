@@ -30,7 +30,7 @@ from .utils.tensor_description import TensorSemantics
 # Create a global annotate instance that's ready to use
 annotate = ExportManager()
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __author__ = "Frank Lai"
 __email__ = "frlai@nvidia.com"
 

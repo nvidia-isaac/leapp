@@ -22,6 +22,9 @@ from leapp._logging import _get_logger
 
 
 class TorchExportBackend(ExportBackend):
+    def get_backend_metadata(self):
+        return {}
+    
     def get_backed_model_type(self):
         return "jit"
 

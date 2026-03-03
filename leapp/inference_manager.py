@@ -20,9 +20,8 @@ class NodeManager:
         self.input_descriptions = inputs
         self.output_descriptions = outputs
 
-        device = parameters['device']
-        if device == 'cuda' and not torch.cuda.is_available():
-            device = 'cpu'
+
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
         backend = self._create_backend(parameters['backend'])
         backend.load(model_path, parameters['sha256sum'], device)
@@ -159,9 +158,9 @@ class InferenceManager:
                     f"Model description must contain inputs, outputs, and parameters, got {description.keys()}")
             # load the model
             parameters = description['parameters']
-            if any(key not in parameters for key in ["model_path", "md5sum", "sha256sum", "device", "backend"]):
+            if any(key not in parameters for key in ["model_path", "md5sum", "sha256sum", "backend"]):
                 raise ValueError(
-                    f"Model description must contain model_path, sha256sum, device, and backend, got {parameters.keys()}")
+                    f"Model description must contain model_path, md5sum, sha256sum, and backend, got {parameters.keys()}")
 
             model_path = parameters['model_path']
             base_path = os.path.dirname(self.model_path)
