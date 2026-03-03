@@ -7,7 +7,7 @@ from typing import Dict
 from safetensors.torch import load_file
 
 
-from leapp.utils.tensor_description import map_to_torch_dtype
+from leapp.utils.tensor_description import map_to_torch_dtype, validate_connection_compatibility
 
 from leapp.backends.torch_export_backend import TorchExportBackend
 from leapp.backends.onnx_export_backend import ONNXExportBackend
@@ -232,14 +232,25 @@ class InferenceManager:
 
         self.value_dict['==out=='] = output_cache
 
-        # Validate shape and dtype compatibility for all data_flow connections
-        for source, targets in self.pipeline['data_flow'].items():
+        # Validate shape and dtype compatibility for all pipeline connections.
+        self._validate_connection_compatibility()
+
+    def _validate_connection_compatibility(self):
+        all_flows = {}
+        for flow_key in ('data_flow', 'feedback_flow'):
+            for source, targets in self.pipeline.get(flow_key, {}).items():
+                if source in all_flows:
+                    all_flows[source] = all_flows[source] + targets
+                else:
+                    all_flows[source] = list(targets)
+
+        for source, targets in all_flows.items():
             source_node_name, source_output_name = source.split('/')
 
             # Validate source node exists
             if source_node_name not in self.nodes:
                 raise ValueError(
-                    f"Source node '{source_node_name}' in data_flow not found in models")
+                    f"Source node '{source_node_name}' not found in models")
 
             source_node = self.nodes[source_node_name]
 
@@ -267,7 +278,7 @@ class InferenceManager:
                 # Validate target node exists
                 if target_node_name not in self.nodes:
                     raise ValueError(
-                        f"Target node '{target_node_name}' in data_flow not found in models")
+                        f"Target node '{target_node_name}' not found in models")
 
                 # Validate target input exists
                 if target_input_name not in self.value_dict[target_node_name]:
@@ -280,18 +291,14 @@ class InferenceManager:
 
                 target_tensor = self.value_dict[target_node_name][target_input_name]
 
-                if list(target_tensor.shape) != list(source_shape):
-                    raise ValueError(
-                        f"Shape mismatch in pipeline connection: "
-                        f"{source} {tuple(source_shape)} -> "
-                        f"{target} {tuple(target_tensor.shape)}"
-                    )
-                if target_tensor.dtype != source_dtype:
-                    raise ValueError(
-                        f"Dtype mismatch in pipeline connection: "
-                        f"{source} {source_dtype} -> "
-                        f"{target} {target_tensor.dtype}"
-                    )
+                validate_connection_compatibility(
+                    source_name=source,
+                    source_shape=source_shape,
+                    source_dtype=source_dtype,
+                    target_name=target,
+                    target_shape=target_tensor.shape,
+                    target_dtype=target_tensor.dtype,
+                )
 
     def _prepopulate_feedback_inputs(self):
         """Load feedback initial values from safetensors and populate input buffers.

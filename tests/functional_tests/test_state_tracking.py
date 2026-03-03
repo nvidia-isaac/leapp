@@ -344,6 +344,7 @@ class TestStateTensorErrors(LEAPPFunctionalTestBase):
 
         annotate.stop()
 
+
 # ── Test models ──────────────────────────────────────────────────────────────
 
 class GRUModel(nn.Module):

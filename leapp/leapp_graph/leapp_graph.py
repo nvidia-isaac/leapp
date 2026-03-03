@@ -18,7 +18,7 @@ import os
 from safetensors.torch import save_file
 from collections import Counter
 
-from leapp.utils.tensor_description import CompactYamlList
+from leapp.utils.tensor_description import CompactYamlList, validate_connection_compatibility
 from leapp._logging import _get_logger
 from .graph_gui import visualize_graph
 
@@ -40,6 +40,9 @@ class LeappGraph:
         _get_logger().section("Discovering graph inputs and outputs")
         self.graph_inputs, self.graph_outputs = self._compile_graph_io(
             self.nodes, self.connections, self.feedback_connections)
+
+        _get_logger().section("Validating connection compatibility")
+        self._validate_connection_compatibility()
 
     def get_feedback_initial_values(self):
         feedback_initial_values = {}
@@ -252,3 +255,21 @@ class LeappGraph:
                                 "please make sure to match io names in the source code")
         else:
             _get_logger().debug("no names changed")
+
+    def _validate_connection_compatibility(self):
+        for connection in self.connections + self.feedback_connections:
+            source = connection['source']
+            source_desc = source['node'].outputs[source['idx']]
+            source_name = f"{source['node'].name}/{source_desc.name_str}"
+
+            for target in connection['targets']:
+                target_desc = target['node'].inputs[target['idx']]
+                target_name = f"{target['node'].name}/{target_desc.name_str}"
+                validate_connection_compatibility(
+                    source_name=source_name,
+                    source_shape=source_desc.shape,
+                    source_dtype=source_desc.dtype,
+                    target_name=target_name,
+                    target_shape=target_desc.shape,
+                    target_dtype=target_desc.dtype,
+                )

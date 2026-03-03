@@ -444,6 +444,24 @@ def map_to_torch_dtype(string):
     raise ValueError(f"Unsupported string: {string}")
 
 
+def validate_connection_compatibility(source_name, source_shape, source_dtype,
+                                      target_name, target_shape, target_dtype):
+    """Validate shape and dtype compatibility for a single pipeline edge."""
+    if list(source_shape) != list(target_shape):
+        raise ValueError(
+            f"Shape mismatch in pipeline connection: "
+            f"{source_name} {tuple(source_shape)} -> "
+            f"{target_name} {tuple(target_shape)}"
+        )
+
+    if target_dtype != source_dtype:
+        raise ValueError(
+            f"Dtype mismatch in pipeline connection: "
+            f"{source_name} {source_dtype} -> "
+            f"{target_name} {target_dtype}"
+        )
+
+
 def verify_data_exact_match(source_data, target_data):
     # Check if both are the same type (allow dict-like and list-like substitutions)
     source_is_list_like = isinstance(source_data, collections.abc.Sequence) and not isinstance(

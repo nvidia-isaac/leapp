@@ -461,6 +461,95 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             annotate.stop()
             self.assertIn("Cannot reuse a node name from a different call site.", str(e))
 
+    def test_expected_fail_connection_shape_mismatch(self):
+        """Shape mismatch should fail at compile_graph edge compatibility validation."""
+        try:
+            annotate.start(name=self.TEST_GRAPH_NAME)
+
+            source_input = annotate.input_tensors('source_node', {'x': torch.tensor([1.0, 2.0, 3.0])})
+            source_output = source_input + 1.0
+            annotate.output_tensors('source_node', {'y': source_output}, export_with="jit")
+
+            # mutate shape after output_tensors and before next input_tensors,
+            # while preserving LEAPP tag so connection is still established
+            mutated = source_output.clone().reshape(1, 3)
+            mutated.leapp_tag = source_output.leapp_tag
+
+            target_input = annotate.input_tensors('target_node', {'y': mutated})
+            target_output = target_input + 2.0
+            annotate.output_tensors('target_node', {'z': target_output}, export_with="jit")
+
+            annotate.stop()
+            annotate.compile_graph(visualize=False)
+            self.fail("Expected an exception for shape mismatch")
+        except Exception as e:
+            try:
+                annotate.stop()
+            except Exception:
+                pass
+            self.assertIn("Shape mismatch in pipeline connection", str(e))
+
+    def test_expected_fail_connection_dtype_mismatch(self):
+        """Dtype mismatch should fail at compile_graph edge compatibility validation."""
+        try:
+            annotate.start(name=self.TEST_GRAPH_NAME)
+
+            source_input = annotate.input_tensors('source_node', {'x': torch.tensor([1.0, 2.0, 3.0])})
+            source_output = source_input + 1.0
+            annotate.output_tensors('source_node', {'y': source_output}, export_with="jit")
+
+            # mutate dtype after output_tensors and before next input_tensors,
+            # while preserving LEAPP tag so connection is still established
+            mutated = source_output.clone().to(torch.int32)
+            mutated.leapp_tag = source_output.leapp_tag
+
+            target_input = annotate.input_tensors('target_node', {'y': mutated})
+            target_output = target_input + 2
+            annotate.output_tensors('target_node', {'z': target_output}, export_with="jit")
+
+            annotate.stop()
+            annotate.compile_graph(visualize=False)
+            self.fail("Expected an exception for dtype mismatch")
+        except Exception as e:
+            try:
+                annotate.stop()
+            except Exception:
+                pass
+            self.assertIn("Dtype mismatch in pipeline connection", str(e))
+
+    def test_expected_fail_feedback_connection_shape_mismatch(self):
+        """Feedback edge mismatch should fail during compatibility validation."""
+        try:
+            annotate.start(name=self.TEST_GRAPH_NAME)
+
+            obs = torch.tensor([1.0, 2.0, 3.0])
+            feedback_next = torch.tensor([0.0, 0.0, 0.0])
+
+            # run twice from identical call sites to establish a feedback edge
+            for _ in range(2):
+                obs_traced, fb_traced = annotate.input_tensors('node_a', {'obs': obs, 'fb': feedback_next})
+                a_out = obs_traced + fb_traced
+                annotate.output_tensors('node_a', {'a_out': a_out}, export_with="jit")
+
+                c_in = annotate.input_tensors('node_c', {'a_out': a_out})
+                c_out = c_in.reshape(1, 3)  # source output descriptor shape is [1, 3]
+                annotate.output_tensors('node_c', {'fb_out': c_out}, export_with="jit")
+
+                # mutate value between output_tensors and next input_tensors
+                # preserve tag to create feedback connection into node_a/fb
+                feedback_next = c_out.reshape(3).clone()
+                feedback_next.leapp_tag = c_out.leapp_tag
+
+            annotate.stop()
+            annotate.compile_graph(visualize=False)
+            self.fail("Expected an exception for feedback shape mismatch")
+        except Exception as e:
+            try:
+                annotate.stop()
+            except Exception:
+                pass
+            self.assertIn("Shape mismatch in pipeline connection", str(e))
+
     # -------------------------------------------------------------------
     # Caller identity tests — verify stack-trace-based call site detection
     # -------------------------------------------------------------------
