@@ -275,11 +275,65 @@ class TensorArithmeticFunctions:
     @staticmethod
     def type_conversion_operator_tensor(a: Tensor) -> Tensor:
         """Type conversion operation."""
-        b = a.to(torch.float32)
-        # Somehow ONNX fails to use the "to" operation as the last operation in
-        # the graph, so we add a dummy operation after it.
-        c = b * 1.0
-        return c
+        return a.to(torch.float32)
+
+    @staticmethod
+    def type_conversion_operator_float_method(a: Tensor) -> Tensor:
+        """Type conversion via tensor.float()."""
+        return a.float()
+
+    @staticmethod
+    def type_conversion_operator_to_dtype_kwarg(a: Tensor) -> Tensor:
+        """Type conversion via tensor.to(dtype=...)."""
+        return a.to(dtype=torch.float64)
+
+    @staticmethod
+    def type_conversion_operator_double_method(a: Tensor) -> Tensor:
+        """Type conversion via tensor.double()."""
+        return a.double()
+
+    @staticmethod
+    def type_conversion_operator_half_method(a: Tensor) -> Tensor:
+        """Type conversion via tensor.half()."""
+        return a.half()
+
+    @staticmethod
+    def type_conversion_operator_long_method(a: Tensor) -> Tensor:
+        """Type conversion via tensor.long()."""
+        return a.long()
+
+    @staticmethod
+    def type_conversion_operator_int_method(a: Tensor) -> Tensor:
+        """Type conversion via tensor.int()."""
+        return a.int()
+
+    @staticmethod
+    def type_conversion_operator_short_method(a: Tensor) -> Tensor:
+        """Type conversion via tensor.short()."""
+        return a.short()
+
+    @staticmethod
+    def type_conversion_operator_byte_method(a: Tensor) -> Tensor:
+        """Type conversion via tensor.byte()."""
+        return a.byte()
+
+    @staticmethod
+    def type_conversion_operator_bool_method(a: Tensor) -> Tensor:
+        """Type conversion via tensor.bool()."""
+        # TorchScript can reject tensor.bool() in scripted GraphModule code.
+        # Use to(torch.bool) to keep bool conversion coverage across backends.
+        return a.to(torch.bool)
+
+    @staticmethod
+    def type_conversion_operator_type_method(a: Tensor) -> Tensor:
+        """Type conversion via tensor.type(...)."""
+        return a.type(torch.float64)
+
+    @staticmethod
+    def type_conversion_operator_type_as_method(a: Tensor) -> Tensor:
+        """Type conversion via tensor.type_as(...)."""
+        reference = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float64)
+        return a.type_as(reference)
 
     @staticmethod
     def broadcasting_operation(a: Tensor) -> Tensor:
@@ -1794,6 +1848,12 @@ class TestTracedTensor(unittest.TestCase):
                     torch.allclose(result_tracked.tensor, expected),
                     f"{func_name}: Tracked result doesn't match expected result",
                 )
+                if func_name.startswith("type_conversion_operator"):
+                    self.assertEqual(
+                        result_tracked.dtype,
+                        expected.dtype,
+                        f"{func_name}: Tracked result dtype doesn't match expected dtype",
+                    )
 
                 # Test 2: GraphModule export
                 result_graph_module = graph_module(input_tensor)
@@ -1801,6 +1861,12 @@ class TestTracedTensor(unittest.TestCase):
                     torch.allclose(result_graph_module, expected),
                     f"{func_name}: GraphModule result doesn't match expected result",
                 )
+                if func_name.startswith("type_conversion_operator"):
+                    self.assertEqual(
+                        result_graph_module.dtype,
+                        expected.dtype,
+                        f"{func_name}: GraphModule result dtype doesn't match expected dtype",
+                    )
 
                 # Test 3: TorchScript export
                 traced_script = torch.jit.script(graph_module)
@@ -1809,6 +1875,12 @@ class TestTracedTensor(unittest.TestCase):
                     torch.allclose(result_traced_script, expected),
                     f"{func_name}: TorchScript result doesn't match expected result",
                 )
+                if func_name.startswith("type_conversion_operator"):
+                    self.assertEqual(
+                        result_traced_script.dtype,
+                        expected.dtype,
+                        f"{func_name}: TorchScript result dtype doesn't match expected dtype",
+                    )
 
                 # Test 4: ONNX export
                 try:
@@ -1838,6 +1910,12 @@ class TestTracedTensor(unittest.TestCase):
                             ),
                             f"{func_name}: ONNX result doesn't match tracked result",
                         )
+                        if func_name.startswith("type_conversion_operator"):
+                            self.assertEqual(
+                                torch.from_numpy(result_onnx).dtype,
+                                expected.dtype,
+                                f"{func_name}: ONNX result dtype doesn't match expected dtype",
+                            )
                 except Exception as e:
                     self.fail(f"{func_name}: Error exporting to ONNX: {e}")
 
