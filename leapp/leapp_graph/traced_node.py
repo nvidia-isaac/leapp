@@ -14,11 +14,10 @@ import collections
 
 
 class TracedTensorNode(LeappNode):
-    def __init__(self, name, node_index, *args, **kwargs):
+    def __init__(self, name, node_index, dry_run=False, *args, **kwargs):
         if args or kwargs:
             _get_logger().warning(f"TracedTensorNode {name} received unexpected arguments on initialization. these arguments will be ignored.")
-        super().__init__(name, node_index)
-        """Initialize a shared tracing context."""
+        super().__init__(name, node_index, dry_run=dry_run)
         self.graph = fx.Graph()
         self.tracer = fx.Tracer()
         self.tracer.graph = self.graph
@@ -41,7 +40,9 @@ class TracedTensorNode(LeappNode):
 
     def compile_trace(self, tensors: dict[str, "TracedTensor"], backend=None, backend_params={},
                        static_tensors: dict[str, torch.Tensor] | None = None):
-        # Auto-collect buffer mutations before graph freeze
+        # Auto-collect buffer mutations before merging state outputs.
+        # collect() may remove non-mutated buffers from _state_tensors and
+        # bake them as constants, so it must run before get_state_outputs().
         if self._buffer_tracker is not None and not self._buffer_tracker._collected:
             self._buffer_tracker.collect()
             self._buffer_tracker.restore()
@@ -51,6 +52,18 @@ class TracedTensorNode(LeappNode):
         if state_outputs:
             _get_logger().info(f"Adding {len(state_outputs)} state outputs: {list(state_outputs.keys())}")
             tensors = {**tensors, **state_outputs}
+
+        if self.dry_run:
+            for name, tensor in tensors.items():
+                self.tag_data(tensor, name)
+                self.add_output(name, name, tensor)
+            if static_tensors:
+                for name, tensor in static_tensors.items():
+                    self.tag_data(tensor, name)
+                    self.add_output(name, name, tensor)
+            self._apply_state_tags()
+            values = list(tensors.values())
+            return values[0] if len(values) == 1 else tuple(values)
 
         unwrapped_tensors = []
         for name, tensor in tensors.items():
@@ -62,20 +75,9 @@ class TracedTensorNode(LeappNode):
                 wrapped = self.create_output(tensor, name, static=True)
                 tensors[name] = wrapped
 
-        # Set matching leapp_tags on state input/output descriptions for feedback detection.
-        # Both the input and its corresponding _out output share the same tag so the graph
-        # automatically detects the feedback connection.
-        for state_name in self._state_tensors:
-            state_tag = f"{self.name}/{state_name}/"
-            for input_desc in self.inputs:
-                if input_desc.name == state_name:
-                    input_desc.tag = state_tag
-                    break
-            output_name = f"{state_name}_out"
-            for output_desc in self.outputs:
-                if output_desc.name == output_name:
-                    output_desc.tag = state_tag
-                    break
+        # Apply state tags after buffer collection (which may remove placeholder
+        # nodes for non-mutated buffers) but before build_graph_module.
+        self._apply_state_tags()
 
         self.build_graph_module(list(tensors.values()))
 
@@ -83,18 +85,8 @@ class TracedTensorNode(LeappNode):
             self.tracer.root, self.graph)
 
         # Sanitize the FX graph for compatibility with export backends.
-        # 1) aten OpOverload targets (e.g. torch.ops.aten.addmm.default) →
-        #    high-level torch.*/F.* equivalents that torch.jit.script
-        #    recognizes.  This may insert new method_descriptor nodes
-        #    (e.g. torch.Tensor.size for dynamic slice lengths).
-        # 2) method_descriptor targets (e.g. torch.Tensor.view) → call_method
-        #    nodes to avoid weak-ref failures in torch.jit.script.
-        #    Must run AFTER aten_ops since that pass may insert new ones.
         self._rewrite_aten_ops(self.m.graph)
         self._rewrite_method_descriptors(self.m.graph)
-        # 3) Ensure all tensor constants have contiguous memory layout.
-        #    make_fx decomposition produces transposed weight views that
-        #    torch.onnx.export (dynamo=False) serializes incorrectly.
         self._make_tensor_attrs_contiguous(self.m)
         self.m.recompile()
 
@@ -107,6 +99,19 @@ class TracedTensorNode(LeappNode):
         self.setup_backend(backend, backend_params)
 
         return unwrapped_tensors[0] if len(unwrapped_tensors) == 1 else tuple(unwrapped_tensors)
+
+    def _apply_state_tags(self):
+        for state_name in self._state_tensors:
+            state_tag = f"{self.name}/{state_name}/"
+            for input_desc in self.inputs:
+                if input_desc.name == state_name:
+                    input_desc.tag = state_tag
+                    break
+            output_name = f"{state_name}_out"
+            for output_desc in self.outputs:
+                if output_desc.name == output_name:
+                    output_desc.tag = state_tag
+                    break
 
     @staticmethod
     def _rewrite_method_descriptors(graph: fx.Graph):
@@ -369,6 +374,9 @@ class TracedTensorNode(LeappNode):
                     )
 
             if to=="traced":
+                if self.dry_run:
+                    return data
+
                 if is_traced:
                     # Same context: allow override with warning
                     _get_logger().warning(

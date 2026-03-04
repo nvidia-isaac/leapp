@@ -52,10 +52,11 @@ class LeappNode():
                 return result
             cls.compile_trace = wrapped_compile_trace
 
-    def __init__(self, name, node_index):
+    def __init__(self, name, node_index, dry_run=False):
         self.name = name
         self.node_index = node_index
-
+        self.dry_run = dry_run
+        
         # Attributes expected by export backends (subclasses may override)
         self.register_buffers = set()
         self.environment_constants = set()

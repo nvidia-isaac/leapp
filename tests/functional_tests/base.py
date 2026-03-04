@@ -28,6 +28,11 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
     def tearDown(self):
         if os.path.exists(self.TEST_GRAPH_NAME):
             shutil.rmtree(self.TEST_GRAPH_NAME)
+        from leapp import annotate
+        if annotate._interpret_graph:
+            annotate._interpret_graph = False
+        annotate.nodes = {}
+        annotate.dry_run = False
     
     def verify_all_models_exist(self, *model_names):
         for model_name in model_names:

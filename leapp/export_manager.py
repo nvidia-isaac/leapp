@@ -208,7 +208,8 @@ class ExportManager:
                           outputs=kwargs.get("outputs", None),
                           environment_constants=kwargs.get(
                               "environment_constants", None),
-                          register_buffers=kwargs.get("register_buffers", None))
+                          register_buffers=kwargs.get("register_buffers", None),
+                          dry_run=self.dry_run)
 
         node._max_cached_io = self._max_cached_io
         self.nodes[name] = node
@@ -346,29 +347,30 @@ class ExportManager:
         # Warn if pre-compiled ScriptFunctions are visible in the caller's scope
         warn_if_script_functions_in_scope()
 
-        instances = set(is_traced_type(tensor) for tensor in flattened_tensors.values())
+        if not getattr(traced_tensors_node, 'dry_run', False):
+            instances = set(is_traced_type(tensor) for tensor in flattened_tensors.values())
 
-        if not all(instances):
-            types = set(type(tensor) for tensor in flattened_tensors.values())
-            _get_logger().error(
-                f"Error: in output_tensors call for the node {node_name} detected the following"
-                f" types when expected all outputs to be TracedData: {types}\n"
-                "This could happen if \n"
-                "1. You are not using TracedData in your computations.\n"
-                "2. You didn't replace your original tensors with the returned wrapped tensors from input_tensors()\n"
-                "3. Something in your computation breaks tracing\n")
-            raise Exception(
-                "Error: exception detected in output_tensors declaration")
+            if not all(instances):
+                types = set(type(tensor) for tensor in flattened_tensors.values())
+                _get_logger().error(
+                    f"Error: in output_tensors call for the node {node_name} detected the following"
+                    f" types when expected all outputs to be TracedData: {types}\n"
+                    "This could happen if \n"
+                    "1. You are not using TracedData in your computations.\n"
+                    "2. You didn't replace your original tensors with the returned wrapped tensors from input_tensors()\n"
+                    "3. Something in your computation breaks tracing\n")
+                raise Exception(
+                    "Error: exception detected in output_tensors declaration")
 
-        context_names = set(
-            [tensor.context for tensor in flattened_tensors.values()])
-        # Check that all tensors come from exactly one context matching the node name
-        if not (len(context_names) == 1 and next(iter(context_names)) == traced_tensors_node.name):
-            _get_logger().error(
-                f"Error: expected all context names to match the node name: {traced_tensors_node.name}"
-                f" but detected the following context names: {context_names}")
-            raise Exception(
-                "Error: exception detected in output_tensors declaration")
+            context_names = set(
+                [tensor.context for tensor in flattened_tensors.values()])
+            # Check that all tensors come from exactly one context matching the node name
+            if not (len(context_names) == 1 and next(iter(context_names)) == traced_tensors_node.name):
+                _get_logger().error(
+                    f"Error: expected all context names to match the node name: {traced_tensors_node.name}"
+                    f" but detected the following context names: {context_names}")
+                raise Exception(
+                    "Error: exception detected in output_tensors declaration")
 
         # process static outputs (constant tensors that should be returned but aren't derived from inputs)
         flattened_static_outputs = None
