@@ -9,7 +9,10 @@ from leapp.leapp_graph.datatypes import (
     as_traced,
     is_tracable_tensor_type,
 )
-from leapp.utils.tensor_description import resolve_tensor_descriptions_to_names
+from leapp.utils.tensor_description import (
+    resolve_tensor_descriptions_to_names,
+    flatten_io_structure,
+)
 import collections
 
 
@@ -457,17 +460,18 @@ class TracedTensorNode(LeappNode):
                 "Static outputs should be constant tensors, not traced computations.")
             raise Exception("Error: exception detected in output_tensors declaration")
 
-    def create_static_tensors(self, flattened_static_outputs):
+    def create_static_tensors(self, static_outputs):
         """Wrap raw tensors as static graph nodes (for register_buffer).
 
         Unlike create_output(static=True), this does NOT tag or register
         outputs — it only validates and wraps.
+        Returns data in the same nested structure as the input payload.
         """
+        flattened_static_outputs = flatten_io_structure(static_outputs, '')
         for tensor_name, tensor in flattened_static_outputs.items():
             self._validate_static_tensor(tensor, tensor_name)
 
-        return self._create_io_helper(
-            flattened_static_outputs, '', to="static")
+        return self._create_io_helper(static_outputs, '', to="static")
 
     def build_graph_module(self, outputs: list["TracedTensor"]) -> fx.GraphModule:
         """Convert the traced computation to a torch.fx.GraphModule.

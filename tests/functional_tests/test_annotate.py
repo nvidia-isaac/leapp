@@ -232,6 +232,36 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
 
 class TestAnnotateTensor(LEAPPFunctionalTestBase):
 
+    def _assert_nested_traced_structure(self, source, returned):
+        """Validate nested container shape is preserved and tensor leaves are TracedTensor."""
+        if isinstance(source, torch.Tensor):
+            self.assertIsInstance(returned, TracedTensor)
+            self.assertTrue(torch.equal(returned.tensor, source))
+            return
+
+        if isinstance(source, list):
+            self.assertIsInstance(returned, list)
+            self.assertEqual(len(source), len(returned))
+            for src_item, ret_item in zip(source, returned):
+                self._assert_nested_traced_structure(src_item, ret_item)
+            return
+
+        if isinstance(source, tuple):
+            self.assertIsInstance(returned, tuple)
+            self.assertEqual(len(source), len(returned))
+            for src_item, ret_item in zip(source, returned):
+                self._assert_nested_traced_structure(src_item, ret_item)
+            return
+
+        if isinstance(source, dict):
+            self.assertIsInstance(returned, dict)
+            self.assertEqual(set(source.keys()), set(returned.keys()))
+            for key in source:
+                self._assert_nested_traced_structure(source[key], returned[key])
+            return
+
+        self.fail(f"Unsupported nested leaf type in test payload: {type(source).__name__}")
+
     def test_annotate_tensor_single(self):
         annotate.start(name=self.TEST_GRAPH_NAME, verbose=True)
         tensor1 = annotate.input_tensors(
@@ -242,8 +272,10 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
         tensor1 = tensor1 / 4.0
         tensor1 = tensor1.matmul(torch.tensor(
             [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]))
-        annotate.output_tensors(
+        returned_output = annotate.output_tensors(
             'func1', {'output1': tensor1}, export_with="jit")
+        self.assertIs(returned_output, tensor1)
+        self.assertIsInstance(returned_output, TracedTensor)
         annotate.stop()
         annotate.compile_graph(visualize=False)
 
@@ -330,6 +362,86 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
         expected_output = input_tensor * 100.0
         self.verify_single_torchscript_model_expected_value(
             [input_tensor], [expected_output], 'buffer_test')
+
+    def test_api_returns_preserve_complex_nested_format(self):
+        """All return-producing APIs preserve complex dict/list/tuple payload format."""
+        annotate.start(name=self.TEST_GRAPH_NAME, verbose=True)
+
+        nested_payload = {
+            "branch_a": [
+                torch.tensor([1.0, 2.0, 3.0]),
+                {"leaf": torch.tensor([4.0, 5.0, 6.0])},
+            ],
+            "branch_b": (
+                torch.tensor([7.0, 8.0, 9.0]),
+                [torch.tensor([10.0, 11.0, 12.0])],
+            ),
+        }
+
+        # input_tensors: should return the same nested format with traced tensor leaves
+        traced_input_payload = annotate.input_tensors(
+            "complex_returns_input",
+            {"payload": nested_payload},
+        )
+        self._assert_nested_traced_structure(nested_payload, traced_input_payload)
+
+        # output_tensors: should return the same exact payload object passed to it
+        output_payload = {
+            "out_dict": [
+                traced_input_payload["branch_a"][0] + 1.0,
+                {"out_leaf": traced_input_payload["branch_a"][1]["leaf"] + 2.0},
+            ],
+            "out_tuple": (
+                traced_input_payload["branch_b"][0] + 3.0,
+                [traced_input_payload["branch_b"][1][0] + 4.0],
+            ),
+        }
+        returned_output_payload = annotate.output_tensors(
+            "complex_returns_input",
+            {"nested_output": output_payload},
+            export_with="jit",
+        )
+        self._assert_nested_traced_structure(returned_output_payload, output_payload)
+
+        # register_buffer: should preserve nested format in returned buffer payload
+        _ = annotate.input_tensors(
+            "complex_returns_buffer",
+            {"obs": torch.tensor([3.0, 3.0, 3.0])},
+        )
+        buffer_payload = {
+            "buffer_a": [torch.tensor([0.5, 0.5, 0.5])],
+            "buffer_b": {"inner": torch.tensor([1.5, 1.5, 1.5])},
+        }
+        traced_buffer_payload = annotate.register_buffer(
+            "complex_returns_buffer",
+            {"buffer_payload": buffer_payload},
+        )
+        self._assert_nested_traced_structure(buffer_payload, traced_buffer_payload)
+        annotate.output_tensors(
+            "complex_returns_buffer",
+            {"buffer_out": traced_buffer_payload["buffer_a"][0] + traced_buffer_payload["buffer_b"]["inner"]},
+            export_with="jit",
+        )
+
+        annotate.stop()
+        annotate.compile_graph(visualize=False)
+
+        # state_tensors: should preserve nested format in returned state payload
+        annotate.start(name=self.TEST_GRAPH_NAME, verbose=True)
+        _ = annotate.input_tensors(
+            "complex_returns_state",
+            {"obs": torch.tensor([0.1, 0.2, 0.3])},
+        )
+        state_payload = {
+            "state_a": [torch.tensor([1.0, 1.0, 1.0])],
+            "state_b": {"inner": torch.tensor([2.0, 2.0, 2.0])},
+        }
+        traced_state_payload = annotate.state_tensors(
+            "complex_returns_state",
+            {"state_payload": state_payload},
+        )
+        self._assert_nested_traced_structure(state_payload, traced_state_payload)
+        annotate.stop()
 
     def test_annotate_tensor_with_dict_io(self):
         annotate.start(name=self.TEST_GRAPH_NAME, verbose=True)

@@ -38,7 +38,8 @@ class TestPassthrough(LEAPPFunctionalTestBase):
         self.assertNotIsInstance(traced_b, TracedTensor)
 
         out = traced_a + traced_b
-        annotate.output_tensors("node_a", {"out": out}, export_with="jit")
+        returned_out = annotate.output_tensors("node_a", {"out": out}, export_with="jit")
+        self.assertIs(returned_out, out)
 
         self.assertFalse(hasattr(traced_a, "leapp_tag"))
         self.assertFalse(hasattr(traced_b, "leapp_tag"))
@@ -54,7 +55,8 @@ class TestPassthrough(LEAPPFunctionalTestBase):
         self.assertNotIsInstance(passthrough_state, TracedTensor)
 
         new_state = passthrough_state + obs
-        annotate.update_state("node_state", {"state": new_state})
+        returned_state = annotate.update_state("node_state", {"state": new_state})
+        self.assertIs(returned_state, new_state)
 
         self.assertFalse(hasattr(state, "leapp_tag"))
         self.assertFalse(hasattr(passthrough_state, "leapp_tag"))
@@ -186,7 +188,8 @@ class TestDryrun(LEAPPFunctionalTestBase):
         self.assertNotIsInstance(traced_b, TracedTensor)
 
         out = traced_a + traced_b
-        annotate.output_tensors("node_a", {"out": out}, export_with="jit")
+        returned_out = annotate.output_tensors("node_a", {"out": out}, export_with="jit")
+        self.assertIs(returned_out, out)
 
         downstream_in = annotate.input_tensors("node_b", {"out": out})
         self.assertNotIsInstance(downstream_in, TracedTensor)
@@ -213,7 +216,8 @@ class TestDryrun(LEAPPFunctionalTestBase):
         self.assertNotIsInstance(state, TracedTensor)
 
         new_state = state + obs
-        annotate.update_state("node_state", {"state": new_state})
+        returned_state = annotate.update_state("node_state", {"state": new_state})
+        self.assertIs(returned_state, new_state)
         annotate.output_tensors("node_state", {"action": obs + state}, export_with="jit")
 
         annotate.stop()

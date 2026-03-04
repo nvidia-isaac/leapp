@@ -20,12 +20,87 @@ import unittest
 import torch
 from torch import nn
 from leapp import annotate
+from leapp.leapp_graph.datatypes import TracedTensor
 from .base import LEAPPFunctionalTestBase
 
 
 
 class TestStateTensors(LEAPPFunctionalTestBase):
     """Tests for the state_tensors API which handles tensors that are both inputs and outputs."""
+
+    def test_state_api_return_shapes_single_multi_and_reentry(self):
+        """state_tensors/update_state should return single tensor for one key, tuple for many keys."""
+        annotate.start(name=self.TEST_GRAPH_NAME)
+
+        obs0 = annotate.input_tensors("policy", {"observation": torch.tensor([1.0, 2.0, 3.0])})
+
+        # First trace: state_tensors returns TracedTensor (single) and tuple[TracedTensor] (multi)
+        single_state = annotate.state_tensors("policy", {"single": torch.tensor([0.1, 0.2, 0.3])})
+        self.assertIsInstance(single_state, TracedTensor)
+
+        multi_state = annotate.state_tensors(
+            "policy",
+            {
+                "multi_a": torch.tensor([1.0, 1.0, 1.0]),
+                "multi_b": torch.tensor([2.0, 2.0, 2.0]),
+            },
+        )
+        self.assertIsInstance(multi_state, tuple)
+        self.assertEqual(len(multi_state), 2)
+        self.assertTrue(all(isinstance(s, TracedTensor) for s in multi_state))
+
+        new_single = single_state + obs0
+        returned_single = annotate.update_state("policy", {"single": new_single})
+        self.assertIs(returned_single, new_single)
+
+        new_multi_a = multi_state[0] + 1.0
+        new_multi_b = multi_state[1] + 2.0
+        returned_multi = annotate.update_state(
+            "policy",
+            {"multi_a": new_multi_a, "multi_b": new_multi_b},
+        )
+        self.assertIsInstance(returned_multi, tuple)
+        self.assertEqual(len(returned_multi), 2)
+        self.assertIs(returned_multi[0], new_multi_a)
+        self.assertIs(returned_multi[1], new_multi_b)
+
+        annotate.output_tensors(
+            "policy",
+            {"action": obs0 + single_state + multi_state[0] + multi_state[1]},
+            export_with="jit",
+        )
+        annotate.stop()
+
+        # Passthrough (outside tracing): preserve single-vs-tuple return shape with raw tensors
+        single_passthrough = annotate.state_tensors("policy", {"single": torch.tensor([0.0, 0.0, 0.0])})
+        self.assertIsInstance(single_passthrough, torch.Tensor)
+
+        multi_passthrough = annotate.state_tensors(
+            "policy",
+            {
+                "multi_a": torch.tensor([0.0, 0.0, 0.0]),
+                "multi_b": torch.tensor([0.0, 0.0, 0.0]),
+            },
+        )
+        self.assertIsInstance(multi_passthrough, tuple)
+        self.assertEqual(len(multi_passthrough), 2)
+        self.assertTrue(all(isinstance(s, torch.Tensor) for s in multi_passthrough))
+
+        upd_single_passthrough = torch.tensor([9.0, 9.0, 9.0])
+        returned_single_passthrough = annotate.update_state(
+            "policy", {"single": upd_single_passthrough}
+        )
+        self.assertIs(returned_single_passthrough, upd_single_passthrough)
+
+        upd_multi_a = torch.tensor([8.0, 8.0, 8.0])
+        upd_multi_b = torch.tensor([7.0, 7.0, 7.0])
+        returned_multi_passthrough = annotate.update_state(
+            "policy", {"multi_a": upd_multi_a, "multi_b": upd_multi_b}
+        )
+        self.assertIsInstance(returned_multi_passthrough, tuple)
+        self.assertEqual(len(returned_multi_passthrough), 2)
+        self.assertIs(returned_multi_passthrough[0], upd_multi_a)
+        self.assertIs(returned_multi_passthrough[1], upd_multi_b)
 
     def test_state_tensor_basic(self):
         """Test basic state tensor: input -> computation -> updated state output."""
@@ -47,7 +122,8 @@ class TestStateTensors(LEAPPFunctionalTestBase):
         new_counter = counter + obs
 
         # Update state with new value
-        annotate.update_state("policy", {"counter": new_counter})
+        returned_state = annotate.update_state("policy", {"counter": new_counter})
+        self.assertIs(returned_state, new_counter)
 
         # Regular output
         action = obs * 2.0
@@ -278,7 +354,8 @@ class TestStateTensors(LEAPPFunctionalTestBase):
             new_history = torch.cat(
                 [history_state[:, 1:, :], current_obs.unsqueeze(1)], dim=1
             )
-            annotate.update_state("policy", {"history": new_history})
+            returned_history = annotate.update_state("policy", {"history": new_history})
+            self.assertIs(returned_history, new_history)
 
             # Compute action from history
             flat = new_history.reshape(1, -1)

@@ -215,6 +215,11 @@ class ExportManager:
         self.nodes[name] = node
         return node
 
+    @staticmethod
+    def _passthrough_dict_values(tensors: dict):
+        """Unwrap a single-entry dict to its value, or a multi-entry dict to a tuple."""
+        values = list(tensors.values())
+        return values[0] if len(values) == 1 else tuple(values)
 
     #########################################################
     # annotation APIs
@@ -235,8 +240,7 @@ class ExportManager:
             raise Exception("Mixing active contxts is not allowed")
 
         if not ExportManager._interpret_graph:
-            values = list(tensors.values())
-            return values[0] if len(values) == 1 else tuple(values)
+            return self._passthrough_dict_values(tensors)
 
         # create the node if it doesn't exist
         if node_name in self.nodes:
@@ -266,11 +270,8 @@ class ExportManager:
                     f"that was not seen during the first trace. "
                     f"Cannot reuse a node name from a different call site.\n"
                     f"New call site:\n{format_caller_identity(_caller_identity)}")
-            for tensor_name, tensor in tensors.items():
-                traced_tensors_node.validate_input_and_update_tags(
-                    tensor_name, tensor_name, tensor)
-            values = list(tensors.values())
-            return values[0] if len(values) == 1 else tuple(values)
+            traced_tensors_node.reentry_validate_inputs(tensors)
+            return self._passthrough_dict_values(tensors)
 
         traced_tensors_node._caller_identities.add(_caller_identity)
 
@@ -307,7 +308,9 @@ class ExportManager:
             tensors, metadata = unwrap_tensor_semantics(tensors)
 
         if not ExportManager._interpret_graph:
-            return
+            if not isinstance(tensors, dict):
+                tensors = {'tensor': tensors}
+            return self._passthrough_dict_values(tensors)
  
 
         if node_name in self.nodes.keys():
@@ -327,18 +330,14 @@ class ExportManager:
         flattened_tensors = flatten_io_structure(tensors, '')
 
         if not traced_tensors_node.is_tracing:
-            # tag regardless of tracing status
-            for tensor_name, tensor in flattened_tensors.items():
-                traced_tensors_node.tag_data(tensor, tensor_name)
-                traced_tensors_node.validate_output_and_update_tags(
-                    tensor_name, tensor_name, tensor)
+            flattened_static = None
             if static_outputs is not None:
                 if not isinstance(static_outputs, dict):
                     static_outputs = {'static_output': static_outputs}
-                for tensor_name, tensor in flatten_io_structure(static_outputs, '').items():
-                    traced_tensors_node.tag_data(tensor, tensor_name)
-            traced_tensors_node.increment_cache_idx()
-            return
+                flattened_static = flatten_io_structure(static_outputs, '')
+            traced_tensors_node.reentry_validate_and_tag_outputs(
+                flattened_tensors, flattened_static)
+            return self._passthrough_dict_values(tensors)
 
         if tensors_changed:
             _get_logger().warning(f"Warning: no tensor name provided for output_tensors call in node {node_name}\n"
@@ -395,6 +394,8 @@ class ExportManager:
         # Apply semantic metadata from TensorDescription wrappers
         if metadata:
             apply_semantic_metadata(traced_tensors_node, metadata)
+
+        return self._passthrough_dict_values(tensors)
 
     def register_buffer(self, node_name: str, tensors):
         """Register tensors as persistent buffers for a traced node.
@@ -457,9 +458,8 @@ class ExportManager:
             values = list(tensors.values())
             return values[0] if was_single else tuple(values)
 
-        # Flatten, validate, and wrap using create_static_tensors
-        flattened = flatten_io_structure(tensors, '')
-        result = traced_node.create_static_tensors(flattened)
+        # Validate and wrap static tensors while preserving nested structure
+        result = traced_node.create_static_tensors(tensors)
         values = list(result.values())
         return values[0] if was_single else tuple(values)
 
@@ -491,8 +491,7 @@ class ExportManager:
         Call input_tensors() first to create the node. Use update_state() to set output values.
         """
         if not ExportManager._interpret_graph:
-            values = list(tensors.values())
-            return values[0] if len(values) == 1 else tuple(values)
+            return self._passthrough_dict_values(tensors)
 
  
 
@@ -511,20 +510,18 @@ class ExportManager:
             raise Exception("Error: exception detected in state_tensors")
 
         if not traced_node.is_tracing:
-            for name, tensor in tensors.items():
-                traced_node.validate_input_and_update_tags(name, name, tensor)
-            values = list(tensors.values())
-            return values[0] if len(values) == 1 else tuple(values)
+            traced_node.reentry_validate_inputs(tensors)
+            return self._passthrough_dict_values(tensors)
 
         # Create state tensors (input placeholders that will also be outputs)
         state_dict = traced_node.create_state_tensors(tensors)
         values = list(state_dict.values())
         return values[0] if len(values) == 1 else tuple(values)
 
-    def update_state(self, node_name: str, tensors: dict[str, TracedTensor]) -> None:
-        """Set output values for state tensors. If not called, state passes through unchanged."""
+    def update_state(self, node_name: str, tensors: dict[str, TracedTensor]) -> TracedTensor | tuple[TracedTensor, ...]:
+        """Set output values for state tensors and return passthrough values."""
         if not ExportManager._interpret_graph:
-            return  # No-op when not tracing
+            return self._passthrough_dict_values(tensors)
 
  
 
@@ -542,12 +539,11 @@ class ExportManager:
             raise Exception("Error: exception detected in update_state")
 
         if not traced_node.is_tracing:
-            for name, tensor in tensors.items():
-                traced_node.validate_output_and_update_tags(
-                    f"{name}_out", f"{name}_out", tensor)
-            return
+            traced_node.reentry_validate_state_update(tensors)
+            return self._passthrough_dict_values(tensors)
 
         traced_node.update_state_tensors(tensors)
+        return self._passthrough_dict_values(tensors)
 
     def module(self, node_name: str, model: torch.nn.Module,
                buffer_names: list[str] | None = None) -> None:

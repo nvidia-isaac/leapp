@@ -417,6 +417,28 @@ class LeappNode():
         self.validate_io_and_update_tags(
             output_name, raw_output_name, output_value, self.outputs)
 
+    def reentry_validate_inputs(self, tensors: dict):
+        """Validate input tensors on re-entry (node already compiled)."""
+        for tensor_name, tensor in tensors.items():
+            self.validate_input_and_update_tags(tensor_name, tensor_name, tensor)
+
+    def reentry_validate_and_tag_outputs(self, tensors: dict,
+                                         static_tensors: dict | None = None):
+        """Tag and validate output tensors on re-entry, then advance the cache index."""
+        for tensor_name, tensor in tensors.items():
+            self.tag_data(tensor, tensor_name)
+            self.validate_output_and_update_tags(tensor_name, tensor_name, tensor)
+        if static_tensors:
+            for tensor_name, tensor in static_tensors.items():
+                self.tag_data(tensor, tensor_name)
+        self.increment_cache_idx()
+
+    def reentry_validate_state_update(self, tensors: dict):
+        """Validate state tensor updates on re-entry."""
+        for tensor_name, tensor in tensors.items():
+            self.validate_output_and_update_tags(
+                f"{tensor_name}_out", f"{tensor_name}_out", tensor)
+
     def change_input_name(self, old_name, new_name):
         _get_logger().warning(
             f"changing input name from {old_name} to {new_name} for model {self.name}")
