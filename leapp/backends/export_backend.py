@@ -352,12 +352,21 @@ class ExportBackend(abc.ABC):
                 f"SHA256 checksum mismatch for {model_path}: "
                 f"expected {sha256sum}, got {actual_sha256sum}"
             )
-        model = torch.jit.load(model_path)
+        model = torch.jit.load(model_path, map_location=device)
+        model = model.to(device)
         self.compiled_model = model.eval()
         self.compiled_module = model
 
 
 class NoneExportBackend(ExportBackend):
+    """Null export backend for nodes without an active export backend.
+
+    This backend represents "no export" behavior in normal usage. It can also
+    optionally act as a thin wrapper for existing model artifacts when
+    ``backend_params['model_path']`` is provided, including checksum validation
+    and backend-specific loading.
+    """
+
     def get_backend_metadata(self):
         return {}
 
@@ -386,15 +395,15 @@ class NoneExportBackend(ExportBackend):
 
         return model_path, md5sum, sha256sum
 
-    def load(self, model_path: str, sha256sum: str, device: str, type=None):
-        if type is None: 
+    def load(self, model_path: str, sha256sum: str, device: str, model_type=None):
+        if model_type is None: 
             return
-        if type == "onnx":
+        if model_type == "onnx":
             self._load_onnx(model_path, sha256sum, device)
-        elif type == "jit":
+        elif model_type == "jit":
             self._load_torchscript(model_path, sha256sum, device)
         else:
-            raise Exception(f"Unsupported model type: {type}")
+            raise ValueError(f"Unsupported model type: {model_type}")
 
     def get_backed_model_type(self):
         if "model_path" not in self.backend_params:
@@ -415,5 +424,5 @@ class NoneExportBackend(ExportBackend):
         elif suffix == 'engine' or suffix == 'plan':
             return 'trt'
         else:
-            raise Exception(
+            raise ValueError(
                 f"Unsupported model file suffix: {suffix}")

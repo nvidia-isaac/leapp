@@ -15,6 +15,8 @@ import collections
 
 class TracedTensorNode(LeappNode):
     def __init__(self, name, node_index, *args, **kwargs):
+        if args or kwargs:
+            _get_logger().warning(f"TracedTensorNode {name} received unexpected arguments on initialization. these arguments will be ignored.")
         super().__init__(name, node_index)
         """Initialize a shared tracing context."""
         self.graph = fx.Graph()
