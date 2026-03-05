@@ -30,6 +30,7 @@ from .utils.enums import inputKindEnum, outputKindEnum
 from .utils.tensor_description import TensorSemantics
 
 __version__ = "0.4.0"
+__config_version__ = "1.0"
 __author__ = "Frank Lai"
 __email__ = "frlai@nvidia.com"
 

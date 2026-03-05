@@ -478,6 +478,7 @@ def get_system_info():
     import leapp
     metadata = {'system information': {}}
     metadata['system information']['leapp version'] = leapp.__version__
+    metadata['system information']['leapp config version'] = leapp.__config_version__
     metadata['system information']['torch version'] = str(torch.__version__)
     metadata['system information']['python version'] = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     metadata['system information']['cuda version'] = str(torch.version.cuda)
