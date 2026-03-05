@@ -24,6 +24,8 @@ import sys
 import shutil
 from pathlib import Path
 
+from leapp.export_manager import ExportManager
+from leapp.leapp import _MANAGER as annotate
 from leapp.inference_manager import InferenceManager
 
 
@@ -55,10 +57,9 @@ class BaseExampleTest(unittest.TestCase):
         
         # Reset ExportManager singleton to avoid stale state between tests
         # This is necessary because different examples may use the same node names
-        from leapp import annotate
-        if annotate._interpret_graph:
-            annotate._interpret_graph = False
-        annotate.nodes = {}
+        if ExportManager.is_interpret_graph_enabled():
+            ExportManager.set_interpret_graph(False)
+        annotate.reset_nodes()
 
     def _run_example_script(self, script_name, expected_output_dir):
         """

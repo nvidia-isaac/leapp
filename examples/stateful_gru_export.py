@@ -22,6 +22,7 @@ import os
 import shutil
 import torch
 import torch.nn as nn
+import leapp
 from leapp import annotate
 
 
@@ -63,7 +64,7 @@ def main():
     obs = torch.randn(1, 16)
 
     # Start LEAPP tracing
-    annotate.start("stateful_gru", save_path=output_dir)
+    leapp.start("stateful_gru", save_path=output_dir)
 
     # Register regular inputs
     obs_traced = annotate.input_tensors("policy", {"obs": obs})
@@ -77,8 +78,8 @@ def main():
     annotate.output_tensors("policy", {"action": action},
                             export_with="onnx-torchscript")
 
-    annotate.stop()
-    annotate.compile_graph(visualize=False)
+    leapp.stop()
+    leapp.compile_graph(visualize=False)
 
     # Verify the ONNX model
     onnx_path = os.path.join(output_dir, "stateful_gru", "policy.onnx")

@@ -16,7 +16,8 @@
 #
 import unittest
 import torch
-from leapp import annotate
+import leapp
+from leapp.leapp import _MANAGER as annotate
 from .base import LEAPPFunctionalTestBase
 from leapp.leapp_graph.datatypes import TracedTensor
 
@@ -32,12 +33,12 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
         def funcC(inputB: torch.Tensor):
             return inputB+5.0
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         for i in range(5):
             outputA = funcA(torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32))
             outputC = funcC(outputA)
-        annotate.stop()
-        annotate.compile_graph(visualize=False, validate=True)
+        leapp.stop()
+        leapp.compile_graph(visualize=False, validate=True)
 
         self.assertEqual(len(annotate.nodes), 2)
         self.assertEqual(len(annotate.nodes[funcA.__name__].inputs), 1)
@@ -55,10 +56,10 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
         def funcA(inputA: torch.Tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)):
             return inputA
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         outputA = funcA()
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.assertEqual(len(annotate.nodes), 1)
         self.assertEqual(len(annotate.nodes[funcA.__name__].inputs), 0)
 
@@ -77,10 +78,10 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
         def funcA(inputA: torch.Tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)):
             return inputA
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         outputA = funcA(torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32))
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.assertEqual(len(annotate.nodes), 1)
         self.assertEqual(len(annotate.nodes[funcA.__name__].inputs), 1)
         model_info = self.inspect_torchscript_model(funcA.__name__)
@@ -97,10 +98,10 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
             output = torch.cat([input1, input2, input3, input4, input5], dim=0)
             return output
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         outputA = funcA(input1=torch.tensor([1]), input4=torch.tensor([1]))
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.assertEqual(len(annotate.nodes), 1)
         self.assertEqual(len(annotate.nodes[funcA.__name__].inputs), 2)
         model_info = self.inspect_torchscript_model(funcA.__name__)
@@ -117,10 +118,10 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
             scale_before, tensor, scale_after = inputs
             return tensor * scale_before + scale_after
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         outputA = funcA(2, torch.tensor([3, 4, 5]), 10)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.assertEqual(len(annotate.nodes), 1)
         expected = torch.tensor([3, 4, 5]) * 2 + 10
         self.assertTrue(torch.equal(outputA.data if hasattr(outputA, 'data') else outputA, expected),
@@ -132,10 +133,10 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
         def funcA(input1: torch.Tensor):
             return input1+1, input1+2, input1+3
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         outputA, outputB, outputC = funcA(torch.tensor([1]))
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         self.assertEqual(len(annotate.nodes), 1)
         self.assertEqual(len(annotate.nodes[funcA.__name__].inputs), 1)
@@ -162,10 +163,10 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
         # Apply annotate.method on top of the wrapped function
         annotated_func = annotate.method(export_with="jit")(wrapped_func)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         input_tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
         output = annotated_func(input_tensor)
-        annotate.stop()
+        leapp.stop()
 
         # Verify node was created correctly
         self.assertEqual(len(annotate.nodes), 1)
@@ -176,7 +177,7 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
             annotate.nodes['wrapped_func'].inputs[0].name, "inputA")
 
         # Compile the graph
-        annotate.compile_graph(visualize=False)
+        leapp.compile_graph(visualize=False)
 
         # Verify model was generated
         self.verify_all_models_exist('wrapped_func')
@@ -206,10 +207,10 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
             export_with="jit"
         )(model.forward)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         input_tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
         output = model.forward(input_tensor)
-        annotate.stop()
+        leapp.stop()
 
         # Verify node was created correctly
         self.assertEqual(len(annotate.nodes), 1)
@@ -219,7 +220,7 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
         self.assertEqual(annotate.nodes['model_forward'].inputs[0].name, "x")
 
         # Compile the graph
-        annotate.compile_graph(visualize=False)
+        leapp.compile_graph(visualize=False)
 
         # Verify model was generated
         self.verify_all_models_exist('model_forward')
@@ -263,7 +264,7 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
         self.fail(f"Unsupported nested leaf type in test payload: {type(source).__name__}")
 
     def test_annotate_tensor_single(self):
-        annotate.start(name=self.TEST_GRAPH_NAME, verbose=True)
+        leapp.start(name=self.TEST_GRAPH_NAME, verbose=True)
         tensor1 = annotate.input_tensors(
             'func1', {'input1': torch.tensor([1.0, 2.0, 3.0])})
         tensor1 = tensor1 + 1.0
@@ -276,8 +277,8 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
             'func1', {'output1': tensor1}, export_with="jit")
         self.assertIs(returned_output, tensor1)
         self.assertIsInstance(returned_output, TracedTensor)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(
             annotate, nodes=1, inputs=1, outputs=1, internal_connections=0)
@@ -286,7 +287,7 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
 
     def test_annotate_tensor_with_static_outputs(self):
         """Test that static outputs (constant tensors not derived from inputs) are returned by the model."""
-        annotate.start(name=self.TEST_GRAPH_NAME, verbose=True)
+        leapp.start(name=self.TEST_GRAPH_NAME, verbose=True)
         
         # Input tensor
         input_tensor = torch.tensor([1.0, 2.0, 3.0])
@@ -306,8 +307,8 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
             export_with="jit"
         )
         
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         
         # Verify graph structure: 1 input, 2 outputs (computed + static)
         self.verify_num_connections(
@@ -336,7 +337,7 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
         
         module = MockModule()
         
-        annotate.start(name=self.TEST_GRAPH_NAME, verbose=True)
+        leapp.start(name=self.TEST_GRAPH_NAME, verbose=True)
         
         # Create traced input
         input_tensor = torch.tensor([4.0, 5.0, 6.0])
@@ -348,8 +349,8 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
         # Output the result
         annotate.output_tensors('buffer_test', {'result': result}, export_with="jit")
         
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         
         # Verify graph structure: 1 input, 1 output
         self.verify_num_connections(
@@ -365,7 +366,7 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
 
     def test_api_returns_preserve_complex_nested_format(self):
         """All return-producing APIs preserve complex dict/list/tuple payload format."""
-        annotate.start(name=self.TEST_GRAPH_NAME, verbose=True)
+        leapp.start(name=self.TEST_GRAPH_NAME, verbose=True)
 
         nested_payload = {
             "branch_a": [
@@ -423,11 +424,11 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
             export_with="jit",
         )
 
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         # state_tensors: should preserve nested format in returned state payload
-        annotate.start(name=self.TEST_GRAPH_NAME, verbose=True)
+        leapp.start(name=self.TEST_GRAPH_NAME, verbose=True)
         _ = annotate.input_tensors(
             "complex_returns_state",
             {"obs": torch.tensor([0.1, 0.2, 0.3])},
@@ -441,23 +442,23 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
             {"state_payload": state_payload},
         )
         self._assert_nested_traced_structure(state_payload, traced_state_payload)
-        annotate.stop()
+        leapp.stop()
 
     def test_annotate_tensor_with_dict_io(self):
-        annotate.start(name=self.TEST_GRAPH_NAME, verbose=True)
+        leapp.start(name=self.TEST_GRAPH_NAME, verbose=True)
         input_dict = {'input1': torch.tensor([1.0, 2.0, 3.0])}
         input_dict = annotate.input_tensors(
             'func1', {'input_dict': input_dict})
         input_dict['input1'] = input_dict['input1'].matmul(torch.tensor(
             [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]))
         annotate.output_tensors('func1', input_dict, export_with="jit")
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_num_connections(
             annotate, nodes=1, inputs=1, outputs=1, internal_connections=0)
 
     def test_annotate_tensor_with_list_io(self):
-        annotate.start(name=self.TEST_GRAPH_NAME, verbose=True)
+        leapp.start(name=self.TEST_GRAPH_NAME, verbose=True)
         tensor_list = [torch.tensor([1.0, 2.0, 3.0]),
                        torch.tensor([4.0, 5.0, 6.0])]
         tensor_list = annotate.input_tensors(
@@ -467,14 +468,14 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
         tensor_list[1] = tensor_list[1].matmul(torch.tensor(
             [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]))
         annotate.output_tensors('func1', tensor_list, export_with="jit")
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_num_connections(
             annotate, nodes=1, inputs=2, outputs=2, internal_connections=0)
 
     def test_annotate_tensor_with_list_input_dict_output(self):
         """Test with list input and dict output."""
-        annotate.start(name=self.TEST_GRAPH_NAME, verbose=True)
+        leapp.start(name=self.TEST_GRAPH_NAME, verbose=True)
         tensor_list = [torch.tensor([1.0, 2.0, 3.0]),
                        torch.tensor([4.0, 5.0, 6.0])]
         tensor_list = annotate.input_tensors(
@@ -485,15 +486,15 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
         # Output as dict
         output_dict = {'result_a': processed_0, 'result_b': processed_1}
         annotate.output_tensors('func1', output_dict, export_with="jit")
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_num_connections(
             annotate, nodes=1, inputs=2, outputs=2, internal_connections=0)
 
     def test_annotate_tensor_with_list_and_single_input_concat_output(self):
         """Test with 2 inputs: one list of 2 tensors, one regular tensor.
         Output is all tensors concatenated together."""
-        annotate.start(name=self.TEST_GRAPH_NAME, verbose=True)
+        leapp.start(name=self.TEST_GRAPH_NAME, verbose=True)
         # First input: a list of 2 tensors
         tensor_list = [torch.tensor([1.0, 2.0, 3.0]),
                        torch.tensor([4.0, 5.0, 6.0])]
@@ -509,13 +510,13 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
         # Output as single tensor
         annotate.output_tensors(
             'func1', {'concatenated': concatenated}, export_with="jit")
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_num_connections(
             annotate, nodes=1, inputs=3, outputs=1, internal_connections=0)
 
     def test_annotate_tensor_sequential_context(self):
-        annotate.start(name=self.TEST_GRAPH_NAME, verbose=True)
+        leapp.start(name=self.TEST_GRAPH_NAME, verbose=True)
         tensor1 = annotate.input_tensors(
             'func1', {'input1': torch.tensor([1.0, 2.0, 3.0])})
         tensor2 = tensor1 + 1.0
@@ -529,15 +530,15 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
         tensor4 = tensor3 + 3.0
         annotate.output_tensors('func3', {'output3': tensor4},
                                 export_with="jit")
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(
             annotate, nodes=3, inputs=1, outputs=1, internal_connections=2)
 
     def test_annotate_multiple_parallel_contexts(self):
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         for i in range(10):
             tensor1 = annotate.input_tensors(
                 f'func{i}', {'input1': torch.tensor([1.0, 2.0, 3.0])})
@@ -545,8 +546,8 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
             annotate.output_tensors(
                 f'func{i}', {'output1': tensor1}, export_with="jit")
 
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(
             annotate, nodes=10, inputs=10, outputs=10, internal_connections=0)
@@ -555,7 +556,7 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
 
     def test_annotate_multiple_parallel_inputs_as_one_context(self):
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         output_tensors = []
         for i in range(10):
             tensor1 = annotate.input_tensors(
@@ -566,8 +567,8 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
         annotate.output_tensors(
             'func_combined', {'outputs': output_tensors}, export_with="jit")
 
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(
             annotate, nodes=1, inputs=10, outputs=10, internal_connections=0)
@@ -575,7 +576,7 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
 
     def test_annotate_node_with_trimmed_inputs(self):
         '''test the situation where the node has inputs that are not used in the computation'''
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         for i in range(10):
             tensor1 = annotate.input_tensors(
                 'func1', {'input1': torch.tensor([1.0, 2.0, 3.0])})
@@ -584,8 +585,8 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
             tensor3 = tensor1 + 20
             annotate.output_tensors(
                 'func1', {'output1': tensor3}, export_with="jit")
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         result = self.inspect_torchscript_model('func1')
         self.assertTrue(
@@ -600,7 +601,7 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
             annotate, nodes=1, inputs=1, outputs=1, internal_connections=0)
 
     def test_annotate_node_with_many_trimmed_inputs(self):
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         for i in range(5):
             inputs = [torch.tensor(
                 [float(i), float(i+1), float(i+2)], dtype=torch.float32) for i in range(20)]
@@ -613,8 +614,8 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
 
             annotate.output_tensors(
                 'func1', {'output': output}, export_with="jit")
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         result = self.inspect_torchscript_model('func1')
         self.assertEqual(len(result['inputs']), 16,
@@ -633,7 +634,7 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
             [inputs], [output], 'func1')
 
     def test_annotate_multiple_runs(self):
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
 
         for i in range(10):
             tensor1 = annotate.input_tensors(
@@ -646,8 +647,8 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
             annotate.output_tensors(
                 'func1', {'output1': tensor1}, export_with="jit")
 
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(
             annotate, nodes=1, inputs=1, outputs=1, internal_connections=0)
@@ -661,7 +662,7 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
         and both are annotated with the same node - the inner call's traced tensor should be
         overridden to become a new input.
         """
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
 
         # First input - creates a TracedTensor
         input1 = annotate.input_tensors(
@@ -684,8 +685,8 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
 
         annotate.output_tensors('physics_node', {'force': final_output},
                                 export_with="jit")
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         # Verify we have 2 inputs (velocity and acceleration)
         self.assertEqual(len(annotate.nodes['physics_node'].inputs), 1)
@@ -722,7 +723,7 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
         the first one has 2 inputs 1 output which feeds into the second one. 
         the output of the second one going into one of the inputs of the first one'''
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
 
         # Initialize feedback tensor (will be updated each iteration)
         feedback_tensor = torch.tensor([0.0, 0.0, 0.0])
@@ -746,8 +747,8 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
             # Update feedback tensor for next iteration
             feedback_tensor = output2
 
-        annotate.stop()
-        annotate.compile_graph(visualize=False, validate=True)
+        leapp.stop()
+        leapp.compile_graph(visualize=False, validate=True)
 
         # 2 nodes, 1 external input (input1), 1 external output (output2)
         # 1 internal connection (func1 -> func2)
@@ -761,7 +762,7 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
         '''Three node chain where the last node feeds back to the first.
         func1 -> func2 -> func3 -> (feedback to func1)'''
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
 
         feedback_tensor = torch.tensor([0.0, 0.0, 0.0])
 
@@ -789,8 +790,8 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
 
             feedback_tensor = out3
 
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         # 3 nodes, 1 external input, 0 external outputs (all internal/feedback)
         # 2 internal connections (func1->func2, func2->func3)
@@ -803,7 +804,7 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
     def test_annotate_traced_tensors_with_complex_nested_io(self):
         '''Single node with complex nested dict/list IO run multiple times'''
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
 
         for i in range(10):
             # Complex nested input structure
@@ -824,8 +825,8 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
                 'sum': list_sum,
                 'combined': combined}, export_with="jit")
 
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         # 1 node, 3 flattened inputs, 2 flattened outputs
         self.verify_num_connections(
@@ -841,7 +842,7 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
               -> func2b ->
         '''
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
 
         feedback_tensor = torch.tensor([0.0, 0.0, 0.0])
 
@@ -878,8 +879,8 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
 
             feedback_tensor = out3
 
-        annotate.stop()
-        annotate.compile_graph(visualize=True)
+        leapp.stop()
+        leapp.compile_graph(visualize=True)
 
         # 4 nodes, 1 external input
         # 3 internal connections (func1->func2a, func1->func2b, func2a->func3, func2b->func3)
@@ -896,7 +897,7 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
         Loop B: funcB1 -> funcB2 -> (feedback to funcB1)
         '''
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
 
         feedback_a = torch.tensor([0.0, 0.0, 0.0])
         feedback_b = torch.tensor([0.0, 0.0, 0.0])
@@ -932,8 +933,8 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
                 'funcB2', {'out': outB2}, export_with="jit")
             feedback_b = outB2
 
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         # 4 nodes, 2 external inputs (one per loop)
         # 2 internal connections (funcA1->funcA2, funcB1->funcB2)
@@ -947,7 +948,7 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
         '''Test nested dict input structure with multiple iterations.
         This tests that validation correctly handles nested structures on reentry.'''
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
 
         for i in range(5):
             # Nested dict input - {'group': {'a': tensor, 'b': tensor}}
@@ -964,8 +965,8 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
             annotate.output_tensors(
                 'nested_node', {'result': result}, export_with="jit")
 
-        annotate.stop()
-        annotate.compile_graph(visualize=False, validate=True)
+        leapp.stop()
+        leapp.compile_graph(visualize=False, validate=True)
 
         # 1 node, 2 flattened inputs (group_x, group_y), 1 output
         self.verify_num_connections(
@@ -975,7 +976,7 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
     def test_annotate_traced_tensors_nested_list_multiple_runs(self):
         '''Test nested list input structure with multiple iterations.'''
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
 
         for i in range(10):
             # List input that gets flattened
@@ -993,8 +994,8 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
             annotate.output_tensors(
                 'list_node', {'result': result}, export_with="jit")
 
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         # 1 node, 3 flattened inputs, 1 output
         self.verify_num_connections(
@@ -1004,7 +1005,7 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
     def test_annotate_traced_tensors_mixed_nested_structure_multiple_runs(self):
         '''Test mixed nested structure (dict containing list) with multiple iterations.'''
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
 
         for i in range(10):
             # Mixed nested: dict with both list and scalar tensor
@@ -1023,8 +1024,8 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
             annotate.output_tensors(
                 'mixed_node', {'result': result}, export_with="jit")
 
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         # 1 node, 3 flattened inputs (batch_0, batch_1, scale), 1 output
         self.verify_num_connections(
@@ -1043,15 +1044,15 @@ class TestAnnotateMixed(LEAPPFunctionalTestBase):
             return inputA - 2.0
 
         input_tensor = torch.tensor([1.0, 2.0, 3.0])
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         input_tensor = annotate.input_tensors(
             'run_function', {'input_tensor': input_tensor})
         output_tensor = run_function(input_tensor)
         annotate.output_tensors(
             'run_function', {'output_tensor': output_tensor}, export_with="jit")
         outputA = funcA(output_tensor)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(
             annotate, nodes=2, inputs=1, outputs=1, internal_connections=1)
@@ -1067,7 +1068,7 @@ class TestAnnotateMixed(LEAPPFunctionalTestBase):
             return tensor + 10.0
 
         input_tensor = torch.tensor([1.0, 2.0, 3.0])
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         output_funcA = funcA(input_tensor)
         # Now use traced tensors for the next step
         traced_input = annotate.input_tensors(
@@ -1075,8 +1076,8 @@ class TestAnnotateMixed(LEAPPFunctionalTestBase):
         output_tensor = run_function(traced_input)
         annotate.output_tensors(
             'run_function', {'output_tensor': output_tensor}, export_with="jit")
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(
             annotate, nodes=2, inputs=1, outputs=1, internal_connections=1)
@@ -1095,7 +1096,7 @@ class TestAnnotateMixed(LEAPPFunctionalTestBase):
             return tensor - 1.0
 
         input_tensor = torch.tensor([1.0, 2.0, 3.0])
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         # First traced tensor node
         traced_input = annotate.input_tensors(
             'preprocess', {'input': input_tensor})
@@ -1110,8 +1111,8 @@ class TestAnnotateMixed(LEAPPFunctionalTestBase):
         postprocessed = postprocess(traced_method_output)
         annotate.output_tensors(
             'postprocess', {'postprocessed': postprocessed}, export_with="jit")
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
 
         self.verify_num_connections(
@@ -1124,7 +1125,7 @@ class TestAnnotateMixed(LEAPPFunctionalTestBase):
     #         return tensor + 100.0
 
     #     input_tensor = torch.tensor([1.0, 2.0, 3.0])
-    #     annotate.start(name=self.TEST_GRAPH_NAME)
+    #     leapp.start(name=self.TEST_GRAPH_NAME)
     #     # Block context first
     #     with annotate.block('block_node', inputs=['input_tensor'], outputs=['block_output'], export_with="jit"):
     #         block_output = input_tensor * 3.0
@@ -1134,8 +1135,8 @@ class TestAnnotateMixed(LEAPPFunctionalTestBase):
     #     output_tensor = run_function(traced_input)
     #     annotate.output_tensors(
     #         'run_function', {'output_tensor': output_tensor}, export_with="jit")
-    #     annotate.stop()
-    #     annotate.compile_graph(visualize=False)
+    #     leapp.stop()
+    #     leapp.compile_graph(visualize=False)
 
     #     self.verify_num_connections(
     #         annotate, nodes=2, inputs=1, outputs=1, internal_connections=1)
@@ -1147,7 +1148,7 @@ class TestAnnotateMixed(LEAPPFunctionalTestBase):
     #         return tensor * 2.0
 
     #     input_tensor = torch.tensor([1.0, 2.0, 3.0])
-    #     annotate.start(name=self.TEST_GRAPH_NAME)
+    #     leapp.start(name=self.TEST_GRAPH_NAME)
     #     # Traced tensors first
     #     traced_input = annotate.input_tensors(
     #         'run_function', {'input': input_tensor})
@@ -1157,8 +1158,8 @@ class TestAnnotateMixed(LEAPPFunctionalTestBase):
     #     # Then block context
     #     with annotate.block('block_node', inputs=['output_tensor'], outputs=['block_output'], export_with="jit"):
     #         block_output = output_tensor + 50.0
-    #     annotate.stop()
-    #     annotate.compile_graph(visualize=False)
+    #     leapp.stop()
+    #     leapp.compile_graph(visualize=False)
 
     #     self.verify_num_connections(
     #         annotate, nodes=2, inputs=1, outputs=1, internal_connections=1)
@@ -1174,7 +1175,7 @@ class TestAnnotateMixed(LEAPPFunctionalTestBase):
     #         return tensor - 5.0
 
     #     input_tensor = torch.tensor([1.0, 2.0, 3.0])
-    #     annotate.start(name=self.TEST_GRAPH_NAME)
+    #     leapp.start(name=self.TEST_GRAPH_NAME)
     #     # Method first
     #     method_output = funcA(input_tensor)
     #     # Then block
@@ -1186,8 +1187,8 @@ class TestAnnotateMixed(LEAPPFunctionalTestBase):
     #     output_tensor = run_function(traced_input)
     #     annotate.output_tensors(
     #         'run_function', {'output_tensor': output_tensor}, export_with="jit")
-    #     annotate.stop()
-    #     annotate.compile_graph(visualize=False)
+    #     leapp.stop()
+    #     leapp.compile_graph(visualize=False)
 
     #     self.verify_num_connections(
     #         annotate, nodes=3, inputs=1, outputs=1, internal_connections=2)
@@ -1207,7 +1208,7 @@ class TestAnnotateMixed(LEAPPFunctionalTestBase):
 
         input_a = torch.tensor([1.0, 2.0, 3.0])
         input_b = torch.tensor([4.0, 5.0, 6.0])
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         # First traced tensor path
         traced_a = annotate.input_tensors('process_a', {'input_a': input_a})
         # First traced tensor path
@@ -1222,8 +1223,8 @@ class TestAnnotateMixed(LEAPPFunctionalTestBase):
                                 export_with="jit")
         # Combine with method
         combined = combine(output_a, output_b)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(
             annotate, nodes=3, inputs=2, outputs=1, internal_connections=2)
@@ -1242,7 +1243,7 @@ class TestAnnotateMixed(LEAPPFunctionalTestBase):
     #         'b': torch.tensor([4.0, 5.0, 6.0]),
     #     }
 
-    #     annotate.start(name=self.TEST_GRAPH_NAME)
+    #     leapp.start(name=self.TEST_GRAPH_NAME)
 
     #     with annotate.block('multiline_dict',
     #                         inputs=['input_data'],
@@ -1253,8 +1254,8 @@ class TestAnnotateMixed(LEAPPFunctionalTestBase):
     #             key: value * 2.0 for key, value in input_data.items()
     #         }
 
-    #     annotate.stop()
-    #     annotate.compile_graph(visualize=False)
+    #     leapp.stop()
+    #     leapp.compile_graph(visualize=False)
 
     #     # Verify node was created
     #     self.assertEqual(len(annotate.nodes), 1)

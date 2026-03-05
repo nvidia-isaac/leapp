@@ -5,26 +5,27 @@ This document provides a comprehensive reference for LEAPP's core API methods. L
 ## Quick Reference
 
 ```python
+import leapp
 from leapp import annotate
 
 # Core workflow
-annotate.start(name="my_graph", save_path=".", verbose=False)
+leapp.start(name="my_graph", save_path=".", verbose=False)
 # ... trace your code using @annotate.method(), with annotate.block(), 
 #     or annotate.input_tensors() / annotate.output_tensors()
-annotate.stop()
-annotate.compile_graph(visualize=True)
+leapp.stop()
+leapp.compile_graph(visualize=True)
 ```
 
 ---
 
-## `annotate.start()`
+## `leapp.start()`
 
 Initialize and start LEAPP graph interpretation.
 
 ### Signature
 
 ```python
-annotate.start(name: str, save_path: str = ".", verbose: bool = False)
+leapp.start(name: str, save_path: str = ".", verbose: bool = False)
 ```
 
 ### Parameters
@@ -48,14 +49,14 @@ annotate.start(name: str, save_path: str = ".", verbose: bool = False)
 
 ---
 
-## `annotate.stop()`
+## `leapp.stop()`
 
 Stop LEAPP graph interpretation and disable tracing.
 
 ### Signature
 
 ```python
-annotate.stop()
+leapp.stop()
 ```
 
 ### Parameters
@@ -238,14 +239,14 @@ annotate.output_tensors(node_name: str, tensors: dict, **kwargs)
 
 ---
 
-## `annotate.compile_graph()`
+## `leapp.compile_graph()`
 
 Compile and save the computational graph from traced nodes.
 
 ### Signature
 
 ```python
-annotate.compile_graph(visualize: bool = True)
+leapp.compile_graph(visualize: bool = True)
 ```
 
 ### Parameters
@@ -365,6 +366,7 @@ Here's a complete example demonstrating all API methods:
 ```python
 import torch
 import torch.nn as nn
+import leapp
 from leapp import annotate
 
 # Define a simple model
@@ -402,7 +404,7 @@ def run_inference(data):
 # Main pipeline
 def main():
     # 1. Start tracing
-    annotate.start(
+    leapp.start(
         name="complete_pipeline",
         save_path="./exports",
         verbose=True
@@ -430,10 +432,10 @@ def main():
     print(f"Final output: {final_output}")
     
     # 5. Stop tracing
-    annotate.stop()
+    leapp.stop()
     
     # 6. Compile and export the graph
-    annotate.compile_graph(visualize=True)
+    leapp.compile_graph(visualize=True)
     
     print("Pipeline exported successfully!")
     print("Check ./exports/complete_pipeline/ for outputs")

@@ -10,13 +10,14 @@ Instead of passing raw tensors to `input_tensors` or `output_tensors`, wrap them
 
 ```python
 import torch
+import leapp
 from leapp import annotate, TensorSemantics
 from leapp.utils.enums import inputKindEnum, outputKindEnum
 
 joint_pos = torch.randn(1, 12)
 joint_vel = torch.randn(1, 12)
 
-annotate.start("my_robot")
+leapp.start("my_robot")
 
 # Pass a list of TensorSemantics as inputs
 traced_pos, traced_vel = annotate.input_tensors("policy", [
@@ -43,8 +44,8 @@ annotate.output_tensors("policy", [
                                     "shoulder_r", "elbow_r", "wrist_r"]),
 ])
 
-annotate.stop()
-annotate.compile_graph()
+leapp.stop()
+leapp.compile_graph()
 ```
 
 The generated YAML will include the semantic metadata:

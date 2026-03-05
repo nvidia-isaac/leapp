@@ -15,37 +15,40 @@ Primary goal: export complex pipelines with small annotation inserts and no func
 ## Core workflow (always in this order)
 
 ```python
+import leapp
 from leapp import annotate
 
-annotate.start(name="my_graph", save_path=".")
+leapp.start(name="my_graph", save_path=".")
 # ... trace nodes ...
-annotate.stop()
-annotate.compile_graph(visualize=True, validate=True)
+leapp.stop()
+leapp.compile_graph(visualize=True, validate=True)
 ```
 
 Do not call `compile_graph()` before `stop()`.
+Use `leapp.start()`, `leapp.stop()`, and `leapp.compile_graph()` for graph lifecycle control.
+Use `annotate` only for annotation APIs such as `method()`, `input_tensors()`, and `output_tensors()`.
 
 ## Optional runtime/export settings (important knobs)
 
 Use these to control tracing cost, validation coverage, and output artifacts.
 
-- `annotate.start(..., max_cached_io=N)`:
+- `leapp.start(..., max_cached_io=N)`:
   - Controls how many re-entry I/O examples LEAPP caches per node for multi-example validation.
   - Higher values improve confidence for looped/stateful pipelines, but increase memory/time.
   - Practical default: keep `N` small (`3-5`) unless user explicitly wants stronger replay coverage.
-- `annotate.compile_graph(validate=True, rtol=..., atol=..., strict=True)`:
+- `leapp.compile_graph(validate=True, rtol=..., atol=..., strict=True)`:
   - `validate=True` compares exported model outputs against traced outputs.
   - Tune `rtol`/`atol` if expected numeric drift exists (especially ONNX/cross-device).
   - Use `validate=False` only for rapid iteration or when user asks for speed over checks.
-- `annotate.start(..., dry_run=True)`:
+- `leapp.start(..., dry_run=True)`:
   - Skips real model compilation/export, but still traces graph structure.
   - Useful for debugging node boundaries, names, and pipeline wiring before expensive export.
-- `annotate.compile_graph(visualize=True)`:
+- `leapp.compile_graph(visualize=True)`:
   - `True` emits `<graph_name>.png` graph visualization.
   - `False` is faster for CI/headless runs when the image is not needed.
 - Also useful:
-  - `annotate.start(..., verbose=True)` for detailed trace logs.
-  - `annotate.start(..., patch_numpy=False)` if numpy-related patching causes environment issues.
+  - `leapp.start(..., verbose=True)` for detailed trace logs.
+  - `leapp.start(..., global_patching=False)` if numpy-related patching causes environment issues.
 
 
 ## Critical node declaration rule
@@ -63,15 +66,15 @@ For `TracedTensorNode` workflows (`input_tensors` / `output_tensors`), agents mu
 Example:
 
 ```python
-annotate.start(
+leapp.start(
     name="my_graph",
     max_cached_io=5,
     dry_run=False,
     verbose=True,
 )
 # ... trace ...
-annotate.stop()
-annotate.compile_graph(
+leapp.stop()
+leapp.compile_graph(
     visualize=True,
     validate=True,
     rtol=1e-3,
@@ -101,9 +104,10 @@ Example:
 
 ```python
 import torch
+import leapp
 from leapp import annotate, TensorSemantics, inputKindEnum, outputKindEnum
 
-annotate.start("semantic_graph")
+leapp.start("semantic_graph")
 
 annotate.input_tensors("policy", [
     TensorSemantics("joint_pos", torch.randn(12), kind=inputKindEnum.JOINT_POSITION),
@@ -120,8 +124,8 @@ annotate.output_tensors("policy", [
     )
 ], export_with="jit")
 
-annotate.stop()
-annotate.compile_graph(validate=True)
+leapp.stop()
+leapp.compile_graph(validate=True)
 ```
 
 ## API chooser (how to pick the right LEAPP method)
@@ -177,7 +181,7 @@ Use this decision table:
 3. Wrap each stage with `method()` or `input_tensors()/output_tensors()`.
 4. Pick backend per stage (`jit` first unless user requests ONNX).
 5. Export and validate:
-   - `annotate.compile_graph(validate=True)`
+   - `leapp.compile_graph(validate=True)`
 6. Smoke test runtime with `InferenceManager`.
 
 ## Copy-paste patterns
@@ -186,6 +190,7 @@ Use this decision table:
 
 ```python
 import torch
+import leapp
 from leapp import annotate
 
 @annotate.method(export_with="jit")  # node_name defaults to function name: "preprocess"
@@ -194,19 +199,20 @@ def preprocess(obs):
 
 def run():
     x = torch.randn(1, 32)
-    annotate.start("demo_graph")
+    leapp.start("demo_graph")
     y = preprocess(x)
-    annotate.stop()
-    annotate.compile_graph(visualize=True, validate=True)
+    leapp.stop()
+    leapp.compile_graph(visualize=True, validate=True)
 ```
 
 ### Pattern B: Flexible traced node (recommended for multi-step logic)
 
 ```python
 import torch
+import leapp
 from leapp import annotate
 
-annotate.start("demo_graph")
+leapp.start("demo_graph")
 
 obs = torch.randn(1, 32)
 x = annotate.input_tensors("policy", {"obs": obs})
@@ -215,8 +221,8 @@ h = torch.relu(x)
 out = torch.tanh(h)
 
 annotate.output_tensors("policy", {"action": out}, export_with="jit")
-annotate.stop()
-annotate.compile_graph(validate=True)
+leapp.stop()
+leapp.compile_graph(validate=True)
 ```
 
 ## Automatic feedback detection
@@ -232,9 +238,10 @@ LEAPP automatically detects feedback connections when an output from a later nod
 
 ```python
 import torch
+import leapp
 from leapp import annotate
 
-annotate.start("stateful_graph")
+leapp.start("stateful_graph")
 
 x = annotate.input_tensors("rnn_step", {"obs": torch.randn(1, 16)})
 h = annotate.state_tensors("rnn_step", {"h": torch.zeros(1, 32)})
@@ -243,8 +250,8 @@ h_next = torch.tanh(torch.cat([x, h], dim=-1))[..., :32]
 annotate.update_state("rnn_step", {"h": h_next})
 annotate.output_tensors("rnn_step", {"policy_h": h_next}, export_with="jit")
 
-annotate.stop()
-annotate.compile_graph(validate=True)
+leapp.stop()
+leapp.compile_graph(validate=True)
 ```
 
 ### Pattern D: Track module buffers automatically
@@ -252,6 +259,7 @@ annotate.compile_graph(validate=True)
 ```python
 import torch
 import torch.nn as nn
+import leapp
 from leapp import annotate
 
 class StatefulPolicy(nn.Module):
@@ -267,13 +275,13 @@ class StatefulPolicy(nn.Module):
 
 model = StatefulPolicy().eval()
 
-annotate.start("module_graph")
+leapp.start("module_graph")
 obs = annotate.input_tensors("policy", {"obs": torch.randn(1, 16)})
 annotate.module("policy", model)
 action = model(obs)
 annotate.output_tensors("policy", {"action": action}, export_with="onnx-torchscript")
-annotate.stop()
-annotate.compile_graph(validate=True)
+leapp.stop()
+leapp.compile_graph(validate=True)
 ```
 
 ## Runtime recipe (using exported YAML)
@@ -294,6 +302,9 @@ out = im(sample_inputs)  # same as im.run_policy(sample_inputs)
 
 - Reuse names consistently:
   - keep `node_name`, input keys, output keys stable across traces.
+- Keep the API split straight:
+  - import `leapp` whenever you need `start()`, `stop()`, or `compile_graph()`.
+  - do not assume `annotate` exposes lifecycle or internal manager state.
 - Prefer one node at a time while tracing:
   - complete `output_tensors()` for a node before starting another traced context.
 - Handle copied tensors:
@@ -308,7 +319,7 @@ out = im(sample_inputs)  # same as im.run_policy(sample_inputs)
 - If user pipeline has loops/re-entry:
   - run multiple iterations between `start()` and `stop()` so cached I/O paths are exercised.
 - If NumPy conversion causes trace issues:
-  - try `annotate.start(..., patch_numpy=False)` as a debugging fallback.
+  - try `leapp.start(..., global_patching=False)` as a debugging fallback.
 
 ## Common failure modes and fixes
 

@@ -50,9 +50,10 @@ TracedTensors provide the most flexible approach, allowing you to programmatical
 
 ```python
 import torch
+import leapp
 from leapp import annotate
 
-annotate.start(name="my_graph")
+leapp.start(name="my_graph")
 
 # Create traced inputs - returns TracedTensor objects that record operations
 joint_pos, joint_vel = annotate.input_tensors('preprocessing', {
@@ -75,14 +76,15 @@ features = annotate.input_tensors('inference', {'features': combined})
 predictions = features @ torch.randn(24, 3)  # Simple linear transform
 annotate.output_tensors('inference', {'predictions': predictions}, export_with="onnx")
 
-annotate.stop()
-annotate.compile_graph()
+leapp.stop()
+leapp.compile_graph()
 ```
 
 ### Method 2: Decorator Pattern
 
 ```python
 import torch
+import leapp
 from leapp import annotate
 
 @annotate.method(export_with="jit")
@@ -92,21 +94,22 @@ def process_data(input_tensor):
     return result
 
 # Start tracing
-annotate.start(name="my_graph")
+leapp.start(name="my_graph")
 # Run your functions
 output = process_data(torch.randn(10))
 # Stop tracing and compile graph
-annotate.stop()
-annotate.compile_graph()
+leapp.stop()
+leapp.compile_graph()
 ```
 
 ### Method 3: Context Manager Pattern
 
 ```python
 import torch
+import leapp
 from leapp import annotate
 
-annotate.start(name="my_graph")
+leapp.start(name="my_graph")
 
 # Example data
 raw_data = torch.randn(100, 10)
@@ -125,8 +128,8 @@ with annotate.block("inference",
                      export_with="jit"):
     predictions = model(processed_data)
 
-annotate.stop()
-annotate.compile_graph()
+leapp.stop()
+leapp.compile_graph()
 ```
 
 
@@ -179,15 +182,15 @@ Export with `annotate.module()`:
 model = GRUPolicy()
 model.eval()
 
-annotate.start("my_graph", save_path=".")
+leapp.start("my_graph", save_path=".")
 obs_traced = annotate.input_tensors("policy", {"obs": obs})
 
 annotate.module("policy", model)
 action = model(obs_traced)
 
 annotate.output_tensors("policy", {"action": action}, export_with="onnx-torchscript")
-annotate.stop()
-annotate.compile_graph()
+leapp.stop()
+leapp.compile_graph()
 ```
 
 **How it works**: `annotate.module()` replaces registered buffers with TracedTensor inputs. When `output_tensors()` compiles the graph, it auto-detects which buffers were reassigned (mutated) during forward. Mutated buffers become state outputs with automatic feedback connections. Non-mutated buffers (e.g. normalizer mean/var) are baked as constants in the exported model, preserving their trained values.
@@ -206,13 +209,14 @@ See `examples/stateful_gru_export.py` for a complete runnable example.
 
 #### import
 ```python
+import leapp
 from leapp import annotate  # Singleton, export manager
 ```
 
 #### Flow Control methods
-- `start(name, save_path=".", verbose=False, dry_run=False, patch_numpy=True)`: Begin tracing mode with graph name
+- `start(name, save_path=".", verbose=False, dry_run=False, global_patching=True)`: Begin tracing mode with graph name
   - `dry_run` (bool): If True, skips model compilation and export. This is used to verify graph structure and i/o. Defaults to False.
-  - `patch_numpy` (bool): If True, patches torch numpy functions for TracedTensor compatibility. Defaults to True but under some cases this is known to cause errors. If not needed try setting this to false.
+  - `global_patching` (bool): If True, patches torch numpy functions for TracedTensor compatibility. Defaults to True but under some cases this is known to cause errors. If not needed try setting this to false.
 - `stop()`: End tracing mode
 
 

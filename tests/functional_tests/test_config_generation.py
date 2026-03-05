@@ -18,7 +18,9 @@ import os
 import unittest
 import yaml
 import torch
-from leapp import annotate, TensorSemantics
+import leapp
+from leapp import TensorSemantics
+from leapp.leapp import _MANAGER as annotate
 from leapp.utils.enums import inputKindEnum, outputKindEnum
 from .base import LEAPPFunctionalTestBase
 
@@ -56,7 +58,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         joint_pos = torch.randn(1, 12)
         joint_vel = torch.randn(1, 12)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         traced_pos, traced_vel = annotate.input_tensors("policy", [
             TensorSemantics(name="joint_pos", ref=joint_pos, kind=inputKindEnum.JOINT_POSITION),
             TensorSemantics(name="joint_vel", ref=joint_vel, kind=inputKindEnum.JOINT_VELOCITY),
@@ -64,8 +66,8 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         output = traced_pos + traced_vel
         annotate.output_tensors("policy", {"command": output})
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         config = self._load_yaml()
         inputs, outputs = self._get_node_io_from_yaml(config, "policy")
@@ -85,7 +87,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         """Test passing a single TensorSemantics directly (not in a list)."""
         tensor = torch.randn(1, 4)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         traced = annotate.input_tensors(
             "single_node",
             TensorSemantics(name="pos", ref=tensor, kind=inputKindEnum.JOINT_POSITION),
@@ -93,8 +95,8 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         output = traced * 2.0
         annotate.output_tensors("single_node", {"out": output})
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         config = self._load_yaml()
         inputs, _ = self._get_node_io_from_yaml(config, "single_node")
@@ -109,7 +111,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         tensor = torch.randn(1, 3)
         names = ["x", "y", "z"]
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         traced = annotate.input_tensors(
             "elem_node",
             TensorSemantics(name="position", ref=tensor, element_names=names),
@@ -117,8 +119,8 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         output = traced + 1.0
         annotate.output_tensors("elem_node", {"out": output})
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         config = self._load_yaml()
         inputs, _ = self._get_node_io_from_yaml(config, "elem_node")
@@ -133,7 +135,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         tensor = torch.randn(1, 6)
         joint_names = ["hip_l", "knee_l", "ankle_l", "hip_r", "knee_r", "ankle_r"]
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         traced = annotate.input_tensors(
             "full_meta_node",
             TensorSemantics(name="joint_pos", ref=tensor,
@@ -143,8 +145,8 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         output = traced * 0.5
         annotate.output_tensors("full_meta_node", {"out": output})
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         config = self._load_yaml()
         inputs, _ = self._get_node_io_from_yaml(config, "full_meta_node")
@@ -161,7 +163,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         tensor = torch.randn(1, 6)
         joint_names = ["hip_l", "knee_l", "ankle_l", "hip_r", "knee_r", "ankle_r"]
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         traced = annotate.input_tensors(
             "full_meta_node",
             TensorSemantics(name="joint_pos", ref=tensor,
@@ -171,8 +173,8 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         output = traced * 0.5
         annotate.output_tensors("full_meta_node", {"out": output})
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         config = self._load_yaml()
         inputs, _ = self._get_node_io_from_yaml(config, "full_meta_node")
@@ -192,7 +194,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         """Test that kind metadata from output TensorSemantics appears in YAML."""
         tensor = torch.randn(1, 6)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         traced = annotate.input_tensors("out_kind_node", {"pos": tensor})
 
         command = traced * 2.0
@@ -200,8 +202,8 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         annotate.output_tensors("out_kind_node", [
             TensorSemantics(name="command", ref=command, kind=outputKindEnum.JOINT_TORQUES),
         ])
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         config = self._load_yaml()
         _, outputs = self._get_node_io_from_yaml(config, "out_kind_node")
@@ -214,7 +216,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         """Test that element_names from output TensorSemantics appears in YAML."""
         tensor = torch.randn(1, 3)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         traced = annotate.input_tensors("out_elem_node", {"input": tensor})
 
         result = traced + 1.0
@@ -222,8 +224,8 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         annotate.output_tensors("out_elem_node", [
             TensorSemantics(name="rgb", ref=result, element_names=["r", "g", "b"]),
         ])
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         config = self._load_yaml()
         _, outputs = self._get_node_io_from_yaml(config, "out_elem_node")
@@ -241,7 +243,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         pos = torch.randn(1, 6)
         vel = torch.randn(1, 6)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         traced_pos, traced_vel = annotate.input_tensors("both_node", [
             TensorSemantics(name="pos", ref=pos, kind=inputKindEnum.JOINT_POSITION),
             TensorSemantics(name="vel", ref=vel, kind=inputKindEnum.JOINT_VELOCITY),
@@ -252,8 +254,8 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         annotate.output_tensors("both_node", [
             TensorSemantics(name="torques", ref=command, kind=outputKindEnum.JOINT_TORQUES),
         ])
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         config = self._load_yaml()
         inputs, outputs = self._get_node_io_from_yaml(config, "both_node")
@@ -270,13 +272,13 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         """Test that tensors without TensorSemantics have no kind or element_names in YAML."""
         tensor = torch.randn(1, 4)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         traced = annotate.input_tensors("plain_node", {"input": tensor})
 
         output = traced + 1.0
         annotate.output_tensors("plain_node", {"output": output})
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         config = self._load_yaml()
         inputs, outputs = self._get_node_io_from_yaml(config, "plain_node")
@@ -298,26 +300,26 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         t1 = torch.randn(1, 3)
         t2 = torch.randn(1, 3)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         with self.assertRaises(TypeError):
             annotate.input_tensors("fail_node", [
                 t1,
                 TensorSemantics(name="td", ref=t2, kind=inputKindEnum.JOINT_POSITION),
             ])
-        annotate.stop()
+        leapp.stop()
 
     def test_duplicate_td_names_raises(self):
         """Test that two TensorSemantics with the same name raise an error."""
         t1 = torch.randn(1, 3)
         t2 = torch.randn(1, 3)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         with self.assertRaises(Exception):
             annotate.input_tensors("dup_node", [
                 TensorSemantics(name="same_name", ref=t1),
                 TensorSemantics(name="same_name", ref=t2),
             ])
-        annotate.stop()
+        leapp.stop()
 
     # =========================================================================
     # Graph structure verification
@@ -328,7 +330,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         pos = torch.randn(1, 4)
         vel = torch.randn(1, 4)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         traced_pos, traced_vel = annotate.input_tensors("struct_node", [
             TensorSemantics(name="pos", ref=pos, kind=inputKindEnum.JOINT_POSITION),
             TensorSemantics(name="vel", ref=vel, kind=inputKindEnum.JOINT_VELOCITY),
@@ -336,8 +338,8 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         output = traced_pos + traced_vel
         annotate.output_tensors("struct_node", {"command": output})
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(
             annotate, nodes=1, inputs=2, outputs=1, internal_connections=0)

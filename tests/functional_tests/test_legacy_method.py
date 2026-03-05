@@ -16,7 +16,8 @@
 #
 import unittest
 import torch
-from leapp import annotate
+import leapp
+from leapp.leapp import _MANAGER as annotate
 from .base import LEAPPFunctionalTestBase
 
 
@@ -36,11 +37,11 @@ class TestLegacyMethod(LEAPPFunctionalTestBase):
         def double(x: torch.Tensor):
             return x * 2.0
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         for _ in range(5):
             out = double(torch.tensor([1.0, 2.0, 3.0]))
-        annotate.stop()
-        annotate.compile_graph(visualize=False, validate=True)
+        leapp.stop()
+        leapp.compile_graph(visualize=False, validate=True)
 
         self.assertEqual(len(annotate.nodes), 1)
         self.verify_all_models_exist("double")
@@ -59,11 +60,11 @@ class TestLegacyMethod(LEAPPFunctionalTestBase):
 
         wrapped = annotate._method(export_with="jit")(triple)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         for _ in range(3):
             out = wrapped(torch.tensor([1.0, 2.0, 3.0]))
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         self.assertEqual(len(annotate.nodes), 1)
         self.verify_all_models_exist("triple")
@@ -85,12 +86,12 @@ class TestLegacyMethod(LEAPPFunctionalTestBase):
         def step_b(y: torch.Tensor):
             return y * 10.0
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         for _ in range(3):
             mid = step_a(torch.tensor([1.0, 2.0, 3.0]))
             out = step_b(mid)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         self.assertEqual(len(annotate.nodes), 2)
         self.verify_all_models_exist("step_a", "step_b")
@@ -106,12 +107,12 @@ class TestLegacyMethod(LEAPPFunctionalTestBase):
         def accumulate(state: torch.Tensor):
             return state + 1.0
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         state = torch.zeros(3)
         for _ in range(5):
             state = accumulate(state)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         self.assertEqual(len(annotate.nodes), 1)
         self.verify_all_models_exist("accumulate")
@@ -127,11 +128,11 @@ class TestLegacyMethod(LEAPPFunctionalTestBase):
         def scale(x: torch.Tensor):
             return x * SCALE_FACTOR
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         for _ in range(3):
             out = scale(torch.tensor([1.0, 1.0, 1.0]))
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         self.assertEqual(len(annotate.nodes), 1)
         self.verify_all_models_exist("scale")
@@ -154,13 +155,13 @@ class TestLegacyMethod(LEAPPFunctionalTestBase):
         def outer(x: torch.Tensor):
             return inner(x)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         try:
             outer(torch.tensor([1.0, 2.0, 3.0]))
-            annotate.stop()
+            leapp.stop()
             self.fail("Expected an exception for nested _method() calls")
         except Exception as e:
-            annotate.stop()
+            leapp.stop()
             self.assertIn("Tracing lock is already acquired", str(e))
 
     # ── Test 6: TracedTensor as input to _method() → error ───────────────
@@ -172,17 +173,17 @@ class TestLegacyMethod(LEAPPFunctionalTestBase):
         def func(x: torch.Tensor):
             return x + 5.0
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         try:
             traced = annotate.input_tensors("other_node",
                                             {"val": torch.tensor([1.0, 2.0, 3.0])})
             traced = traced + 100.0
             func(traced)
             annotate.output_tensors("other_node", {"out": traced}, export_with="jit")
-            annotate.stop()
+            leapp.stop()
             self.fail("Expected an exception for TracedTensor input to _method()")
         except Exception as e:
-            annotate.stop()
+            leapp.stop()
             self.assertIn("Cannot use TracedTensor", str(e))
 
     # ── Test 7: Traced tensor ops while _method() is active → error ──────
@@ -197,13 +198,13 @@ class TestLegacyMethod(LEAPPFunctionalTestBase):
                                    {"y": torch.randn(3)})
             return x * 2.0
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         try:
             func(torch.tensor([1.0, 2.0, 3.0]))
-            annotate.stop()
+            leapp.stop()
             self.fail("Expected an exception for traced ops inside _method()")
         except Exception as e:
-            annotate.stop()
+            leapp.stop()
             self.assertIn("Mixing active contxts is not allowed", str(e))
 
 
@@ -221,10 +222,10 @@ class TestLegacyMethod(LEAPPFunctionalTestBase):
             'imu': torch.tensor([5.0, 6.0]),
         }
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         expected = fuse(input_dict)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         node = annotate.nodes["fuse"]
         self.assertEqual(len(node.inputs), 3)
@@ -247,10 +248,10 @@ class TestLegacyMethod(LEAPPFunctionalTestBase):
             torch.tensor([3.0]),
         ]
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         expected = sum_all(input_list)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         node = annotate.nodes["sum_all"]
         self.assertEqual(len(node.inputs), 3)
@@ -273,10 +274,10 @@ class TestLegacyMethod(LEAPPFunctionalTestBase):
         state = {'pos': torch.tensor([1.0, 2.0]), 'vel': torch.tensor([0.1, 0.2])}
         commands = [torch.tensor([0.5, 0.5]), torch.tensor([0.01, 0.02])]
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         expected = combine(state, commands)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         node = annotate.nodes["combine"]
         self.assertEqual(len(node.inputs), 4)
@@ -301,10 +302,10 @@ class TestLegacyMethod(LEAPPFunctionalTestBase):
             'group_b': {'z': torch.tensor([3.0])},
         }
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         expected = process(nested)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         node = annotate.nodes["process"]
         self.assertEqual(len(node.inputs), 3)
@@ -329,10 +330,10 @@ class TestLegacyMethod(LEAPPFunctionalTestBase):
             'camera': torch.tensor([3.0, 4.0]),
         }
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         expected = transform(input_dict)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         node = annotate.nodes["transform"]
         self.assertEqual(len(node.inputs), 2)
@@ -355,10 +356,10 @@ class TestLegacyMethod(LEAPPFunctionalTestBase):
             torch.tensor([3.0]),
         ]
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         expected = per_element(input_list)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         node = annotate.nodes["per_element"]
         self.assertEqual(len(node.inputs), 3)
@@ -381,10 +382,10 @@ class TestLegacyMethod(LEAPPFunctionalTestBase):
         state = {'a': torch.tensor([1.0]), 'b': torch.tensor([2.0])}
         cmds = [torch.tensor([10.0]), torch.tensor([20.0])]
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         expected = cross(state, cmds)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         node = annotate.nodes["cross"]
         self.assertEqual(len(node.inputs), 4)

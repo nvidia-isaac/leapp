@@ -25,10 +25,9 @@ various formats including PyTorch JIT, ONNX, and generate visualization and YAML
 """
 
 from .export_manager import ExportManager
+from .leapp import annotate, start, stop, compile_graph
 from .utils.enums import inputKindEnum, outputKindEnum
 from .utils.tensor_description import TensorSemantics
-# Create a global annotate instance that's ready to use
-annotate = ExportManager()
 
 __version__ = "0.4.0"
 __author__ = "Frank Lai"
@@ -39,6 +38,9 @@ __all__ = [
     "inputKindEnum",
     "outputKindEnum",
     "annotate",
+    "start",
+    "stop",
+    "compile_graph",
     "__version__",
     "TensorSemantics",
 ]

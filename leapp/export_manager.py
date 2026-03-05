@@ -18,12 +18,10 @@
 import sys
 import functools
 import inspect
-import yaml
 import os
 import torch
 
 from leapp._logging import _get_logger
-from leapp.leapp_graph.leapp_graph import LeappGraph
 from leapp.leapp_graph.leapp_node import LeappNode
 from leapp.leapp_graph.traced_node import TracedTensorNode
 from leapp.leapp_graph.function_decorator_node import FunctionDecoratorNode
@@ -31,8 +29,6 @@ from leapp.utils.tracing_lock import TracingLock
 from leapp.leapp_graph.datatypes import (
     TracedTensor,
     is_traced_type,
-    apply_traced_tensor_patches,
-    remove_traced_tensor_patches,
     is_tracable_tensor_type,
 )
 from leapp.leapp_graph.datatypes.global_patching import warn_if_script_functions_in_scope
@@ -42,7 +38,6 @@ from leapp.utils.tensor_description import (verify_data_exact_match,
                                              unwrap_tensor_semantics,
                                              apply_semantic_metadata)
 from leapp.utils.utils import (get_relative_path,
-                               get_system_info,
                                mirror_all_tensor_tags,
                                extract_return_names,
                                get_caller_stack_identity,
@@ -76,107 +71,77 @@ class ExportManager:
             self.GRAPH_NAME = "my_graph"
             self.SAVE_PATH = None
             self.dry_run = False
-            self._numpy_patches_applied = False
+            self._patches_applied = False
 
             # tracetime variables
             self.nodes = {}
 
             ExportManager._initialized = True
 
-    #########################################################
-    # no-op context manager (used when block() is called outside tracing)
-    #########################################################
-    def __enter__(self):
-        return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        return False
 
     #########################################################
-    # flow control
+    # state accessors (for runtime API)
     #########################################################
-    def start(self, name, save_path=".", verbose=False, dry_run=False, max_cached_io=5, patch_numpy=True):
-        """Initialize and start LEAPP graph interpretation.
-
-        This method prepares the export manager for tracing by setting up the graph name,
-        creating the save directory, configuring the logger, and enabling graph interpretation.
-        If graph interpretation is already active, it will reset the current graph state.
-
-        Args:
-            name (str): The name of the graph to be created. This will be used as the 
-                directory name where graph artifacts are saved.
-            save_path (str, optional): The base directory path where the graph directory 
-                will be created. Defaults to "." (current directory).
-            verbose (bool, optional): If True, enables verbose logging output. 
-                Defaults to False.
-            dry_run (bool, optional): If True, enables dry run mode which skips model
-                compilation and export. Defaults to False.
-            patch_numpy (bool, optional): If True, applies patches to torch.from_numpy,
-                torch.as_tensor, and torch.tensor to enable TracedTensor compatibility
-                with numpy operations. Defaults to True.
-
-        Returns:
-            None
-
-        Note:
-            - The full save path will be: {save_path}/{name}/
-            - Calling start() while interpretation is already active will reset the graph. This is discouraged.
-        """
+    def set_graph_name(self, name: str):
         self.GRAPH_NAME = name
-        self.SAVE_PATH = os.path.join(save_path, self.GRAPH_NAME)
-        if not os.path.exists(self.SAVE_PATH):
+
+    def get_graph_name(self):
+        return self.GRAPH_NAME
+
+    def set_save_path(self, save_path: str):
+        self.SAVE_PATH = save_path
+
+    def get_save_path(self):
+        return self.SAVE_PATH
+
+    def ensure_save_path_exists(self):
+        if self.SAVE_PATH is not None and not os.path.exists(self.SAVE_PATH):
             os.makedirs(self.SAVE_PATH)
+
+    def configure_logger(self, verbose=False):
         _get_logger().configure(self.SAVE_PATH, verbose=verbose)
-        if ExportManager._interpret_graph:
-            _get_logger().warning("LEAPP graph interpretation is already enabled, "
-                                  "calling start() again will reset the graph")
-            _get_logger().warning("Resetting graph...")
-            TracingLock().reset()
-        if dry_run:
-            _get_logger().info("Starting dry run mode")
+
+    def set_dry_run(self, dry_run: bool):
         self.dry_run = dry_run
-        self._max_cached_io = max_cached_io-1
+
+    def get_dry_run(self):
+        return self.dry_run
+
+    def set_max_cached_io(self, max_cached_io: int):
+        self._max_cached_io = max_cached_io - 1
+
+    def reset_nodes(self):
         self.nodes = {}
-        ExportManager._interpret_graph = True
-        # Apply patches for torch functions that bypass __torch_function__
-        self._numpy_patches_applied = patch_numpy
-        if patch_numpy:
-            apply_traced_tensor_patches()
 
-    def stop(self):
-        """Stop LEAPP graph interpretation and disable tracing.
+    def get_nodes(self):
+        return self.nodes
 
-        This method disables graph interpretation mode that was previously enabled by start().
-        It performs safety checks to ensure that no active tracing is in progress and that
-        graph interpretation is currently enabled before stopping.
+    @classmethod
+    def set_interpret_graph(cls, is_enabled: bool):
+        cls._interpret_graph = is_enabled
 
-        Args:
-            None
+    @classmethod
+    def is_interpret_graph_enabled(cls):
+        return cls._interpret_graph
 
-        Returns:
-            None
+    def set_patches_applied(self, is_applied: bool):
+        self._patches_applied = is_applied
 
-        Raises:
-            Exception: If ExportManager is currently in the middle of tracing a node.
-            Exception: If graph interpretation is not currently enabled.
+    def is_numpy_patches_applied(self):
+        return self._patches_applied
 
-        Note:
-            - This method should only be called after start() has been called.
-            - Ensure all active tracing operations are completed before calling stop().
-        """
-        if TracingLock().is_active:
-            raise Exception("ExportManager is currently tracing")
-        if not ExportManager._interpret_graph:
-            raise Exception("ExportManager graph interpretation is disabled")
-        ExportManager._interpret_graph = False
-        # Restore model buffers for any pending buffer trackers
+    def reset_tracing_lock(self):
+        TracingLock().reset()
+
+    def restore_pending_buffer_trackers(self):
         for node in self.nodes.values():
             if hasattr(node, '_buffer_tracker') and node._buffer_tracker is not None:
                 node._buffer_tracker.restore()
-        # Remove patches to restore original torch function behavior
-        if self._numpy_patches_applied:
-            remove_traced_tensor_patches()
-            self._numpy_patches_applied = False
+
+    def set_detected_graph(self, models: dict, pipeline: dict):
+        self.detected_nodes = models['models']
+        self.detected_pipeline = pipeline['pipeline']
 
     #########################################################
     # node setup
@@ -567,7 +532,7 @@ class ExportManager:
 
         Example::
 
-            annotate.start("graph", save_path=output_dir)
+            leapp.start("graph", save_path=output_dir)
             obs_traced = annotate.input_tensors("policy", {"obs": obs})
 
             annotate.module("policy", model)
@@ -575,8 +540,8 @@ class ExportManager:
 
             annotate.output_tensors("policy", {"action": action},
                                     export_with="onnx-torchscript")
-            annotate.stop()
-            annotate.compile_graph()
+            leapp.stop()
+            leapp.compile_graph()
 
         Note:
             Detects *reassignment* (``self.h = h_out``), not in-place mutation
@@ -810,102 +775,6 @@ class ExportManager:
             node_context.save_model(self.SAVE_PATH)
             _get_logger().info("Success\n")
 
-    #########################################################
-    # graph compilation
-    #########################################################
-    def compile_graph(self, visualize=True, verbose=None, validate: bool = True,
-                      rtol: float = 1e-3, atol: float = 1e-5, strict=True):
-        """Compile and save the computational graph from traced nodes.
-
-        This method performs the complete pipeline of compiling traced nodes into exportable
-        models, building graph connections, saving models to disk, and generating a YAML 
-        description of the entire computational graph. It also optionally creates a 
-        visualization of the graph structure.
-
-        Args:
-            visualize (bool, optional): If True, generates a visual representation of the 
-                graph structure and saves it to the output directory. The visualization 
-                will be created even if an error occurs during the process. 
-                Defaults to True.
-        Returns:
-            None
-
-        Generated Artifacts:
-            - Compiles all traced models using the configured backend
-            - Saves compiled models to {SAVE_PATH}/ directory
-            - Creates {GRAPH_NAME}.yaml file with complete graph description
-            - Generates visualization files if visualize=True
-            - Updates self.detected_nodes and self.detected_pipeline attributes
-            - Prints graph statistics to the logger
-
-        Note:
-            - Must be called after tracing is complete and stop() has been called.
-            - The YAML file contains model descriptions, pipeline connections, and system info.
-            - Graph statistics include node count, dangling inputs/outputs, and edge counts.
-            - Visualization errors are logged but don't stop the compilation process.
-        """
-        # compile models first before input name reconciliation
-        if verbose is not None:
-            _get_logger().set_verbose(verbose)
-
-        if not self.dry_run:        
-            self.compile_models()
-
-        # builds the graph connections. this may change input and output names
-        graph = LeappGraph(self.nodes, self.GRAPH_NAME)
-        pipeline = graph.get_full_pipeline_description()
-
-        inital_value_filename = None
-        if not self.dry_run:
-            # cache the initial values for feedback inputs
-            inital_value_filename = graph.save_feedback_initial_values(self.SAVE_PATH, self.GRAPH_NAME)
-
-
-        if inital_value_filename is not None:
-            pipeline['pipeline']['initial_values'] = inital_value_filename
-
-        if not self.dry_run:
-            self.save_models()
-
-        models = self.get_io_descriptions()
-
-        if visualize:
-            try:
-                graph.visualize(self.SAVE_PATH, self.GRAPH_NAME)
-            except Exception as e:
-                _get_logger().error(f"Error visualizing graph: {e}")
-
-        internal_connections, total_edges = graph.get_graph_statistics()
-
-        # Print graph statistics
-        _get_logger().section("Graph Statistics")
-        _get_logger().info(f"- Computation nodes: {len(self.nodes)}")
-        _get_logger().info(f"- Dangling inputs: {len(graph.graph_inputs)}")
-        _get_logger().info(f"- Dangling outputs: {len(graph.graph_outputs)}")
-        _get_logger().info(f"- Internal connections: {internal_connections}")
-        _get_logger().info(f"- Total edges: {total_edges}")
-
-        system_info = get_system_info()
-        with open(os.path.join(self.SAVE_PATH, f"{self.GRAPH_NAME}.yaml"), "w") as f:
-            yaml.dump(models, f, sort_keys=False)
-            f.write("\n")  # Add a newline separator
-            yaml.dump(pipeline, f)
-            f.write("\n")
-            yaml.dump(system_info, f)
-            f.write("\n")
-
-        # store the models and pipeline as part of the object
-        # this will do a rewrite each time
-        # this is **ONLY USED FOR TESTING**
-        self.detected_nodes = models['models']
-        self.detected_pipeline = pipeline['pipeline']
-
-        # validate all the models in the compute graph
-        if validate and not self.dry_run:
-            return self.validate_all_models(rtol=rtol, atol=atol, strict=strict)
-
-        return True
-
     def validate_all_models(self, rtol: float = 1e-3, atol: float = 1e-5, strict: bool = True):
         """Validate all exported models by comparing computed outputs against captured outputs.
 
@@ -926,10 +795,10 @@ class ExportManager:
             Exception: If called before compile_models() has been run.
 
         Example:
-            >>> annotate.start(name="my_graph")
+            >>> leapp.start(name="my_graph")
             >>> # ... run your code ...
-            >>> annotate.stop()
-            >>> annotate.compile_graph()
+            >>> leapp.stop()
+            >>> leapp.compile_graph()
             >>> results = annotate.validate_all_models()
             >>> assert all(results.values()), "Some models failed validation"
         """

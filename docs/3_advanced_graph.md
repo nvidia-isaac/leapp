@@ -49,7 +49,7 @@ def final_output(data: torch.Tensor):
 
 
 def main():
-    annotate.start(name="feedback_example")
+    leapp.start(name="feedback_example")
 
     # Initialize feedback to zero
     feedback_value = torch.tensor([0])
@@ -68,8 +68,8 @@ def main():
 
         final_output_value = final_output(feedback_value)
 
-    annotate.stop()
-    annotate.compile_graph()
+    leapp.stop()
+    leapp.compile_graph()
 ```
 
 In this example, `feedback_value` flows from `generate_feedback` (traced later) back to `process_input` (traced earlier), creating a feedback connection. The detected graph will look like the following where red curved lines represent feedback connections. 
@@ -122,6 +122,7 @@ A common use case is duplicating data into a preallocated buffer:
 
 ```python
 import torch
+import leapp
 from leapp import annotate
 
 class DataProcessor:
@@ -168,7 +169,7 @@ annotate.mirror_leapp_tags(source, target)  # Error logged: source and target do
 
 **⚠️ Only Works During Tracing**
 
-The function only has an effect when LEAPP is actively tracing. Outside of `annotate.start()` / `annotate.stop()` blocks, it will safely no-op.
+The function only has an effect when LEAPP is actively tracing. Outside of `leapp.start()` / `leapp.stop()` blocks, it will safely no-op.
 
 ### When to not use `mirror_leapp_tags`
 

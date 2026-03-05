@@ -20,6 +20,7 @@ Dynamo export is the modern approach introduced in PyTorch 2.0. It captures the 
 
 ```python
 import torch
+import leapp
 from leapp import annotate
 
 @annotate.method(export_with="onnx")  # Uses dynamo by default
@@ -27,10 +28,10 @@ def process_data(input_tensor: torch.Tensor):
     normalized = (input_tensor - input_tensor.mean()) / input_tensor.std()
     return torch.relu(normalized)
 
-annotate.start(name="dynamo_example")
+leapp.start(name="dynamo_example")
 process_data(torch.randn(10))
-annotate.stop()
-annotate.compile_graph()
+leapp.stop()
+leapp.compile_graph()
 ```
 These options can be configured by passing a dict with the expected keys to `backend_params`.
 
@@ -49,6 +50,7 @@ While it is ideal to use dynamo, It comes with a few limitations. You may consid
 
 ```python
 import torch
+import leapp
 from leapp import annotate
 
 @annotate.method(
@@ -58,10 +60,10 @@ def process_data(input_tensor: torch.Tensor):
     normalized = (input_tensor - input_tensor.mean()) / input_tensor.std()
     return torch.relu(normalized)
 
-annotate.start(name="torchscript_onnx_example")
+leapp.start(name="torchscript_onnx_example")
 process_data(torch.randn(10))
-annotate.stop()
-annotate.compile_graph()
+leapp.stop()
+leapp.compile_graph()
 ```
 
 **When to use TorchScript export:**
@@ -105,10 +107,11 @@ Instead of providing a backend name like `"jit"` or `"onnx"`, you can set `expor
 
 ```python
 import torch
+import leapp
 from leapp import annotate
 
 def use_precompiled_model():
-    annotate.start(name="precompiled_example")
+    leapp.start(name="precompiled_example")
     
     # Some input data
     input_data = torch.randn(1, 10)
@@ -123,8 +126,8 @@ def use_precompiled_model():
         model = torch.jit.load("/path/to/model.pt")
         predictions = model(input_data)
     
-    annotate.stop()
-    annotate.compile_graph()
+    leapp.stop()
+    leapp.compile_graph()
     return predictions
 ```
 

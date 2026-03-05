@@ -18,6 +18,7 @@
 import torch
 import sys
 import os
+import leapp
 from leapp import annotate
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DTYPE = torch.float32
@@ -180,7 +181,7 @@ def main():
 
 
 if __name__ == "__main__":
-    annotate.start(name="sample_wbc_obj", verbose=True)
+    leapp.start(name="sample_wbc_obj", verbose=True)
     main()
-    annotate.stop()
-    annotate.compile_graph()
+    leapp.stop()
+    leapp.compile_graph()

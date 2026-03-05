@@ -139,7 +139,7 @@ _init_patches()
 _patches_applied = False
 
 
-def apply_traced_tensor_patches():
+def apply_traced_data_patches():
     """Apply patches for torch and numpy functions.
     
     Call this when tracing starts to enable TracedTensor/TracedNpArray
@@ -160,7 +160,7 @@ def apply_traced_tensor_patches():
         _patches_applied = True
 
 
-def remove_traced_tensor_patches():
+def remove_traced_data_patches():
     """Remove patches for torch and numpy functions.
     
     Call this when tracing stops to restore original function behavior.
@@ -224,6 +224,6 @@ def warn_if_script_functions_in_scope():
             "To fix this, either:\n"
             "  1. Call torch.jit._state.disable() before the @torch.jit.script "
             "decorators run (e.g. before importing the module that defines them)\n"
-            "  2. Run the scripting code between annotate.start() and annotate.stop() signals"
+            "  2. Run the scripting code between leapp.start() and leapp.stop() signals"
             "(leapp disables JIT during tracing automatically)"
         )

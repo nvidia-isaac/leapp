@@ -18,8 +18,8 @@ import torch
 from leapp.leapp_graph.traced_node import TracedTensorNode
 from leapp.leapp_graph.datatypes import TracedTensor, TracedNpArray
 from leapp.leapp_graph.datatypes.global_patching import (
-    apply_traced_tensor_patches,
-    remove_traced_tensor_patches,
+    apply_traced_data_patches,
+    remove_traced_data_patches,
 )
 
 
@@ -28,11 +28,11 @@ class TestTracedTensorToNumpy(unittest.TestCase):
 
     def setUp(self):
         """Apply patches before each test."""
-        apply_traced_tensor_patches()
+        apply_traced_data_patches()
 
     def tearDown(self):
         """Remove patches after each test."""
-        remove_traced_tensor_patches()
+        remove_traced_data_patches()
 
     def test_numpy_method_returns_traced_np_array(self):
         """Test TracedTensor.numpy() returns TracedNpArray when tracing."""
@@ -91,11 +91,11 @@ class TestNumpyToTracedTensor(unittest.TestCase):
 
     def setUp(self):
         """Apply patches before each test."""
-        apply_traced_tensor_patches()
+        apply_traced_data_patches()
 
     def tearDown(self):
         """Remove patches after each test."""
-        remove_traced_tensor_patches()
+        remove_traced_data_patches()
 
     def test_torch_from_numpy_returns_traced_tensor(self):
         """Test torch.from_numpy(TracedNpArray) returns TracedTensor when tracing."""
@@ -148,11 +148,11 @@ class TestConversionFXGraphCompilation(unittest.TestCase):
 
     def setUp(self):
         """Apply patches before each test."""
-        apply_traced_tensor_patches()
+        apply_traced_data_patches()
 
     def tearDown(self):
         """Remove patches after each test."""
-        remove_traced_tensor_patches()
+        remove_traced_data_patches()
 
     def test_tensor_to_numpy_and_back(self):
         """Test: tensor → numpy → operations → tensor → output.
@@ -281,11 +281,11 @@ class TestConversionWithDtype(unittest.TestCase):
 
     def setUp(self):
         """Apply patches before each test."""
-        apply_traced_tensor_patches()
+        apply_traced_data_patches()
 
     def tearDown(self):
         """Remove patches after each test."""
-        remove_traced_tensor_patches()
+        remove_traced_data_patches()
 
     def test_numpy_with_dtype_change(self):
         """Test conversion with dtype change preserves tracing."""
@@ -320,11 +320,11 @@ class TestTracedTensorIdentityPreservation(unittest.TestCase):
 
     def setUp(self):
         """Apply patches before each test."""
-        apply_traced_tensor_patches()
+        apply_traced_data_patches()
 
     def tearDown(self):
         """Remove patches after each test."""
-        remove_traced_tensor_patches()
+        remove_traced_data_patches()
 
     def test_torch_as_tensor_preserves_identity(self):
         """Test torch.as_tensor returns same TracedTensor object."""
@@ -358,22 +358,22 @@ class TestPatchingBehavior(unittest.TestCase):
 
     def tearDown(self):
         """Ensure patches are removed after each test."""
-        remove_traced_tensor_patches()
+        remove_traced_data_patches()
 
     def test_patches_can_be_toggled(self):
         """Test that patches can be applied and removed."""
         from leapp.leapp_graph.datatypes.global_patching import is_patching_enabled
         
         # Start clean
-        remove_traced_tensor_patches()
+        remove_traced_data_patches()
         self.assertFalse(is_patching_enabled())
         
         # Apply patches
-        apply_traced_tensor_patches()
+        apply_traced_data_patches()
         self.assertTrue(is_patching_enabled())
         
         # Remove patches
-        remove_traced_tensor_patches()
+        remove_traced_data_patches()
         self.assertFalse(is_patching_enabled())
 
 

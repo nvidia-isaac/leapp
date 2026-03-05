@@ -19,6 +19,8 @@ import os
 import shutil
 import torch
 from safetensors.torch import load_file
+from leapp.export_manager import ExportManager
+from leapp.leapp import _MANAGER as annotate # non-protected access to annotate singleton
 
 
 class LEAPPFunctionalTestBase(unittest.TestCase):
@@ -28,11 +30,10 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
     def tearDown(self):
         if os.path.exists(self.TEST_GRAPH_NAME):
             shutil.rmtree(self.TEST_GRAPH_NAME)
-        from leapp import annotate
-        if annotate._interpret_graph:
-            annotate._interpret_graph = False
-        annotate.nodes = {}
-        annotate.dry_run = False
+        if ExportManager.is_interpret_graph_enabled():
+            ExportManager.set_interpret_graph(False)
+        annotate.reset_nodes()
+        annotate.set_dry_run(False)
     
     def verify_all_models_exist(self, *model_names):
         for model_name in model_names:

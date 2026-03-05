@@ -16,7 +16,8 @@
 #
 import unittest
 import torch
-from leapp import annotate
+import leapp
+from leapp.leapp import _MANAGER as annotate
 from .base import LEAPPFunctionalTestBase
 
 
@@ -32,15 +33,15 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
         def funcC(inputB: torch.Tensor):
             return inputB+5.0
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         for i in range(10):
             outputA = funcA(torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32))
             outputA = annotate.input_tensors("blockA", {"outputA": outputA})
             outputB = outputA*2.
             annotate.output_tensors("blockA", {"outputB": outputB}, export_with="jit")
             outputC = funcC(outputB)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_num_connections(annotate, nodes=3, inputs=1, outputs=1,
                                     internal_connections=2)
 
@@ -63,7 +64,7 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
             outputD = inputD.clone()
             return outputD
 
-        annotate.start(name=self.TEST_GRAPH_NAME, verbose=False)
+        leapp.start(name=self.TEST_GRAPH_NAME, verbose=False)
         feedback_input = torch.tensor([0.0, 0.0, 0.0])
         for i in range(2):
             out_funcA = funcA(torch.tensor([1.0, 2.0, 3.0]), feedback_input)
@@ -72,8 +73,8 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
             out_funcD = funcD(out_funcC)
             feedback_input = out_funcC
 
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_num_connections(annotate, nodes=4, inputs=1, outputs=1,
                                     internal_connections=3, feedback_connections=1)
 
@@ -98,7 +99,7 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
         def funcE(inputE: torch.Tensor, inputE2: torch.Tensor):
             return inputE
 
-        annotate.start(name="test_graph")
+        leapp.start(name="test_graph")
         out_funcA1, out_funcA2 = funcA(torch.tensor([1.0, 2.0, 3.0]))
         out_funcB = funcB(out_funcA1.clone())
         out_funcC = funcC(out_funcA2.detach())
@@ -106,8 +107,8 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
         # not testing .cuda() because CI machine does not have a GPU
         funcE(out_funcD.cpu(), out_funcB)
 
-        annotate.stop()
-        annotate.compile_graph()
+        leapp.stop()
+        leapp.compile_graph()
 
         self.verify_num_connections(annotate, nodes=5, inputs=1, outputs=2,
                                     internal_connections=4, feedback_connections=0)
@@ -126,7 +127,7 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
         def funcC(inputC: torch.Tensor):
             return inputC * 3.0
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         out_funcA = funcA(torch.tensor([1.0, 2.0, 3.0]))
         
         # Simulate in-place assignment to a preallocated buffer BETWEEN nodes
@@ -137,8 +138,8 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
         
         out_funcB = funcB(buffer)
         out_funcC = funcC(out_funcB)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         # Should have proper connections: funcA -> funcB -> funcC
         self.verify_num_connections(annotate, nodes=3, inputs=1, outputs=1,
@@ -171,7 +172,7 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
             return inputB + 3.0
 
         processor = DataProcessor()
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         upstream_output = upstream_node(torch.tensor([1.0, 2.0, 3.0]))
         
         # Copy to buffer and mirror tags BETWEEN nodes
@@ -179,8 +180,8 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
         
         processed = processor.process(buffered_data)
         final_output = downstream_node(processed)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         # Should have proper connections through all three nodes
         self.verify_num_connections(annotate, nodes=3, inputs=1, outputs=1,
@@ -201,7 +202,7 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
         def funcC(inputC1: torch.Tensor, inputC2: torch.Tensor):
             return inputC1 + inputC2
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         out_A1, out_A2 = funcA(torch.tensor([1.0, 2.0, 3.0]))
         
         # Create two separate buffers BETWEEN nodes
@@ -218,8 +219,8 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
         
         out_B1, out_B2 = funcB(buffer1, buffer2)
         final_output = funcC(out_B1, out_B2)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         # Verify connections: funcA (2 outputs) -> funcB (2 inputs, 2 outputs) -> funcC (2 inputs)
         self.verify_num_connections(annotate, nodes=3, inputs=1, outputs=1,
@@ -243,7 +244,7 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
         def sink_node(inputD: torch.Tensor):
             return inputD
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         out1 = source_node(torch.tensor([1.0, 2.0, 3.0]))
         
         # Buffer between nodes 1 and 2
@@ -260,8 +261,8 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
         
         out3 = process_node2(buffer2)
         final = sink_node(out3)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         # Should maintain proper connections through all nodes
         self.verify_num_connections(annotate, nodes=4, inputs=1, outputs=1,

@@ -12,6 +12,7 @@ Consider a method that processes actions and stores them in an internal buffer, 
 
 ```python
 import torch
+import leapp
 from leapp import annotate
 
 class ActionProcessor:
@@ -65,13 +66,14 @@ Sometimes you need to reference data from outside your annotated code block, suc
 
 ```python
 import torch
+import leapp
 from leapp import annotate
 
 def process_with_external_model():
     # Load a pre-trained TorchScript model
     pretrained_model = torch.jit.load("path/to/model.pt")
     
-    annotate.start(name="external_model_pipeline")
+    leapp.start(name="external_model_pipeline")
     
     # Create some input data
     sensor_input = torch.randn(10, 128)
@@ -85,8 +87,8 @@ def process_with_external_model():
         # LEAPP captures the external model and makes it available
         predictions = pretrained_model(sensor_input)
     
-    annotate.stop()
-    annotate.compile_graph()
+    leapp.stop()
+    leapp.compile_graph()
     return predictions
 ```
 
@@ -167,6 +169,7 @@ The `input_tensors` and `output_tensors` API provides a high degree of freedom w
 
 ```python
 import torch
+import leapp
 from leapp import annotate
 
 def get_lidar_data(env):
@@ -186,7 +189,7 @@ def get_camera_features(env):
     return camera_features
 
 def run_pipeline():
-    annotate.start(name="distributed_inputs_example")
+    leapp.start(name="distributed_inputs_example")
     model_inputs = []
     for feature in preconfigured_features:
         # pulls data from get_lidar_data and get_camera_data
@@ -200,8 +203,8 @@ def run_pipeline():
     
     output = model(concatenated)
     
-    annotate.stop()
-    annotate.compile_graph()
+    leapp.stop()
+    leapp.compile_graph()
 ```
 
 Both `input_tensors` calls reference the same node name (`'sensor_fusion'`), so they're combined into a single node with two inputs despite being in seperate locations.
@@ -215,6 +218,7 @@ Register buffers are persistent tensors that are part of a module's state but ar
 ```python
 import torch
 import torch.nn as nn
+import leapp
 from leapp import annotate
 
 class RobotController:
@@ -225,7 +229,7 @@ class RobotController:
         self.action_history = torch.zeros(10, 3)
     
     def process_sensors(self, sensor_data):
-        annotate.start(name="stateful_controller")
+        leapp.start(name="stateful_controller")
         
         with annotate.block("update_statistics",
                             inputs=["sensor_data"],
@@ -246,8 +250,8 @@ class RobotController:
             self.action_history = torch.roll(self.action_history, -1, dims=0)
             self.action_history[-1] = normalized_data[:3]
         
-        annotate.stop()
-        annotate.compile_graph()
+        leapp.stop()
+        leapp.compile_graph()
         return normalized_data
 ```
 
@@ -263,6 +267,7 @@ The `register_buffers` parameter shown above works with decorators and context m
 
 ```python
 import torch
+import leapp
 from leapp import annotate
 
 class Module:
@@ -281,7 +286,7 @@ class Module:
 
 module = Module()
 
-annotate.start(name="buffer_example")
+leapp.start(name="buffer_example")
 
 input_tensor = torch.tensor([4.0, 5.0, 6.0])
 traced_input = annotate.input_tensors('my_node', {'input': input_tensor})
@@ -290,8 +295,8 @@ result = module.run(traced_input)
 
 annotate.output_tensors('my_node', {'result': result}, export_with="jit")
 
-annotate.stop()
-annotate.compile_graph()
+leapp.stop()
+leapp.compile_graph()
 ```
 
 **Key rules:**
@@ -305,9 +310,10 @@ Sometimes a node needs to output a **constant tensor that is not derived from an
 
 ```python
 import torch
+import leapp
 from leapp import annotate
 
-annotate.start(name="static_example")
+leapp.start(name="static_example")
 
 input_tensor = torch.tensor([1.0, 2.0, 3.0])
 traced_input = annotate.input_tensors('my_node', {'input': input_tensor})
@@ -325,8 +331,8 @@ annotate.output_tensors(
     export_with="jit"
 )
 
-annotate.stop()
-annotate.compile_graph()
+leapp.stop()
+leapp.compile_graph()
 ```
 
 The exported model will return both outputs: `computed` (input-dependent) and `static` (always `[4, 5, 6]`).
@@ -344,6 +350,7 @@ LEAPP can track data connections through complex nested structures. Each individ
 
 ```python
 import torch
+import leapp
 from leapp import annotate
 
 @annotate.method(export_with="jit", node_name="process_robot_state")
@@ -361,7 +368,7 @@ def process_robot_state(state_dict):
     return processed_state
 
 def main():
-    annotate.start(name="nested_data_example")
+    leapp.start(name="nested_data_example")
     
     # Complex nested input
     robot_state = {
@@ -392,8 +399,8 @@ def main():
         
         action = torch.tensor([position_factor, velocity_factor, sensor_confidence])
     
-    annotate.stop()
-    annotate.compile_graph()
+    leapp.stop()
+    leapp.compile_graph()
 ```
 
 ### How LEAPP Handles Nested Structures
@@ -449,12 +456,12 @@ def funcC(input, detections):
     retval = torch.tensor([])
     return retval
 
-annotate.start(name = "failed example")
+leapp.start(name = "failed example")
 detections = funcA(data)
 funcBreturn = funcB(detections)
 funcCreturn = funcC(detections, data)
-annotate.stop()
-annotate.compile_graph() #failure on this line
+leapp.stop()
+leapp.compile_graph() #failure on this line
 ```
 #### Why does this fail?
 this example passes the output of funcA `detections` to `funcB` and `funcC`. `funcC` function signature register detections as input while also containing a detections field. During io reconciliation, LEAPP tries to update the `funcC` input name to detections which causes an unresolvable conflict with the other input. 
@@ -480,12 +487,12 @@ def funcC(detections, data)
     retval = torch.tensor([])
     return retval
 
-annotate.start(name = "failed example")
+leapp.start(name = "failed example")
 detections = funcA(data)
 funcBreturn = funcB(detections)
 funcCreturn = funcC(detections, data)
-annotate.stop()
-annotate.compile_graph() #failure on this line
+leapp.stop()
+leapp.compile_graph() #failure on this line
 
 ```
 

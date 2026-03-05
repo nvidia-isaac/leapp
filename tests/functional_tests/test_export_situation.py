@@ -17,7 +17,8 @@
 import unittest
 from .base import LEAPPFunctionalTestBase
 import torch
-from leapp import annotate
+import leapp
+from leapp.leapp import _MANAGER as annotate
 
 
 class TestExportSituation(LEAPPFunctionalTestBase):
@@ -33,7 +34,7 @@ class TestExportSituation(LEAPPFunctionalTestBase):
         a = torch.randn(3, 8)
         b = torch.randn(6, 8)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
 
         @torch.jit.script
         def module(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
@@ -56,8 +57,8 @@ class TestExportSituation(LEAPPFunctionalTestBase):
             'result': result,
         }, export_with="jit-script")
 
-        annotate.stop()
-        annotate.compile_graph()
+        leapp.stop()
+        leapp.compile_graph()
 
         # Use allclose instead of exact match because torch.jit.freeze
         # (optimize_numerics=True) can cause tiny floating-point differences
@@ -75,10 +76,10 @@ class TestExportSituation(LEAPPFunctionalTestBase):
             output = linear(inputA)
             return output
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         funcA(torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32))
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
     def test_export_nnModule(self):
         class moduleA(torch.nn.Module):
@@ -90,10 +91,10 @@ class TestExportSituation(LEAPPFunctionalTestBase):
             def forward(self, inputA: torch.Tensor):
                 return self.linear(inputA)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         moduleA()(torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32))
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
     def test_export_nnModule_with_dict_list_io(self):
 
@@ -104,10 +105,10 @@ class TestExportSituation(LEAPPFunctionalTestBase):
 
         input = {'a': torch.tensor([1]), 'b': torch.tensor(
             [2]), 'c': torch.tensor([3]), 'd': torch.tensor([4])}
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         expected_output = funcA(input)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(annotate, nodes=1, inputs=4, outputs=4,
                                     internal_connections=0)
@@ -129,10 +130,10 @@ class TestExportSituation(LEAPPFunctionalTestBase):
 
         input = [[{'nested': {'a': torch.tensor([1]), 'b': torch.tensor(
             [2]), 'c': torch.tensor([3]), 'd': torch.tensor([4])}}], torch.tensor([5])]
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         expected_output = funcA(*input)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(annotate, nodes=1, inputs=5, outputs=5,
                                     internal_connections=0)
@@ -156,10 +157,10 @@ class TestExportSituation(LEAPPFunctionalTestBase):
                 self.idx += self.stride
                 return retval
         moduleA = moduleA()
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         subset = moduleA.get_subset(torch.tensor([1, 2, 3]))
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(annotate, nodes=1, inputs=1, outputs=1,
                                     internal_connections=0)
@@ -184,10 +185,10 @@ class TestExportSituation(LEAPPFunctionalTestBase):
         input_list = [torch.tensor([5]), torch.tensor(
             [6]), torch.tensor([7]), torch.tensor([8])]
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         expected_output = test_complex_io(input_dict, input_list)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         # Verify graph statistics: 1 node, 8 dangling inputs, 8 dangling outputs, 0 internal connections
         self.verify_num_connections(annotate, nodes=1, inputs=8, outputs=8,
@@ -222,10 +223,10 @@ class TestExportSituation(LEAPPFunctionalTestBase):
         # Create input tensor with shape (20,) with values 0, 10, 20, ..., 190
         input_tensor = torch.arange(0, 200, 10)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         expected_output = split_tensor(input_tensor)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         # Verify graph statistics: 1 node, 1 dangling input, 20 dangling outputs, 0 internal connections
         self.verify_num_connections(annotate, nodes=1, inputs=1, outputs=20,
@@ -261,10 +262,10 @@ class TestExportSituation(LEAPPFunctionalTestBase):
 
         input_tensor = torch.arange(4)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         expected_output = create_nested_lists(input_tensor)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         # Should have 1 input, 4 outputs (flattened from nested structure)
         self.verify_num_connections(annotate, nodes=1, inputs=1, outputs=4,
@@ -293,10 +294,10 @@ class TestExportSituation(LEAPPFunctionalTestBase):
 
         input_list = [torch.tensor([i]) for i in range(4)]
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         expected_output = create_dict_of_lists(input_list)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         # 4 inputs, 4 outputs (dict values flattened)
         self.verify_num_connections(annotate, nodes=1, inputs=4, outputs=4,
@@ -325,10 +326,10 @@ class TestExportSituation(LEAPPFunctionalTestBase):
 
         input_tensor = torch.arange(5)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         expected_output = mixed_outputs(input_tensor)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         # 1 input, 5 outputs (1 tensor + 2 list tensors + 2 dict tensors)
         self.verify_num_connections(annotate, nodes=1, inputs=1, outputs=5,
@@ -361,10 +362,10 @@ class TestExportSituation(LEAPPFunctionalTestBase):
 
         input_tensor = torch.arange(4)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         expected_output = create_list_of_dicts(input_tensor)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         # 1 input, 4 outputs (flattened from list of dicts)
         self.verify_num_connections(annotate, nodes=1, inputs=1, outputs=4,
@@ -403,10 +404,10 @@ class TestExportSituation(LEAPPFunctionalTestBase):
             }
         }
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         expected_output = flatten_nested_structure(nested_input)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         # 3 inputs (flattened from nested dict), 3 outputs
         self.verify_num_connections(annotate, nodes=1, inputs=3, outputs=3,

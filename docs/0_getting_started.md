@@ -20,6 +20,7 @@ Let's create a simple robot sensor processing pipeline that demonstrates LEAPP's
 
 ```python
 import torch
+import leapp
 from leapp import annotate
 
 # Method node: Process and normalize sensor data
@@ -39,7 +40,7 @@ def compute_obstacle_features(sensor_data):
 
 def main():
     # Start tracing our computational graph
-    annotate.start(name="sample_robot_pipeline")
+    leapp.start(name="sample_robot_pipeline")
     
     # Create some sample sensor data
     raw_sensor_data = torch.tensor([0.1, 0.8, 0.3, 0.9, 0.2])
@@ -84,8 +85,8 @@ def main():
                                    caution_factor.unsqueeze(0)])
     
     # Stop tracing and compile the graph
-    annotate.stop()
-    annotate.compile_graph()
+    leapp.stop()
+    leapp.compile_graph()
     
     print(f"Raw sensor data: {raw_sensor_data}")
     print(f"Processed data: {clean_data}")
@@ -172,16 +173,16 @@ raw_sensor_data → [process_sensor_data] → clean_data
 
 ```python
 # 1. Start tracing
-annotate.start(name="sample_robot_pipeline")
+leapp.start(name="sample_robot_pipeline")
 
 # 2. Run your annotated code
 # ... your pipeline code ...
 
 # 3. Stop tracing  
-annotate.stop()
+leapp.stop()
 
 # 4. Compile and export
-annotate.compile_graph()
+leapp.compile_graph()
 ```
 
 ## Generated Output Files

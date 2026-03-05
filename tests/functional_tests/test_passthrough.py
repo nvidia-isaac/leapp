@@ -1,7 +1,8 @@
 import unittest
 import os
 import torch
-from leapp import annotate
+import leapp
+from leapp.leapp import _MANAGER as annotate
 from .base import LEAPPFunctionalTestBase
 from leapp.leapp_graph.datatypes import TracedTensor
 
@@ -94,7 +95,7 @@ class TestDryrun(LEAPPFunctionalTestBase):
 
     def test_complex_nested_input_and_state_tensors_dryrun_passthrough(self):
         """dry_run should preserve nested input/state structures without wrapping tensors."""
-        annotate.start(name=self.TEST_GRAPH_NAME, dry_run=True)
+        leapp.start(name=self.TEST_GRAPH_NAME, dry_run=True)
 
         nested_cases = [
             {
@@ -135,8 +136,8 @@ class TestDryrun(LEAPPFunctionalTestBase):
             {"out": {"inputs": returned_inputs, "states": returned_states}},
             export_with="jit",
         )
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         self.assertFalse(os.path.exists(os.path.join(self.TEST_GRAPH_NAME, "complex_node.pt")))
         self.assertFalse(os.path.exists(os.path.join(self.TEST_GRAPH_NAME, "complex_node.onnx")))
@@ -151,11 +152,11 @@ class TestDryrun(LEAPPFunctionalTestBase):
             y = x * 2.0 + 1.0
             return y
 
-        annotate.start(name=self.TEST_GRAPH_NAME, dry_run=True)
+        leapp.start(name=self.TEST_GRAPH_NAME, dry_run=True)
         x = torch.tensor([1.0, 2.0, 3.0])
         y = policy(x)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         self.assertEqual(len(seen_traced_inputs), 1)
         self.assertFalse(seen_traced_inputs[0], "dry_run at start should not use TracedTensor")
@@ -179,7 +180,7 @@ class TestDryrun(LEAPPFunctionalTestBase):
 
     def test_input_output_tensor_dryrun_passthrough(self):
         """dry_run at start should still build connectivity but skip model export."""
-        annotate.start(name=self.TEST_GRAPH_NAME, dry_run=True)
+        leapp.start(name=self.TEST_GRAPH_NAME, dry_run=True)
 
         a = torch.tensor([1.0, 2.0, 3.0])
         b = torch.tensor([0.5, 0.5, 0.5])
@@ -195,8 +196,8 @@ class TestDryrun(LEAPPFunctionalTestBase):
         self.assertNotIsInstance(downstream_in, TracedTensor)
         annotate.output_tensors("node_b", {"final": downstream_in * 3.0}, export_with="jit")
 
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         self.assertTrue(hasattr(out, "leapp_tag"), "Dryrun should tag node outputs")
         self.assertIn("data_flow", annotate.detected_pipeline)
@@ -208,7 +209,7 @@ class TestDryrun(LEAPPFunctionalTestBase):
 
     def test_state_tensor_dryrun_passthrough(self):
         """dry_run at start should preserve feedback detection and skip export."""
-        annotate.start(name=self.TEST_GRAPH_NAME, dry_run=True)
+        leapp.start(name=self.TEST_GRAPH_NAME, dry_run=True)
 
         obs = annotate.input_tensors("node_state", {"obs": torch.tensor([1.0, 2.0, 3.0])})
         state = annotate.state_tensors("node_state", {"state": torch.tensor([0.1, 0.2, 0.3])})
@@ -220,8 +221,8 @@ class TestDryrun(LEAPPFunctionalTestBase):
         self.assertIs(returned_state, new_state)
         annotate.output_tensors("node_state", {"action": obs + state}, export_with="jit")
 
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         self.assertNotIsInstance(new_state, TracedTensor)
         self.assertTrue(
@@ -244,13 +245,13 @@ class TestDryrun(LEAPPFunctionalTestBase):
         original_buffers = dict(model.named_buffers())
         original_buffer_ids = {name: id(buf) for name, buf in original_buffers.items()}
 
-        annotate.start(name=self.TEST_GRAPH_NAME, dry_run=True)
+        leapp.start(name=self.TEST_GRAPH_NAME, dry_run=True)
         x = annotate.input_tensors("policy", {"x": torch.ones(4)})
         annotate.module("policy", model)
         y = model(x)
         annotate.output_tensors("policy", {"y": y}, export_with="jit")
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         current_buffers = dict(model.named_buffers())
         self.assertEqual(set(original_buffers.keys()), set(current_buffers.keys()))
@@ -260,18 +261,18 @@ class TestDryrun(LEAPPFunctionalTestBase):
 
     def test_dryrun_declared_at_compile_graph_keeps_fx_graph_and_skips_export(self):
         """Setting dry_run before compile_graph should keep traced FX graph but skip model files."""
-        annotate.start(name=self.TEST_GRAPH_NAME, dry_run=False)
+        leapp.start(name=self.TEST_GRAPH_NAME, dry_run=False)
 
         x = annotate.input_tensors("compile_node", {"x": torch.tensor([1.0, 2.0, 3.0])})
         y = x * 2.0
         annotate.output_tensors("compile_node", {"y": y}, export_with="jit")
-        annotate.stop()
+        leapp.stop()
 
         node = annotate.nodes["compile_node"]
         self.assertIsNotNone(node.m, "FX graph module should be created during tracing")
 
         annotate.dry_run = True
-        annotate.compile_graph(visualize=False, validate=False)
+        leapp.compile_graph(visualize=False, validate=False)
 
         self.assertIn("compile_node", annotate.detected_nodes)
         self.assertTrue(os.path.exists(os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")))
@@ -290,10 +291,10 @@ class TestDryrun(LEAPPFunctionalTestBase):
             seen_traced_inputs.append(isinstance(x, TracedTensor))
             return x * 2.0
 
-        annotate.start(name=self.TEST_GRAPH_NAME, dry_run=True)
+        leapp.start(name=self.TEST_GRAPH_NAME, dry_run=True)
         out = policy(torch.tensor([1.0, 2.0, 3.0]))
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         self.assertEqual(len(seen_traced_inputs), 1)
         self.assertFalse(
@@ -304,15 +305,15 @@ class TestDryrun(LEAPPFunctionalTestBase):
 
     def test_expected_fail_start_dryrun_input_tensors_returns_raw(self):
         """Desired behavior: start(dry_run=True) input_tensors should return raw tensors."""
-        annotate.start(name=self.TEST_GRAPH_NAME, dry_run=True)
+        leapp.start(name=self.TEST_GRAPH_NAME, dry_run=True)
         a, b = annotate.input_tensors(
             "node_a",
             {"a": torch.tensor([1.0, 2.0]), "b": torch.tensor([3.0, 4.0])},
         )
         out = a + b
         annotate.output_tensors("node_a", {"out": out}, export_with="jit")
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         self.assertNotIsInstance(a, TracedTensor)
         self.assertNotIsInstance(b, TracedTensor)
@@ -332,13 +333,13 @@ class TestDryrun(LEAPPFunctionalTestBase):
         model = TinyStatefulModel()
         original_buffer_ids = {name: id(buf) for name, buf in model.named_buffers()}
 
-        annotate.start(name=self.TEST_GRAPH_NAME, dry_run=True)
+        leapp.start(name=self.TEST_GRAPH_NAME, dry_run=True)
         x = annotate.input_tensors("policy", {"x": torch.ones(4)})
         annotate.module("policy", model)
         y = model(x)
         annotate.output_tensors("policy", {"y": y}, export_with="jit")
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
         for name, buf in model.named_buffers():
             self.assertEqual(

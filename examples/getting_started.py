@@ -12,6 +12,7 @@ Run:
 
 import os
 import torch
+import leapp
 from leapp import annotate
 
 
@@ -56,7 +57,7 @@ def main():
     joint_vel = torch.randn(6)
     orientation = torch.tensor([1.0, 0.0, 0.0, 0.0])
 
-    annotate.start(name="sample_robot_pipeline")
+    leapp.start(name="sample_robot_pipeline")
 
     # Node 1: observation preprocessing.
     pos, vel, quat, cmd = annotate.input_tensors("obs_processor", {
@@ -82,8 +83,8 @@ def main():
     annotate.output_tensors("policy", {"joint_targets": joint_targets},
                             export_with="jit")
 
-    annotate.stop()
-    annotate.compile_graph(visualize=True)
+    leapp.stop()
+    leapp.compile_graph(visualize=True)
 
     out_dir = "sample_robot_pipeline"
     print(f"\nExported to {out_dir}/")

@@ -21,8 +21,8 @@ from .traced_tensor import TracedTensor
 from .traced_np_array import TracedNpArray
 
 from .global_patching import (
-    apply_traced_tensor_patches,
-    remove_traced_tensor_patches,
+    apply_traced_data_patches,
+    remove_traced_data_patches,
     is_numpy_patching_enabled,
 )
 
@@ -181,7 +181,7 @@ __all__ = [
     "is_traced_type",
     "get_traced_class_for",
     # Patch management
-    "apply_traced_tensor_patches",
-    "remove_traced_tensor_patches",
+    "apply_traced_data_patches",
+    "remove_traced_data_patches",
     "is_numpy_patching_enabled",
 ]

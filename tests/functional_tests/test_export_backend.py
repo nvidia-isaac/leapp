@@ -16,7 +16,8 @@
 #
 import unittest
 import torch
-from leapp import annotate
+import leapp
+from leapp.leapp import _MANAGER as annotate
 from .base import LEAPPFunctionalTestBase
 import pytest
 
@@ -39,10 +40,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
         input_tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
         expected_output = input_tensor*2.0
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         funcA(input_tensor)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
     @pytest.mark.filterwarnings("ignore:You are using the legacy TorchScript-based ONNX export")
     @pytest.mark.filterwarnings("ignore:The feature will be removed")
@@ -54,10 +55,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
         input_tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
         expected_output = input_tensor*2.0
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         funcA(input_tensor)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
     
     @pytest.mark.filterwarnings("ignore:You are using the legacy TorchScript-based ONNX export")
     @pytest.mark.filterwarnings("ignore:The feature will be removed")
@@ -94,10 +95,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
         input_tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
         threshold = torch.tensor(0.5, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         funcA(input_tensor, threshold)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
 
     @pytest.mark.filterwarnings("ignore:You are using the legacy TorchScript-based ONNX export")
     @pytest.mark.filterwarnings("ignore:The feature will be removed")
@@ -143,10 +144,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
 
         input_tensor = torch.randn(4, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         encode_decode(input_tensor)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('encode_decode')
 
     @pytest.mark.filterwarnings("ignore:You are using the legacy TorchScript-based ONNX export")
@@ -193,10 +194,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
 
         input_image = torch.randn(1, 1, 8, 8, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         process_image(input_image)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('process_image')
 
     @pytest.mark.filterwarnings("ignore:You are using the legacy TorchScript-based ONNX export")
@@ -239,10 +240,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
 
         input_tensor = torch.randn(2, 4, 8, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         apply_attention(input_tensor)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('apply_attention')
 
     @pytest.mark.filterwarnings("ignore:You are using the legacy TorchScript-based ONNX export")
@@ -294,12 +295,12 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
 
         input_tensor = torch.randn(4, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         intermediate = step_a(input_tensor)
         # Detach to make it a leaf tensor for the next node's ONNX export
         step_b(intermediate.detach())
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('step_a', 'step_b')
 
     @pytest.mark.filterwarnings("ignore:You are using the legacy TorchScript-based ONNX export")
@@ -337,10 +338,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
         input_tensor = torch.randn(2, 4, dtype=torch.float32)
         mask = torch.tensor([1.0, 0.0], dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         scale_and_broadcast(input_tensor, mask)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('scale_and_broadcast')
 
     @pytest.mark.filterwarnings("ignore:You are using the legacy TorchScript-based ONNX export")
@@ -379,10 +380,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
         input_tensor = torch.randn(4, dtype=torch.float32)
         noise = torch.randn(4, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         sample_gaussian(input_tensor, noise)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('sample_gaussian')
 
     def test_onnx_dynamo_with_complex_math(self):
@@ -400,10 +401,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
         x = torch.randn(3, 4, dtype=torch.float32)
         y = torch.randn(3, 4, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         complex_math(x, y)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('complex_math')
 
     def test_onnx_dynamo_with_reduction_operations(self):
@@ -423,10 +424,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
 
         x = torch.randn(4, 8, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         reduction_ops(x)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('reduction_ops')
 
     def test_onnx_dict_inputs_to_list_outputs(self):
@@ -451,10 +452,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
             'b': torch.randn(3, 4, dtype=torch.float32),
         }
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         dict_to_list(input_dict)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('dict_to_list')
 
     def test_onnx_list_inputs_to_dict_outputs(self):
@@ -480,10 +481,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
             torch.randn(3, 4, dtype=torch.float32),
         ]
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         list_to_dict(input_list)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('list_to_dict')
 
     def test_onnx_nested_dict_input(self):
@@ -507,10 +508,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
             }
         }
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         process_nested_dict(nested_input)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('process_nested_dict')
 
     def test_onnx_nested_list_input(self):
@@ -529,10 +530,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
             [torch.randn(3, 4, dtype=torch.float32)],
         ]
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         process_nested_list(nested_input)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('process_nested_list')
 
     def test_onnx_mixed_dict_list_input(self):
@@ -555,10 +556,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
             torch.randn(3, 4, dtype=torch.float32),
         ]
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         process_mixed_inputs(dict_input, list_input)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('process_mixed_inputs')
 
     def test_onnx_nested_list_output(self):
@@ -571,10 +572,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
 
         input_tensor = torch.randn(4, 4, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         create_nested_list_output(input_tensor)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('create_nested_list_output')
 
     def test_onnx_dict_of_lists_output(self):
@@ -589,10 +590,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
 
         input_tensor = torch.randn(4, 4, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         create_dict_of_lists(input_tensor)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('create_dict_of_lists')
 
     def test_onnx_list_of_dicts_output(self):
@@ -607,10 +608,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
 
         input_tensor = torch.randn(4, 4, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         create_list_of_dicts(input_tensor)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('create_list_of_dicts')
 
     def test_onnx_mixed_return_types(self):
@@ -625,10 +626,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
 
         input_tensor = torch.randn(5, 4, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         mixed_outputs(input_tensor)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('mixed_outputs')
 
     def test_onnx_large_nested_structure(self):
@@ -652,10 +653,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
             ] for i in range(4)
         }
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         process_large_structure(large_input)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('process_large_structure')
 
     def test_onnx_deeply_nested_dict_input(self):
@@ -679,10 +680,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
             }
         }
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         process_deep_dict(deep_input)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('process_deep_dict')
 
     def test_onnx_many_tensor_inputs(self):
@@ -697,10 +698,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
 
         tensors = [torch.randn(3, 4, dtype=torch.float32) for _ in range(10)]
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         sum_many_tensors(*tensors)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('sum_many_tensors')
 
     def test_onnx_many_dict_tensor_inputs(self):
@@ -715,10 +716,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
 
         input_dict = {f't{i}': torch.randn(3, 4, dtype=torch.float32) for i in range(10)}
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         sum_dict_tensors(input_dict)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('sum_dict_tensors')
 
     def test_onnx_split_tensor_to_many_outputs(self):
@@ -731,10 +732,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
 
         input_tensor = torch.randn(8, 4, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         split_to_many(input_tensor)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('split_to_many')
 
     def test_onnx_bidirectional_dict_list_io(self):
@@ -761,10 +762,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
             torch.randn(3, 4, dtype=torch.float32),
         ]
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         bidirectional_io(dict_input, list_input)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('bidirectional_io')
 
     def test_onnx_complex_nested_dict_with_extra_input(self):
@@ -792,10 +793,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
         ]
         extra = torch.randn(3, 4, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         nested_with_extra(nested, extra)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('nested_with_extra')
 
     @pytest.mark.filterwarnings("ignore:You are using the legacy TorchScript-based ONNX export")
@@ -814,10 +815,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
             'b': torch.randn(3, 4, dtype=torch.float32),
         }
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         torchscript_io(input_dict)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('torchscript_io')
 
     @pytest.mark.filterwarnings("ignore:You are using the legacy TorchScript-based ONNX export")
@@ -838,10 +839,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
             [torch.randn(3, 4, dtype=torch.float32)],
         ]
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         torchscript_nested(nested_input)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('torchscript_nested')
 
     def test_onnx_with_nn_module_and_dict_input(self):
@@ -864,10 +865,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
             'b': torch.randn(3, 4, dtype=torch.float32),
         }
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         module.process(input_dict)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('process')
 
     def test_onnx_with_nn_module_and_list_output(self):
@@ -886,10 +887,10 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
         module = SplitModule()
         input_tensor = torch.randn(3, 4, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         module.split_process(input_tensor)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('split_process')
     
 class TestTorchBackend(LEAPPFunctionalTestBase):
@@ -909,10 +910,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         input_tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
         expected_output = input_tensor*2.0
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         funcA(input_tensor)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_single_torchscript_model_expected_value(
             [input_tensor], [expected_output], funcA.__name__)
 
@@ -924,10 +925,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         input_tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
         expected_output = input_tensor*2.0
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         funcA(input_tensor)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_single_torchscript_model_expected_value(
             [input_tensor], [expected_output], funcA.__name__)
 
@@ -949,10 +950,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         x = torch.randn(3, 4, dtype=torch.float32)
         y = torch.randn(3, 4, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         complex_math(x, y)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('complex_math')
 
     def test_torch_script_complex_math(self):
@@ -969,10 +970,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         x = torch.randn(3, 4, dtype=torch.float32)
         y = torch.randn(3, 4, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         complex_math(x, y)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('complex_math')
 
     # -----------------------------------------------------------------
@@ -993,10 +994,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
 
         x = torch.randn(4, 8, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         reduction_ops(x)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('reduction_ops')
 
     def test_torch_script_reduction_operations(self):
@@ -1013,10 +1014,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
 
         x = torch.randn(4, 8, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         reduction_ops(x)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('reduction_ops')
 
     # -----------------------------------------------------------------
@@ -1039,10 +1040,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
             'b': torch.randn(3, 4, dtype=torch.float32),
         }
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         dict_to_list(input_dict)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('dict_to_list')
 
     def test_torch_trace_list_inputs_to_dict_outputs(self):
@@ -1062,10 +1063,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
             torch.randn(3, 4, dtype=torch.float32),
         ]
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         list_to_dict(input_list)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('list_to_dict')
 
     def test_torch_trace_nested_dict_input(self):
@@ -1088,10 +1089,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
             }
         }
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         process_nested_dict(nested_input)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('process_nested_dict')
 
     def test_torch_trace_nested_list_input(self):
@@ -1109,10 +1110,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
             [torch.randn(3, 4, dtype=torch.float32)],
         ]
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         process_nested_list(nested_input)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('process_nested_list')
 
     def test_torch_trace_mixed_dict_list_input(self):
@@ -1135,10 +1136,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
             torch.randn(3, 4, dtype=torch.float32),
         ]
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         process_mixed_inputs(dict_input, list_input)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('process_mixed_inputs')
 
     def test_torch_trace_nested_list_output(self):
@@ -1150,10 +1151,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
 
         input_tensor = torch.randn(4, 4, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         create_nested_list_output(input_tensor)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('create_nested_list_output')
 
     def test_torch_trace_dict_of_lists_output(self):
@@ -1168,10 +1169,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
 
         input_tensor = torch.randn(4, 4, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         create_dict_of_lists(input_tensor)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('create_dict_of_lists')
 
     def test_torch_trace_list_of_dicts_output(self):
@@ -1186,10 +1187,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
 
         input_tensor = torch.randn(4, 4, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         create_list_of_dicts(input_tensor)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('create_list_of_dicts')
 
     def test_torch_trace_mixed_return_types(self):
@@ -1204,10 +1205,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
 
         input_tensor = torch.randn(5, 4, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         mixed_outputs(input_tensor)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('mixed_outputs')
 
     def test_torch_trace_bidirectional_dict_list_io(self):
@@ -1229,10 +1230,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
             torch.randn(3, 4, dtype=torch.float32),
         ]
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         bidirectional_io(dict_input, list_input)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('bidirectional_io')
 
     # -----------------------------------------------------------------
@@ -1259,10 +1260,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
             }
         }
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         process_deep_dict(deep_input)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('process_deep_dict')
 
     def test_torch_trace_many_tensor_inputs(self):
@@ -1277,10 +1278,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
 
         tensors = [torch.randn(3, 4, dtype=torch.float32) for _ in range(10)]
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         sum_many_tensors(*tensors)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('sum_many_tensors')
 
     def test_torch_trace_many_dict_tensor_inputs(self):
@@ -1295,10 +1296,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
 
         input_dict = {f't{i}': torch.randn(3, 4, dtype=torch.float32) for i in range(10)}
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         sum_dict_tensors(input_dict)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('sum_dict_tensors')
 
     def test_torch_trace_split_tensor_to_many_outputs(self):
@@ -1310,10 +1311,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
 
         input_tensor = torch.randn(8, 4, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         split_to_many(input_tensor)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('split_to_many')
 
     def test_torch_trace_large_nested_structure(self):
@@ -1334,10 +1335,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
             ] for i in range(4)
         }
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         process_large_structure(large_input)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('process_large_structure')
 
     def test_torch_trace_complex_nested_dict_with_extra_input(self):
@@ -1360,10 +1361,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         ]
         extra = torch.randn(3, 4, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         nested_with_extra(nested, extra)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('nested_with_extra')
 
     # -----------------------------------------------------------------
@@ -1383,11 +1384,11 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
 
         input_tensor = torch.randn(4, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         intermediate = step_a(input_tensor)
         step_b(intermediate.detach())
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('step_a', 'step_b')
 
     def test_torch_script_chained_nodes(self):
@@ -1403,11 +1404,11 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
 
         input_tensor = torch.randn(4, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         intermediate = step_a(input_tensor)
         step_b(intermediate.detach())
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('step_a', 'step_b')
 
     # -----------------------------------------------------------------
@@ -1434,10 +1435,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
             'b': torch.randn(3, 4, dtype=torch.float32),
         }
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         module.process(input_dict)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('process')
 
     def test_torch_trace_nn_module_with_list_output(self):
@@ -1456,10 +1457,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         module = SplitModule()
         input_tensor = torch.randn(3, 4, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         module.split_process(input_tensor)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('split_process')
 
     def test_torch_script_nn_module_with_dict_input(self):
@@ -1482,10 +1483,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
             'b': torch.randn(3, 4, dtype=torch.float32),
         }
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         module.process(input_dict)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('process')
 
     def test_torch_script_nn_module_with_list_output(self):
@@ -1504,10 +1505,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         module = SplitModule()
         input_tensor = torch.randn(3, 4, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         module.split_process(input_tensor)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('split_process')
 
     # -----------------------------------------------------------------
@@ -1523,10 +1524,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
 
         input_tensor = torch.randn(3, 4, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         multi_output(input_tensor)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('multi_output')
 
     def test_torch_script_multiple_outputs(self):
@@ -1538,10 +1539,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
 
         input_tensor = torch.randn(3, 4, dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         multi_output(input_tensor)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('multi_output')
 
     def test_torch_trace_tensor_broadcasting(self):
@@ -1560,10 +1561,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         input_tensor = torch.randn(2, 4, dtype=torch.float32)
         mask = torch.tensor([1.0, 0.0], dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         broadcast_ops(input_tensor, mask)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('broadcast_ops')
 
     def test_torch_script_tensor_broadcasting(self):
@@ -1582,10 +1583,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         input_tensor = torch.randn(2, 4, dtype=torch.float32)
         mask = torch.tensor([1.0, 0.0], dtype=torch.float32)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         broadcast_ops(input_tensor, mask)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('broadcast_ops')
 
     # -----------------------------------------------------------------
@@ -1603,10 +1604,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         y = torch.tensor([[0.0, 1.0], [-1.0, 0.5]], dtype=torch.float32)
         expected = torch.relu(x) + torch.sigmoid(y)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         compute(x, y)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_single_torchscript_model_expected_value(
             [x, y], [expected], 'compute')
 
@@ -1621,10 +1622,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         y = torch.tensor([[0.0, 1.0], [-1.0, 0.5]], dtype=torch.float32)
         expected = torch.relu(x) + torch.sigmoid(y)
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         compute(x, y)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_single_torchscript_model_expected_value(
             [x, y], [expected], 'compute')
 
@@ -1641,10 +1642,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         expected_half1 = x[:2] * 2.0
         expected_half2 = x[2:] * 3.0
 
-        annotate.start(name=self.TEST_GRAPH_NAME)
+        leapp.start(name=self.TEST_GRAPH_NAME)
         split_and_scale(x)
-        annotate.stop()
-        annotate.compile_graph(visualize=False)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
         self.verify_single_torchscript_model_expected_value(
             [x], [expected_half1, expected_half2], 'split_and_scale')
 
