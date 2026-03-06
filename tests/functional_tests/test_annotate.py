@@ -320,6 +320,35 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
         self.verify_single_torchscript_model_expected_value(
             [input_tensor], [expected_computed, static_tensor], 'static_test')
 
+    def test_annotate_tensor_with_static_outputs_multiple_runs_validation(self):
+        """Static outputs should validate correctly across cached re-entry examples."""
+        leapp.start(name=self.TEST_GRAPH_NAME, verbose=True, max_cached_io=3)
+
+        static_tensor = torch.tensor([4.0, 5.0, 6.0])
+        last_input = None
+
+        for i in range(3):
+            input_tensor = torch.tensor(
+                [1.0 + i, 2.0 + i, 3.0 + i], dtype=torch.float32)
+            traced_input = annotate.input_tensors(
+                'static_test_cached', {'input': input_tensor})
+            computed_output = traced_input + 1.0
+            annotate.output_tensors(
+                'static_test_cached',
+                {'computed': computed_output},
+                static_outputs={'static': static_tensor},
+                export_with="jit"
+            )
+            last_input = input_tensor
+
+        leapp.stop()
+        leapp.compile_graph(visualize=False, validate=True)
+
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=1, outputs=2, internal_connections=0)
+        self.verify_single_torchscript_model_expected_value(
+            [last_input], [last_input + 1.0, static_tensor], 'static_test_cached')
+
     def test_annotate_register_buffer_with_inplace_assignment(self):
         """Test that register_buffer allows a tensor to participate in tracing with in-place assignment.
         """

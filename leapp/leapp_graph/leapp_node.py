@@ -440,12 +440,11 @@ class LeappNode():
     def reentry_validate_and_tag_outputs(self, tensors: dict,
                                          static_tensors: dict | None = None):
         """Tag and validate output tensors on re-entry, then advance the cache index."""
-        for tensor_name, tensor in tensors.items():
-            self.tag_data(tensor, tensor_name)
-            self.validate_output_and_update_tags(tensor_name, tensor_name, tensor)
-        if static_tensors:
-            for tensor_name, tensor in static_tensors.items():
+        for tensors in [tensors, static_tensors]: # this is to handle name overlaps.
+            for tensor_name, tensor in tensors.items():
                 self.tag_data(tensor, tensor_name)
+                self.validate_output_and_update_tags(tensor_name, tensor_name, tensor)
+
         self.increment_cache_idx()
 
     def reentry_validate_state_update(self, tensors: dict):

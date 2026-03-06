@@ -333,7 +333,7 @@ class ExportManager:
         flattened_tensors = flatten_io_structure(tensors, '')
 
         if not traced_tensors_node.is_tracing:
-            flattened_static = None
+            flattened_static = {}
             if static_outputs is not None:
                 if not isinstance(static_outputs, dict):
                     static_outputs = {'static_output': static_outputs}
