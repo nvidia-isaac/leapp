@@ -20,6 +20,7 @@ import functools
 import inspect
 import os
 import torch
+from typing import Union
 
 from leapp.utils.logging import _get_logger
 from leapp.leapp_graph.leapp_node import LeappNode
@@ -71,6 +72,7 @@ class ExportManager:
             self.GRAPH_NAME = "my_graph"
             self.SAVE_PATH = None
             self.dry_run = False
+            self.non_traced = set[str]()
             self._patches_applied = False
 
             # tracetime variables
@@ -102,11 +104,19 @@ class ExportManager:
     def configure_logger(self, verbose=False):
         _get_logger().configure(self.SAVE_PATH, verbose=verbose)
 
+    def set_dry_run_and_non_traced(self, dry_run: bool, non_traced):
+        self.set_dry_run(dry_run)
+        if isinstance(non_traced, str):
+            non_traced = [non_traced]
+        self.non_traced = set[str](non_traced)
     def set_dry_run(self, dry_run: bool):
         self.dry_run = dry_run
-
-    def get_dry_run(self):
-        return self.dry_run
+    
+    def is_dry_run(self, name: str = None):
+        if name is None:
+            return self.dry_run
+        else:
+            return self.dry_run or name in self.non_traced
 
     def set_max_cached_io(self, max_cached_io: int):
         self._max_cached_io = max_cached_io - 1
@@ -161,8 +171,8 @@ class ExportManager:
                 f"Cannot create a new node with the same name.")
 
         node_index = self._get_node_index(name)
-
-        if self.dry_run:
+        self.is_dry_run(name)
+        if self.is_dry_run(name):
             kwargs['export_with'] = None
             kwargs['backend_params'] = {}
 
@@ -174,7 +184,7 @@ class ExportManager:
                           environment_constants=kwargs.get(
                               "environment_constants", None),
                           register_buffers=kwargs.get("register_buffers", None),
-                          dry_run=self.dry_run)
+                          dry_run=self.is_dry_run(name))
 
         node._max_cached_io = self._max_cached_io
         self.nodes[name] = node
@@ -350,7 +360,7 @@ class ExportManager:
                 _get_logger().warning(f"Warning: no tensor name provided for static_outputs in node {node_name}\n"
                                       "Assuming default tensor name")
 
-        export_with = None if self.dry_run else kwargs.get("export_with", None)
+        export_with = None if self.is_dry_run(node_name) else kwargs.get("export_with", None)
         traced_tensors_node.compile_trace(flattened_tensors,
                                           backend=export_with,
                                           backend_params=kwargs.get("backend_params", {}),

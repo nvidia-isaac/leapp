@@ -14,9 +14,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-import torch
 import os
+import warnings
 from typing import Tuple
+
+import torch
 from leapp.backends.export_backend import ExportBackend, prepare_tensors_for_export
 from leapp.utils.logging import _get_logger
 
@@ -83,7 +85,16 @@ class TorchScriptExportBackend(TorchExportBackend):
             m = self.module_builder()
         m = m.eval()
         torch.jit._state.enable
-        compiled_model = torch.jit.script(m, **self.backend_params)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=(
+                    "The TorchScript type system doesn't support instance-level "
+                    "annotations on empty non-base types in `__init__`.*"
+                ),
+                category=UserWarning,
+            )
+            compiled_model = torch.jit.script(m, **self.backend_params)
         self.compiled_model = compiled_model
         self.compiled_module = m
         # Freezing moved to save() method to allow node combination

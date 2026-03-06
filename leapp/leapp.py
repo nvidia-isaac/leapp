@@ -33,7 +33,7 @@ from .export_manager import ExportManager
 _MANAGER = ExportManager()
 
 
-def start(name, save_path=".", verbose=False, dry_run=False, max_cached_io=5, global_patching=True):
+def start(name, save_path=".", verbose=False, dry_run=False, non_traced=[], max_cached_io=5, global_patching=True):
     """Initialize and start LEAPP graph interpretation."""
     manager = _MANAGER
     manager.set_graph_name(name)
@@ -50,7 +50,7 @@ def start(name, save_path=".", verbose=False, dry_run=False, max_cached_io=5, gl
     if dry_run:
         _get_logger().info("Starting dry run mode")
 
-    manager.set_dry_run(dry_run)
+    manager.set_dry_run_and_non_traced(dry_run, non_traced)
     manager.set_max_cached_io(max_cached_io)
     manager.reset_nodes()
     ExportManager.set_interpret_graph(True)
@@ -79,7 +79,7 @@ def stop():
         manager.set_patches_applied(False)
 
 
-def compile_graph(visualize=True, verbose=None, validate=True, rtol=1e-3, atol=1e-5, strict=True):
+def compile_graph(visualize=True, verbose=None, validate=True, dry_run=False, rtol=1e-3, atol=1e-5, strict=True):
     """Compile and save the computational graph from traced nodes."""
     manager = _MANAGER
 
@@ -90,21 +90,24 @@ def compile_graph(visualize=True, verbose=None, validate=True, rtol=1e-3, atol=1
     if verbose is not None:
         _get_logger().set_verbose(verbose)
 
-    if not manager.get_dry_run():
+    if dry_run:
+        manager.set_dry_run_and_non_traced(dry_run, [])
+
+    if not manager.is_dry_run():
         manager.compile_models()
 
     graph = LeappGraph(manager.get_nodes(), manager.get_graph_name())
     pipeline = graph.get_full_pipeline_description()
 
     inital_value_filename = None
-    if not manager.get_dry_run():
+    if not manager.is_dry_run():
         inital_value_filename = graph.save_feedback_initial_values(
             manager.get_save_path(), manager.get_graph_name())
 
     if inital_value_filename is not None:
         pipeline['pipeline']['initial_values'] = inital_value_filename
 
-    if not manager.get_dry_run():
+    if not manager.is_dry_run():
         manager.save_models()
 
     models = manager.get_io_descriptions()
@@ -135,7 +138,7 @@ def compile_graph(visualize=True, verbose=None, validate=True, rtol=1e-3, atol=1
 
     manager.set_detected_graph(models, pipeline)
 
-    if validate and not manager.get_dry_run():
+    if validate and not manager.is_dry_run():
         return manager.validate_all_models(rtol=rtol, atol=atol, strict=strict)
 
     return True

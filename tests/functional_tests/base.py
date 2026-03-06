@@ -33,7 +33,7 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
         if ExportManager.is_interpret_graph_enabled():
             ExportManager.set_interpret_graph(False)
         annotate.reset_nodes()
-        annotate.set_dry_run(False)
+        annotate.set_dry_run_and_non_traced(False, [])
     
     def verify_all_models_exist(self, *model_names):
         for model_name in model_names:

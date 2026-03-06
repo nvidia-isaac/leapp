@@ -271,13 +271,88 @@ class TestDryrun(LEAPPFunctionalTestBase):
         node = annotate.nodes["compile_node"]
         self.assertIsNotNone(node.m, "FX graph module should be created during tracing")
 
-        annotate.dry_run = True
-        leapp.compile_graph(visualize=False, validate=False)
+        leapp.compile_graph(visualize=False, validate=False, dry_run=True)
 
         self.assertIn("compile_node", annotate.detected_nodes)
         self.assertTrue(os.path.exists(os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")))
         self.assertFalse(os.path.exists(os.path.join(self.TEST_GRAPH_NAME, "compile_node.pt")))
         self.assertFalse(os.path.exists(os.path.join(self.TEST_GRAPH_NAME, "compile_node.onnx")))
+
+    def test_non_traced_node_is_selective_and_preserves_connectivity(self):
+        """non_traced should disable tracing only for selected nodes while preserving graph connectivity."""
+        leapp.start(name=self.TEST_GRAPH_NAME, non_traced=["raw_node"])
+
+        x = torch.tensor([1.0, 2.0, 3.0])
+        raw_x = annotate.input_tensors("raw_node", {"x": x})
+        self.assertNotIsInstance(raw_x, TracedTensor)
+
+        raw_y = raw_x * 2.0
+        annotate.output_tensors("raw_node", {"y": raw_y}, export_with="jit")
+        self.assertTrue(hasattr(raw_y, "leapp_tag"), "non_traced outputs should still be tagged")
+
+        traced_y = annotate.input_tensors("traced_node", {"y": raw_y})
+        self.assertIsInstance(traced_y, TracedTensor)
+
+        traced_z = traced_y + 1.0
+        annotate.output_tensors("traced_node", {"z": traced_z}, export_with="jit")
+
+        leapp.stop()
+        results = leapp.compile_graph(visualize=False, validate=True)
+
+        self.assertTrue(results["raw_node"])
+        self.assertTrue(results["traced_node"])
+        self.assertIn("raw_node", annotate.detected_nodes)
+        self.assertIn("traced_node", annotate.detected_nodes)
+        self.assertTrue(os.path.exists(os.path.join(self.TEST_GRAPH_NAME, "traced_node.pt")))
+        self.assertFalse(os.path.exists(os.path.join(self.TEST_GRAPH_NAME, "raw_node.pt")))
+        self.assertFalse(os.path.exists(os.path.join(self.TEST_GRAPH_NAME, "raw_node.onnx")))
+        self.assertIn("raw_node/y", annotate.detected_pipeline["data_flow"])
+        self.assertEqual(
+            ["traced_node/y"],
+            list(annotate.detected_pipeline["data_flow"]["raw_node/y"]),
+        )
+
+    def test_non_traced_node_validation_is_skipped_under_validate_true(self):
+        """validate=True should succeed when a graph mixes traced and non_traced nodes."""
+        leapp.start(name=self.TEST_GRAPH_NAME, non_traced=["raw_node"])
+
+        raw_x = annotate.input_tensors("raw_node", {"x": torch.tensor([2.0, 4.0, 6.0])})
+        raw_y = raw_x / 2.0
+        annotate.output_tensors("raw_node", {"y": raw_y}, export_with="jit")
+
+        traced_y = annotate.input_tensors("traced_node", {"y": raw_y})
+        annotate.output_tensors("traced_node", {"z": traced_y.square()}, export_with="jit")
+
+        leapp.stop()
+        results = leapp.compile_graph(visualize=False, validate=True)
+
+        self.assertEqual({"raw_node", "traced_node"}, set(results.keys()))
+        self.assertTrue(results["raw_node"])
+        self.assertTrue(results["traced_node"])
+        self.assertFalse(os.path.exists(os.path.join(self.TEST_GRAPH_NAME, "raw_node.pt")))
+        self.assertTrue(os.path.exists(os.path.join(self.TEST_GRAPH_NAME, "traced_node.pt")))
+
+    def test_non_traced_state_node_still_populates_feedback_flow(self):
+        """non_traced state nodes should still register feedback connections without exporting a model."""
+        leapp.start(name=self.TEST_GRAPH_NAME, non_traced=["state_node"])
+
+        obs = annotate.input_tensors("state_node", {"obs": torch.tensor([1.0, 2.0, 3.0])})
+        state = annotate.state_tensors("state_node", {"state": torch.tensor([0.1, 0.2, 0.3])})
+        self.assertNotIsInstance(obs, TracedTensor)
+        self.assertNotIsInstance(state, TracedTensor)
+
+        new_state = state + obs
+        annotate.update_state("state_node", {"state": new_state})
+        annotate.output_tensors("state_node", {"action": obs - state}, export_with="jit")
+
+        leapp.stop()
+        results = leapp.compile_graph(visualize=False, validate=True)
+
+        self.assertTrue(results["state_node"])
+        self.assertIn("feedback_flow", annotate.detected_pipeline)
+        self.assertGreaterEqual(len(annotate.detected_pipeline["feedback_flow"]), 1)
+        self.assertFalse(os.path.exists(os.path.join(self.TEST_GRAPH_NAME, "state_node.pt")))
+        self.assertFalse(os.path.exists(os.path.join(self.TEST_GRAPH_NAME, "state_node.onnx")))
 
     # ------------------------------------------------------------------
     # Expected-fail specs for future dry_run(start=...) semantics
