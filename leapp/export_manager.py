@@ -72,7 +72,7 @@ class ExportManager:
             self.GRAPH_NAME = "my_graph"
             self.SAVE_PATH = None
             self.dry_run = False
-            self.non_traced = set[str]()
+            self.non_traced = set()
             self._patches_applied = False
 
             # tracetime variables
@@ -110,9 +110,10 @@ class ExportManager:
         if isinstance(non_traced, str):
             non_traced = [non_traced]
         self.non_traced = set[str](non_traced)
+
     def set_dry_run(self, dry_run: bool):
         self.dry_run = dry_run
-    
+
     def is_dry_run(self, name: str = None):
         if name is None:
             return self.dry_run
@@ -241,7 +242,7 @@ class ExportManager:
             _get_logger().error(
                 "Cannot call input_tensors() while a _method()-traced function "
                 "is executing. Mixing active contexts is not allowed.")
-            raise Exception("Mixing active contxts is not allowed")
+            raise Exception("Mixing active contexts is not allowed")
 
         if not ExportManager._interpret_graph:
             return self._passthrough_dict_values(tensors)

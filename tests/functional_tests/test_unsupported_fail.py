@@ -220,7 +220,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         except Exception as e:
             leapp.stop()
             # The error should mention that we're trying to set up a new trace
-            self.assertIn("Mixing active contxts is not allowed", str(e))
+            self.assertIn("Mixing active contexts is not allowed", str(e))
     
     def test_reentrant_tracing_using_traced_tensors(self): #TODO: these both need to fail
         try:
@@ -236,7 +236,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             leapp.stop()
             self.fail("Expected an exception")
         except Exception as e:
-            self.assertIn("Mixing active contxts is not allowed", str(e))
+            self.assertIn("Mixing active contexts is not allowed", str(e))
     
     def test_passing_traced_tensor_to_method(self):
         try:
@@ -251,7 +251,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             leapp.stop()
             self.fail("Expected an exception")
         except Exception as e:
-            self.assertIn("Mixing active contxts is not allowed", str(e))
+            self.assertIn("Mixing active contexts is not allowed", str(e))
     
     def test_cross_context_traced_tensor_usage(self):
         """Basic test: addition of two TracedTensors from different contexts."""
@@ -264,7 +264,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             leapp.stop()
             self.fail("Expected an exception")
         except Exception as e:
-            self.assertIn("Mixing active contxts is not allowed", str(e))
+            self.assertIn("Mixing active contexts is not allowed", str(e))
 
     def test_cross_context_torch_cat_list(self):
         """Test torch.cat with a list containing TracedTensors from different contexts."""

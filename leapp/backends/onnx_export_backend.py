@@ -15,7 +15,7 @@ class ONNXExportBackend(ExportBackend):
         metadata['opset_version'] = getattr(self, 'opset_version', _constants.ONNX_DEFAULT_OPSET)
         return metadata
 
-    def get_backed_model_type(self):
+    def get_backend_model_type(self):
         return "onnx"
     
     def _get_onnx_model(self, onnx_program):

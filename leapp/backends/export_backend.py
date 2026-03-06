@@ -15,20 +15,17 @@
 # limitations under the License.
 #
 import abc
-from typing import Tuple, Any
-import os
 import hashlib
+import os
 import shutil
-from typing import Callable
+from typing import Callable, Tuple, Any
+
 import torch
+import onnx
+import onnxruntime as ort
 
 from leapp.utils.logging import _get_logger
 from leapp.backends.module_builder import ModuleBuilder
-
-
-
-import onnx
-import onnxruntime as ort
 
 
 class SimplifiedONNXProgram:
@@ -63,7 +60,6 @@ class SimplifiedONNXProgram:
     def __del__(self):
         """Clean up temp directory if we own it."""
         if getattr(self, '_temp_dir', None) is not None:
-            import shutil
             try:
                 if os.path.exists(self._temp_dir):
                     shutil.rmtree(self._temp_dir)
@@ -108,8 +104,6 @@ class SimplifiedONNXProgram:
         For large models (>2GB), re-saves with external data format.
         For small models, copies files directly.
         """
-        import shutil
-
         # 2GB threshold for protobuf limit
         SIZE_THRESHOLD = 2 * 1024 * 1024 * 1024
 
@@ -301,7 +295,7 @@ class ExportBackend(abc.ABC):
         return dest_path
 
     @abc.abstractmethod
-    def get_backed_model_type(self):
+    def get_backend_model_type(self):
         raise NotImplementedError
 
     @abc.abstractmethod
@@ -380,7 +374,7 @@ class NoneExportBackend(ExportBackend):
             _, sha256sum = self._verify_model_location_and_get_hash(self.backend_params['model_path'])
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
             device = self.backend_params['device'] if 'device' in self.backend_params else device
-            self.load(self.backend_params['model_path'], sha256sum, device, self.get_backed_model_type())
+            self.load(self.backend_params['model_path'], sha256sum, device, self.get_backend_model_type())
 
 
     def save(self, save_path: str) -> Tuple[str, str, str]:
@@ -405,7 +399,7 @@ class NoneExportBackend(ExportBackend):
         else:
             raise ValueError(f"Unsupported model type: {model_type}")
 
-    def get_backed_model_type(self):
+    def get_backend_model_type(self):
         if "model_path" not in self.backend_params:
             return None
 

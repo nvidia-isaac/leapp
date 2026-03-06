@@ -145,7 +145,7 @@ class ModuleBuilder:
             _get_logger().info("Created the following buffers:")
             for buffer_name in self.module_instance.saved_buffers:
                 _get_logger().info(
-                    f"  - self.{buffer_name}: intialized as {getattr(self.module_instance, buffer_name)}")
+                    f"  - self.{buffer_name}: initialized as {getattr(self.module_instance, buffer_name)}")
 
     def _duplicate_attributes(self):
         # copy all the attributes from the original object to the module

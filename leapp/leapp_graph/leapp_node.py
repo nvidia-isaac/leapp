@@ -211,7 +211,7 @@ class LeappNode():
             raise e
 
     def get_backend(self):
-        return self.export_backend.get_backed_model_type()
+        return self.export_backend.get_backend_model_type()
 
     def tag_data(self, tensor, tag):
         # the tag is the name of the tensor, with the node name prepended
@@ -249,9 +249,9 @@ class LeappNode():
             existing_names.add(description.name_str)
             current_io_list.append(description)
 
-    def add_output(self, outout_name, raw_output_name, output_value):
+    def add_output(self, output_name, raw_output_name, output_value):
         io_descriptions, output_format = describe_io(
-            outout_name, raw_output_name, output_value)
+            output_name, raw_output_name, output_value)
         for desc in io_descriptions:
             desc.cached_values = [torch.zeros_like(desc.value) for _ in range(self._max_cached_io)]
         self._validate_and_add_to_list(

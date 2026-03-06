@@ -33,7 +33,7 @@ from .export_manager import ExportManager
 _MANAGER = ExportManager()
 
 
-def start(name, save_path=".", verbose=False, dry_run=False, non_traced=[], max_cached_io=5, global_patching=True):
+def start(name, save_path=".", verbose=False, dry_run=False, non_traced=None, max_cached_io=5, global_patching=True):
     """Initialize and start LEAPP graph interpretation."""
     manager = _MANAGER
     manager.set_graph_name(name)
@@ -50,6 +50,8 @@ def start(name, save_path=".", verbose=False, dry_run=False, non_traced=[], max_
     if dry_run:
         _get_logger().info("Starting dry run mode")
 
+    if non_traced is None:
+        non_traced = []
     manager.set_dry_run_and_non_traced(dry_run, non_traced)
     manager.set_max_cached_io(max_cached_io)
     manager.reset_nodes()
@@ -101,13 +103,13 @@ def compile_graph(visualize=True, verbose=None, validate=True, dry_run=False, rt
     graph = LeappGraph(manager.get_nodes(), manager.get_graph_name())
     pipeline = graph.get_full_pipeline_description()
 
-    inital_value_filename = None
+    initial_value_filename = None
     if not manager.is_dry_run():
-        inital_value_filename = graph.save_feedback_initial_values(
+        initial_value_filename = graph.save_feedback_initial_values(
             manager.get_save_path(), manager.get_graph_name())
 
-    if inital_value_filename is not None:
-        pipeline['pipeline']['initial_values'] = inital_value_filename
+    if initial_value_filename is not None:
+        pipeline['pipeline']['initial_values'] = initial_value_filename
 
     if not manager.is_dry_run():
         manager.save_models()

@@ -27,7 +27,7 @@ class TorchExportBackend(ExportBackend):
     def get_backend_metadata(self):
         return {}
     
-    def get_backed_model_type(self):
+    def get_backend_model_type(self):
         return "jit"
 
     def save(self, save_path: str) -> Tuple[str, str, str]:
@@ -42,7 +42,7 @@ class TorchExportBackend(ExportBackend):
                 compiled_model.eval(), preserved_attrs=preserved_attrs)
         else:
             _get_logger().error(
-                "No compiled model found for {self.node_context.name}")
+                f"No compiled model found for {self.node_context.name}")
 
         path = os.path.join(save_path, f"{self.node_context.name}.pt")
         compiled_model.save(path)
@@ -84,7 +84,7 @@ class TorchScriptExportBackend(TorchExportBackend):
         if m is None:
             m = self.module_builder()
         m = m.eval()
-        torch.jit._state.enable
+        torch.jit._state.enable()
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore",

@@ -205,7 +205,7 @@ class TestLegacyMethod(LEAPPFunctionalTestBase):
             self.fail("Expected an exception for traced ops inside _method()")
         except Exception as e:
             leapp.stop()
-            self.assertIn("Mixing active contxts is not allowed", str(e))
+            self.assertIn("Mixing active contexts is not allowed", str(e))
 
 
     # ── Test 8: Dict input → list output ────────────────────────────────

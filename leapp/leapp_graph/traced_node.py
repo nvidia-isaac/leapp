@@ -19,7 +19,6 @@ import collections
 class TracedTensorNode(LeappNode):
     def __init__(self, name, *args, dry_run=False, **kwargs):
         if args or kwargs:
-            print(f"args: {args}, kwargs: {kwargs}")
             _get_logger().warning(f"{name} received unexpected arguments on initialization. these arguments will be ignored.")
         super().__init__(name, dry_run=dry_run)
         self.graph = fx.Graph()
@@ -367,13 +366,13 @@ class TracedTensorNode(LeappNode):
                     _get_logger().error(
                         f"Error: when creating inputs for '{self.name}', "
                         f"detected data '{name}' is an active {data.__class__.__name__} from a different node '{data.context}'. \n"
-                        f"Mixing active contxts is not allowed. "
+                        f"Mixing active contexts is not allowed. "
                         f"Call output_tensors() on the source node first."
                     )
                     raise Exception(
                         f"Error: when creating inputs for '{self.name}', "
                         f"detected data '{name}' is an active {data.__class__.__name__} from a different node '{data.context}'. \n"
-                        f"Mixing active contxts is not allowed. "
+                        f"Mixing active contexts is not allowed. "
                         f"Call output_tensors() on the source node first."
                     )
 
