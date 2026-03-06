@@ -190,7 +190,10 @@ class ExportManager:
             kwargs['export_with'] = None
             kwargs['backend_params'] = {}
 
-        node = node_class(name,
+        if node_class is FunctionDecoratorNode:
+            # kept for backward compatibility we still suppport old style initialization
+            # TODO: this needs to be removed in the future
+            node = node_class(name,
                           backend=kwargs.get("export_with", None),
                           backend_params=kwargs.get("backend_params", None),
                           inputs=kwargs.get("inputs", None),
@@ -199,6 +202,18 @@ class ExportManager:
                               "environment_constants", None),
                           register_buffers=kwargs.get("register_buffers", None),
                           dry_run=self.is_dry_run(name))
+        else:
+            node = node_class(name, dry_run=self.is_dry_run(name), **kwargs)
+
+        # node = node_class(name,
+        #                   backend=kwargs.get("export_with", None),
+        #                   backend_params=kwargs.get("backend_params", None),
+        #                   inputs=kwargs.get("inputs", None),
+        #                   outputs=kwargs.get("outputs", None),
+        #                   environment_constants=kwargs.get(
+        #                       "environment_constants", None),
+        #                   register_buffers=kwargs.get("register_buffers", None),
+        #                   dry_run=self.is_dry_run(name))
 
         node._max_cached_io = self._max_cached_io
         self.nodes[name] = node

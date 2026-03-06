@@ -19,7 +19,8 @@ import collections
 class TracedTensorNode(LeappNode):
     def __init__(self, name, *args, dry_run=False, **kwargs):
         if args or kwargs:
-            _get_logger().warning(f"TracedTensorNode {name} received unexpected arguments on initialization. these arguments will be ignored.")
+            print(f"args: {args}, kwargs: {kwargs}")
+            _get_logger().warning(f"{name} received unexpected arguments on initialization. these arguments will be ignored.")
         super().__init__(name, dry_run=dry_run)
         self.graph = fx.Graph()
         self.tracer = fx.Tracer()
