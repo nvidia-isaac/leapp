@@ -93,6 +93,8 @@ def compile_graph(visualize=True, verbose=None, validate=True, dry_run=False, rt
     if dry_run:
         manager.set_dry_run_and_non_traced(dry_run, [])
 
+    manager.validate_nodes_ready_for_compile()
+
     if not manager.is_dry_run():
         manager.compile_models()
 

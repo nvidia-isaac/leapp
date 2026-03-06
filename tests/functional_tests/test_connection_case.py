@@ -78,6 +78,63 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
         self.verify_num_connections(annotate, nodes=4, inputs=1, outputs=1,
                                     internal_connections=3, feedback_connections=1)
 
+    def test_interleaved_traced_nodes_keep_forward_execution_order(self):
+        """Interleaved traced nodes should classify completed dependencies as forward flow."""
+        trace_seed = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+        trace_external = torch.tensor([10.0, 20.0, 30.0], dtype=torch.float32)
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+
+        seed = annotate.input_tensors("node_a", {"seed": trace_seed})
+
+        external_input = annotate.input_tensors(
+            "node_b", {"external_input": trace_external}
+        )
+        from_b = external_input + 5.0
+        annotate.output_tensors("node_b", {"b_out": from_b}, export_with="jit")
+
+        from_b = annotate.input_tensors("node_a", {"from_b": from_b})
+        annotate.output_tensors(
+            "node_a", {"final_output": seed + from_b}, export_with="jit"
+        )
+
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        data_flow = {
+            source: list(targets)
+            for source, targets in annotate.detected_pipeline["data_flow"].items()
+        }
+        feedback_flow = {
+            source: list(targets)
+            for source, targets in annotate.detected_pipeline["feedback_flow"].items()
+        }
+
+        self.assertEqual({"node_b/from_b": ["node_a/from_b"]}, data_flow)
+        self.assertEqual({}, feedback_flow)
+        self.verify_num_connections(
+            annotate,
+            nodes=2,
+            inputs=2,
+            outputs=1,
+            internal_connections=1,
+            feedback_connections=0,
+        )
+        self.verify_all_models_exist("node_a", "node_b")
+        self.verify_safetensors_matches_feedback(annotate)
+
+        runtime_seed = torch.tensor([3.0, 4.0, 5.0], dtype=torch.float32)
+        runtime_external = torch.tensor([7.0, 8.0, 9.0], dtype=torch.float32)
+        expected_output = runtime_seed + (runtime_external + 5.0)
+
+        self.verify_inference_manager(
+            source_inputs={
+                "node_a/seed": runtime_seed,
+                "node_b/external_input": runtime_external,
+            },
+            source_outputs={"node_a/final_output": expected_output},
+        )
+
     def test_tensor_tag_presistence(self):
         @annotate.method()
         def funcA(inputA: torch.Tensor):

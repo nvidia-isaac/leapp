@@ -77,6 +77,7 @@ class ExportManager:
 
             # tracetime variables
             self.nodes = {}
+            self._next_completed_node_index = 0
 
             ExportManager._initialized = True
 
@@ -123,6 +124,7 @@ class ExportManager:
 
     def reset_nodes(self):
         self.nodes = {}
+        self._next_completed_node_index = 0
 
     def get_nodes(self):
         return self.nodes
@@ -156,13 +158,26 @@ class ExportManager:
     #########################################################
     # node setup
     #########################################################
-    def _get_node_index(self, name):
-        if name in self.nodes.keys():
-            # retracing inherits the node index of the original node
-            node_index = self.nodes[name].node_index
-        else:
-            node_index = len(self.nodes)
-        return node_index
+    def _assign_completion_index(self, node: LeappNode):
+        """Assign execution order when a node completes its initial trace."""
+        if node.node_index != LeappNode.UNSET_NODE_INDEX:
+            return
+        node.node_index = self._next_completed_node_index
+        self._next_completed_node_index += 1
+
+    def validate_nodes_ready_for_compile(self):
+        incomplete_nodes = [
+            name for name, node in self.nodes.items()
+            if node.node_index == LeappNode.UNSET_NODE_INDEX
+        ]
+        if incomplete_nodes:
+            incomplete_nodes.sort()
+            formatted = ", ".join(incomplete_nodes)
+            raise Exception(
+                "The following nodes were created but never completed: "
+                f"{formatted}. Did you forget to call output_tensors() "
+                "or finish the annotated function?"
+            )
 
     def _setup_new_node(self, name, node_class: LeappNode, **kwargs):
         if name in self.nodes:
@@ -170,13 +185,12 @@ class ExportManager:
                 f"Error: node '{name}' already exists. "
                 f"Cannot create a new node with the same name.")
 
-        node_index = self._get_node_index(name)
         self.is_dry_run(name)
         if self.is_dry_run(name):
             kwargs['export_with'] = None
             kwargs['backend_params'] = {}
 
-        node = node_class(name, node_index,
+        node = node_class(name,
                           backend=kwargs.get("export_with", None),
                           backend_params=kwargs.get("backend_params", None),
                           inputs=kwargs.get("inputs", None),
@@ -365,6 +379,7 @@ class ExportManager:
                                           backend=export_with,
                                           backend_params=kwargs.get("backend_params", {}),
                                           static_tensors=flattened_static_outputs)
+        self._assign_completion_index(traced_tensors_node)
 
         # Apply semantic metadata from TensorDescription wrappers
         if metadata:
@@ -717,6 +732,7 @@ class ExportManager:
                     if node_context.output_namespace is not None:
                         node_context.capture_outputs_from_namespace(
                             node_context.output_namespace)
+                    self._assign_completion_index(node_context)
                 else:
                     node_context.validate_function_outputs(func, result)
                     if node_context.output_namespace is not None:

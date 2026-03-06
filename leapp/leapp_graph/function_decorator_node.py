@@ -36,10 +36,10 @@ class FunctionDecoratorNode(LeappNode):
     an nn.Module via ModuleBuilder for export.
     """
 
-    def __init__(self, name, node_index, backend=None,
+    def __init__(self, name, backend=None,
                  backend_params=None, inputs=None, outputs=None,
                  environment_constants=None, register_buffers=None, dry_run=False):
-        super().__init__(name, node_index, dry_run=dry_run)
+        super().__init__(name, dry_run=dry_run)
 
         if inputs is not None:
             self._declared_inputs = list(dict.fromkeys(inputs))

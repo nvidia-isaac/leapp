@@ -52,9 +52,11 @@ class LeappNode():
                 return result
             cls.compile_trace = wrapped_compile_trace
 
-    def __init__(self, name, node_index, dry_run=False):
+    UNSET_NODE_INDEX = -1
+
+    def __init__(self, name, dry_run=False):
         self.name = name
-        self.node_index = node_index
+        self._node_index = self.UNSET_NODE_INDEX
         self.dry_run = dry_run
         
         # Attributes expected by export backends (subclasses may override)
@@ -85,6 +87,19 @@ class LeappNode():
 
         # storage for the fx graph or compiled module
         self.m = None
+
+    @property
+    def node_index(self):
+        return self._node_index
+
+    @node_index.setter
+    def node_index(self, value):
+        if self._node_index != self.UNSET_NODE_INDEX:
+            raise Exception(
+                f"Node index for '{self.name}' is already set to {self._node_index} "
+                "and cannot be reassigned."
+            )
+        self._node_index = value
 
     @property
     def captured(self):
