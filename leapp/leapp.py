@@ -22,7 +22,7 @@ from __future__ import annotations
 import os
 import yaml
 
-from ._logging import _get_logger
+from .utils.logging import _get_logger
 from .leapp_graph.datatypes import apply_traced_data_patches, remove_traced_data_patches
 from .leapp_graph.leapp_graph import LeappGraph
 from .utils.tracing_lock import TracingLock

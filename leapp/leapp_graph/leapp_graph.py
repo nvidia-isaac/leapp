@@ -19,7 +19,7 @@ from safetensors.torch import save_file
 from collections import Counter
 
 from leapp.utils.tensor_description import CompactYamlList, validate_connection_compatibility
-from leapp._logging import _get_logger
+from leapp.utils.logging import _get_logger
 from .graph_gui import visualize_graph
 
 

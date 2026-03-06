@@ -18,7 +18,7 @@ from torch.fx.proxy import Proxy
 import io as _io
 from torch._export.converter import TS2EPConverter
 
-from leapp._logging import _get_logger
+from leapp.utils.logging import _get_logger
 from .traced_data import TracedData
 
 

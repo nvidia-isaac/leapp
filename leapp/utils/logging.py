@@ -19,14 +19,14 @@
 Internal logging module for leapp - NOT part of the public API.
 
 This module contains the logging infrastructure that should only be used within
-the leapp package itself. The underscore prefix signals this is private.
+the leapp package itself.
 
 DO NOT import from this module in downstream code.
 """
 
 import logging
-from datetime import datetime
 import os
+
 
 # Define custom log level for SECTION (between INFO and WARNING)
 SECTION = 25
@@ -74,11 +74,8 @@ class _LeappLogger:
         # log file handler
         if os.path.exists(savepath):
             filepath = os.path.join(savepath, 'log.txt')
-            if os.path.exists(filepath):
-                filepath = os.path.join(
-                    savepath, f'log_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt')
             self.log_path = filepath
-            self.file_handler = logging.FileHandler(filepath, mode='a')
+            self.file_handler = logging.FileHandler(filepath, mode='w')
             self.file_handler.setLevel(logging.DEBUG)
             # Plain format for file (with timestamp, no colors)
             file_formatter = logging.Formatter(
@@ -134,7 +131,7 @@ class _LeappLogger:
         """Log error message (file always, console always)."""
         if self.initialized:
             self.logger.error(msg)
-    
+
     @property
     def path(self):
         return self.log_path
@@ -147,15 +144,14 @@ _logger = _LeappLogger()
 def _get_logger():
     """
     Get the internal logger instance.
-    
+
     This function should be called each time you need to log something.
-    
+
     Returns:
         _LeappLogger: The internal logger instance.
-    
+
     Note:
         This function is for internal use only and should not be called
         by downstream users of the leapp library.
     """
     return _logger
-

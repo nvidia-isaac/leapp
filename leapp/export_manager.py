@@ -21,7 +21,7 @@ import inspect
 import os
 import torch
 
-from leapp._logging import _get_logger
+from leapp.utils.logging import _get_logger
 from leapp.leapp_graph.leapp_node import LeappNode
 from leapp.leapp_graph.traced_node import TracedTensorNode
 from leapp.leapp_graph.function_decorator_node import FunctionDecoratorNode

@@ -2,7 +2,7 @@ from leapp.leapp_graph.leapp_node import LeappNode
 import torch
 import torch.fx as fx
 from torch.fx.proxy import Proxy
-from leapp._logging import _get_logger
+from leapp.utils.logging import _get_logger
 from leapp.leapp_graph.datatypes import (
     TracedData,
     TracedTensor,
@@ -94,7 +94,7 @@ class TracedTensorNode(LeappNode):
         self.m.recompile()
 
         _get_logger().debug(
-            f"Compiled graph module for {self.name}")
+            f"Compiled graph module for {self.name}:\n{self.m.graph}")
         _get_logger().debug(
             f"Graph module inputs: {[resolve_tensor_descriptions_to_names(input) for input in self.input_formats]}")
         _get_logger().debug(

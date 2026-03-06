@@ -49,7 +49,7 @@ import torch.nn as nn
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from leapp._logging import _get_logger
+from leapp.utils.logging import _get_logger
 
 if TYPE_CHECKING:
     from leapp.export_manager import ExportManager

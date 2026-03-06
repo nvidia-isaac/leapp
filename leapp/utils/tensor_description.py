@@ -23,7 +23,7 @@ import torch
 import numpy as np
 import yaml
 
-from leapp._logging import _get_logger
+from leapp.utils.logging import _get_logger
 from leapp.leapp_graph.datatypes import (
     TracedData,
     TracedTensor,

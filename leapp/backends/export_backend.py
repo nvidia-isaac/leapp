@@ -22,7 +22,7 @@ import shutil
 from typing import Callable
 import torch
 
-from leapp._logging import _get_logger
+from leapp.utils.logging import _get_logger
 from leapp.backends.module_builder import ModuleBuilder
 
 

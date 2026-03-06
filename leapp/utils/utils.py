@@ -26,7 +26,7 @@ import traceback
 
 import torch
 
-from leapp._logging import _get_logger
+from leapp.utils.logging import _get_logger
 from leapp.leapp_graph.datatypes import TracedData, TracedTensor
 
 # Re-export from datatypes for backwards compatibility

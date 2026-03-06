@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 import networkx as nx
 import matplotlib.patches as patches
 from matplotlib.widgets import Button
-from leapp._logging import _get_logger
+from leapp.utils.logging import _get_logger
 
 
 class InteractiveGraphVisualizer:

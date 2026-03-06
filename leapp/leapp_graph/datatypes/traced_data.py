@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Set, Optional
 
 from torch.fx.proxy import Proxy
-from leapp._logging import _get_logger
+from leapp.utils.logging import _get_logger
 
 import torch
 

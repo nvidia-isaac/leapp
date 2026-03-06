@@ -24,7 +24,7 @@ from leapp.utils.utils import (
     frame_to_namespace,
     get_attribute_value_from_namespace,
 )
-from leapp._logging import _get_logger
+from leapp.utils.logging import _get_logger
 from leapp.leapp_graph.leapp_node import LeappNode
 from leapp.leapp_graph.datatypes import TracedTensor
 

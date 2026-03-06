@@ -1,7 +1,7 @@
 import torch
 from typing import Tuple
 from leapp.backends.export_backend import ExportBackend, prepare_tensors_for_export, SimplifiedONNXProgram
-from leapp._logging import _get_logger
+from leapp.utils.logging import _get_logger
 import os
 import onnx
 from onnx import numpy_helper
