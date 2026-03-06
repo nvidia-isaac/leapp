@@ -552,7 +552,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             self.assertIn("Shape mismatch in pipeline connection", str(e))
 
     # -------------------------------------------------------------------
-    # Caller identity tests — verify stack-trace-based call site detection
+    # Caller identity tests — verify normalized annotation-origin detection
     # -------------------------------------------------------------------
 
     def test_caller_identity_wrapper_indirection(self):
@@ -572,18 +572,13 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
 
     def test_caller_identity_same_helper_different_caller(self):
         """A single helper called from two different lines in user code
-        should be detected as different call sites."""
-        try:
-            leapp.start(name=self.TEST_GRAPH_NAME)
-            inp = _shared_helper('func', torch.tensor([1.0]))
-            result = inp + 1.0
-            annotate.output_tensors('func', {'output': result}, export_with="onnx")
-            _shared_helper('func', torch.tensor([2.0]))
-            leapp.stop()
-            self.fail("Expected an exception for same helper from different caller")
-        except Exception as e:
-            leapp.stop()
-            self.assertIn("Cannot reuse a node name from a different call site.", str(e))
+        should now be accepted because the helper itself is the origin."""
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        inp = _shared_helper('func', torch.tensor([1.0]))
+        result = inp + 1.0
+        annotate.output_tensors('func', {'output': result}, export_with="onnx")
+        _shared_helper('func', torch.tensor([2.0]))
+        leapp.stop()
 
     def test_caller_identity_same_path_in_loop(self):
         """The same helper called from the same line in a loop should be
@@ -634,35 +629,25 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
 
     def test_caller_identity_class_hierarchy(self):
         """A base-class method called through different subclass methods
-        should be detected as different call sites."""
-        try:
-            leapp.start(name=self.TEST_GRAPH_NAME)
-            a = _PipelineA()
-            b = _PipelineB()
-            inp = a.run(torch.tensor([1.0]))
-            result = inp + 1.0
-            annotate.output_tensors('func', {'output': result}, export_with="onnx")
-            b.run(torch.tensor([2.0]))
-            leapp.stop()
-            self.fail("Expected an exception for class hierarchy indirection")
-        except Exception as e:
-            leapp.stop()
-            self.assertIn("Cannot reuse a node name from a different call site.", str(e))
+        should now be accepted because the annotation anchor is shared."""
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        a = _PipelineA()
+        b = _PipelineB()
+        inp = a.run(torch.tensor([1.0]))
+        result = inp + 1.0
+        annotate.output_tensors('func', {'output': result}, export_with="onnx")
+        b.run(torch.tensor([2.0]))
+        leapp.stop()
 
     def test_caller_identity_decorator_adds_frame(self):
         """Calling a raw function vs its decorated version should be
-        detected as different call sites (the decorator adds a frame)."""
-        try:
-            leapp.start(name=self.TEST_GRAPH_NAME)
-            inp = _raw_annotate(torch.tensor([1.0]))
-            result = inp + 1.0
-            annotate.output_tensors('func', {'output': result}, export_with="onnx")
-            _decorated_annotate(torch.tensor([2.0]))
-            leapp.stop()
-            self.fail("Expected an exception for decorator adding frame")
-        except Exception as e:
-            leapp.stop()
-            self.assertIn("Cannot reuse a node name from a different call site.", str(e))
+        accepted when the decorated path resolves to the same anchor."""
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        inp = _raw_annotate(torch.tensor([1.0]))
+        result = inp + 1.0
+        annotate.output_tensors('func', {'output': result}, export_with="onnx")
+        _decorated_annotate(torch.tensor([2.0]))
+        leapp.stop()
 
     def test_caller_identity_lambda_vs_named(self):
         """input_tensors called through a named helper vs a lambda should

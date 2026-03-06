@@ -20,7 +20,6 @@ import functools
 import inspect
 import os
 import torch
-from typing import Union
 
 from leapp.utils.logging import _get_logger
 from leapp.leapp_graph.leapp_node import LeappNode
@@ -38,11 +37,12 @@ from leapp.utils.tensor_description import (verify_data_exact_match,
                                              flatten_io_structure,
                                              unwrap_tensor_semantics,
                                              apply_semantic_metadata)
+from leapp.utils.caller_identity import (get_caller_stack_identity,
+                                         caller_identity_has_same_anchor,
+                                         format_caller_identity)
 from leapp.utils.utils import (get_relative_path,
                                mirror_all_tensor_tags,
                                extract_return_names,
-                               get_caller_stack_identity,
-                               format_caller_identity,
                                frame_to_namespace)
 
 
@@ -253,12 +253,26 @@ class ExportManager:
         # if the node is not tracing, we validate the inputs only and return the raw tensors
         # the node is not tracing if it is already compiled.
         if not traced_tensors_node.is_tracing:
-            if _caller_identity not in traced_tensors_node._caller_identities:
+            matching_origin = next(
+                (
+                    identity for identity in traced_tensors_node._caller_identities
+                    if caller_identity_has_same_anchor(identity, _caller_identity)
+                ),
+                None,
+            )
+            if matching_origin is None:
                 raise Exception(
-                    f"Error: node '{node_name}' is being called from a new call site "
-                    f"that was not seen during the first trace. "
-                    f"Cannot reuse a node name from a different call site.\n"
+                    f"Error: node '{node_name}' is being called from a different annotation origin "
+                    f"than the first trace. Cannot reuse a node name from a different call site.\n"
                     f"New call site:\n{format_caller_identity(_caller_identity)}")
+            if _caller_identity not in traced_tensors_node._caller_identities:
+                _get_logger().warning(
+                    f"Warning: node '{node_name}' is being re-entered from a new caller context, "
+                    f"but the normalized annotation origin matches a previously seen site. "
+                    f"Allowing re-entry.\n"
+                    f"Original origin:\n{format_caller_identity(matching_origin)}\n"
+                    f"New call site:\n{format_caller_identity(_caller_identity)}")
+                traced_tensors_node._caller_identities.add(_caller_identity)
             traced_tensors_node.reentry_validate_inputs(tensors)
             return self._passthrough_dict_values(tensors)
 
