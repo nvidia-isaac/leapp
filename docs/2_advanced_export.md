@@ -117,14 +117,14 @@ def use_precompiled_model():
     input_data = torch.randn(1, 10)
     
     # Reference a pre-compiled model without recompiling
-    with annotate.block("precompiled_inference",
-                        inputs=["input_data"],
-                        outputs=["predictions"],
-                        export_with=None,
-                        backend_params={"model_path": "/path/to/model.pt"}):
-        # Load and use the pre-compiled model
+    x = annotate.input_tensors("precompiled_inference", {"input_data": input_data})
+
+    @annotate.method(export_with=None, backend_params={"model_path": "/path/to/model.pt"})
+    def precompiled_inference(input_data):
         model = torch.jit.load("/path/to/model.pt")
-        predictions = model(input_data)
+        return model(input_data)
+
+    predictions = precompiled_inference(x)
     
     leapp.stop()
     leapp.compile_graph()

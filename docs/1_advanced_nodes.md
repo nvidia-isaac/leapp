@@ -4,7 +4,7 @@ This guide dives deeper into specific scenarios you might encounter when using L
 
 ## Declaring Explicit Return Values
 
-Sometimes you need to export a function that modifies internal state but doesn't explicitly return those values in its signature. LEAPP allows you to declare return values using the `outputs` parameter in `@annotate.method()` or `annotate.block()`, even when those values aren't part of the original function's return statement.
+Sometimes you need to export a function that modifies internal state but doesn't explicitly return those values in its signature. LEAPP allows you to declare return values using the `outputs` parameter in `@annotate.method()`, even when those values aren't part of the original function's return statement.
 
 ### Example: Exporting Internal State Variables
 
@@ -79,14 +79,15 @@ def process_with_external_model():
     sensor_input = torch.randn(10, 128)
     
     # Use environment constants to reference external variables
-    with annotate.block("model_inference",
-                        inputs=["sensor_input"],
-                        outputs=["predictions"],
-                        environment_constants=["pretrained_model"],
-                        export_with="jit"):
-        # LEAPP captures the external model and makes it available
-        predictions = pretrained_model(sensor_input)
-    
+    x = annotate.input_tensors("model_inference",
+                               {"sensor_input": sensor_input})
+
+    @annotate.method(export_with="jit", environment_constants=["pretrained_model"])
+    def model_inference(sensor_input):
+        return pretrained_model(sensor_input)
+
+    predictions = model_inference(x)
+
     leapp.stop()
     leapp.compile_graph()
     return predictions
@@ -125,15 +126,14 @@ Use `environment_constants` to **freeze variables that change over time** but sh
 # Example: Splitting action tensor with changing index
 idx = 0
 for term_name, term in self.terms.items():
-    with annotate.block(
-        node_name=f"{term_name}_split",
-        inputs=["action"],
-        outputs=["term_actions"],
-        environment_constants=['idx'],  # Freeze idx at current iteration value
+    a = annotate.input_tensors(f"{term_name}_split", {"action": action})
+    term_actions = a[:, idx : idx + term.action_dim]
+    annotate.output_tensors(
+        f"{term_name}_split",
+        {"term_actions": term_actions},
         export_with="jit-trace",
-    ):
-        term_actions = action[:, idx : idx + term.action_dim]
-    
+        environment_constants=["idx"],  # Freeze idx at current iteration value
+    )
     idx += term.action_dim  # idx changes, but each node keeps its frozen value
 ```
 
@@ -228,30 +228,23 @@ class RobotController:
         self.running_count = torch.tensor(0)
         self.action_history = torch.zeros(10, 3)
     
+    @annotate.method(
+        outputs=["normalized_data"],
+        register_buffers=["self.running_mean", "self.running_count", "self.action_history"],
+        export_with="jit",
+    )
     def process_sensors(self, sensor_data):
-        leapp.start(name="stateful_controller")
-        
-        with annotate.block("update_statistics",
-                            inputs=["sensor_data"],
-                            outputs=["normalized_data"],
-                            register_buffers=["self.running_mean", 
-                                            "self.running_count",
-                                            "self.action_history"],
-                            export_with="jit"):
-            # Update running mean
-            self.running_count += 1
-            alpha = 1.0 / self.running_count
-            self.running_mean = (1 - alpha) * self.running_mean + alpha * sensor_data.mean(dim=0)
-            
-            # Normalize using running statistics
-            normalized_data = (sensor_data - self.running_mean) / (self.running_mean.std() + 1e-6)
-            
-            # Shift action history
-            self.action_history = torch.roll(self.action_history, -1, dims=0)
-            self.action_history[-1] = normalized_data[:3]
-        
-        leapp.stop()
-        leapp.compile_graph()
+        # Update running mean
+        self.running_count += 1
+        alpha = 1.0 / self.running_count
+        self.running_mean = (1 - alpha) * self.running_mean + alpha * sensor_data.mean(dim=0)
+
+        # Normalize using running statistics
+        normalized_data = (sensor_data - self.running_mean) / (self.running_mean.std() + 1e-6)
+
+        # Shift action history
+        self.action_history = torch.roll(self.action_history, -1, dims=0)
+        self.action_history[-1] = normalized_data[:3]
         return normalized_data
 ```
 
@@ -263,7 +256,7 @@ class RobotController:
 
 ### Traced Tensor Pattern: `annotate.register_buffer()`
 
-The `register_buffers` parameter shown above works with decorators and context managers. For traced tensor nodes (`input_tensors` / `output_tensors`), use `annotate.register_buffer()` instead to make a pre-existing tensor participate in tracing. This is necessary when you need **in-place assignment** (`tensor[:] = ...`) on a tensor that was not returned by `input_tensors()`.
+The `register_buffers` parameter shown above works with the `@annotate.method()` decorator. For traced tensor nodes (`input_tensors` / `output_tensors`), use `annotate.register_buffer()` instead to make a pre-existing tensor participate in tracing. This is necessary when you need **in-place assignment** (`tensor[:] = ...`) on a tensor that was not returned by `input_tensors()`.
 
 ```python
 import torch
@@ -388,16 +381,15 @@ def main():
     # - robot_state['sensors']['lidar'] -> processed_state['sensors']['lidar']
     # - robot_state['sensors']['camera'] -> processed_state['sensors']['camera']
     
-    with annotate.block("decision_maker",
-                        inputs=["processed"],
-                        outputs=["action"],
-                        export_with="jit"):
-        # You can access nested structures naturally
-        position_factor = processed['position'].norm()
-        velocity_factor = processed['velocity'].sum()
-        sensor_confidence = processed['sensors']['lidar'].std()
-        
-        action = torch.tensor([position_factor, velocity_factor, sensor_confidence])
+    p = annotate.input_tensors("decision_maker", {"processed": processed})
+
+    # You can access nested structures naturally
+    position_factor = p['position'].norm()
+    velocity_factor = p['velocity'].sum()
+    sensor_confidence = p['sensors']['lidar'].std()
+
+    action = torch.tensor([position_factor, velocity_factor, sensor_confidence])
+    annotate.output_tensors("decision_maker", {"action": action}, export_with="jit")
     
     leapp.stop()
     leapp.compile_graph()
@@ -468,9 +460,9 @@ this example passes the output of funcA `detections` to `funcB` and `funcC`. `fu
 
 ### Best Practices to Avoid Issues
 The best way to avoid these issues is to avoid io reconciliation altogether. For that we should try to use clear and consistent naming throughout. Reconciliation is for cases where that is not possible and as a last resort.
+
 ```python
 # GOOD: Consistent naming throughout the pipeline
-```python
 @annotate.method()
 def funcA(input: torch.Tensor):
     detections = torch.zeros(input.shape)
@@ -481,19 +473,19 @@ def funcA(input: torch.Tensor):
 def funcB(detections):
     retval = torch.tensor([])
     #some processing
-    return functionB_retval
+    return retval
+
 @annotate.method()
-def funcC(detections, data)
+def funcC(detections, data):
     retval = torch.tensor([])
     return retval
 
-leapp.start(name = "failed example")
+leapp.start(name = "good_example")
 detections = funcA(data)
 funcBreturn = funcB(detections)
 funcCreturn = funcC(detections, data)
 leapp.stop()
-leapp.compile_graph() #failure on this line
-
+leapp.compile_graph()
 ```
 
 

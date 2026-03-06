@@ -6,17 +6,15 @@ Welcome to LEAPP - Lightweight Export Annotations for Policy Pipelines! This gui
 
 In this guide, you'll learn how to:
 - Use function decorators to annotate methods
-- Use context managers to annotate code blocks  
 - Use traced tensors to annotate input and output tensors
 - Create computational graphs that connect multiple processing stages
 - Export your pipeline for deployment
 
 ## Simple Example: Robot Sensor Processing Pipeline
 
-Let's create a simple robot sensor processing pipeline that demonstrates LEAPP's three annotation methods. Our pipeline will:
+Let's create a simple robot sensor processing pipeline that demonstrates LEAPP's two annotation methods. Our pipeline will:
 1. Process raw sensor data using a **decorated function** (`@annotate.method`)
 2. Extract navigation features using **traced tensors** (`annotate.input_tensors` / `annotate.output_tensors`)
-3. Make control decisions using an **annotation block** (`annotate.block`)
 
 ```python
 import torch
@@ -32,67 +30,51 @@ def process_sensor_data(raw_readings):
     return normalized
 
 # Helper function for feature extraction (called within traced tensor context)
-def compute_obstacle_features(sensor_data):
-    """Compute obstacle-related features from sensor data."""
-    obstacle_distance = torch.mean(torch.abs(sensor_data))
-    obstacle_variance = torch.var(sensor_data)
-    return obstacle_distance, obstacle_variance
+def compute_features(sensor_data):
+    """Compute features from sensor data."""
+    distance = torch.mean(torch.abs(sensor_data))
+    variance = torch.var(sensor_data)
+    return distance, variance
 
 def main():
     # Start tracing our computational graph
-    leapp.start(name="sample_robot_pipeline")
-    
+    leapp.start(name="sample_pipeline")
+
     # Create some sample sensor data
     raw_sensor_data = torch.tensor([0.1, 0.8, 0.3, 0.9, 0.2])
-    
+
     # ===== NODE 1: Method decorator =====
     # Process sensor data using decorated function
     clean_data = process_sensor_data(raw_sensor_data)
-    
+
     # ===== NODE 2: Traced tensors =====
-    # Extract navigation features using traced tensors
+    # Extract features using traced tensors
     # This allows us to trace operations across function calls
     sensor_input = annotate.input_tensors('feature_extractor', {
         'sensor_data': clean_data
     })
-    
+
     # Operations are automatically traced - even through helper functions!
-    obstacle_dist, obstacle_var = compute_obstacle_features(sensor_input)
-    
+    distance, variance = compute_features(sensor_input)
+
     # Additional inline operations are also traced
-    safe_speed = torch.clamp(obstacle_dist, min=0.1, max=1.0)
-    confidence = 1.0 / (1.0 + obstacle_var)
-    
+    safe_speed = torch.clamp(distance, min=0.1, max=1.0)
+    confidence = 1.0 / (1.0 + variance)
+
     # Mark outputs to finalize the traced node
     annotate.output_tensors('feature_extractor', {
         'safe_speed': safe_speed,
         'confidence': confidence
     }, export_with="jit")
-    
-    # ===== NODE 3: Block annotation =====
-    # Control decisions using annotation block
-    with annotate.block("control_decision",
-                         inputs=["safe_speed", "confidence"],
-                         outputs=["robot_action"],
-                         export_with="jit"):
-        # Combine features into final robot action
-        # Action format: [forward_speed, turn_rate, caution_factor]
-        forward_speed = safe_speed * confidence
-        turn_rate = torch.zeros(1)
-        caution_factor = 1.0 - confidence
-        robot_action = torch.cat([forward_speed.unsqueeze(0), 
-                                   turn_rate, 
-                                   caution_factor.unsqueeze(0)])
-    
+
     # Stop tracing and compile the graph
     leapp.stop()
     leapp.compile_graph()
-    
+
     print(f"Raw sensor data: {raw_sensor_data}")
     print(f"Processed data: {clean_data}")
     print(f"Safe speed: {safe_speed}")
     print(f"Confidence: {confidence}")
-    print(f"Robot action: {robot_action}")
 
 if __name__ == "__main__":
     main()
@@ -134,26 +116,9 @@ annotate.output_tensors('feature_extractor', {
 Traced tensors provide the most flexible approach for capturing operations:
 - **Spans function calls**: Operations through helper functions are automatically traced
 - **Inline operations**: Mix function calls with inline tensor operations
-- **Programmatic control**: Define nodes dynamically without decorators or context managers
+- **Programmatic control**: Define nodes dynamically without decorators
 
-### 3. Context Manager Blocks (`annotate.block`)
-
-```python
-with annotate.block("control_decision",
-                     inputs=["safe_speed", "confidence"],
-                     outputs=["robot_action"],
-                     export_with="jit"):
-    # Your processing logic here
-    robot_action = compute_action(safe_speed, confidence)
-```
-
-Context managers let you annotate specific code blocks as graph nodes. Key parameters:
-- First parameter: Node name
-- `inputs`: List of input variable names (references variables in scope)
-- `outputs`: List of output variable names  
-- `export_with`: Export format
-
-### 4. Graph Flow
+### 3. Graph Flow
 
 The example demonstrates how data flows through the computational graph:
 
@@ -163,22 +128,18 @@ raw_sensor_data → [process_sensor_data] → clean_data
                                     [feature_extractor]
                                        ↓          ↓
                                  safe_speed   confidence
-                                       ↓          ↓
-                                   [control_decision]
-                                          ↓
-                                     robot_action
 ```
 
-### 5. Tracing Lifecycle
+### 4. Tracing Lifecycle
 
 ```python
 # 1. Start tracing
-leapp.start(name="sample_robot_pipeline")
+leapp.start(name="sample_pipeline")
 
 # 2. Run your annotated code
 # ... your pipeline code ...
 
-# 3. Stop tracing  
+# 3. Stop tracing
 leapp.stop()
 
 # 4. Compile and export
@@ -189,9 +150,10 @@ leapp.compile_graph()
 
 After running `compile_graph()`, LEAPP generates:
 
-- **`sample_robot_pipeline.yaml`** - Complete graph specification with metadata
-- **`sample_robot_pipeline_graph.png`** - Visual diagram of your computational graph  
-- **Individual model files** - Exported models for each annotated function/block
+- **`sample_pipeline.yaml`** - Complete graph specification with metadata
+- **`sample_pipeline.png`** - Visual diagram of your computational graph
+- **Individual model files** - Exported models for each annotated function
+
 ## Try It Yourself
 
 1. Save the example code to a file (e.g., `simple_pipeline.py`)
@@ -211,7 +173,6 @@ First, let's look at the generated graph visualization:
 This automatically generated diagram shows your entire computational pipeline at a glance. You can see:
 - **Method nodes** (process_sensor_data) created from decorated functions
 - **Traced tensor nodes** (feature_extractor) capturing programmatic tensor operations
-- **Block nodes** (control_decision) from context manager annotations
 - **Data flow connections** showing how outputs from nodes feed into subsequent nodes
 - **Input/output tensors** with their names and shapes
 
@@ -219,12 +180,17 @@ This visual representation is invaluable for **verifying that LEAPP detected you
 
 ### Graph Specification File
 
-LEAPP also generates a complete specification of your pipeline in `sample_robot_pipeline/sample_robot_pipeline.yaml`:
+LEAPP also generates a complete specification of your pipeline in `sample_pipeline/sample_pipeline.yaml`:
 
 ```yaml
 models:
-  control_decision:
+  feature_extractor:
     inputs:
+    - dtype: float32
+      name: sensor_data
+      shape: [5]
+      type: tensor
+    outputs:
     - dtype: float32
       name: safe_speed
       shape: []
@@ -233,40 +199,18 @@ models:
       name: confidence
       shape: []
       type: tensor
-    outputs:
-    - dtype: float32
-      name: robot_action
-      shape: [3]
-      type: tensor
     parameters:
       backend: torch
-      device: cuda
-      md5sum: db4183a5028b64c97cbdad1c648e568e
-      model_path: control_decision.pt
-      sha256sum: f70e35e6f59313bb30c04a6f1895d526c527092263396166564fbd5ea7e29079
-  feature_extractor:
-    inputs:
-    - dtype: float32
-
-...
-
+      model_path: feature_extractor.pt
 
 pipeline:
   inputs:
     process_sensor_data: [raw_readings]
   outputs:
-    control_decision: [robot_action]
+    feature_extractor: [safe_speed, confidence]
   data_flow:
-    feature_extractor/confidence: [control_decision/confidence]
-    feature_extractor/safe_speed: [control_decision/safe_speed]
     process_sensor_data/sensor_data: [feature_extractor/sensor_data]
   feedback_flow: {}
-
-system information:
-  cuda version: 
-
-...
-
 ```
 
 This YAML file contains:
@@ -275,12 +219,10 @@ This YAML file contains:
 - **Graph structure metadata** ready for deployment systems
 - **Export configuration** showing how each node should be compiled
 
-Additionally, you'll find the individual exported model files (`process_sensor_data.pt`, `feature_extractor.pt`, `control_decision.pt`) ready for deployment in production environments.
-
 ## Next Steps
 
 Now that you understand the basics, you can:
 - Explore more complex pipelines in the [examples](../examples/) directory
-- Learn about advanced features in [1_advanced_nodes.md](1_advanced_nodes.md) and [2_advanced_graph.md](2_advanced_graph.md)
-- Get detailed explination on the api at [api.md](api.md)
+- Learn about advanced features in [1_advanced_nodes.md](1_advanced_nodes.md) and [3_advanced_graph.md](3_advanced_graph.md)
+- Get detailed explanation on the api at [api.md](api.md)
 - Integrate LEAPP into your existing pipelines

@@ -10,7 +10,7 @@ from leapp import annotate
 
 # Core workflow
 leapp.start(name="my_graph", save_path=".", verbose=False)
-# ... trace your code using @annotate.method(), with annotate.block(), 
+# ... trace your code using @annotate.method()
 #     or annotate.input_tensors() / annotate.output_tensors()
 leapp.stop()
 leapp.compile_graph(visualize=True)
@@ -25,7 +25,7 @@ Initialize and start LEAPP graph interpretation.
 ### Signature
 
 ```python
-leapp.start(name: str, save_path: str = ".", verbose: bool = False)
+leapp.start(name: str, save_path: str = ".", verbose: bool = False, dry_run: bool = False, non_traced: list = [], max_cached_io: int = 5, global_patching: bool = True)
 ```
 
 ### Parameters
@@ -33,6 +33,10 @@ leapp.start(name: str, save_path: str = ".", verbose: bool = False)
 - **`name`** (str, required): The name of the graph to be created. This will be used as the directory name where graph artifacts are saved.
 - **`save_path`** (str, optional): The base directory path where the graph directory will be created. Defaults to `"."` (current directory).
 - **`verbose`** (bool, optional): If `True`, enables verbose logging output. Defaults to `False`.
+- **`dry_run`** (bool, optional): If `True`, skips model compilation and export. Used to verify graph structure and I/O without the cost of compilation. Defaults to `False`.
+- **`non_traced`** (list[str], optional): List of node names to exclude from tracing/export. These nodes still capture inputs/outputs, contribute to graph connectivity, and appear in the YAML — they just won't have compiled models. Defaults to `[]`.
+- **`max_cached_io`** (int, optional): Controls how many re-entry I/O examples LEAPP caches per node for multi-example validation. Higher values improve confidence for looped/stateful pipelines at the cost of memory. Defaults to `5`.
+- **`global_patching`** (bool, optional): If `True`, patches torch numpy functions for TracedTensor compatibility. Defaults to `True`. Set to `False` if global patching causes environment issues.
 
 ### Behavior
 
@@ -43,7 +47,7 @@ leapp.start(name: str, save_path: str = ".", verbose: bool = False)
 
 ### Notes
 
-- Must be called before any `@annotate.method()` decorators or `annotate.block()` context managers are used
+- Must be called before any `@annotate.method()` decorators or `annotate.input_tensors()` calls are used
 - Creates a directory structure: `{save_path}/{name}/`
 - All traced nodes and outputs will be saved in this directory
 
@@ -113,50 +117,9 @@ All parameters are optional keyword arguments (`**params`):
 ### Notes
 
 - Graph interpretation must be enabled via `start()` before decorated functions are called
-- Functions decorated with `method()` should not contain nested `block()` or `method()` annotations
+- Functions decorated with `method()` should not contain nested `method()` annotations
 - Input and output names are automatically derived from function parameters and return values
 - Class member variables (`self.*`) are automatically available as constants in class methods
-
----
-
-## `annotate.block()`
-
-Create a context manager for tracing a block of code in the computational graph.
-
-### Signature
-
-```python
-with annotate.block(node_name: str, **kwargs):
-    # code to trace
-```
-
-### Parameters
-
-- **`node_name`** (str, required): The unique name to identify this node in the computational graph.
-- **`**kwargs`**: Additional parameters (same as `@annotate.method()`)
-  - `export_with`: Backend for exporting
-  - `backend_params`: Backend-specific parameters
-  - `inputs`: Input specifications (list of variable names)
-  - `outputs`: Output specifications (list of variable names)
-  - `environment_constants`: External variables to capture as constants (also used to freeze changing variables like loop counters)
-  - `register_buffers`: Buffers for mutable state
-  - `enable_fp16`: Enable FP16 precision
-  - `enable_cuda_graphs`: Enable CUDA graphs
-
-### Behavior
-
-- Traces a specific block of code when used with a `with` statement
-- Captures inputs, outputs, and execution details of the code block
-- Creates a node in the LEAPP computational graph
-- Must declare input and output variable names explicitly
-
-### Notes
-
-- Must be used with a `with` statement to demarcate the code block
-- Graph interpretation must be enabled via `start()` before using this method
-- Input and output variable names must be explicitly declared
-- Variable names in `inputs` and `outputs` must match actual Python variable names in scope
-- The traced code block should not contain nested `block()` or `method()` annotations
 
 ---
 
@@ -246,12 +209,18 @@ Compile and save the computational graph from traced nodes.
 ### Signature
 
 ```python
-leapp.compile_graph(visualize: bool = True)
+leapp.compile_graph(visualize: bool = True, verbose: bool = None, validate: bool = True, dry_run: bool = False, rtol: float = 1e-3, atol: float = 1e-5, strict: bool = True)
 ```
 
 ### Parameters
 
 - **`visualize`** (bool, optional): If `True`, generates a visual representation of the graph structure and saves it to the output directory. Visualization errors are logged but don't stop compilation. Defaults to `True`.
+- **`verbose`** (bool | None, optional): Override verbose logging for the compile step. `None` leaves the current setting unchanged. Defaults to `None`.
+- **`validate`** (bool, optional): If `True`, validates exported models by comparing their outputs against the captured traced outputs. Defaults to `True`.
+- **`dry_run`** (bool, optional): If `True`, skips model compile/save/validate at compile time while still tracing graph structure and generating the YAML. Useful for CI/headless runs when artifacts are not needed. Defaults to `False`.
+- **`rtol`** (float, optional): Relative tolerance used in `torch.allclose` during model validation. Defaults to `1e-3`.
+- **`atol`** (float, optional): Absolute tolerance used in `torch.allclose` during model validation. Defaults to `1e-5`.
+- **`strict`** (bool, optional): If `True`, raises an exception when any model fails validation. Defaults to `True`.
 
 ### Behavior
 
@@ -355,7 +324,7 @@ annotate.mirror_leapp_tags(source, target)
 3. **Logs error on mismatch**: If data doesn't match exactly, logs an error and does nothing to prevent incorrect tracing
 
 
-- **See detailed guide**: For more information and use cases, see [Advanced Graph Operations](2_advanced_graph.md#maintaining-tracing-with-mirror_leapp_tags)
+- **See detailed guide**: For more information and use cases, see [Advanced Graph Operations](3_advanced_graph.md#maintaining-tracing-with-mirror_leapp_tags)
 
 ---
 
@@ -419,16 +388,12 @@ def main():
     # 3. Trace inference
     predictions = run_inference(preprocessed)
     
-    # 4. Trace postprocessing with a block
-    with annotate.block(
-        "postprocess",
-        inputs=["predictions"],
-        outputs=["final_output"],
-        export_with="jit"
-    ):
-        probabilities = torch.softmax(predictions, dim=1)
-        final_output = torch.argmax(probabilities, dim=1)
-    
+    # 4. Trace postprocessing with traced tensors
+    pred_traced = annotate.input_tensors("postprocess", {"predictions": predictions})
+    probabilities = torch.softmax(pred_traced, dim=1)
+    final_output = torch.argmax(probabilities, dim=1)
+    annotate.output_tensors("postprocess", {"final_output": final_output}, export_with="jit")
+
     print(f"Final output: {final_output}")
     
     # 5. Stop tracing
@@ -467,8 +432,7 @@ exports/complete_pipeline/
 5. **Use verbose mode during development**: Helps debug tracing issues
 6. **Choose the right annotation method**:
    - Use `@annotate.method()` for self-contained functions
-   - Use `annotate.block()` for inline code with explicit I/O
-   - Use `input_tensors()`/`output_tensors()` for operations spanning multiple functions or dynamic scenarios
+   - Use `input_tensors()`/`output_tensors()` for operations spanning multiple functions, inline code, or dynamic scenarios
 7. **Always pair `input_tensors()` with `output_tensors()`**: Forgetting to call `output_tensors()` leaves the node incomplete
 8. **Don't mix TracedTensors across contexts**: Complete one traced tensor node before starting another
 

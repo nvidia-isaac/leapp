@@ -24,7 +24,7 @@ The core workflow: annotate PyTorch code with lightweight markers, trace the com
 
 ## Key Concepts
 
-- **Three annotation methods**: `@annotate.method()` decorator, `annotate.block()` context manager, `annotate.input_tensors()`/`annotate.output_tensors()` traced tensors
+- **Two annotation methods**: `@annotate.method()` decorator, `annotate.input_tensors()`/`annotate.output_tensors()` traced tensors
 - **State tensors**: Tensors that are both inputs and outputs (RNN hidden states, history buffers). Use `annotate.state_tensors()` and `annotate.update_state()`.
 - **leapp_tag**: Tag on tensors for automatic connection detection between nodes. Format: `{node_name}/{tensor_name}/`
 - **StatefulModel protocol**: Interface for generic export of recurrent models (`get_state_spec`, `stateless_forward`)

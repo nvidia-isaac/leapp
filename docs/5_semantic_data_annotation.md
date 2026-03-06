@@ -2,7 +2,7 @@
 
 This guide covers how to add semantic metadata to your tensors using `TensorSemantics`. Semantic annotations let you describe **what** a tensor represents (e.g., joint positions, target torques) and provide element-level naming, making generated YAML specifications self-documenting and enabling downstream consumers to interpret the data correctly.
 
-> **Note:** Semantic annotation is only available for `annotate.input_tensors()` and `annotate.output_tensors()`. It is not supported for `@annotate.method()` or `annotate.block()` nodes.
+> **Note:** Semantic annotation is only available for `annotate.input_tensors()` and `annotate.output_tensors()`. It is not supported for `@annotate.method()` nodes.
 
 ## Basic Usage
 
@@ -194,7 +194,7 @@ annotate.input_tensors("node", [
 
 ## Limitations
 
-1. **`input_tensors` and `output_tensors` only** — Semantic annotations are not available for `@annotate.method()` or `annotate.block()` decorated functions. These nodes derive their I/O descriptions automatically from function signatures and traced values.
+1. **`input_tensors` and `output_tensors` only** — Semantic annotations are not available for `@annotate.method()` nodes. These nodes derive their I/O descriptions automatically from function signatures and traced values.
 
 2. **No mixing** — When using TensorSemantics, all items must be TensorSemantics. You cannot mix raw tensors and TensorSemantics in the same list.
 
