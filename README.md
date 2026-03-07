@@ -135,6 +135,6 @@ See `docs/api.md` for the full reference and `docs/` for advanced features.
 
 ## License
 
-Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 
 Licensed under the Apache License, Version 2.0.

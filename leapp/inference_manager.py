@@ -185,7 +185,7 @@ class InferenceManager:
         self.organized_pipeline_connections = {}
         # Merge data_flow and feedback_flow, combining target lists for shared keys
         all_flows = {}
-        for flow_dict in [self.pipeline['data_flow'], self.pipeline['feedback_flow']]:
+        for flow_dict in [self.pipeline.get('data_flow', {}), self.pipeline.get('feedback_flow', {})]:
             for source, targets in flow_dict.items():
                 if source in all_flows:
                     all_flows[source] = all_flows[source] + targets
@@ -387,7 +387,7 @@ class InferenceManager:
     @property
     def feedback_inputs(self) -> list:
         keys = []
-        for targets in self.pipeline['feedback_flow'].values():
+        for targets in self.pipeline.get('feedback_flow', {}).values():
             keys.extend(targets)
         return keys
 

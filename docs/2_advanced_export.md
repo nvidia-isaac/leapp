@@ -38,38 +38,7 @@ These options can be configured by passing a dict with the expected keys to `bac
 **Advantages of Dynamo export:**
 - Generally produces more optimized ONNX graphs
 - Automatically performs testing
-- Significantly recdues memory usage during export
-
-### TorchScript-based Export (Legacy)
-
-While it is ideal to use dynamo, It comes with a few limitations. You may consider setting `dynamo = False` if the following apply: 
-
-1. internal logic has input dependant control flow.
-2. you want to export to an older onnx opset
-3. your processing logic contains a torch.jit.ScriptModule
-
-```python
-import torch
-import leapp
-from leapp import annotate
-
-@annotate.method(
-    export_with="onnx-torchscript",
-)
-def process_data(input_tensor: torch.Tensor):
-    normalized = (input_tensor - input_tensor.mean()) / input_tensor.std()
-    return torch.relu(normalized)
-
-leapp.start(name="torchscript_onnx_example")
-process_data(torch.randn(10))
-leapp.stop()
-leapp.compile_graph()
-```
-
-**When to use TorchScript export:**
-- When working with pre-traced or pre-scripted models
-- When dynamo export produces errors for specific operations
-- For compatibility with older ONNX runtimes
+- Significantly reduces memory usage during export
 
 ### Using Pre-Scripted Models with ONNX Export
 
