@@ -1,8 +1,8 @@
-import yaml
 import os
-import torch
 import json
-from typing import Dict
+import yaml
+
+import torch
 
 from safetensors.torch import load_file
 
@@ -112,7 +112,7 @@ class NodeManager:
 
 
 class InferenceManager:
-    def __init__(self, model_path, verbose=False):
+    def __init__(self, model_path):
         # data reading variables
         self.models = None
         self.pipeline = None
@@ -232,8 +232,26 @@ class InferenceManager:
 
         self.value_dict['==out=='] = output_cache
 
+        self._validate_output_routing()
+
         # Validate shape and dtype compatibility for all pipeline connections.
         self._validate_connection_compatibility()
+
+    def _validate_output_routing(self):
+        """Ensure every model output is routed somewhere before inference starts."""
+        for node_name, node in self.nodes.items():
+            pipeline_map = self.organized_pipeline_connections.get(node_name, {})
+            missing_outputs = [
+                output_name for output_name in node.output_names
+                if output_name not in pipeline_map
+            ]
+            if missing_outputs:
+                raise ValueError(
+                    f"Node '{node_name}' has unroutable outputs: {missing_outputs}. "
+                    "Every model output must appear in pipeline data_flow, "
+                    "feedback_flow, or pipeline outputs. This may indicate the "
+                    "YAML was edited manually and is inconsistent with the exported model."
+                )
 
     def _validate_connection_compatibility(self):
         all_flows = {}
@@ -330,7 +348,7 @@ class InferenceManager:
                     f"Feedback initial value key '{key}' does not match any node input. "
                     f"Available nodes: {list(self.value_dict.keys())}")
 
-    def run_policy(self, inputs: Dict[str, torch.Tensor], verbose: bool = False):
+    def run_policy(self, inputs: dict[str, torch.Tensor]):
         # Update input tensors with provided values (keys are "node_name/input_name")
         for key, input_value in inputs.items():
             try:
@@ -426,5 +444,5 @@ class InferenceManager:
 
         return mock_inputs
 
-    def __call__(self, inputs: Dict[str, torch.Tensor]):
+    def __call__(self, inputs: dict[str, torch.Tensor]):
         return self.run_policy(inputs)

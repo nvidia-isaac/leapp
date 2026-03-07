@@ -26,7 +26,7 @@ from pathlib import Path
 
 from leapp.export_manager import ExportManager
 from leapp.leapp import _MANAGER as annotate
-from leapp.inference_manager import InferenceManager
+from leapp import InferenceManager
 
 
 class BaseExampleTest(unittest.TestCase):

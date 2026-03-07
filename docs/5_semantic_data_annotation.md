@@ -12,7 +12,7 @@ Instead of passing raw tensors to `input_tensors` or `output_tensors`, wrap them
 import torch
 import leapp
 from leapp import annotate, TensorSemantics
-from leapp.utils.enums import inputKindEnum, outputKindEnum
+from leapp.utils.enums import InputKindEnum, OutputKindEnum
 
 joint_pos = torch.randn(1, 12)
 joint_vel = torch.randn(1, 12)
@@ -22,13 +22,13 @@ leapp.start("my_robot")
 # Pass a list of TensorSemantics as inputs
 traced_pos, traced_vel = annotate.input_tensors("policy", [
     TensorSemantics("joint_pos", joint_pos,
-                     kind=inputKindEnum.JOINT_POSITION,
+                     kind=InputKindEnum.JOINT_POSITION,
                      element_names=["hip_l", "knee_l", "ankle_l",
                                     "hip_r", "knee_r", "ankle_r",
                                     "shoulder_l", "elbow_l", "wrist_l",
                                     "shoulder_r", "elbow_r", "wrist_r"]),
     TensorSemantics("joint_vel", joint_vel,
-                     kind=inputKindEnum.JOINT_VELOCITY),
+                     kind=InputKindEnum.JOINT_VELOCITY),
 ])
 
 # Compute output
@@ -37,7 +37,7 @@ command = traced_pos + traced_vel
 # Pass a list of TensorSemantics as outputs
 annotate.output_tensors("policy", [
     TensorSemantics("command", command,
-                     kind=outputKindEnum.JOINT_TORQUES,
+                     kind=OutputKindEnum.JOINT_TORQUES,
                      element_names=["hip_l", "knee_l", "ankle_l",
                                     "hip_r", "knee_r", "ankle_r",
                                     "shoulder_l", "elbow_l", "wrist_l",
@@ -82,7 +82,7 @@ models:
 
 The `kind` field describes the **semantic role** of a tensor — what physical quantity or command it represents. LEAPP provides two separate enums for inputs and outputs to clearly distinguish between observed state and commanded targets.
 
-#### `inputKindEnum` — for input tensors
+#### `InputKindEnum` — for input tensors
 
 Used with `annotate.input_tensors()`. These represent **observed state** or **commanded references** flowing into a node.
 
@@ -101,14 +101,14 @@ Used with `annotate.input_tensors()`. These represent **observed state** or **co
 | `COMMAND_JOINT_TORQUES` | `command/joint/torques` | Commanded joint torques reference |
 
 ```python
-from leapp.utils.enums import inputKindEnum
+from leapp.utils.enums import InputKindEnum
 
-TensorSemantics("joint_pos", tensor, kind=inputKindEnum.JOINT_POSITION)
-TensorSemantics("imu_gyro", tensor, kind=inputKindEnum.BODY_ANGULAR_VELOCITY)
-TensorSemantics("target_pos", tensor, kind=inputKindEnum.COMMAND_JOINT_POSITION)
+TensorSemantics("joint_pos", tensor, kind=InputKindEnum.JOINT_POSITION)
+TensorSemantics("imu_gyro", tensor, kind=InputKindEnum.BODY_ANGULAR_VELOCITY)
+TensorSemantics("target_pos", tensor, kind=InputKindEnum.COMMAND_JOINT_POSITION)
 ```
 
-#### `outputKindEnum` — for output tensors
+#### `OutputKindEnum` — for output tensors
 
 Used with `annotate.output_tensors()`. These represent **target commands** or **control outputs** produced by a node.
 
@@ -126,13 +126,13 @@ Used with `annotate.output_tensors()`. These represent **target commands** or **
 | `BODY_ANGULAR_ACCELERATION` | `target/body/angular_acceleration` | Target body angular acceleration |
 
 ```python
-from leapp.utils.enums import outputKindEnum
+from leapp.utils.enums import OutputKindEnum
 
-TensorSemantics("torques", action, kind=outputKindEnum.JOINT_TORQUES)
-TensorSemantics("kp_gains", kp, kind=outputKindEnum.KP)
+TensorSemantics("torques", action, kind=OutputKindEnum.JOINT_TORQUES)
+TensorSemantics("kp_gains", kp, kind=OutputKindEnum.KP)
 ```
 
-> **Note:** While LEAPP does not enforce using `inputKindEnum` exclusively for inputs or `outputKindEnum` exclusively for outputs, it is strongly recommended to follow this convention for clarity. The `kind` field accepts any enum value.
+> **Note:** While LEAPP does not enforce using `InputKindEnum` exclusively for inputs or `OutputKindEnum` exclusively for outputs, it is strongly recommended to follow this convention for clarity. The `kind` field accepts any enum value.
 
 ### `element_names`
 
@@ -168,13 +168,13 @@ TensorSemantics are passed as a **single object** or as a **list**. They cannot 
 # ✅ Single TensorSemantics
 annotate.input_tensors(
     "node",
-    TensorSemantics("pos", tensor, kind=inputKindEnum.JOINT_POSITION),
+    TensorSemantics("pos", tensor, kind=InputKindEnum.JOINT_POSITION),
 )
 
 # ✅ List of TensorSemantics
 annotate.input_tensors("node", [
-    TensorSemantics("pos", pos_tensor, kind=inputKindEnum.JOINT_POSITION),
-    TensorSemantics("vel", vel_tensor, kind=inputKindEnum.JOINT_VELOCITY),
+    TensorSemantics("pos", pos_tensor, kind=InputKindEnum.JOINT_POSITION),
+    TensorSemantics("vel", vel_tensor, kind=InputKindEnum.JOINT_VELOCITY),
 ])
 
 # ✅ Regular dict (no semantic metadata)
@@ -182,12 +182,12 @@ annotate.input_tensors("node", {"pos": pos_tensor, "vel": vel_tensor})
 
 # ❌ TensorSemantics inside a dict — NOT supported
 annotate.input_tensors("node", {
-    "pos": TensorSemantics("pos", pos_tensor, kind=inputKindEnum.JOINT_POSITION),
+    "pos": TensorSemantics("pos", pos_tensor, kind=InputKindEnum.JOINT_POSITION),
 })
 
 # ❌ Mixing TensorSemantics and raw tensors — NOT supported
 annotate.input_tensors("node", [
-    TensorSemantics("pos", pos_tensor, kind=inputKindEnum.JOINT_POSITION),
+    TensorSemantics("pos", pos_tensor, kind=InputKindEnum.JOINT_POSITION),
     vel_tensor,  # raw tensor mixed with semantics
 ])
 ```

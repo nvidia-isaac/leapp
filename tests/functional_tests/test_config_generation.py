@@ -21,7 +21,7 @@ import torch
 import leapp
 from leapp import TensorSemantics
 from leapp.leapp import _MANAGER as annotate
-from leapp.utils.enums import inputKindEnum, outputKindEnum
+from leapp.utils.enums import InputKindEnum, OutputKindEnum
 from .base import LEAPPFunctionalTestBase
 
 
@@ -60,8 +60,8 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         leapp.start(name=self.TEST_GRAPH_NAME)
         traced_pos, traced_vel = annotate.input_tensors("policy", [
-            TensorSemantics(name="joint_pos", ref=joint_pos, kind=inputKindEnum.JOINT_POSITION),
-            TensorSemantics(name="joint_vel", ref=joint_vel, kind=inputKindEnum.JOINT_VELOCITY),
+            TensorSemantics(name="joint_pos", ref=joint_pos, kind=InputKindEnum.JOINT_POSITION),
+            TensorSemantics(name="joint_vel", ref=joint_vel, kind=InputKindEnum.JOINT_VELOCITY),
         ])
 
         output = traced_pos + traced_vel
@@ -90,7 +90,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         leapp.start(name=self.TEST_GRAPH_NAME)
         traced = annotate.input_tensors(
             "single_node",
-            TensorSemantics(name="pos", ref=tensor, kind=inputKindEnum.JOINT_POSITION),
+            TensorSemantics(name="pos", ref=tensor, kind=InputKindEnum.JOINT_POSITION),
         )
 
         output = traced * 2.0
@@ -139,7 +139,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         traced = annotate.input_tensors(
             "full_meta_node",
             TensorSemantics(name="joint_pos", ref=tensor,
-                            kind=inputKindEnum.JOINT_POSITION,
+                            kind=InputKindEnum.JOINT_POSITION,
                             element_names=joint_names),
         )
 
@@ -200,7 +200,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         command = traced * 2.0
 
         annotate.output_tensors("out_kind_node", [
-            TensorSemantics(name="command", ref=command, kind=outputKindEnum.JOINT_TORQUES),
+            TensorSemantics(name="command", ref=command, kind=OutputKindEnum.JOINT_TORQUES),
         ])
         leapp.stop()
         leapp.compile_graph(visualize=False)
@@ -245,14 +245,14 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         leapp.start(name=self.TEST_GRAPH_NAME)
         traced_pos, traced_vel = annotate.input_tensors("both_node", [
-            TensorSemantics(name="pos", ref=pos, kind=inputKindEnum.JOINT_POSITION),
-            TensorSemantics(name="vel", ref=vel, kind=inputKindEnum.JOINT_VELOCITY),
+            TensorSemantics(name="pos", ref=pos, kind=InputKindEnum.JOINT_POSITION),
+            TensorSemantics(name="vel", ref=vel, kind=InputKindEnum.JOINT_VELOCITY),
         ])
 
         command = traced_pos + traced_vel
 
         annotate.output_tensors("both_node", [
-            TensorSemantics(name="torques", ref=command, kind=outputKindEnum.JOINT_TORQUES),
+            TensorSemantics(name="torques", ref=command, kind=OutputKindEnum.JOINT_TORQUES),
         ])
         leapp.stop()
         leapp.compile_graph(visualize=False)
@@ -304,7 +304,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         with self.assertRaises(TypeError):
             annotate.input_tensors("fail_node", [
                 t1,
-                TensorSemantics(name="td", ref=t2, kind=inputKindEnum.JOINT_POSITION),
+                TensorSemantics(name="td", ref=t2, kind=InputKindEnum.JOINT_POSITION),
             ])
         leapp.stop()
 
@@ -332,8 +332,8 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         leapp.start(name=self.TEST_GRAPH_NAME)
         traced_pos, traced_vel = annotate.input_tensors("struct_node", [
-            TensorSemantics(name="pos", ref=pos, kind=inputKindEnum.JOINT_POSITION),
-            TensorSemantics(name="vel", ref=vel, kind=inputKindEnum.JOINT_VELOCITY),
+            TensorSemantics(name="pos", ref=pos, kind=InputKindEnum.JOINT_POSITION),
+            TensorSemantics(name="vel", ref=vel, kind=InputKindEnum.JOINT_VELOCITY),
         ])
 
         output = traced_pos + traced_vel

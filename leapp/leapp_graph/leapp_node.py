@@ -117,9 +117,6 @@ class LeappNode():
         if self.export_backend.compiled_model is None:
             return None
         return self.export_backend.compiled_model
-        # assert self.export_backend is not None, f"Error: {self.name} has no export backend, please setup the backend first"
-        # assert self.export_backend.compiled_model is not None, f"Error: {self.name} has no compiled model, please compile the model first"
-        # return self.export_backend.compiled_model
     
     @property
     def compiled_module(self):
@@ -128,9 +125,6 @@ class LeappNode():
         if self.export_backend.compiled_module is None:
             return None
         return self.export_backend.compiled_module
-        # assert self.export_backend is not None, f"Error: {self.name} has no export backend, please setup the backend first"
-        # assert self.export_backend.compiled_module is not None, f"Error: {self.name} has no compiled module, please compile the model first"
-        # return self.export_backend.compiled_module
     
     def delete_compiled_model(self):
         if self.export_backend is None:

@@ -31,7 +31,7 @@ from leapp.leapp_graph.datatypes import (
     TRACABLE_BASE_TYPES,
 )
 from leapp.utils.utils import safe_deepcopy
-from leapp.utils.enums import inputKindEnum, outputKindEnum
+from leapp.utils.enums import InputKindEnum, OutputKindEnum
 
 
 class CompactYamlList(list):
@@ -79,7 +79,7 @@ class TensorSemantics:
     ref: Any = None
 
     # Semantic fields
-    kind: Optional[inputKindEnum | outputKindEnum | str] = None
+    kind: Optional[InputKindEnum | OutputKindEnum | str] = None
     element_names: Optional[List] = None
 
     def __post_init__(self):

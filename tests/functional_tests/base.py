@@ -388,7 +388,7 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
             rtol: Relative tolerance for allclose.
             atol: Absolute tolerance for allclose.
         """
-        from leapp.inference_manager import InferenceManager
+        from leapp import InferenceManager
 
         if graph_name is None:
             graph_name = self.TEST_GRAPH_NAME

@@ -98,8 +98,8 @@ LEAPP supports semantic injection via `TensorSemantics` wrappers passed to `inpu
   - `kind`: high-level semantic role string/enum for a tensor.
   - `element_names`: per-element labels (for vector/joint/channel interpretability).
 - For `kind`, LEAPP provides two semantic enum families:
-  - `inputKindEnum` for input/state/command-like inputs.
-  - `outputKindEnum` for output/target/control-like outputs.
+  - `InputKindEnum` for input/state/command-like inputs.
+  - `OutputKindEnum` for output/target/control-like outputs.
 - Output location:
   - semantic fields are serialized into the generated YAML tensor entries.
 - Input format rules:
@@ -111,13 +111,13 @@ Example:
 ```python
 import torch
 import leapp
-from leapp import annotate, TensorSemantics, inputKindEnum, outputKindEnum
+from leapp import annotate, TensorSemantics, InputKindEnum, OutputKindEnum
 
 leapp.start("semantic_graph")
 
 annotate.input_tensors("policy", [
-    TensorSemantics("joint_pos", torch.randn(12), kind=inputKindEnum.JOINT_POSITION),
-    TensorSemantics("joint_vel", torch.randn(12), kind=inputKindEnum.JOINT_VELOCITY),
+    TensorSemantics("joint_pos", torch.randn(12), kind=InputKindEnum.JOINT_POSITION),
+    TensorSemantics("joint_vel", torch.randn(12), kind=InputKindEnum.JOINT_VELOCITY),
 ])
 
 action = torch.randn(12)
@@ -125,7 +125,7 @@ annotate.output_tensors("policy", [
     TensorSemantics(
         "torques",
         action,
-        kind=outputKindEnum.JOINT_TORQUES,
+        kind=OutputKindEnum.JOINT_TORQUES,
         element_names=[f"joint_{i}" for i in range(12)],
     )
 ], export_with="jit")
@@ -296,7 +296,7 @@ leapp.compile_graph(validate=True)
 ## Runtime recipe (using exported YAML)
 
 ```python
-from leapp.inference_manager import InferenceManager
+from leapp import InferenceManager
 
 im = InferenceManager("module_graph/module_graph.yaml")
 

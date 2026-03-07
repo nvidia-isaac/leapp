@@ -109,7 +109,7 @@ class ExportManager:
         self.set_dry_run(dry_run)
         if isinstance(non_traced, str):
             non_traced = [non_traced]
-        self.non_traced = set[str](non_traced)
+        self.non_traced = set(non_traced)
 
     def set_dry_run(self, dry_run: bool):
         self.dry_run = dry_run
@@ -321,7 +321,7 @@ class ExportManager:
             return self._passthrough_dict_values(tensors)
  
 
-        if node_name in self.nodes.keys():
+        if node_name in self.nodes:
             traced_tensors_node = self.nodes[node_name]
         else:
             raise Exception(
@@ -368,8 +368,8 @@ class ExportManager:
                 _get_logger().error(msg)
                 raise Exception(msg)
 
-            context_names = set(
-                [tensor.context for tensor in flattened_tensors.values()])
+            context_names = {
+                tensor.context for tensor in flattened_tensors.values()}
             # Check that all tensors come from exactly one context matching the node name
             if not (len(context_names) == 1 and next(iter(context_names)) == traced_tensors_node.name):
                 msg = (

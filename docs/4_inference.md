@@ -5,7 +5,7 @@ The `InferenceManager` loads an exported LEAPP graph and runs the full pipeline 
 ## Usage
 
 ```python
-from leapp.inference_manager import InferenceManager
+from leapp import InferenceManager
 
 # Load from the generated YAML description
 manager = InferenceManager("path/to/my_graph/my_graph.yaml")

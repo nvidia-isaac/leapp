@@ -19,7 +19,7 @@
 
 import torch
 import unittest
-from leapp.inference_manager import InferenceManager
+from leapp import InferenceManager
 from .base_example_test import BaseExampleTest
 
 

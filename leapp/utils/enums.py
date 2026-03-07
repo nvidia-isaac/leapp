@@ -18,7 +18,7 @@
 from enum import Enum
 
 
-class inputKindEnum(Enum):
+class InputKindEnum(Enum):
     JOINT_POSITION= "state/joint/position"
     JOINT_VELOCITY= "state/joint/velocity"
     BODY_LINEAR_ACCELERATION= "state/body/linear_acceleration"
@@ -32,7 +32,7 @@ class inputKindEnum(Enum):
     COMMAND_BODY_ROTATION= "command/body/rotation"
     COMMAND_BODY_VELOCITY= "command/body/velocity"
 
-class outputKindEnum(Enum):
+class OutputKindEnum(Enum):
     KP="kp"
     KD="kd"
     JOINT_POSITION="target/joint/position"

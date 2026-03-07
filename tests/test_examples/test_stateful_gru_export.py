@@ -25,7 +25,7 @@ import torch
 import leapp
 from leapp import annotate
 from leapp.export_manager import ExportManager
-from leapp.inference_manager import InferenceManager
+from leapp import InferenceManager
 from leapp.leapp import _MANAGER as _annotate_manager
 
 from .base_example_test import BaseExampleTest
@@ -33,8 +33,6 @@ from .base_example_test import BaseExampleTest
 
 class TestStatefulGRUExport(BaseExampleTest):
     """Tests for examples/stateful_gru_export.py — stateful GRU buffer tracking."""
-
-    _OUTPUT_DIR = None  # set in setUp, cleaned up in tearDown
 
     def setUp(self):
         super().setUp()
