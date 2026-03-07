@@ -83,7 +83,7 @@ class NodeManager:
         return output_values_to_populate
 
     def _create_backend(self, backend):
-        'utilizes the backends just to load the model. the backend is not used for compilation or saving.'
+        """utilizes the backends just to load the model. the backend is not used for compilation or saving."""
         if backend == "jit":
             return TorchExportBackend(None)
         elif backend == "onnx":

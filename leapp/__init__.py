@@ -25,6 +25,7 @@ various formats including PyTorch JIT, ONNX, and generate visualization and YAML
 """
 
 from .export_manager import ExportManager
+from .inference_manager import InferenceManager
 from .leapp import annotate, start, stop, compile_graph
 from .utils.enums import inputKindEnum, outputKindEnum
 from .utils.tensor_description import TensorSemantics
@@ -36,6 +37,7 @@ __email__ = "frlai@nvidia.com"
 
 __all__ = [
     "ExportManager",
+    "InferenceManager",
     "inputKindEnum",
     "outputKindEnum",
     "annotate",

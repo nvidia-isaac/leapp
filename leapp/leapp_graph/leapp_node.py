@@ -27,7 +27,11 @@ from leapp.utils.logging import _get_logger
 class LeappNode():
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
-        # Only wrap if this class defines its own __init__
+        # Only wrap if this class defines its own __init__.
+        # NOTE: if a deeper subclass chain is added in future, ensure each
+        # class only defines __init__ once — cls.__dict__ prevents re-wrapping
+        # inherited methods, but a class that redefines an already-wrapped method
+        # would get double-wrapped.
         if '__init__' in cls.__dict__:
             original_init = cls.__init__
 
@@ -131,10 +135,10 @@ class LeappNode():
     def delete_compiled_model(self):
         if self.export_backend is None:
             return
-        if self.export_backend.compiled_model is not None:
-            del self.export_backend.compiled_model
-        if self.export_backend.compiled_module is not None:
-            del self.export_backend.compiled_module
+        self.export_backend.compiled_model = None
+        self.export_backend.compiled_module = None
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     def get_description(self):
         # dynamically generate i/o descriptions depending on need
@@ -440,10 +444,10 @@ class LeappNode():
     def reentry_validate_and_tag_outputs(self, tensors: dict,
                                          static_tensors: dict | None = None):
         """Tag and validate output tensors on re-entry, then advance the cache index."""
-        for tensors in [tensors, static_tensors]: # this is to handle name overlaps.
-            for tensor_name, tensor in tensors.items():
-                self.tag_data(tensor, tensor_name)
-                self.validate_output_and_update_tags(tensor_name, tensor_name, tensor)
+        all_tensors = {**tensors, **(static_tensors or {})}
+        for tensor_name, tensor in all_tensors.items():
+            self.tag_data(tensor, tensor_name)
+            self.validate_output_and_update_tags(tensor_name, tensor_name, tensor)
 
         self.increment_cache_idx()
 

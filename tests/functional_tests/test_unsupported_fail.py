@@ -391,7 +391,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             self.fail("Expected an exception")
             
         except Exception as e:
-            self.assertIn("output_tensors declaration", str(e))
+            self.assertIn("non-traced tensors", str(e))
 
     def test_traced_tensor_as_static_output_fails(self):
         """Test that using a TracedTensor (derived from input) as a static output fails.
@@ -428,8 +428,8 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             error_msg = str(e)
             # Should mention that static outputs cannot be TracedTensors
             self.assertTrue(
-                "output_tensors declaration" in error_msg,
-                f"Expected error about output_tensors declaration, got: {error_msg}"
+                "output_tensors" in error_msg,
+                f"Expected error about output_tensors, got: {error_msg}"
             )
 
     def test_input_tensors_after_output_tensors_same_node(self):

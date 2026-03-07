@@ -68,9 +68,9 @@ def stop():
     manager = _MANAGER
 
     if TracingLock().is_active:
-        raise Exception("ExportManager is currently tracing")
+        raise Exception("leapp.stop() was called while a traced function is still executing")
     if not ExportManager.is_interpret_graph_enabled():
-        raise Exception("ExportManager graph interpretation is disabled")
+        raise Exception("leapp.stop() called with no active tracing session — did you call leapp.start()?")
 
     ExportManager.set_interpret_graph(False)
     manager.restore_pending_buffer_trackers()

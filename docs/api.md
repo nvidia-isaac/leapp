@@ -183,7 +183,7 @@ annotate.output_tensors(node_name: str, tensors: dict, **kwargs)
 - **`node_name`** (str, required): The node name. Must match the name used in the corresponding `input_tensors()` call.
 
 - **`**kwargs`**: Export configuration options:
-  - **`export_with`** (str): Backend for exporting. **Currently only `"jit"` and `"onnx"` is supported** for traced tensor nodes.
+  - **`export_with`** (str): Backend for exporting. The two supported formats are `"jit"` and `"onnx"`. You can also specify `"jit-script"`, `"jit-trace"`, `"onnx-dynamo"`, or `"onnx-torchscript"` to control the export technique within each format — see [Advanced Export](2_advanced_export.md) for details.
   - **`backend_params`** (dict): Backend-specific parameters.
 
 ### Behavior
@@ -252,7 +252,7 @@ The generated YAML file contains:
 ```yaml
 models:
   node_name:
-    backend: torch
+    backend: jit
     inputs:
       - name: input_name
         shape: [10, 3]

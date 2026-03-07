@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
+import os
 import unittest
 import torch
 import leapp
@@ -931,6 +932,32 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         leapp.compile_graph(visualize=False)
         self.verify_single_torchscript_model_expected_value(
             [input_tensor], [expected_output], funcA.__name__)
+
+    def test_sha256_mismatch_raises(self):
+        """Corrupting the model file after export raises ValueError on load."""
+        from leapp.inference_manager import InferenceManager
+
+        @annotate.method(export_with="jit")
+        def simple_model(x: torch.Tensor):
+            return x * 2.0
+
+        input_tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        simple_model(input_tensor)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        # Corrupt the model file by appending garbage bytes
+        model_path = os.path.join(self.TEST_GRAPH_NAME, "simple_model.pt")
+        with open(model_path, "ab") as f:
+            f.write(b"\x00\xFF\x00\xFF")
+
+        yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+        with self.assertRaises(ValueError) as ctx:
+            InferenceManager(yaml_path)
+
+        self.assertIn("SHA256 checksum mismatch", str(ctx.exception))
 
     # -----------------------------------------------------------------
     # Complex math operations

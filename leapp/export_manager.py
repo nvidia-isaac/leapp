@@ -186,7 +186,6 @@ class ExportManager:
                 f"Error: node '{name}' already exists. "
                 f"Cannot create a new node with the same name.")
 
-        self.is_dry_run(name)
         if self.is_dry_run(name):
             kwargs['export_with'] = None
             kwargs['backend_params'] = {}
@@ -205,16 +204,6 @@ class ExportManager:
                           dry_run=self.is_dry_run(name))
         else:
             node = node_class(name, dry_run=self.is_dry_run(name), **kwargs)
-
-        # node = node_class(name,
-        #                   backend=kwargs.get("export_with", None),
-        #                   backend_params=kwargs.get("backend_params", None),
-        #                   inputs=kwargs.get("inputs", None),
-        #                   outputs=kwargs.get("outputs", None),
-        #                   environment_constants=kwargs.get(
-        #                       "environment_constants", None),
-        #                   register_buffers=kwargs.get("register_buffers", None),
-        #                   dry_run=self.is_dry_run(name))
 
         node._max_cached_io = self._max_cached_io
         self.nodes[name] = node
@@ -335,10 +324,9 @@ class ExportManager:
         if node_name in self.nodes.keys():
             traced_tensors_node = self.nodes[node_name]
         else:
-            _get_logger().error(
-                f"Error: output tensors called for node {node_name} but not registered to the ExportManager")
             raise Exception(
-                "Error: exception detected in output_tensors declaration")
+                f"output_tensors() called for node '{node_name}' but input_tensors() was never called for it. "
+                "Call annotate.input_tensors() before annotate.output_tensors() for the same node name.")
 
         # process outputs
         tensors_changed = False
@@ -369,26 +357,27 @@ class ExportManager:
             instances = set(is_traced_type(tensor) for tensor in flattened_tensors.values())
 
             if not all(instances):
-                types = set(type(tensor) for tensor in flattened_tensors.values())
-                _get_logger().error(
-                    f"Error: in output_tensors call for the node {node_name} detected the following"
-                    f" types when expected all outputs to be TracedData: {types}\n"
-                    "This could happen if \n"
-                    "1. You are not using TracedData in your computations.\n"
-                    "2. You didn't replace your original tensors with the returned wrapped tensors from input_tensors()\n"
-                    "3. Something in your computation breaks tracing\n")
-                raise Exception(
-                    "Error: exception detected in output_tensors declaration")
+                types = set(type(tensor).__name__ for tensor in flattened_tensors.values())
+                msg = (
+                    f"output_tensors() for node '{node_name}' received non-traced tensors: {types}\n"
+                    "Possible causes:\n"
+                    "1. You did not use the traced tensors returned by input_tensors() — "
+                    "make sure to replace your original tensors with the return value of annotate.input_tensors().\n"
+                    "2. An operation in your computation broke tracing (e.g. converting to numpy and back).\n"
+                    "3. You passed raw tensors instead of the traced ones to output_tensors().")
+                _get_logger().error(msg)
+                raise Exception(msg)
 
             context_names = set(
                 [tensor.context for tensor in flattened_tensors.values()])
             # Check that all tensors come from exactly one context matching the node name
             if not (len(context_names) == 1 and next(iter(context_names)) == traced_tensors_node.name):
-                _get_logger().error(
-                    f"Error: expected all context names to match the node name: {traced_tensors_node.name}"
-                    f" but detected the following context names: {context_names}")
-                raise Exception(
-                    "Error: exception detected in output_tensors declaration")
+                msg = (
+                    f"output_tensors() for node '{node_name}' received tensors that belong to a different node: "
+                    f"{context_names}. Make sure you are passing tensors derived from "
+                    f"annotate.input_tensors('{node_name}', ...) to annotate.output_tensors('{node_name}', ...).")
+                _get_logger().error(msg)
+                raise Exception(msg)
 
         # process static outputs (constant tensors that should be returned but aren't derived from inputs)
         flattened_static_outputs = None
@@ -458,10 +447,11 @@ class ExportManager:
             return tensors[0] if len(tensors) == 1 else tuple(tensors)
 
         if node_name not in self.nodes:
-            _get_logger().error(
-                f"Error: register_buffer called for node '{node_name}' but node not found. "
-                "Call input_tensors() first to create the node.")
-            raise Exception("Error: exception detected in register_buffer")
+            msg = (
+                f"register_buffer() called for node '{node_name}' but node not found. "
+                "Call annotate.input_tensors() first to create the node.")
+            _get_logger().error(msg)
+            raise Exception(msg)
 
         # Normalize input to a dict with auto-generated names if needed
         tensors, was_single = self._normalize_buffer_input(node_name, tensors)
@@ -469,10 +459,11 @@ class ExportManager:
         traced_node = self.nodes[node_name]
 
         if not isinstance(traced_node, TracedTensorNode):
-            _get_logger().error(
-                f"Error: register_buffer only works with TracedTensorNode, "
-                f"but '{node_name}' is a {type(traced_node).__name__}")
-            raise Exception("Error: exception detected in register_buffer")
+            msg = (
+                f"register_buffer() is not supported for node '{node_name}' — "
+                "it was created with the legacy method annotation.")
+            _get_logger().error(msg)
+            raise Exception(msg)
 
         if not traced_node.is_tracing:
             values = list(tensors.values())
@@ -516,18 +507,20 @@ class ExportManager:
  
 
         if node_name not in self.nodes:
-            _get_logger().error(
-                f"Error: state_tensors called for node '{node_name}' but node not found. "
-                "Call input_tensors() first to create the node.")
-            raise Exception("Error: exception detected in state_tensors")
+            msg = (
+                f"state_tensors() called for node '{node_name}' but node not found. "
+                "Call annotate.input_tensors() first to create the node.")
+            _get_logger().error(msg)
+            raise Exception(msg)
 
         traced_node = self.nodes[node_name]
 
         if not isinstance(traced_node, TracedTensorNode):
-            _get_logger().error(
-                f"Error: state_tensors only works with TracedTensorNode, "
-                f"but '{node_name}' is a {type(traced_node).__name__}")
-            raise Exception("Error: exception detected in state_tensors")
+            msg = (
+                f"state_tensors() is not supported for node '{node_name}' — "
+                "it was created with the legacy method annotation.")
+            _get_logger().error(msg)
+            raise Exception(msg)
 
         if not traced_node.is_tracing:
             traced_node.reentry_validate_inputs(tensors)
@@ -546,17 +539,20 @@ class ExportManager:
  
 
         if node_name not in self.nodes:
-            _get_logger().error(
-                f"Error: update_state called for node '{node_name}' but node not found.")
-            raise Exception("Error: exception detected in update_state")
+            msg = (
+                f"update_state() called for node '{node_name}' but node not found. "
+                "Call annotate.input_tensors() first to create the node.")
+            _get_logger().error(msg)
+            raise Exception(msg)
 
         traced_node = self.nodes[node_name]
 
         if not isinstance(traced_node, TracedTensorNode):
-            _get_logger().error(
-                f"Error: update_state only works with TracedTensorNode, "
-                f"but '{node_name}' is a {type(traced_node).__name__}")
-            raise Exception("Error: exception detected in update_state")
+            msg = (
+                f"update_state() is not supported for node '{node_name}' — "
+                "it was created with the legacy method annotation.")
+            _get_logger().error(msg)
+            raise Exception(msg)
 
         if not traced_node.is_tracing:
             traced_node.reentry_validate_state_update(tensors)

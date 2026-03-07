@@ -200,7 +200,7 @@ models:
       shape: []
       type: tensor
     parameters:
-      backend: torch
+      backend: jit
       model_path: feature_extractor.pt
 
 pipeline:
