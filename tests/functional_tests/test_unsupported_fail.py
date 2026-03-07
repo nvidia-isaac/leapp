@@ -62,6 +62,72 @@ _decorated_annotate = _timing_decorator(_raw_annotate)
 class TestUnsupportedFail(LEAPPFunctionalTestBase):
     """Unit tests to see if unsupported io is properly handled"""
 
+    def test_output_tensors_without_prior_input_tensors(self):
+        """Calling output_tensors before input_tensors should raise a clear error."""
+        leapp.start(name=self.TEST_GRAPH_NAME)
+
+        try:
+            annotate.output_tensors(
+                'orphan_node',
+                {'output': torch.tensor([1.0, 2.0, 3.0])},
+                export_with="jit",
+            )
+            self.fail("Expected an exception")
+        except Exception as e:
+            self.assertIn(
+                "input_tensors() was never called for it",
+                str(e),
+            )
+        finally:
+            leapp.stop()
+
+    def test_reentry_output_shape_change_fails(self):
+        """Re-entering a node with a changed output shape should be rejected."""
+        try:
+            leapp.start(name=self.TEST_GRAPH_NAME)
+
+            for idx in range(2):
+                traced = annotate.input_tensors(
+                    'shape_node', {'input': torch.tensor([1.0, 2.0, 3.0])}
+                )
+                output = traced + 1.0 if idx == 0 else traced.reshape(1, 3)
+                annotate.output_tensors(
+                    'shape_node', {'output': output}, export_with="jit"
+                )
+
+            leapp.stop()
+            self.fail("Expected an exception")
+        except Exception as e:
+            try:
+                leapp.stop()
+            except Exception:
+                pass
+            self.assertIn("Validation error when reentering node", str(e))
+
+    def test_reentry_output_tag_change_fails(self):
+        """Corrupting cached output tags before re-entry should be rejected."""
+        try:
+            leapp.start(name=self.TEST_GRAPH_NAME)
+
+            for idx in range(2):
+                traced = annotate.input_tensors(
+                    'tag_node', {'input': torch.tensor([1.0, 2.0, 3.0])}
+                )
+                annotate.output_tensors(
+                    'tag_node', {'output': traced + 1.0}, export_with="jit"
+                )
+                if idx == 0:
+                    annotate.nodes['tag_node'].outputs[0].tag = 'wrong_node/output/'
+
+            leapp.stop()
+            self.fail("Expected an exception")
+        except Exception as e:
+            try:
+                leapp.stop()
+            except Exception:
+                pass
+            self.assertIn("Validation error when reentering node", str(e))
+
     def test_same_variable_used_twice(self):
 
         @annotate.method()

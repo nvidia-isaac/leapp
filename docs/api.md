@@ -252,7 +252,6 @@ The generated YAML file contains:
 ```yaml
 models:
   node_name:
-    backend: jit
     inputs:
       - name: input_name
         shape: [10, 3]
@@ -262,7 +261,10 @@ models:
         shape: [10, 3]
         dtype: float32
     parameters:
+      backend: jit
       model_path: ./node_name.pt
+      md5sum: ...
+      sha256sum: ...
 
 pipeline:
   data_flow:

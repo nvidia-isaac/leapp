@@ -27,13 +27,10 @@ from leapp.utils.logging import _get_logger
 class LeappNode():
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
-        # Only wrap if this class defines its own __init__.
-        # NOTE: if a deeper subclass chain is added in future, ensure each
-        # class only defines __init__ once — cls.__dict__ prevents re-wrapping
-        # inherited methods, but a class that redefines an already-wrapped method
-        # would get double-wrapped.
         if '__init__' in cls.__dict__:
             original_init = cls.__init__
+            if getattr(original_init, '_leapp_wrapped', False):
+                return
 
             @functools.wraps(original_init)
             def wrapped_init(self, *args, **kwargs):
@@ -43,6 +40,7 @@ class LeappNode():
                 if type(self) is cls:
                     _get_logger().info(
                         f"Node context initialized: {self.name}")
+            wrapped_init._leapp_wrapped = True
             cls.__init__ = wrapped_init
 
         # Wrap compile_trace to set _model_captured = True after execution

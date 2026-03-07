@@ -16,7 +16,7 @@ LEAPP supports two methods for exporting models to ONNX format:
 
 ### Dynamo Export (Default)
 
-Dynamo export is the modern approach introduced in PyTorch 2.0. It captures the computation graph using TorchDynamo and converts it to ONNX. TochDynamo is the backend used for the new torch.export module.
+Dynamo export is the modern approach introduced in PyTorch 2.0. It captures the computation graph using TorchDynamo and converts it to ONNX. TorchDynamo is the backend used for the new torch.export module.
 
 ```python
 import torch

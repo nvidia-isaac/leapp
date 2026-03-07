@@ -603,10 +603,9 @@ class ExportManager:
             return
 
         if node_name not in self.nodes:
-            _get_logger().error(
-                f"Error: module() called for node '{node_name}' but node not found. "
-                "Call input_tensors() first to create the node.")
-            raise Exception("Error: exception detected in module")
+            msg = f"Error: module() called for node '{node_name}' but node not found. Call input_tensors() first to create the node."
+            _get_logger().error(msg)
+            raise Exception(msg)
 
         from leapp.buffer_tracker import BufferTracker
         tracker = BufferTracker(model, node_name, self, buffer_names=buffer_names)

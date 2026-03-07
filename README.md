@@ -101,7 +101,7 @@ from leapp import annotate
 
 **Lifecycle**
 
-- `leapp.start(name, save_path=".", verbose=False, dry_run=False, non_traced=[], max_cached_io=5, global_patching=True)`
+- `leapp.start(name, save_path=".", verbose=False, dry_run=False, non_traced=None, max_cached_io=5, global_patching=True)`
 - `leapp.stop()`
 - `leapp.compile_graph(visualize=True, verbose=None, validate=True, dry_run=False, rtol=1e-3, atol=1e-5, strict=True)`
 
