@@ -188,7 +188,7 @@ class ExportManager:
 
         if self.is_dry_run(name):
             kwargs['export_with'] = None
-            kwargs['backend_params'] = {}
+            kwargs.setdefault('backend_params', {})
 
         if node_class is FunctionDecoratorNode:
             # kept for backward compatibility we still suppport old style initialization
@@ -619,6 +619,7 @@ class ExportManager:
 
             name = params.get("node_name", func.__name__)
             export_with = params.get("export_with", None)
+            backend_params = params.get("backend_params", {})
             
             @functools.wraps(func)
             def wrapper(*args, **kwargs):
@@ -679,9 +680,19 @@ class ExportManager:
                             f"Fatal: annotated method {name} returned {len(result)} values, "
                             f"but LEAPP detected the following return names {return_names} from source")
                     output_dict = {return_names[i]: result[i] for i in range(len(result))}
-                    self.output_tensors(name, output_dict, export_with=export_with)
+                    self.output_tensors(
+                        name,
+                        output_dict,
+                        export_with=export_with,
+                        backend_params=backend_params,
+                    )
                 else:
-                    self.output_tensors(name, {return_names[0]: result}, export_with=export_with)
+                    self.output_tensors(
+                        name,
+                        {return_names[0]: result},
+                        export_with=export_with,
+                        backend_params=backend_params,
+                    )
                 # ~~~~~~~~~~~~~~~~~~~ set up outputs ~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
                 return result
             return wrapper

@@ -21,23 +21,24 @@ import unittest
 from .base_example_test import BaseExampleTest
 
 
-class TestGettingStarted(BaseExampleTest):
-    """Unit tests for examples/getting_started.py."""
+class TestFeedbackExample(BaseExampleTest):
+    """Unit tests for examples/feedback_example.py."""
 
-    def test_getting_started_execution(self):
-        """Test that getting_started.py runs and generates expected artifacts."""
+    def test_feedback_example_execution(self):
+        """Test that feedback_example.py runs and generates expected artifacts."""
         expected_files = [
-            "obs_processor.pt",
-            "policy.pt",
-            "sample_pipeline.png",
-            "sample_pipeline.yaml",
+            "policy_step.pt",
+            "feedback_update.pt",
+            "sample_feedback_graph.png",
+            "sample_feedback_graph.yaml",
+            "sample_feedback_graph_initial_values.safetensors",
         ]
 
         self._run_and_verify_example(
-            script_name="getting_started.py",
-            output_dir_name="sample_pipeline",
+            script_name="feedback_example.py",
+            output_dir_name="sample_feedback_graph",
             expected_files=expected_files,
-            test_description="Testing getting_started.py",
+            test_description="Testing feedback_example.py",
         )
 
 

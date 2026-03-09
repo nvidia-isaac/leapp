@@ -1,6 +1,6 @@
 # Advanced Graph Operations
 
-This guide explores advanced graph-level operations in LEAPP, focusing on how LEAPP handles complex graph structures including cycles and optimization through node merging.
+This guide explores advanced graph-level operations in LEAPP, focusing on cycles, feedback connections, and tracing continuity across graph edges.
 
 ## Cycle Detection and Feedback Connections
 
@@ -8,95 +8,93 @@ LEAPP automatically detects cycles in your computational graph through a concept
 
 ### How LEAPP Detects Cycles
 
-LEAPP assigns each node an index based on the order it's first traced. When analyzing connections:
+LEAPP assigns each node an index when that node completes its initial trace. In practice, this is the node completion/finalization order, not the order a node name first appeared. When analyzing connections:
 - **Normal connections**: Data flows from a lower-indexed node to a higher-indexed node (forward flow)
 - **Feedback connections**: Data flows from a higher-indexed node back to a lower-indexed node (backward flow)
 
 Feedback connections are visualized in red in the graph visualization, while normal connections appear in black.
-\
 ### Capturing Feedback Behavior
 
-To properly capture feedback connections, you need to **run your graph multiple times** within the same tracing session. This allows LEAPP to observe the data flowing back to earlier nodes.
+For graph-level feedback that is inferred from re-entry across nodes, you need to **run your graph multiple times** within the same tracing session. This allows LEAPP to observe data flowing from a later node back into an earlier node on a later iteration.
+
+This is different from explicit state APIs such as `annotate.state_tensors()` / `annotate.update_state()` and `annotate.module()`, which can produce feedback metadata in a single trace.
 
 #### Example: Processing with Feedback Loop
 
+A complete runnable version of this example lives in `examples/feedback_example.py`.
+
 ```python
-@annotate.method()
-def process_input(data: torch.Tensor, feedback: torch.Tensor):
-    """Combines current input with feedback from previous iteration."""
-    return data + feedback
+import torch
+import leapp
+from leapp import annotate
 
+def mix_with_feedback(data: torch.Tensor, feedback: torch.Tensor) -> torch.Tensor:
+    centered = data - 0.5
+    return torch.tanh(centered + 0.25 * feedback)
 
-@annotate.method()
-def transform_data(data: torch.Tensor):
-    """Applies transformation to the data."""
-    return data * 2.0
-
-
-@annotate.method()
-def generate_feedback(data: torch.Tensor, previous_feedback: torch.Tensor):
-    """Generates feedback for next iteration."""
-    return data + previous_feedback * 0.1
-
-
-@annotate.method()
-def final_output(data: torch.Tensor):
-    if torch.sum(data > 10):
-        retval = torch.tensor([False])
-    else:
-        retval = torch.tensor([True])
-    return retval
-
+def blend_feedback(hidden: torch.Tensor, previous_feedback: torch.Tensor) -> torch.Tensor:
+    return 0.8 * previous_feedback + 0.2 * hidden
 
 def main():
-    leapp.start(name="feedback_example")
+    leapp.start(name="sample_feedback_graph")
 
-    # Initialize feedback to zero
-    feedback_value = torch.tensor([0])
-    final_output_value = torch.tensor([False])
+    policy_memory = torch.tensor([0.0])
 
-    # Run the graph multiple times to capture the feedback loop
-    for i in range(2):  # Minimum 2 iterations required
-        # Process input with feedback from previous iteration
-        processed = process_input(torch.tensor([1]), feedback_value)
+    for _ in range(2):  # needed for inferred cross-node feedback detection
+        policy_inputs = annotate.input_tensors("policy_step", {
+            "observation_scalar": torch.tensor([1.0]),
+            "policy_memory_in": policy_memory,
+        })
+        policy_context = mix_with_feedback(policy_inputs[0], policy_inputs[1])
+        control_action = torch.clamp(policy_context * 2.0, min=-1.0, max=1.0)
+        annotate.output_tensors(
+            "policy_step",
+            {"policy_context": policy_context, "control_action": control_action},
+            export_with="jit",
+        )
 
-        # Transform the data
-        transformed = transform_data(processed)
-
-        # Generate feedback for next iteration
-        feedback_value = generate_feedback(transformed, feedback_value)
-
-        final_output_value = final_output(feedback_value)
+        feedback_inputs = annotate.input_tensors("feedback_update", {
+            "policy_context": policy_context,
+            "policy_memory_prev": policy_memory,
+        })
+        policy_memory = blend_feedback(feedback_inputs[0], feedback_inputs[1])
+        annotate.output_tensors(
+            "feedback_update",
+            {"policy_memory_out": policy_memory},
+            export_with="jit",
+        )
 
     leapp.stop()
     leapp.compile_graph()
 ```
 
-In this example, `feedback_value` flows from `generate_feedback` (traced later) back to `process_input` (traced earlier), creating a feedback connection. The detected graph will look like the following where red curved lines represent feedback connections. 
+In this example, `policy_memory_out` flows from `feedback_update` (completed later) back into the `policy_memory_in` input of `policy_step` on the next iteration, creating a feedback connection. The standalone script exports to `sample_feedback_graph/`, which is ignored by git via the repository's `sample_*` rule.
 
-![Sample Robot Pipeline Graph](images/feedback_example.png)
+![Feedback Example Graph](images/feedback_example_graph.png)
 
 Inspect detected feedback connection details by verifying the `feedback_flow` field under pipeline.
 
 ```yaml
     feedback_flow:
-        generate_feedback/data: [process_input/feedback, generate_feedback/previous_feedback]
+        feedback_update/policy_memory_out: [policy_step/policy_memory_in, feedback_update/policy_memory_prev]
 ```
 
 ### Important Considerations
 
 **⚠️ Minimum Two Iterations Required**
 
-You must run the loop **at least twice** for LEAPP to detect feedback connections:
+You must run the loop **at least twice** for LEAPP to detect inferred cross-node feedback connections:
 - **First iteration**: LEAPP traces all nodes and establishes their direct connections
 - **Second iteration**: LEAPP observes data flowing back to earlier nodes, confirming the feedback connection
 
-**⚠️ name matching not guaranteed**
-- When feedback loops are established, LEAPP does not attempt to reconcile the i/o names. The downstream framework would need to take this into consideration when reconnecting feedback loops.
+Explicit feedback declared with `state_tensors()` / `update_state()` or detected via `annotate.module()` does not require a second iteration.
+
+**⚠️ feedback i/o names are not reconciled**
+- LEAPP currently reconciles names only for forward internal connections in `data_flow`. Feedback connections in `feedback_flow` are emitted as-is, so downstream frameworks should not assume the source and target port names will match.
 
 ## Maintaining Tracing with `mirror_leapp_tags`
 
-When working with tensor data in LEAPP, proper tracing requires that LEAPP can track how data flows through your computational graph. However, sometimes you need to duplicate tensor data without using PyTorch's standard `clone()` or `detach()` methods - for example, when using in-place assignment operations like `tensor[:] = other_tensor`.
+When working with tensor data in LEAPP, proper tracing requires that LEAPP can track how data flows through your computational graph. However, sometimes you need to duplicate tensor data without using PyTorch's standard `clone()` or `detach()` methods - for example, when using in-place assignment operations like `tensor[:] = other_tensor` or if the tensor was temporarily converted to a different datatype `tensor=np.array(tagged_tensor)`.
 
 In these cases, LEAPP's internal tags that track data provenance won't automatically transfer to the copied data. The `annotate.mirror_leapp_tags()` function solves this problem by explicitly transferring tracing tags from a source tensor to a target tensor.
 
@@ -114,7 +112,7 @@ The `mirror_leapp_tags()` function performs two critical operations:
 1. **Verifies Data Equivalence**: First checks that the source and target tensors contain exactly the same values
 2. **Transfers Tags**: If verification passes, copies all LEAPP internal tracking tags from source to target
 
-If the data doesn't match, it logs an error and does nothing to prevent incorrect tracing.
+If the data doesn't match, LEAPP logs an error and raises instead of copying incorrect tracing metadata.
 
 ### Example: Using Preallocated Buffer
 
@@ -157,14 +155,14 @@ annotate.mirror_leapp_tags(source, target)
 
 **⚠️ Data Must Match Exactly**
 
-The function will log an error and do nothing if the values in source and target differ:
+The function raises if the values in `source` and `target` differ:
 
 ```python
 source = torch.tensor([1.0, 2.0, 3.0])
 target = torch.tensor([1.0, 2.0, 4.0])  # Different value!
 
-# This will log an error and do nothing:
-annotate.mirror_leapp_tags(source, target)  # Error logged: source and target do not match
+# This raises because the tensor values differ:
+annotate.mirror_leapp_tags(source, target)
 ```
 
 **⚠️ Only Works During Tracing**
@@ -202,9 +200,36 @@ new_tensor = old_tensor+10       # computation performed
 new_tensor[:5] = old_tensor      # a subsection of new_tensor is replaced with old_tensor
 ```
 
-## Node Merging
+## IO Reconciliation
 
-Node merging has been removed from LEAPP and is no longer part of `compile_graph()`.
+IO reconciliation happens during graph construction, when LEAPP tries to connect node outputs to downstream node inputs even if the names do not already match.
+
+This is useful as a fallback, but it can also create ambiguous or conflicting graph interfaces. As a rule, it is better to keep names consistent yourself and treat reconciliation as a last resort.
+
+### Practical Guidance
+
+- Keep output names and downstream input names consistent when you can
+- Prefer explicit names with `input_tensors()` / `output_tensors()` for graph boundaries
+- If `compile_graph()` warns that names were changed, inspect the generated YAML and verify the final interface names
+
+### Common Failure Pattern
+
+This kind of graph is risky:
+
+```python
+@annotate.method()
+def detect(x):
+    detections = x + 1
+    return detections
+
+@annotate.method()
+def consume(detections, x):
+    return detections + x
+```
+
+If a graph has multiple candidate names that LEAPP tries to reconcile into the same slot, `compile_graph()` can fail with an unrecoverable naming conflict.
+
+The simplest fix is usually to rename the node inputs or outputs so the intended graph wiring is already explicit before reconciliation runs.
 
 ## Summary
 

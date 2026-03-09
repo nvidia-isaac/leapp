@@ -98,6 +98,7 @@ Used with `annotate.input_tensors()`. These represent **observed state** or **co
 | `COMMAND_JOINT_POSITION` | `command/joint/position` | Commanded joint position reference |
 | `COMMAND_JOINT_VELOCITY` | `command/joint/velocity` | Commanded joint velocity reference |
 | `COMMAND_BODY_ROTATION` | `command/body/rotation` | Commanded body rotation reference |
+| `COMMAND_BODY_VELOCITY` | `command/body/velocity` | Commanded body velocity reference |
 | `COMMAND_JOINT_TORQUES` | `command/joint/torques` | Commanded joint torques reference |
 
 ```python
@@ -186,6 +187,7 @@ annotate.input_tensors("node", {
 })
 
 # ❌ Mixing TensorSemantics and raw tensors — NOT supported
+# use multiple calls to input_tensors in this case
 annotate.input_tensors("node", [
     TensorSemantics("pos", pos_tensor, kind=InputKindEnum.JOINT_POSITION),
     vel_tensor,  # raw tensor mixed with semantics

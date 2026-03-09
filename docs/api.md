@@ -1,6 +1,6 @@
 # LEAPP API Reference
 
-This document provides a comprehensive reference for LEAPP's core API methods. LEAPP uses a global `annotate` instance that provides methods for tracing and exporting computational graphs.
+This document provides a reference for LEAPP's public runtime and annotation APIs. Use the `leapp` module for graph lifecycle control and the global `annotate` instance for node annotations.
 
 ## Quick Reference
 
@@ -10,7 +10,7 @@ from leapp import annotate
 
 # Core workflow
 leapp.start(name="my_graph", save_path=".", verbose=False)
-# ... trace your code using @annotate.method()
+# ... trace your code using annotate.method()
 #     or annotate.input_tensors() / annotate.output_tensors()
 leapp.stop()
 leapp.compile_graph(visualize=True)
@@ -25,7 +25,7 @@ Initialize and start LEAPP graph interpretation.
 ### Signature
 
 ```python
-leapp.start(name: str, save_path: str = ".", verbose: bool = False, dry_run: bool = False, non_traced: list = [], max_cached_io: int = 5, global_patching: bool = True)
+leapp.start(name: str, save_path: str = ".", verbose: bool = False, dry_run: bool = False, non_traced = None, max_cached_io: int = 5, global_patching: bool = True)
 ```
 
 ### Parameters
@@ -34,9 +34,11 @@ leapp.start(name: str, save_path: str = ".", verbose: bool = False, dry_run: boo
 - **`save_path`** (str, optional): The base directory path where the graph directory will be created. Defaults to `"."` (current directory).
 - **`verbose`** (bool, optional): If `True`, enables verbose logging output. Defaults to `False`.
 - **`dry_run`** (bool, optional): If `True`, skips model compilation and export. Used to verify graph structure and I/O without the cost of compilation. Defaults to `False`.
-- **`non_traced`** (list[str], optional): List of node names to exclude from tracing/export. These nodes still capture inputs/outputs, contribute to graph connectivity, and appear in the YAML — they just won't have compiled models. Defaults to `[]`.
+- **`non_traced`** (list[str], optional): List of node names to exclude from tracing/export. These nodes still capture inputs/outputs, contribute to graph connectivity, and appear in the YAML — they just won't have compiled models. Defaults to `None`.
 - **`max_cached_io`** (int, optional): Controls how many re-entry I/O examples LEAPP caches per node for multi-example validation. Higher values improve confidence for looped/stateful pipelines at the cost of memory. Defaults to `5`.
 - **`global_patching`** (bool, optional): If `True`, patches torch numpy functions for TracedTensor compatibility. Defaults to `True`. Set to `False` if global patching causes environment issues.
+
+  > **Warning:** Setting `global_patching=False` disables patches that allow traced tensors to pass through `torch.from_numpy()` and related numpy-interop functions. If your pipeline calls any such functions on traced tensors, they will silently return untraced results and those operations will be invisible to LEAPP. Only disable this if you are certain your pipeline does not use numpy-interop on traced values.
 
 ### Behavior
 
@@ -47,7 +49,7 @@ leapp.start(name: str, save_path: str = ".", verbose: bool = False, dry_run: boo
 
 ### Notes
 
-- Must be called before any `@annotate.method()` decorators or `annotate.input_tensors()` calls are used
+- Must be called before annotated functions are invoked and before `annotate.input_tensors()` begins tracing
 - Creates a directory structure: `{save_path}/{name}/`
 - All traced nodes and outputs will be saved in this directory
 
@@ -81,48 +83,6 @@ None
 
 ---
 
-## `@annotate.method()`
-
-Create a decorator for tracing functions/methods in the computational graph.
-
-### Signature
-
-```python
-@annotate.method(**params)
-def your_function(...):
-    ...
-```
-
-### Parameters
-
-All parameters are optional keyword arguments (`**params`):
-
-- **`node_name`** (str): Custom name for the node. If not provided, uses the function's name.
-- **`export_with`** (str): Backend to use for exporting the model (e.g., `"jit"`, `"onnx"`).
-- **`backend_params`** (dict): Parameters specific to the export backend.
-- **`inputs`** (list[str]): Input specifications for the node.
-- **`outputs`** (list[str]): Output specifications for the node.
-- **`environment_constants`** (list[str]): External variables to capture as constants. Two main use cases: (1) capturing external dependencies like models or configs, (2) freezing variables that change over time (e.g., loop counters) to their value at node creation. See [Advanced Node Operations](1_advanced_nodes.md#environment-constants-referencing-external-data) for details.
-- **`register_buffers`** (list[str]): Buffers to register with the model (for mutable state).
-- **`enable_fp16`** (bool): Enable FP16 precision mode.
-- **`enable_cuda_graphs`** (bool): Enable CUDA graphs optimization.
-
-### Behavior
-
-- Wraps the function to trace its execution when called
-- Captures function inputs, outputs, and execution details
-- Creates a node in the LEAPP computational graph
-- If graph interpretation is disabled, the function executes normally without tracing
-
-### Notes
-
-- Graph interpretation must be enabled via `start()` before decorated functions are called
-- Functions decorated with `method()` should not contain nested `method()` annotations
-- Input and output names are automatically derived from function parameters and return values
-- Class member variables (`self.*`) are automatically available as constants in class methods
-
----
-
 ## `annotate.input_tensors()`
 
 Create traced tensor inputs for programmatic node definition. Returns TracedTensor objects that record all subsequent operations.
@@ -130,23 +90,20 @@ Create traced tensor inputs for programmatic node definition. Returns TracedTens
 ### Signature
 
 ```python
-traced_tensors = annotate.input_tensors(node_name: str, tensors: dict)
+traced_tensors = annotate.input_tensors(node_name: str, tensors)
 ```
 
 ### Parameters
 
 - **`node_name`** (str, required): The unique name to identify this node in the computational graph.
 
-- **`tensors`** (dict, required): A dictionary mapping input names to tensor values. Keys become the input names in the exported model. Values can be:
-  - `torch.Tensor`: Regular tensors
-  - Nested structures: `dict`, `list`, or `tuple` containing tensors (will be flattened)
+- **`tensors`** (required): Usually a dictionary mapping output names to traced values. You may also pass a single output value, in which case LEAPP uses the default name `"tensor"`. Alternatively, you may pass in a TensorSemantics object for semantic annotation. see `5_semantic_data_annotation.md` for more details.
 
 ### Returns
 
-- **TracedTensor(s)**: Returns TracedTensor object(s) that wrap the input tensors and record all operations performed on them.
-  - Single tensor input: Returns a single TracedTensor
-  - Multiple tensor inputs: Returns a tuple of TracedTensors (in dict key order)
-  - Nested structures: Returns the same structure with TracedTensors replacing regular tensors
+- **TracedTensor(s)**: Returns traced values that record all subsequent operations.
+  - Single input: Returns a single traced value
+  - Multiple named inputs: Returns a tuple in dict key order
 
 ### Behavior
 
@@ -161,7 +118,7 @@ traced_tensors = annotate.input_tensors(node_name: str, tensors: dict)
 - Graph interpretation must be enabled via `start()` before calling
 - TracedTensors support most PyTorch tensor operations
 - Cannot mix TracedTensors from different node contexts in a single operation
-- Cannot pass TracedTensors to `@annotate.method()` decorated functions (call `output_tensors()` first)
+- Cannot pass TracedTensors from one node context into another active traced node
 - Calling `input_tensors()` multiple times with the same `node_name` will reuse the existing and add another input to the node context
 
 ---
@@ -173,17 +130,19 @@ Mark traced tensor outputs and finalize a traced tensor node.
 ### Signature
 
 ```python
-annotate.output_tensors(node_name: str, tensors: dict, **kwargs)
+annotate.output_tensors(node_name: str, tensors, static_outputs = None, **kwargs)
 ```
 
 ### Parameters
 
-- **`tensors`** (dict, required): A dictionary mapping output names to TracedTensor values. Keys become the output names in the exported model. Values should be TracedTensors (or nested structures containing them) that were derived from `input_tensors()`.
+- **`tensors`** (required): Usually a dictionary mapping output names to traced values. You may also pass a single output value, in which case LEAPP uses the default name `"tensor"`. Alternatively, you may pass in a TensorSemantics object for semantic annotation. see `5_semantic_data_annotation.md` for more details.
 
 - **`node_name`** (str, required): The node name. Must match the name used in the corresponding `input_tensors()` call.
 
+- **`static_outputs`** (optional): Constant raw tensors that should be emitted as outputs but are not derived from traced inputs. These must be plain `torch.Tensor` values, not `TracedTensor` values.
+
 - **`**kwargs`**: Export configuration options:
-  - **`export_with`** (str): Backend for exporting. The two supported formats are `"jit"` and `"onnx"`. You can also specify `"jit-script"`, `"jit-trace"`, `"onnx-dynamo"`, or `"onnx-torchscript"` to control the export technique within each format — see [Advanced Export](2_advanced_export.md) for details.
+  - **`export_with`** (str | None): Backend for exporting. Common values are `"jit"` and `"onnx"`. You can also specify `"jit-script"`, `"jit-trace"`, `"onnx-dynamo"`, or `"onnx-torchscript"` to control the exact backend — see [Advanced Export](2_advanced_export.md) for details.
   - **`backend_params`** (dict): Backend-specific parameters.
 
 ### Behavior
@@ -199,6 +158,179 @@ annotate.output_tensors(node_name: str, tensors: dict, **kwargs)
 - Must be called after `input_tensors()` with the same `node_name`
 - All output tensors must be derived from the corresponding input TracedTensors
 - Unused inputs are automatically detected and removed from the exported model
+
+---
+
+## `annotate.method()`
+
+Create a decorator for tracing functions/methods in the computational graph. method is a shorthand for annotating tensors for modules that follow a function structure. It sets up input_tensors and output_tensors in the backend.
+
+### Signature
+
+```python
+@annotate.method(**params)
+def your_function(...):
+    ...
+```
+
+### Parameters
+
+All parameters are optional keyword arguments (`**params`):
+
+- **`node_name`** (str): Custom name for the node. If not provided, uses the function's name.
+- **`export_with`** (str | None): Backend to use for exporting the model. Common values are `"jit"` and `"onnx"`.
+- **`backend_params`** (dict): Backend-specific parameters forwarded to the selected export backend.
+
+### Behavior
+
+- Wraps the function to trace its execution when called
+- Captures tensor inputs from the function signature and tensor outputs from the return value
+- Creates a `TracedTensorNode` in the LEAPP computational graph
+- If graph interpretation is disabled, the function executes normally without tracing
+- Tensor-valued default arguments that are not explicitly passed are automatically registered as buffers
+
+### Notes
+
+- Graph interpretation must be enabled via `start()` before decorated functions are called
+- Input and output names are automatically derived from function parameters and return values
+- This is the recommended shorthand for self-contained functions
+- even when called, you may still use other annotate. api to annotate things like other inputs or state values inside the method.
+
+---
+
+## `annotate.register_buffer()`
+
+Register a preallocated tensor for a traced node.
+
+### Signature
+
+```python
+annotate.register_buffer(node_name: str, tensors)
+```
+
+### Parameters
+
+- **`node_name`** (str, required): Name of an existing traced tensor node. Call `annotate.input_tensors()` first to create the node.
+- **`tensors`** (required): Buffer payload to register. Supported forms:
+  - a single tensor
+  - a `list` or `tuple` of tensors
+  - a `dict` mapping buffer names to tensors
+
+### Returns
+
+- A single traced value for a single tensor input
+- A tuple of traced values for multi-value inputs
+
+### Behavior
+
+- Wraps the preallocated tensor so that subsequent in-place writes (`buffer[:] = value`) are traced
+- Supports repeated calls; unnamed list/tuple entries receive auto-generated names such as `buffer_0`, `buffer_1`, ...
+- The return value must be reassigned to the variable or attribute you intend to mutate
+
+### Notes
+
+- `register_buffer()` is only supported for traced tensor nodes created with `input_tensors()` or `method()`
+- The tensor passed in must be raw (not already traced)
+- Use this for fixed-location staging buffers that are updated in-place each call — not for constants
+- Use `state_tensors()` or `annotate.module()` when the value should behave as recurrent feedback across calls
+
+---
+
+## `annotate.state_tensors()`
+
+Declare recurrent/state tensors for a traced node. State tensors behave as both inputs and outputs of the node.
+
+### Signature
+
+```python
+annotate.state_tensors(node_name: str, tensors: dict[str, torch.Tensor])
+```
+
+### Parameters
+
+- **`node_name`** (str, required): Name of an existing traced tensor node. Call `annotate.input_tensors()` first to create the node.
+- **`tensors`** (dict, required): Mapping of state names to initial tensor values.
+
+### Returns
+
+- A single traced state tensor for a one-entry dict
+- A tuple of traced state tensors for a multi-entry dict, in dict key order
+
+### Behavior
+
+- Registers state placeholders as additional node inputs
+- Marks those values as feedback-capable state for graph compilation
+- If `update_state()` is not called for a given state, LEAPP treats it as passthrough state
+
+### Notes
+
+- `state_tensors()` is only supported for traced tensor nodes created with `input_tensors()` or `method()`
+- State tensor names must be unique within the node
+- Use this for hidden state, rolling history, or other explicit recurrent values
+
+---
+
+## `annotate.update_state()`
+
+Update the output values for state tensors previously declared with `annotate.state_tensors()`.
+
+### Signature
+
+```python
+annotate.update_state(node_name: str, tensors: dict[str, TracedTensor])
+```
+
+### Parameters
+
+- **`node_name`** (str, required): Name of an existing traced tensor node.
+- **`tensors`** (dict, required): Mapping from previously declared state names to their updated traced values.
+
+### Returns
+
+- Passthrough of the provided updated state values:
+  - single-entry dict returns a single value
+  - multi-entry dict returns a tuple in dict key order
+
+### Behavior
+
+- Binds new output values to state tensors declared with `state_tensors()`
+- Validates that the updated values match the original state shape and dtype
+- During graph export, these become feedback outputs
+
+### Notes
+
+- Call `state_tensors()` before `update_state()`
+- Omitted state updates fall back to passthrough behavior
+
+---
+
+## `annotate.module()`
+
+Register an `nn.Module` for automatic buffer tracking inside a traced tensor node.
+
+### Signature
+
+```python
+annotate.module(node_name: str, model: torch.nn.Module, buffer_names: list[str] | None = None)
+```
+
+### Parameters
+
+- **`node_name`** (str, required): Name of an existing traced tensor node. Call `annotate.input_tensors()` first to create the node.
+- **`model`** (`torch.nn.Module`, required): Module whose registered buffers should be tracked.
+- **`buffer_names`** (`list[str] | None`, optional): Optional subset of buffer names to track. If omitted, all registered buffers are tracked.
+
+### Behavior
+
+- Temporarily injects tracked versions of model buffers so the forward pass is traced through them
+- Detects buffer reassignment during execution
+- Emits mutated buffers as feedback state and preserves untouched buffers as frozen constants
+
+### Notes
+
+- Call `annotate.module()` after `input_tensors()` and before the module forward pass
+- Reassignment is tracked, but in-place mutation like `self.h.copy_(...)` is not
+- Use explicit `state_tensors()` / `update_state()` if you need in-place state handling
 
 ---
 
@@ -268,22 +400,21 @@ models:
 
 pipeline:
   data_flow:
-    - source: source_node/output_name
-      targets:
-        - target_node/input_name
+    source_node/output_name: [target_node/input_name]
   feedback_flow:
-    - source: later_node/output_name
-      targets:
-        - earlier_node/input_name
+    later_node/output_name: [earlier_node/input_name]
   inputs:
     node_name: [input1, input2]
   outputs:
     node_name: [output1, output2]
 
-system_info:
-  python_version: "3.10.0"
-  pytorch_version: "2.0.0"
-  # ... more system information
+system information:
+  python version: "3.12.9"
+  torch version: "2.7.0+cu126"
+  leapp version: "0.4.0"
+  leapp config version: "1.0"
+  cuda version: "12.6"
+  os: Linux
 ```
 
 ### Graph Statistics
@@ -323,16 +454,16 @@ annotate.mirror_leapp_tags(source, target)
 
 1. **Verifies data equivalence**: Checks that `source` and `target` contain exactly the same values
 2. **Transfers tags**: If verification passes, copies all LEAPP internal tracking tags from `source` to `target`
-3. **Logs error on mismatch**: If data doesn't match exactly, logs an error and does nothing to prevent incorrect tracing
+3. **Raises on mismatch**: If data doesn't match exactly, LEAPP logs an error and raises instead of copying incorrect tracing metadata
 
 
 - **See detailed guide**: For more information and use cases, see [Advanced Graph Operations](3_advanced_graph.md#maintaining-tracing-with-mirror_leapp_tags)
 
 ---
 
-## Complete API Workflow Example
+## Representative Workflow Example
 
-Here's a complete example demonstrating all API methods:
+Here's a representative example showing the core public workflow:
 
 ```python
 import torch
@@ -360,18 +491,6 @@ def preprocess(raw_data):
     normalized = (raw_data - raw_data.mean()) / (raw_data.std() + 1e-6)
     return normalized
 
-# Model inference function
-@annotate.method(
-    export_with="jit",
-    node_name="inference",
-    environment_constants=["model"]
-)
-def run_inference(data):
-    """Run model inference."""
-    with torch.no_grad():
-        output = model(data)
-    return output
-
 # Main pipeline
 def main():
     # 1. Start tracing
@@ -387,9 +506,11 @@ def main():
     # 2. Trace preprocessing
     preprocessed = preprocess(raw_input)
     
-    # 3. Trace inference
-    predictions = run_inference(preprocessed)
-    
+    # 3. Trace inference with traced tensors
+    pred_traced = annotate.input_tensors("inference", {"features": preprocessed})
+    predictions = model(pred_traced)
+    annotate.output_tensors("inference", {"predictions": predictions}, export_with="jit")
+
     # 4. Trace postprocessing with traced tensors
     pred_traced = annotate.input_tensors("postprocess", {"predictions": predictions})
     probabilities = torch.softmax(pred_traced, dim=1)
@@ -418,7 +539,7 @@ exports/complete_pipeline/
 ├── complete_pipeline.png     # Visualization
 ├── preprocess.pt             # Preprocessing model
 ├── inference.pt              # Inference model
-└── postprocess.pt            # Postprocessing model
+├── postprocess.pt            # Postprocessing model
 └── log.txt                   # generated logs for the export process
 ```
 
@@ -440,9 +561,76 @@ exports/complete_pipeline/
 
 ---
 
+## `InferenceManager`
+
+Load an exported LEAPP graph from YAML and run the full pipeline at inference time.
+
+### Signature
+
+```python
+from leapp import InferenceManager
+
+manager = InferenceManager(model_path: str)
+```
+
+### Parameters
+
+- **`model_path`** (str, required): Path to the `.yaml` graph description generated by `leapp.compile_graph()`.
+
+### Behavior
+
+- Loads the exported graph description from YAML
+- Loads the referenced node models from `model_path`
+- Validates pipeline routing and shape/dtype compatibility
+- Preallocates node input buffers
+- Automatically prepopulates feedback inputs from `pipeline.initial_values` when present
+
+### Common Usage
+
+```python
+from leapp import InferenceManager
+
+manager = InferenceManager("my_graph/my_graph.yaml")
+
+print(manager.inputs)
+print(manager.outputs)
+
+sample_inputs = manager.get_mock_input()
+outputs = manager.run_policy(sample_inputs)
+
+# Equivalent shorthand:
+outputs = manager(sample_inputs)
+```
+
+### Methods
+
+| Method | Description |
+|---|---|
+| `run_policy(inputs)` | Run the full pipeline. `inputs` is a dict of `'node_name/input_name'` to `torch.Tensor`. Returns a dict of final pipeline outputs. `manager(inputs)` is an equivalent shorthand. |
+| `get_mock_input()` | Generate random tensors for every external graph input with the correct shape, dtype, and device. |
+| `set_input_value(node_name, input_name, value)` | Overwrite a specific node input buffer, useful for manually overriding feedback state. |
+
+### Properties
+
+| Property | Description |
+|---|---|
+| `inputs` | List of expected graph input keys in `node_name/input_name` format. |
+| `outputs` | List of final graph output keys in `node_name/output_name` format. |
+| `feedback_inputs` | List of feedback input targets taken from `pipeline.feedback_flow`. |
+
+### Notes
+
+- Input dictionaries passed to `run_policy()` must use keys in `node_name/input_name` format
+- `InferenceManager` currently runs exported or referenced `jit` and `onnx` models
+- Feedback state persists across successive `run_policy()` calls unless you overwrite it manually
+
+---
+
 ## See Also
 
 - [Getting Started Guide](0_getting_started.md) - Learn the basics of LEAPP
 - [Advanced Node Operations](1_advanced_nodes.md) - Advanced node tracing options
-- [Advanced Graph Operations](2_advanced_graph.md) - Advanced graph crafting operations
+- [Advanced Graph Operations](3_advanced_graph.md) - Advanced graph crafting operations
+- [Runtime And Validation Guide](4_runtime_and_validation.md) - Export validation and runtime verification
+- [Semantic Data Guide](5_semantic_data_annotation.md) - Injecting semantic data into the LEAPP config
 

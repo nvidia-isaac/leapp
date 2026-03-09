@@ -230,6 +230,26 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
         self.verify_single_torchscript_model_expected_value(
             [input_tensor], [expected_output], 'model_forward')
 
+    def test_annotate_method_forwards_backend_params(self):
+        """backend_params passed to method() should reach the export backend."""
+        @annotate.method(
+            export_with="onnx-torchscript",
+            backend_params={"prescript": True, "report": True},
+        )
+        def funcA(inputA: torch.Tensor):
+            return inputA * 2.0
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        funcA(torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32))
+        leapp.stop()
+
+        node = annotate.nodes["funcA"]
+        self.assertEqual(node.backend, "onnx-torchscript")
+        self.assertEqual(
+            node.export_backend.backend_params,
+            {"prescript": True, "report": True},
+        )
+
 
 class TestAnnotateTensor(LEAPPFunctionalTestBase):
 

@@ -1,7 +1,8 @@
 """Getting Started with LEAPP.
 
-This example keeps things intentionally small while showing the core idea:
-LEAPP traces through ordinary Python helper functions and auto-connects nodes.
+This example mirrors the getting-started guide and shows two important ideas:
+1. traced-tensor-first node annotation with input_tensors()/output_tensors()
+2. multiple input_tensors() calls contributing inputs to the same node
 
 Pipeline:
   [obs_processor] -> [policy]
@@ -28,6 +29,22 @@ def normalize_joints(pos: torch.Tensor, vel: torch.Tensor):
     return pos_norm, vel_norm
 
 
+def capture_joint_observations(joint_pos: torch.Tensor, joint_vel: torch.Tensor):
+    """First input_tensors() call for the obs_processor node."""
+    return annotate.input_tensors("obs_processor", {
+        "joint_pos": joint_pos,
+        "joint_vel": joint_vel,
+    })
+
+
+def capture_context(orientation: torch.Tensor, cmd_vel: torch.Tensor):
+    """Second input_tensors() call for the same obs_processor node."""
+    return annotate.input_tensors("obs_processor", {
+        "orientation": orientation,
+        "cmd_vel": cmd_vel,
+    })
+
+
 def project_gravity(quat: torch.Tensor) -> torch.Tensor:
     """Project world gravity into body frame from a (w,x,y,z) quaternion."""
     w, x, y, z = quat[0], quat[1], quat[2], quat[3]
@@ -52,26 +69,27 @@ _W, _b = torch.randn(18, 6) * 0.05, torch.zeros(6)
 
 
 def main():
-    # Example robot state (small dimensions for readability).
+    # Example robot state.
     joint_pos = torch.randn(6)
     joint_vel = torch.randn(6)
     orientation = torch.tensor([1.0, 0.0, 0.0, 0.0])
+    cmd_vel = torch.tensor([0.5, 0.0, 0.1])
 
-    leapp.start(name="sample_robot_pipeline")
+    leapp.start(name="sample_pipeline")
 
     # Node 1: observation preprocessing.
-    pos, vel, quat, cmd = annotate.input_tensors("obs_processor", {
-        "joint_pos": joint_pos,
-        "joint_vel": joint_vel,
-        "orientation": orientation,
-        "cmd_vel": torch.tensor([0.5, 0.0, 0.1]),
-    })
+    # These two calls contribute inputs to the same traced node.
+    pos, vel = capture_joint_observations(joint_pos, joint_vel)
+    quat, cmd = capture_context(orientation, cmd_vel)
 
     pos_norm, vel_norm = normalize_joints(pos, vel)
-    gravity_vec = project_gravity(quat)
-    obs_features = torch.cat([pos_norm, vel_norm, gravity_vec, cmd])  # (18,)
-    annotate.output_tensors("obs_processor", {"obs_features": obs_features},
-                            export_with="jit")
+    gravity_vec = project_gravity(quat)  # helper function calls are traced too
+    obs_features = torch.cat([pos_norm, vel_norm, gravity_vec, cmd])
+    annotate.output_tensors(
+        "obs_processor",
+        {"obs_features": obs_features},
+        export_with="jit",
+    )
 
     # Node 2: tiny policy + post-processing.
     feat = annotate.input_tensors("policy", {
@@ -80,13 +98,16 @@ def main():
     raw_action = feat @ _W + _b
     joint_targets = scale_and_clip(raw_action)
 
-    annotate.output_tensors("policy", {"joint_targets": joint_targets},
-                            export_with="jit")
+    annotate.output_tensors(
+        "policy",
+        {"joint_targets": joint_targets},
+        export_with="jit",
+    )
 
     leapp.stop()
     leapp.compile_graph(visualize=True)
 
-    out_dir = "sample_robot_pipeline"
+    out_dir = "sample_pipeline"
     print(f"\nExported to {out_dir}/")
     for f in sorted(os.listdir(out_dir)):
         print(f"  {f}")
