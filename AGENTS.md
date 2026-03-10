@@ -64,6 +64,7 @@ For `TracedTensorNode` workflows (`input_tensors` / `output_tensors`), agents mu
 - `annotate.input_tensors("node_name", ...)` can be called multiple times for the same node.
   - This is valid across helper functions, class methods, and even different files, as long as it is the same active trace and same node name.
   - Use this to accumulate/declare node inputs wherever they naturally appear in the code.
+  - For raw tensors, always pass a top-level dict of named tensors. Bare tensors are not supported; use `TensorSemantics(...)` if you want a single named semantic input without a dict.
 - `annotate.output_tensors("node_name", ...)` is the node finalization declaration and should be done once for the initial trace of that node.
   - After this, the node is compiled/finalized.
   - Any later calls in re-entry loops are validation/tag-update behavior, not a second independent output declaration.

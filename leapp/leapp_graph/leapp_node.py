@@ -321,14 +321,14 @@ class LeappNode():
             self._cache_write_idx += 1
 
     def _build_validation_examples(self):
-        examples = [("trace",
+        examples = [(0,
             [td.value for td in self.inputs],
             tuple(td.value for td in self.outputs))]
 
         for cache_idx in range(self._cache_write_idx):
             cached_inputs = [td.cached_values[cache_idx] for td in self.inputs]
             cached_outputs = tuple(td.cached_values[cache_idx] for td in self.outputs)
-            examples.append((f"cached[{cache_idx}]", cached_inputs, cached_outputs))
+            examples.append((cache_idx + 1, cached_inputs, cached_outputs))
         return examples
 
     def validate_compiled_model(self, rtol: float = 1e-3, atol: float = 1e-5) -> bool:
@@ -339,7 +339,7 @@ class LeappNode():
 
         examples = self._build_validation_examples()
         all_match = True
-        for example_label, input_values, source_outputs in examples:
+        for sample_idx, input_values, source_outputs in examples:
             with torch.no_grad():
                 exported_outputs = self.compiled_model(*input_values)
 
@@ -348,7 +348,7 @@ class LeappNode():
 
             if len(exported_outputs) != len(source_outputs):
                 _get_logger().error(
-                    f"{self.name} ({example_label}): Output count mismatch - "
+                    f"{self.name} sample {sample_idx}: Output count mismatch - "
                     f"got {len(exported_outputs)}, expected {len(source_outputs)}")
                 all_match = False
                 continue
@@ -369,7 +369,7 @@ class LeappNode():
                     all_match = False
                     num_elements = exported.numel()
                     _get_logger().error(
-                        f"{self.name}/{output_name} ({example_label}): NaN/Inf detected!")
+                        f"{self.name}/{output_name} sample {sample_idx}: NaN/Inf detected!")
                     if exported_nan > 0:
                         _get_logger().error(
                             f"  Exported has {exported_nan}/{num_elements} NaN values ({100*exported_nan/num_elements:.3f}%)")
@@ -401,7 +401,7 @@ class LeappNode():
 
                     log_path = _get_logger().path
                     _get_logger().error(
-                        f"{self.name}/{output_name} ({example_label}): Mismatch detected (rtol={rtol}, atol={atol}). Please check {log_path} for more details.")
+                        f"{self.name}/{output_name} sample {sample_idx}: Mismatch detected (rtol={rtol}, atol={atol}). Please check {log_path} for more details.")
                     _get_logger().info(
                         f"  Source shape: {source.shape}, dtype: {source.dtype}")
                     _get_logger().info(

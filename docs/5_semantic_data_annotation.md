@@ -163,7 +163,7 @@ TensorSemantics("gravity", tensor, element_names="z")
 
 ## Passing Conventions
 
-TensorSemantics are passed as a **single object** or as a **list**. They cannot be placed inside a dict — use the standard dict format for raw tensors and the list format for TensorSemantics.
+TensorSemantics are passed as a **single object** or as a **list**. They cannot be placed inside a dict — use the standard dict format for raw tensors and the list format for TensorSemantics. The only supported top-level formats are a dict of named raw tensors, a single `TensorSemantics`, or a list of `TensorSemantics`. Bare top-level tensors and other unnamed top-level collections are not supported.
 
 ```python
 # ✅ Single TensorSemantics

@@ -19,6 +19,7 @@ import unittest
 import torch
 import leapp
 from leapp.leapp import _MANAGER as annotate
+from leapp.utils.logging import _get_logger
 from .base import LEAPPFunctionalTestBase
 
 
@@ -101,6 +102,28 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             self.assertIn("expects either a dict of named tensors", str(exc.exception))
         finally:
             leapp.stop()
+
+    def test_validation_message_uses_sample_index(self):
+        """Validation logs should label cached replay failures as sample N."""
+        leapp.start(name=self.TEST_GRAPH_NAME, save_path=self.TEST_GRAPH_NAME)
+
+        for value in (1.0, 2.0):
+            traced = annotate.input_tensors('func', {'input': torch.tensor([value, value + 1.0])})
+            annotate.output_tensors('func', {'output': traced + 1.0}, export_with="jit")
+
+        leapp.stop()
+
+        annotate.nodes['func'].outputs[0].cached_values[0] += 10.0
+        results = leapp.compile_graph(visualize=False, validate=True, strict=False)
+
+        self.assertFalse(results['func'])
+
+        log_path = _get_logger().path
+        with open(log_path) as f:
+            log_text = f.read()
+
+        self.assertIn("sample 1: Mismatch detected", log_text)
+        self.assertNotIn("cached[0]", log_text)
 
     def test_output_tensors_without_prior_input_tensors(self):
         """Calling output_tensors before input_tensors should raise a clear error."""

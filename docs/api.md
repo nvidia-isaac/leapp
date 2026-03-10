@@ -97,7 +97,7 @@ traced_tensors = annotate.input_tensors(node_name: str, tensors)
 
 - **`node_name`** (str, required): The unique name to identify this node in the computational graph.
 
-- **`tensors`** (required): Usually a dictionary mapping output names to traced values. You may also pass a single output value, in which case LEAPP uses the default name `"tensor"`. Alternatively, you may pass in a TensorSemantics object for semantic annotation. see `5_semantic_data_annotation.md` for more details.
+- **`tensors`** (required): The top-level payload must be either a dictionary of named raw tensors or a `TensorSemantics` object / list of `TensorSemantics`. Bare tensors and other unnamed top-level collections are not supported because LEAPP requires explicit tensor names. See `5_semantic_data_annotation.md` for more details.
 
 ### Returns
 
@@ -135,7 +135,7 @@ annotate.output_tensors(node_name: str, tensors, static_outputs = None, **kwargs
 
 ### Parameters
 
-- **`tensors`** (required): Usually a dictionary mapping output names to traced values. You may also pass a single output value, in which case LEAPP uses the default name `"tensor"`. Alternatively, you may pass in a TensorSemantics object for semantic annotation. see `5_semantic_data_annotation.md` for more details.
+- **`tensors`** (required): The top-level payload must be either a dictionary of named raw tensors or a `TensorSemantics` object / list of `TensorSemantics`. Bare tensors and other unnamed top-level collections are not supported because LEAPP requires explicit tensor names. See `5_semantic_data_annotation.md` for more details.
 
 - **`node_name`** (str, required): The node name. Must match the name used in the corresponding `input_tensors()` call.
 
