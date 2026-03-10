@@ -304,7 +304,8 @@ class LeappNode():
             existing_io_description_dict = existing_io_description.dict()
             current_io_description_dict = io_description.dict()
 
-            if not all([existing_io_description_dict[key] == current_io_description_dict[key] for key in existing_io_description_dict.keys()]):
+            common_keys = existing_io_description_dict.keys() & current_io_description_dict.keys()
+            if not all(existing_io_description_dict[key] == current_io_description_dict[key] for key in common_keys):
                 _get_logger().error(
                     f"Error: Reentering {self.name} with new i/o {io_description.name_str} \n"
                     f"but the description has changed from {existing_io_description_dict} to {current_io_description_dict}.\n"

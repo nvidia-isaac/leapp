@@ -344,5 +344,56 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         self.verify_num_connections(
             annotate, nodes=1, inputs=2, outputs=1, internal_connections=0)
 
+    # =========================================================================
+    # Reentry with TensorSemantics
+    # =========================================================================
+
+    def test_semantic_input_reentry_does_not_crash(self):
+        """Reentry with TensorSemantics inputs must not KeyError on semantic-only keys."""
+        joint_pos = torch.randn(1, 6)
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+
+        for _ in range(2):
+            traced = annotate.input_tensors("policy", [
+                TensorSemantics(name="joint_pos", ref=joint_pos,
+                                kind=InputKindEnum.JOINT_POSITION),
+            ])
+            out = traced * 2.0
+            annotate.output_tensors("policy", {"cmd": out}, export_with="jit")
+
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        config = self._load_yaml()
+        inputs, _ = self._get_node_io_from_yaml(config, "policy")
+        entry = self._find_io_by_name(inputs, "joint_pos")
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry['kind'], "state/joint/position")
+
+    def test_semantic_output_reentry_does_not_crash(self):
+        """Reentry with TensorSemantics outputs must not KeyError on semantic-only keys."""
+        tensor = torch.randn(1, 4)
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+
+        for _ in range(2):
+            traced = annotate.input_tensors("out_reentry", {"x": tensor})
+            result = traced + 1.0
+            annotate.output_tensors("out_reentry", [
+                TensorSemantics(name="torques", ref=result,
+                                kind=OutputKindEnum.JOINT_TORQUES),
+            ], export_with="jit")
+
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        config = self._load_yaml()
+        _, outputs = self._get_node_io_from_yaml(config, "out_reentry")
+        entry = self._find_io_by_name(outputs, "torques")
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry['kind'], "target/joint/torques")
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
