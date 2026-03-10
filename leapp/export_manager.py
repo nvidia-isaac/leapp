@@ -215,23 +215,41 @@ class ExportManager:
         values = list(tensors.values())
         return values[0] if len(values) == 1 else tuple(values)
 
-    #########################################################
-    # annotation APIs
-    #########################################################
-    def input_tensors(self, node_name: str, tensors):
-        # If TensorSemantics are passed (single or list), unwrap to dict
+    @staticmethod
+    def _normalize_named_tensor_payload(api_name: str, node_name: str, tensors):
         metadata = {}
-        if isinstance(tensors, (TensorSemantics, list)) and (
+        if isinstance(tensors, (TensorSemantics, list, tuple)) and (
             isinstance(tensors, TensorSemantics) or
             any(isinstance(t, TensorSemantics) for t in tensors)
         ):
             tensors, metadata = unwrap_tensor_semantics(tensors)
 
+        if is_tracable_tensor_type(tensors):
+            raise TypeError(
+                f"{api_name}() for node '{node_name}' does not accept a bare tensor. "
+                "Pass a dict of named tensors or a TensorSemantics/list of TensorSemantics."
+            )
+
+        if isinstance(tensors, dict):
+            return tensors, metadata
+
+        raise TypeError(
+            f"{api_name}() for node '{node_name}' expects either a dict of named tensors "
+            f"or a TensorSemantics/list of TensorSemantics. Received {type(tensors).__name__}."
+        )
+
+    #########################################################
+    # annotation APIs
+    #########################################################
+    def input_tensors(self, node_name: str, tensors):
         if TracingLock().is_active:
             _get_logger().error(
                 "Cannot call input_tensors() while a _method()-traced function "
                 "is executing. Mixing active contexts is not allowed.")
             raise Exception("Mixing active contexts is not allowed")
+
+        tensors, metadata = self._normalize_named_tensor_payload(
+            "input_tensors", node_name, tensors)
 
         if not ExportManager._interpret_graph:
             return self._passthrough_dict_values(tensors)
@@ -244,16 +262,6 @@ class ExportManager:
                 node_name, TracedTensorNode)
 
         _caller_identity = get_caller_stack_identity()
-
-        tensors_changed = False
-        if not isinstance(tensors, dict):
-            tensors_changed = True
-            tensors = {'tensor': tensors}
-
-        # reason this is convoluted is to mirror the scheme in output_tensors
-        if tensors_changed:
-            _get_logger().warning(f"Warning: no tensor name provided for input_tensors call in node {node_name}\n"
-                                  "Assuming default tensor name")
 
         # if the node is not tracing, we validate the inputs only and return the raw tensors
         # the node is not tracing if it is already compiled.
@@ -307,17 +315,10 @@ class ExportManager:
         return traced_tensors[0] if len(traced_tensors) == 1 else tuple(traced_tensors)
 
     def output_tensors(self, node_name: str, tensors, static_outputs=None, **kwargs):
-        # If TensorSemantics are passed (single or list), unwrap to dict
-        metadata = {}
-        if isinstance(tensors, (TensorSemantics, list)) and (
-            isinstance(tensors, TensorSemantics) or
-            any(isinstance(t, TensorSemantics) for t in tensors)
-        ):
-            tensors, metadata = unwrap_tensor_semantics(tensors)
+        tensors, metadata = self._normalize_named_tensor_payload(
+            "output_tensors", node_name, tensors)
 
         if not ExportManager._interpret_graph:
-            if not isinstance(tensors, dict):
-                tensors = {'tensor': tensors}
             return self._passthrough_dict_values(tensors)
  
 
@@ -329,11 +330,6 @@ class ExportManager:
                 "Call annotate.input_tensors() before annotate.output_tensors() for the same node name.")
 
         # process outputs
-        tensors_changed = False
-        if not isinstance(tensors, dict):
-            tensors_changed = True
-            tensors = {'tensor': tensors}
-
         flattened_tensors = flatten_io_structure(tensors, '')
 
         if not traced_tensors_node.is_tracing:
@@ -345,10 +341,6 @@ class ExportManager:
             traced_tensors_node.reentry_validate_and_tag_outputs(
                 flattened_tensors, flattened_static)
             return self._passthrough_dict_values(tensors)
-
-        if tensors_changed:
-            _get_logger().warning(f"Warning: no tensor name provided for output_tensors call in node {node_name}\n"
-                                  "Assuming default tensor name")
 
         # Warn if pre-compiled ScriptFunctions are visible in the caller's scope
         warn_if_script_functions_in_scope()

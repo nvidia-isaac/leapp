@@ -506,22 +506,6 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
         self.verify_num_connections(
             annotate, nodes=1, inputs=1, outputs=1, internal_connections=0)
 
-    def test_annotate_tensor_with_list_io(self):
-        leapp.start(name=self.TEST_GRAPH_NAME, verbose=True)
-        tensor_list = [torch.tensor([1.0, 2.0, 3.0]),
-                       torch.tensor([4.0, 5.0, 6.0])]
-        tensor_list = annotate.input_tensors(
-            'func1', {'tensor_list': tensor_list})
-        tensor_list[0] = tensor_list[0].matmul(torch.tensor(
-            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]))
-        tensor_list[1] = tensor_list[1].matmul(torch.tensor(
-            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]))
-        annotate.output_tensors('func1', tensor_list, export_with="jit")
-        leapp.stop()
-        leapp.compile_graph(visualize=False)
-        self.verify_num_connections(
-            annotate, nodes=1, inputs=2, outputs=2, internal_connections=0)
-
     def test_annotate_tensor_with_list_input_dict_output(self):
         """Test with list input and dict output."""
         leapp.start(name=self.TEST_GRAPH_NAME, verbose=True)
