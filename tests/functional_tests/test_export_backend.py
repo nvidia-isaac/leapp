@@ -17,6 +17,8 @@
 import os
 import unittest
 import torch
+import yaml
+import onnx
 import leapp
 from leapp.leapp import _MANAGER as annotate
 from .base import LEAPPFunctionalTestBase
@@ -60,6 +62,48 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
         funcA(input_tensor)
         leapp.stop()
         leapp.compile_graph(visualize=False)
+
+    @pytest.mark.filterwarnings("ignore:You are using the legacy TorchScript-based ONNX export")
+    @pytest.mark.filterwarnings("ignore:The feature will be removed")
+    def test_onnx_backend_name_overlap_is_renamed(self):
+        """Overlapping input/output names should be disambiguated for ONNX export."""
+        cases = [
+            ("onnx",),
+            ("onnx-torchscript",),
+        ]
+
+        for (export_with,) in cases:
+            with self.subTest(export_with=export_with):
+                leapp.start(name=self.TEST_GRAPH_NAME)
+                traced = annotate.input_tensors(
+                    "func_overlap", {"joint_pos": torch.tensor([1.0, 2.0, 3.0])}
+                )
+                annotate.output_tensors(
+                    "func_overlap", {"joint_pos": traced + 1.0}, export_with=export_with
+                )
+                leapp.stop()
+                leapp.compile_graph(visualize=False)
+
+                yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+                with open(yaml_path) as f:
+                    exported = yaml.safe_load(f)
+
+                model_desc = exported["models"]["func_overlap"]
+                input_names = [desc["name"] for desc in model_desc["inputs"]]
+                output_names = [desc["name"] for desc in model_desc["outputs"]]
+                self.assertEqual(input_names, ["joint_pos_in"])
+                self.assertEqual(output_names, ["joint_pos_out"])
+
+                model_path = os.path.join(self.TEST_GRAPH_NAME, "func_overlap.onnx")
+                model = onnx.load(model_path)
+                initializer_names = {init.name for init in model.graph.initializer}
+                onnx_input_names = [
+                    value.name for value in model.graph.input
+                    if value.name not in initializer_names
+                ]
+                onnx_output_names = [value.name for value in model.graph.output]
+                self.assertEqual(onnx_input_names, ["joint_pos_in"])
+                self.assertEqual(onnx_output_names, ["joint_pos_out"])
     
     @pytest.mark.filterwarnings("ignore:You are using the legacy TorchScript-based ONNX export")
     @pytest.mark.filterwarnings("ignore:The feature will be removed")

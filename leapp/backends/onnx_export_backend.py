@@ -36,6 +36,32 @@ class ONNXExportBackend(ExportBackend):
         # Return only true dynamic inputs
         return [inp.name for inp in onnx_model.graph.input if inp.name not in initializer_names]
 
+    def _handle_duplicate_io_names(self):
+        """Rename overlapping input/output names for ONNX's flat I/O namespace."""
+        input_names = [td.name for td in self.node_context.inputs]
+        output_names = [td.name for td in self.node_context.outputs]
+        overlaps = sorted(set(input_names) & set(output_names))
+        if not overlaps:
+            return
+
+        _get_logger().warning(
+            f"[{self.node_context.name}] Renaming overlapping ONNX input/output names: {overlaps}"
+        )
+        used_names = set(input_names) | set(output_names)
+        for name in overlaps:
+            new_input_name = f"{name}_in"
+            new_output_name = f"{name}_out"
+            if new_input_name in used_names or new_output_name in used_names:
+                raise ValueError(
+                    f"[{self.node_context.name}] Cannot resolve overlapping ONNX I/O name '{name}' "
+                    f"because '{new_input_name}' or '{new_output_name}' is already in use."
+                )
+            self.node_context.change_input_name(name, new_input_name)
+            self.node_context.change_output_name(name, new_output_name)
+            used_names.remove(name)
+            used_names.add(new_input_name)
+            used_names.add(new_output_name)
+
     def _sync_inputs_with_onnx(self, onnx_program):
         """Sync inputs with what ONNX actually exported.
         
@@ -159,6 +185,7 @@ class ONNXTorchScriptExportBackend(ONNXExportBackend):
         if m is None:
             m = self.module_builder()
         m = m.eval()
+        self._handle_duplicate_io_names()
         
         # Optionally pre-script the module before ONNX export
         # This is useful when using traced models as environment constants
@@ -207,6 +234,7 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
         if m is None:
             m = self.module_builder()
         m = m.eval()
+        self._handle_duplicate_io_names()
         # Get flat tensor values directly from inputs (not input_formats which preserves nested structure)
         input_values = tuple(
             [tensor_desc.value for tensor_desc in self.node_context.inputs])
