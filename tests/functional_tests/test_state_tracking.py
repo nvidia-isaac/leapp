@@ -394,6 +394,55 @@ class TestStateTensors(LEAPPFunctionalTestBase):
             source_outputs={"policy/action": expected_action},
         )
 
+    def test_state_reentry_reusing_prior_state_output_tensor_preserves_feedback_tag(self):
+        """Reusing the previous state output tensor should succeed because state feedback shares one tag."""
+        initial_last_action = torch.tensor([0.0, 0.0, 0.0])
+        first_obs_value = torch.tensor([1.0, 2.0, 3.0])
+        second_obs_value = torch.tensor([4.0, 5.0, 6.0])
+        last_action_value = initial_last_action
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+
+        for step_idx, obs_value in enumerate((first_obs_value, second_obs_value)):
+            obs = annotate.input_tensors("policy", {"obs": obs_value})
+            last_action = annotate.state_tensors(
+                "policy", {"last_action": last_action_value}
+            )
+            updated_state = obs + last_action
+            returned_last_action = annotate.update_state(
+                "policy", {"last_action": updated_state}
+            )
+
+            if step_idx == 0:
+                self.assertIs(returned_last_action, updated_state)
+            else:
+                self.assertIsInstance(returned_last_action, torch.Tensor)
+
+            action = obs - last_action
+            annotate.output_tensors("policy", {"action": action}, export_with="onnx")
+
+            if step_idx == 0:
+                self.assertTrue(hasattr(returned_last_action, "leapp_tag"))
+                self.assertEqual("policy/last_action_out/", returned_last_action.leapp_tag)
+
+            last_action_value = returned_last_action
+
+        leapp.stop()
+        leapp.compile_graph(visualize=False, validate=True)
+
+        # Should trace one node with one dangling input/output and one feedback edge
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=1, outputs=1, internal_connections=0,
+            feedback_connections=1
+        )
+        self.verify_feedback_initial_values({
+            "policy/last_action": initial_last_action,
+        })
+        self.verify_inference_manager(
+            source_inputs={"policy/obs": first_obs_value},
+            source_outputs={"policy/action": first_obs_value - initial_last_action},
+        )
+
 
 class TestStateTensorErrors(LEAPPFunctionalTestBase):
     """Tests for error handling in state tensor API."""

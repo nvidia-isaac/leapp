@@ -104,17 +104,31 @@ class TracedTensorNode(LeappNode):
         return unwrapped_tensors[0] if len(unwrapped_tensors) == 1 else tuple(unwrapped_tensors)
 
     def _apply_state_tags(self):
+        """Mirror each registered state output tag onto its paired state input.
+
+        State tensors are an eager form of feedback: the state output from one
+        execution is guaranteed to be fed back into the matching state input on
+        the next execution. By copying the already-registered output tag onto
+        the input description, both ends of that feedback edge share one
+        internal identity without inferring a second "canonical" tag name.
+        """
         for state_name in self._state_tensors:
-            state_tag = f"{self.name}/{state_name}/"
-            for input_desc in self.inputs:
-                if input_desc.name == state_name:
-                    input_desc.tag = state_tag
-                    break
+            input_desc = next(
+                (desc for desc in self.inputs if desc.name == state_name),
+                None,
+            )
+            if input_desc is None:
+                continue
+
             output_name = f"{state_name}_out"
-            for output_desc in self.outputs:
-                if output_desc.name == output_name:
-                    output_desc.tag = state_tag
-                    break
+            output_desc = next(
+                (desc for desc in self.outputs if desc.name == output_name),
+                None,
+            )
+            if output_desc is None or output_desc.tag is None:
+                continue
+
+            input_desc.tag = output_desc.tag
 
     @staticmethod
     def _rewrite_method_descriptors(graph: fx.Graph):
