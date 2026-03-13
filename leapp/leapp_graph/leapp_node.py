@@ -448,7 +448,7 @@ class LeappNode():
         """Validate state tensor updates on re-entry."""
         for tensor_name, tensor in tensors.items():
             self.validate_output_and_update_tags(
-                f"{tensor_name}_out", f"{tensor_name}_out", tensor)
+                tensor_name, tensor_name, tensor)
 
     def change_input_name(self, old_name, new_name):
         _get_logger().warning(

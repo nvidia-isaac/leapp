@@ -134,7 +134,7 @@ class TestStateTensors(LEAPPFunctionalTestBase):
         leapp.compile_graph(visualize=False)
 
         # Verify structure: 1 dangling input (observation), 1 dangling output (action),
-        # 1 feedback connection (counter -> counter_out)
+        # 1 feedback connection for the recurrent state
         self.verify_num_connections(
             annotate, nodes=1, inputs=1, outputs=1, internal_connections=0,
             feedback_connections=1
@@ -423,7 +423,7 @@ class TestStateTensors(LEAPPFunctionalTestBase):
 
             if step_idx == 0:
                 self.assertTrue(hasattr(returned_last_action, "leapp_tag"))
-                self.assertEqual("policy/last_action_out/", returned_last_action.leapp_tag)
+                self.assertEqual("policy/last_action/", returned_last_action.leapp_tag)
 
             last_action_value = returned_last_action
 
@@ -436,7 +436,7 @@ class TestStateTensors(LEAPPFunctionalTestBase):
             feedback_connections=1
         )
         self.verify_feedback_initial_values({
-            "policy/last_action": initial_last_action,
+            "policy/last_action_in": initial_last_action,
         })
         self.verify_inference_manager(
             source_inputs={"policy/obs": first_obs_value},
@@ -591,7 +591,7 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
         self.verify_all_models_exist("policy")
         self.verify_safetensors_matches_feedback(annotate)
         self.verify_feedback_initial_values({
-            "policy/h_state": torch.zeros(1, 1, 8),
+            "policy/h_state_in": torch.zeros(1, 1, 8),
         })
 
     def test_lstm_two_buffers(self):
@@ -619,8 +619,8 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
         self.verify_all_models_exist("policy")
         self.verify_safetensors_matches_feedback(annotate)
         self.verify_feedback_initial_values({
-            "policy/h_state": torch.zeros(1, 1, 8),
-            "policy/c_state": torch.zeros(1, 1, 8),
+            "policy/h_state_in": torch.zeros(1, 1, 8),
+            "policy/c_state_in": torch.zeros(1, 1, 8),
         })
 
     def test_partial_mutation(self):

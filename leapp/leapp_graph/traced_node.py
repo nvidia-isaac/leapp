@@ -120,7 +120,7 @@ class TracedTensorNode(LeappNode):
             if input_desc is None:
                 continue
 
-            output_name = f"{state_name}_out"
+            output_name = state_name
             output_desc = next(
                 (desc for desc in self.outputs if desc.name == output_name),
                 None,
@@ -609,8 +609,9 @@ class TracedTensorNode(LeappNode):
             self._state_tensors[name]["output"] = value
 
     def get_state_outputs(self) -> dict[str, TracedTensor]:
-        """Get state outputs with '_out' suffix for ONNX SSA compliance.
-        Pass-through if update_state not called.
+        """Get state outputs using the original state names.
+
+        Pass-through if update_state() was not called.
         """
         # Warn about state tensors that were not explicitly updated
         missing_states = [name for name, info in self._state_tensors.items()
@@ -622,13 +623,11 @@ class TracedTensorNode(LeappNode):
 
         result = {}
         for name, state_info in self._state_tensors.items():
-            # Use {name}_out for output to avoid ONNX SSA conflict with input
-            output_name = f"{name}_out"
             if state_info["output"] is not None:
-                result[output_name] = state_info["output"]
+                result[name] = state_info["output"]
             else:
                 # Pass-through: state unchanged, output equals input
-                result[output_name] = state_info["input"]
+                result[name] = state_info["input"]
         return result
 
     @property
