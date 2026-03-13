@@ -35,8 +35,7 @@ from leapp.leapp_graph.datatypes.global_patching import warn_if_script_functions
 from leapp.utils.tensor_description import TensorSemantics
 from leapp.utils.tensor_description import (verify_data_exact_match,
                                              flatten_io_structure,
-                                             unwrap_tensor_semantics,
-                                             apply_semantic_metadata)
+                                             unwrap_tensor_semantics)
 from leapp.utils.caller_identity import (get_caller_stack_identity,
                                          caller_identity_has_same_anchor,
                                          format_caller_identity)
@@ -304,12 +303,8 @@ class ExportManager:
         traced_tensors = []
         for tensor_name, tensor in tensors.items():
             traced_tensor = traced_tensors_node.create_input(
-                tensor, tensor_name)
+                tensor, tensor_name, semantics=metadata.get(tensor_name))
             traced_tensors.append(traced_tensor)
-
-        # Apply semantic metadata from TensorDescription wrappers
-        if metadata:
-            apply_semantic_metadata(traced_tensors_node, metadata)
 
         # if node is tracing we return the traced tensors
         return traced_tensors[0] if len(traced_tensors) == 1 else tuple(traced_tensors)
@@ -389,12 +384,9 @@ class ExportManager:
         traced_tensors_node.compile_trace(flattened_tensors,
                                           backend=export_with,
                                           backend_params=kwargs.get("backend_params", {}),
-                                          static_tensors=flattened_static_outputs)
+                                          static_tensors=flattened_static_outputs,
+                                          semantics_map=metadata)
         self._assign_completion_index(traced_tensors_node)
-
-        # Apply semantic metadata from TensorDescription wrappers
-        if metadata:
-            apply_semantic_metadata(traced_tensors_node, metadata)
 
         return self._passthrough_dict_values(tensors)
 

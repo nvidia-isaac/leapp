@@ -50,7 +50,8 @@ class TracedTensorNode(LeappNode):
         return not self._model_captured
 
     def compile_trace(self, tensors: dict[str, "TracedTensor"], backend=None, backend_params={},
-                       static_tensors: dict[str, torch.Tensor] | None = None):
+                       static_tensors: dict[str, torch.Tensor] | None = None,
+                       semantics_map: dict[str, object] | None = None):
         # Auto-collect buffer mutations before merging state outputs.
         # collect() may remove non-mutated buffers from _state_tensors and
         # bake them as constants, so it must run before get_state_outputs().
@@ -67,7 +68,7 @@ class TracedTensorNode(LeappNode):
         if self.dry_run:
             for name, tensor in tensors.items():
                 self.tag_data(tensor, name)
-                self.add_output(name, name, tensor)
+                self.add_output(name, name, tensor, semantics=(semantics_map or {}).get(name))
                 if name in self._state_tensors:
                     self._state_tensors[name]["output_desc"] = self._get_required_io_description(
                         name, self.outputs, "output"
@@ -82,7 +83,7 @@ class TracedTensorNode(LeappNode):
 
         unwrapped_tensors = []
         for name, tensor in tensors.items():
-            unwrapped = self.create_output(tensor, name)
+            unwrapped = self.create_output(tensor, name, semantics=(semantics_map or {}).get(name))
             unwrapped_tensors.append(unwrapped)
             if name in self._state_tensors:
                 self._state_tensors[name]["output_desc"] = self._get_required_io_description(
@@ -440,7 +441,7 @@ class TracedTensorNode(LeappNode):
                     f"will be passed through as a constant.")
             return data
 
-    def create_input(self, data, name: str) -> "TracedTensor":
+    def create_input(self, data, name: str, semantics=None) -> "TracedTensor":
         """Create a TrackedTensor as an input to this context.
 
         Args:
@@ -450,21 +451,21 @@ class TracedTensorNode(LeappNode):
         Returns:
             TracedTensor: A traced tensor in this context
         """
-        self.add_input(name, name, data)
+        self.add_input(name, name, data, semantics=semantics)
         traced_data = self._create_io_helper(data, name, to="traced")
         return traced_data
 
-    def create_output(self, data, name: str, static: bool = False):
+    def create_output(self, data, name: str, static: bool = False, semantics=None):
         if static:
             self._validate_static_tensor(data, name)
             wrapped = self._create_io_helper(data, name, to="static")
             self.tag_data(data, name)
-            self.add_output(name, name, data)
+            self.add_output(name, name, data, semantics=semantics)
             return wrapped
         else:
             unwrapped_data = self._create_io_helper(data, name, to="tensor")
             self.tag_data(unwrapped_data, name)
-            self.add_output(name, name, unwrapped_data)
+            self.add_output(name, name, unwrapped_data, semantics=semantics)
             return unwrapped_data
 
     def _validate_static_tensor(self, tensor, name: str):

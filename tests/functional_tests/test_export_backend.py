@@ -21,6 +21,7 @@ import yaml
 import onnx
 import leapp
 from leapp.leapp import _MANAGER as annotate
+from leapp import TensorSemantics, InputKindEnum, OutputKindEnum
 from .base import LEAPPFunctionalTestBase
 import pytest
 
@@ -76,10 +77,21 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
             with self.subTest(export_with=export_with):
                 leapp.start(name=self.TEST_GRAPH_NAME)
                 traced = annotate.input_tensors(
-                    "func_overlap", {"joint_pos": torch.tensor([1.0, 2.0, 3.0])}
+                    "func_overlap",
+                    TensorSemantics(
+                        name="joint_pos",
+                        ref=torch.tensor([1.0, 2.0, 3.0]),
+                        kind=InputKindEnum.JOINT_POSITION,
+                    ),
                 )
                 annotate.output_tensors(
-                    "func_overlap", {"joint_pos": traced + 1.0}, export_with=export_with
+                    "func_overlap",
+                    TensorSemantics(
+                        name="joint_pos",
+                        ref=traced + 1.0,
+                        kind=OutputKindEnum.JOINT_POSITION,
+                    ),
+                    export_with=export_with,
                 )
                 leapp.stop()
                 leapp.compile_graph(visualize=False)
@@ -93,6 +105,14 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
                 output_names = [desc["name"] for desc in model_desc["outputs"]]
                 self.assertEqual(input_names, ["joint_pos_in"])
                 self.assertEqual(output_names, ["joint_pos_out"])
+                self.assertEqual(
+                    [desc["kind"] for desc in model_desc["inputs"]],
+                    [InputKindEnum.JOINT_POSITION.value],
+                )
+                self.assertEqual(
+                    [desc["kind"] for desc in model_desc["outputs"]],
+                    [OutputKindEnum.JOINT_POSITION.value],
+                )
 
                 model_path = os.path.join(self.TEST_GRAPH_NAME, "func_overlap.onnx")
                 model = onnx.load(model_path)

@@ -17,7 +17,7 @@
 import collections
 import functools
 import torch
-from leapp.utils.tensor_description import describe_io
+from leapp.utils.tensor_description import describe_io, TensorSemantics
 from leapp.utils.utils import tag_tensor
 from leapp.leapp_graph.datatypes import is_tracable_tensor_type
 from leapp.backends.export_backend import NoneExportBackend
@@ -245,9 +245,26 @@ class LeappNode():
             existing_names.add(description.name_str)
             current_io_list.append(description)
 
-    def add_output(self, output_name, raw_output_name, output_value):
+    @staticmethod
+    def _apply_semantics_to_descriptions(io_descriptions, semantics):
+        if semantics is None:
+            return
+        if len(io_descriptions) == 1:
+            io_descriptions[0].init_semantics(semantics)
+            return
+
+        semantic_fields = semantics.to_dict()
+        for desc in io_descriptions:
+            desc.init_semantics(TensorSemantics(
+                name=desc.name,
+                ref=desc.value,
+                **semantic_fields,
+            ))
+
+    def add_output(self, output_name, raw_output_name, output_value, semantics=None):
         io_descriptions, output_format = describe_io(
             output_name, raw_output_name, output_value)
+        self._apply_semantics_to_descriptions(io_descriptions, semantics)
         for desc in io_descriptions:
             desc.cached_values = [torch.zeros_like(desc.value) for _ in range(self._max_cached_io)]
         self._validate_and_add_to_list(
@@ -255,9 +272,10 @@ class LeappNode():
         # used to rebuild the nested i/o
         self.output_formats.append(output_format)
 
-    def add_input(self, input_name, raw_input_name, input_value):
+    def add_input(self, input_name, raw_input_name, input_value, semantics=None):
         io_descriptions, input_format = describe_io(
             input_name, raw_input_name, input_value)
+        self._apply_semantics_to_descriptions(io_descriptions, semantics)
         for desc in io_descriptions:
             desc.cached_values = [torch.zeros_like(desc.value) for _ in range(self._max_cached_io)]
         self._validate_and_add_to_list(io_descriptions, self.inputs, self.name)

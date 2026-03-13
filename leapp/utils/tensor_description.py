@@ -130,7 +130,7 @@ class TensorSemantics:
                 ])
             else:
                 _get_logger().warning(
-                    f"element_names has mixed types, expected List[List[str]]")
+                    "element_names has mixed types, expected List[List[str]]")
                 return element_names
         return element_names
 
@@ -228,6 +228,8 @@ class TensorDescription:
     def change_name(self, new_name: str):
         """Change the name of the tensor description."""
         self.name = new_name
+        if self.semantics is not None:
+            self.semantics.name = new_name
 
     @property
     def name_str(self) -> str:
@@ -575,25 +577,6 @@ def unwrap_tensor_semantics(data):
         semantics_map[sem.name] = sem
 
     return tensors, semantics_map
-
-
-def apply_semantic_metadata(node, semantics_map):
-    """Attach TensorSemantics objects to stored TensorDescriptions on a node by name.
-
-    Args:
-        node: A LeappNode with .inputs and .outputs lists of TensorDescriptions.
-        semantics_map: Dict mapping tensor names to TensorSemantics objects.
-    """
-    from leapp.leapp_graph.leapp_node import LeappNode
-    for tensor_name, semantics in semantics_map.items():
-        desc = (LeappNode.get_io_description_by_name(tensor_name, node.inputs) or
-                LeappNode.get_io_description_by_name(tensor_name, node.outputs))
-        if desc is None:
-            _get_logger().warning(
-                f"Semantic metadata for '{tensor_name}' ignored: "
-                f"not found in node '{node.name}' inputs or outputs")
-            continue
-        desc.init_semantics(semantics)
 
 
 def describe_io_helper(data, name_str):
