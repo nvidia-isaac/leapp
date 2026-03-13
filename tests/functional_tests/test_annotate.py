@@ -476,7 +476,7 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
-        # state_tensors: should preserve nested format in returned state payload
+        # state_tensors: nested state payloads are not supported
         leapp.start(name=self.TEST_GRAPH_NAME, verbose=True)
         _ = annotate.input_tensors(
             "complex_returns_state",
@@ -486,11 +486,12 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
             "state_a": [torch.tensor([1.0, 1.0, 1.0])],
             "state_b": {"inner": torch.tensor([2.0, 2.0, 2.0])},
         }
-        traced_state_payload = annotate.state_tensors(
-            "complex_returns_state",
-            {"state_payload": state_payload},
-        )
-        self._assert_nested_traced_structure(state_payload, traced_state_payload)
+        with self.assertRaises(TypeError) as exc:
+            annotate.state_tensors(
+                "complex_returns_state",
+                {"state_payload": state_payload},
+            )
+        self.assertIn("does not support nested state structures", str(exc.exception))
         leapp.stop()
 
     def test_annotate_tensor_with_dict_io(self):

@@ -488,12 +488,24 @@ class ExportManager:
 
         return named, is_single
 
+    @staticmethod
+    def _validate_flat_state_payload(api_name: str, node_name: str, tensors):
+        for state_name, value in tensors.items():
+            if not is_tracable_tensor_type(value):
+                raise TypeError(
+                    f"{api_name}() for node '{node_name}' does not support nested state structures. "
+                    f"State '{state_name}' has unsupported top-level type {type(value).__name__}. "
+                    "Please either explicitly list out each state as its own named tensor "
+                    "or use input_tensors() and rely on LEAPP feedback detection."
+                )
+
     def state_tensors(self, node_name: str, tensors: dict[str, torch.Tensor]) -> TracedTensor | tuple[TracedTensor, ...]:
         """Register state tensors (both inputs AND outputs) for a traced node.
 
         Call input_tensors() first to create the node. Use update_state() to set output values.
         """
         if not ExportManager._interpret_graph:
+            self._validate_flat_state_payload("state_tensors", node_name, tensors)
             return self._passthrough_dict_values(tensors)
 
  
@@ -514,6 +526,8 @@ class ExportManager:
             _get_logger().error(msg)
             raise Exception(msg)
 
+        self._validate_flat_state_payload("state_tensors", node_name, tensors)
+
         if not traced_node.is_tracing:
             traced_node.reentry_validate_inputs(tensors)
             return self._passthrough_dict_values(tensors)
@@ -526,6 +540,7 @@ class ExportManager:
     def update_state(self, node_name: str, tensors: dict[str, TracedTensor]) -> TracedTensor | tuple[TracedTensor, ...]:
         """Set output values for state tensors and return passthrough values."""
         if not ExportManager._interpret_graph:
+            self._validate_flat_state_payload("update_state", node_name, tensors)
             return self._passthrough_dict_values(tensors)
 
  
@@ -545,6 +560,8 @@ class ExportManager:
                 "it was created with the legacy method annotation.")
             _get_logger().error(msg)
             raise Exception(msg)
+
+        self._validate_flat_state_payload("update_state", node_name, tensors)
 
         if not traced_node.is_tracing:
             traced_node.reentry_validate_state_update(tensors)

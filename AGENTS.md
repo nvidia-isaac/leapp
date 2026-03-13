@@ -151,7 +151,7 @@ Use this decision table:
   - Auto-detects reassigned buffers and turns them into feedback state.
 - `annotate.state_tensors(...)` + `annotate.update_state(...)`:
   - Use for explicit recurrent/stateful inputs (e.g., hidden state, history windows).
-  - Always creates feedback semantics.
+  - Creates feedback semantics only for states explicitly passed to `update_state()`.
 - `annotate.register_buffer(...)`:
   - Use for constants you want embedded in the exported model.
   - No feedback loop.

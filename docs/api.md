@@ -260,12 +260,14 @@ annotate.state_tensors(node_name: str, tensors: dict[str, torch.Tensor])
 
 - Registers state placeholders as additional node inputs
 - Marks those values as feedback-capable state for graph compilation
-- If `update_state()` is not called for a given state, LEAPP treats it as passthrough state
+- Only states that are later passed to `update_state()` become feedback outputs. If `update_state()` is omitted, the declared state remains a regular input and does not create feedback.
+- Nested state structures are not supported. Each state name must map to a single tensor.
 
 ### Notes
 
 - `state_tensors()` is only supported for traced tensor nodes created with `input_tensors()` or `method()`
 - State tensor names must be unique within the node
+- If you need structured state, explicitly list each state tensor with its own name, or use `input_tensors()` and rely on LEAPP feedback detection.
 - Use this for hidden state, rolling history, or other explicit recurrent values
 
 ---

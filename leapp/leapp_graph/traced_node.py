@@ -37,6 +37,14 @@ class TracedTensorNode(LeappNode):
 
         self._next_buffer_idx = 0
 
+    def _get_required_io_description(self, name: str, io_list: list, io_kind: str):
+        desc = self.get_io_description_by_name(name, io_list)
+        if desc is None:
+            raise RuntimeError(
+                f"State tensor '{name}' in node '{self.name}' is missing its {io_kind} description."
+            )
+        return desc
+
     @property
     def is_tracing(self) -> bool:
         return not self._model_captured
@@ -60,6 +68,10 @@ class TracedTensorNode(LeappNode):
             for name, tensor in tensors.items():
                 self.tag_data(tensor, name)
                 self.add_output(name, name, tensor)
+                if name in self._state_tensors:
+                    self._state_tensors[name]["output_desc"] = self._get_required_io_description(
+                        name, self.outputs, "output"
+                    )
             if static_tensors:
                 for name, tensor in static_tensors.items():
                     self.tag_data(tensor, name)
@@ -70,7 +82,12 @@ class TracedTensorNode(LeappNode):
 
         unwrapped_tensors = []
         for name, tensor in tensors.items():
-            unwrapped_tensors.append(self.create_output(tensor, name))
+            unwrapped = self.create_output(tensor, name)
+            unwrapped_tensors.append(unwrapped)
+            if name in self._state_tensors:
+                self._state_tensors[name]["output_desc"] = self._get_required_io_description(
+                    name, self.outputs, "output"
+                )
 
         # Static tensors go through the same create_output path with static=True
         if static_tensors:
@@ -113,19 +130,9 @@ class TracedTensorNode(LeappNode):
         internal identity without inferring a second "canonical" tag name.
         """
         for state_name in self._state_tensors:
-            input_desc = next(
-                (desc for desc in self.inputs if desc.name == state_name),
-                None,
-            )
-            if input_desc is None:
-                continue
-
-            output_name = state_name
-            output_desc = next(
-                (desc for desc in self.outputs if desc.name == output_name),
-                None,
-            )
-            if output_desc is None or output_desc.tag is None:
+            input_desc = self._state_tensors[state_name].get("input_desc")
+            output_desc = self._state_tensors[state_name].get("output_desc")
+            if input_desc is None or output_desc is None or output_desc.tag is None:
                 continue
 
             input_desc.tag = output_desc.tag
@@ -575,7 +582,9 @@ class TracedTensorNode(LeappNode):
             # Track as state tensor
             self._state_tensors[name] = {
                 "input": traced_input,
+                "input_desc": self._get_required_io_description(name, self.inputs, "input"),
                 "output": None,  # Set via update_state_tensors()
+                "output_desc": None,
             }
 
             result[name] = traced_input
@@ -611,23 +620,24 @@ class TracedTensorNode(LeappNode):
     def get_state_outputs(self) -> dict[str, TracedTensor]:
         """Get state outputs using the original state names.
 
-        Pass-through if update_state() was not called.
+        Only states explicitly updated via update_state() become feedback outputs.
+        States declared without an update are treated as regular inputs.
         """
-        # Warn about state tensors that were not explicitly updated
-        missing_states = [name for name, info in self._state_tensors.items()
-                          if info["output"] is None]
-        if missing_states:
+        inactive_states = [
+            name for name, info in self._state_tensors.items()
+            if info["output"] is None
+        ]
+        if inactive_states:
             _get_logger().warning(
-                f"State tensors {missing_states} in node '{self.name}' were not updated via "
-                f"update_state(). They will pass through unchanged.")
+                f"State tensors {inactive_states} in node '{self.name}' were not updated via "
+                "update_state(). They will be treated as regular inputs and will not create feedback outputs."
+            )
+            for name in inactive_states:
+                self._state_tensors.pop(name, None)
 
         result = {}
         for name, state_info in self._state_tensors.items():
-            if state_info["output"] is not None:
-                result[name] = state_info["output"]
-            else:
-                # Pass-through: state unchanged, output equals input
-                result[name] = state_info["input"]
+            result[name] = state_info["output"]
         return result
 
     @property

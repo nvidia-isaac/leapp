@@ -157,6 +157,40 @@ class TestStateTensors(LEAPPFunctionalTestBase):
             source_outputs={"policy/action": obs_value * 2.0},
         )
 
+    def test_state_tensor_without_update_state_becomes_regular_input(self):
+        """State tensors without update_state() should not create feedback."""
+        leapp.start(name=self.TEST_GRAPH_NAME)
+
+        obs_value = torch.tensor([1.0, 2.0, 3.0])
+        initial_counter = torch.tensor([5.0, -3.0, 0.5])
+
+        obs = annotate.input_tensors(
+            "policy", {"observation": obs_value}
+        )
+        counter = annotate.state_tensors(
+            "policy", {"counter": initial_counter}
+        )
+
+        action = obs + counter
+        annotate.output_tensors("policy", {"action": action}, export_with="onnx")
+
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=2, outputs=1, internal_connections=0,
+            feedback_connections=0
+        )
+        self.verify_all_models_exist("policy")
+        self.verify_safetensors_matches_feedback(annotate)
+        self.verify_inference_manager(
+            source_inputs={
+                "policy/observation": obs_value,
+                "policy/counter": initial_counter,
+            },
+            source_outputs={"policy/action": obs_value + initial_counter},
+        )
+
     def test_state_tensor_history_buffer(self):
         """Test state tensor for observation history buffer (shift and append pattern)."""
         history_length = 3
@@ -313,22 +347,18 @@ class TestStateTensors(LEAPPFunctionalTestBase):
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
-        # State should still appear in outputs as passthrough
-        # 1 dangling input (observation), 1 dangling output (action),
-        # 1 feedback connection (hidden passthrough)
+        # Without update_state(), the declared state remains a regular input.
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1, internal_connections=0,
-            feedback_connections=1
+            annotate, nodes=1, inputs=2, outputs=1, internal_connections=0,
+            feedback_connections=0
         )
         self.verify_all_models_exist("policy")
-
-        # Verify feedback initial values safetensors file
-        self.verify_feedback_initial_values({
-            "policy/hidden": initial_hidden,
-        })
         self.verify_safetensors_matches_feedback(annotate)
         self.verify_inference_manager(
-            source_inputs={"policy/observation": obs_value},
+            source_inputs={
+                "policy/observation": obs_value,
+                "policy/hidden": initial_hidden,
+            },
             source_outputs={"policy/action": obs_value + initial_hidden},
         )
 
@@ -457,6 +487,19 @@ class TestStateTensorErrors(LEAPPFunctionalTestBase):
 
         leapp.stop()
 
+    def test_nested_state_tensor_raises(self):
+        """Nested state payloads should be rejected with a clear error."""
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        annotate.input_tensors("policy", {"obs": torch.zeros(3)})
+
+        with self.assertRaises(TypeError) as exc:
+            annotate.state_tensors("policy", {
+                "state_payload": {"inner": torch.zeros(3)}
+            })
+
+        self.assertIn("does not support nested state structures", str(exc.exception))
+        leapp.stop()
+
     def test_update_state_unknown_name_raises(self):
         """Test that update_state raises error for unregistered state name."""
         leapp.start(name=self.TEST_GRAPH_NAME)
@@ -469,6 +512,20 @@ class TestStateTensorErrors(LEAPPFunctionalTestBase):
             # Should fail because "unknown_state" wasn't registered
             annotate.update_state("policy", {"unknown_state": torch.zeros(3)})
 
+        leapp.stop()
+
+    def test_nested_update_state_raises(self):
+        """Nested update_state payloads should be rejected with a clear error."""
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        annotate.input_tensors("policy", {"obs": torch.zeros(3)})
+        annotate.state_tensors("policy", {"state": torch.zeros(3)})
+
+        with self.assertRaises(TypeError) as exc:
+            annotate.update_state("policy", {
+                "state": {"inner": torch.zeros(3)}
+            })
+
+        self.assertIn("does not support nested state structures", str(exc.exception))
         leapp.stop()
 
 

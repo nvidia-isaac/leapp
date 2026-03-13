@@ -94,7 +94,7 @@ class TestPassthrough(LEAPPFunctionalTestBase):
 class TestDryrun(LEAPPFunctionalTestBase):
 
     def test_complex_nested_input_and_state_tensors_dryrun_passthrough(self):
-        """dry_run should preserve nested input/state structures without wrapping tensors."""
+        """dry_run should preserve nested inputs, but nested states are rejected."""
         leapp.start(name=self.TEST_GRAPH_NAME, dry_run=True)
 
         nested_cases = [
@@ -122,18 +122,17 @@ class TestDryrun(LEAPPFunctionalTestBase):
                 self.assertNotIsInstance(returned_tensor, TracedTensor)
 
         returned_inputs = []
-        returned_states = []
         for idx, payload in enumerate(nested_cases):
             returned_input = annotate.input_tensors("complex_node", {f"in_{idx}": payload})
-            returned_state = annotate.state_tensors("complex_node", {f"state_{idx}": payload})
             _assert_nested_passthrough(payload, returned_input)
-            _assert_nested_passthrough(payload, returned_state)
             returned_inputs.append(returned_input)
-            returned_states.append(returned_state)
+            with self.assertRaises(TypeError) as exc:
+                annotate.state_tensors("complex_node", {f"state_{idx}": payload})
+            self.assertIn("does not support nested state structures", str(exc.exception))
 
         annotate.output_tensors(
             "complex_node",
-            {"out": {"inputs": returned_inputs, "states": returned_states}},
+            {"out": {"inputs": returned_inputs}},
             export_with="jit",
         )
         leapp.stop()

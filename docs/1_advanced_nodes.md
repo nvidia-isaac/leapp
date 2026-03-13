@@ -86,7 +86,8 @@ leapp.compile_graph()
 Key points:
 - `state_tensors()` creates values that are both node inputs and node outputs
 - `update_state()` sets the next value of that state
-- if you omit `update_state()` for a registered state tensor, LEAPP treats it as passthrough state
+- if you omit `update_state()` for a registered state tensor, LEAPP leaves it as a regular input and does not create a feedback edge
+- nested state structures are not supported; declare each state tensor with its own explicit name, or use `input_tensors()` and rely on LEAPP feedback detection
 
 ## Automatic module buffer tracking with `annotate.module()`
 
