@@ -44,7 +44,7 @@ class ONNXExportBackend(ExportBackend):
         if not overlaps:
             return
 
-        _get_logger().warning(
+        _get_logger().info(
             f"[{self.node_context.name}] Renaming overlapping ONNX input/output names: {overlaps}"
         )
         used_names = set(input_names) | set(output_names)

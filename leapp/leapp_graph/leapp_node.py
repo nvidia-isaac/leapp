@@ -451,7 +451,7 @@ class LeappNode():
                 tensor_name, tensor_name, tensor)
 
     def change_input_name(self, old_name, new_name):
-        _get_logger().warning(
+        _get_logger().debug(
             f"changing input name from {old_name} to {new_name} for model {self.name}")
         if old_name == new_name:
             return
@@ -465,7 +465,7 @@ class LeappNode():
                 input.change_name(new_name)
 
     def change_output_name(self, old_name, new_name):
-        _get_logger().warning(
+        _get_logger().debug(
             f"changing output name from {old_name} to {new_name} for model {self.name}")
         if old_name == new_name:
             return
