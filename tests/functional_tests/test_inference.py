@@ -181,6 +181,39 @@ class TestInferenceManagerRobustness(LEAPPFunctionalTestBase):
             torch.allclose(loaded.cpu(), initial_counter),
             f"Expected initial_counter {initial_counter}, got {loaded}")
 
+    def test_reset_zeros_runtime_buffers_then_repopulates_feedback(self):
+        """reset() zeroes runtime caches and then restores feedback initial values."""
+        initial_counter = torch.tensor([42.0, 43.0, 44.0])
+        obs = torch.tensor([1.0, 2.0, 3.0])
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        obs_traced = annotate.input_tensors("policy", {"observation": obs})
+        counter = annotate.state_tensors("policy", {"counter": initial_counter})
+        new_counter = counter + obs_traced
+        annotate.update_state("policy", {"counter": new_counter})
+        annotate.output_tensors("policy", {"action": obs_traced * 2.0}, export_with="jit")
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+        manager = InferenceManager(yaml_path)
+
+        manager.run_policy({"policy/observation": obs.to(manager.nodes["policy"].device)})
+        manager.reset()
+
+        self.assertTrue(torch.allclose(
+            manager.value_dict["policy"]["observation"].cpu(),
+            torch.zeros_like(obs),
+        ))
+        self.assertTrue(torch.allclose(
+            manager.value_dict["policy"]["counter"].cpu(),
+            initial_counter,
+        ))
+        self.assertTrue(torch.allclose(
+            manager.value_dict["==out=="]["policy/action"].cpu(),
+            torch.zeros_like(obs),
+        ))
+
     def test_feedback_malformed_safetensors_key_raises(self):
         """A safetensors key with more than one slash raises an error on load."""
         from leapp import InferenceManager

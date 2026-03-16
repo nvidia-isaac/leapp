@@ -443,6 +443,20 @@ class InferenceManager:
                 mock_inputs[f"{node_name}/{input_name}"] = tensor
 
         return mock_inputs
+    
+    def reset(self):
+        """resets the inference manager to its initial state
+        
+        This method does not reset the internal state of the nodes, only the input and output buffers.
+        It uses default initial values for feedback inputs.
+        """
+        with torch.no_grad():
+            for buffer_group in self.value_dict.values():
+                for tensor in buffer_group.values():
+                    tensor.zero_()
+
+        self._prepopulate_feedback_inputs()
+
 
     def __call__(self, inputs: dict[str, torch.Tensor]):
         return self.run_policy(inputs)
