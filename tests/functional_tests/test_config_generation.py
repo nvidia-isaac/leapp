@@ -157,6 +157,45 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         self.assertEqual(entry['element_names'], [joint_names])
         self.assertEqual(entry['dtype'], "float32")
         self.assertEqual(entry['shape'], [1, 6])
+
+    def test_input_and_output_td_with_source(self):
+        """Test that source metadata from TensorSemantics appears in YAML."""
+        tensor = torch.randn(1, 6)
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        traced = annotate.input_tensors(
+            "source_node",
+            TensorSemantics(
+                name="imu",
+                ref=tensor,
+                kind=InputKindEnum.BODY_ANGULAR_VELOCITY,
+                source="imu/root",
+            ),
+        )
+
+        annotate.output_tensors("source_node", [
+            TensorSemantics(
+                name="filtered_imu",
+                ref=traced * 0.5,
+                kind=OutputKindEnum.BODY_ANGULAR_ACCELERATION,
+                source="realsense/right",
+            ),
+        ])
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        config = self._load_yaml()
+        inputs, outputs = self._get_node_io_from_yaml(config, "source_node")
+
+        input_entry = self._find_io_by_name(inputs, "imu")
+        output_entry = self._find_io_by_name(outputs, "filtered_imu")
+
+        self.assertIsNotNone(input_entry)
+        self.assertIsNotNone(output_entry)
+        self.assertEqual(input_entry["source"], "imu/root")
+        self.assertEqual(output_entry["source"], "realsense/right")
+        self.assertEqual(input_entry["kind"], "state/body/angular_velocity")
+        self.assertEqual(output_entry["kind"], "target/body/angular_acceleration")
     
     def test_input_td_with_string_kind(self):
         """Test that a string kind appears in YAML."""
@@ -296,7 +335,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
     # =========================================================================
 
     def test_no_metadata_no_extra_yaml_fields(self):
-        """Test that tensors without TensorSemantics have no kind or element_names in YAML."""
+        """Test that tensors without TensorSemantics have no semantic fields in YAML."""
         tensor = torch.randn(1, 4)
 
         leapp.start(name=self.TEST_GRAPH_NAME)
@@ -314,8 +353,10 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         output_entry = self._find_io_by_name(outputs, "output")
 
         self.assertNotIn('kind', input_entry)
+        self.assertNotIn('source', input_entry)
         self.assertNotIn('element_names', input_entry)
         self.assertNotIn('kind', output_entry)
+        self.assertNotIn('source', output_entry)
         self.assertNotIn('element_names', output_entry)
 
     # =========================================================================
