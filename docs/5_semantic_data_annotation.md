@@ -80,7 +80,7 @@ models:
 
 ### `kind`
 
-The `kind` field describes the **semantic role** of a tensor — what physical quantity or command it represents. LEAPP provides two separate enums for inputs and outputs to clearly distinguish between observed state and commanded targets.
+The `kind` field describes the **semantic role** of a tensor — what physical quantity or command it represents. LEAPP provides two separate enums for inputs and outputs to clearly distinguish between observed state and commanded targets, but `kind` may also be any plain string when you need a custom semantic label.
 
 #### `InputKindEnum` — for input tensors
 
@@ -107,6 +107,9 @@ from leapp.utils.enums import InputKindEnum
 TensorSemantics("joint_pos", tensor, kind=InputKindEnum.JOINT_POSITION)
 TensorSemantics("imu_gyro", tensor, kind=InputKindEnum.BODY_ANGULAR_VELOCITY)
 TensorSemantics("target_pos", tensor, kind=InputKindEnum.COMMAND_JOINT_POSITION)
+
+# Custom string kinds are also allowed
+TensorSemantics("terrain_latent", tensor, kind="state/environment/terrain_embedding")
 ```
 
 #### `OutputKindEnum` — for output tensors
@@ -133,7 +136,7 @@ TensorSemantics("torques", action, kind=OutputKindEnum.JOINT_TORQUES)
 TensorSemantics("kp_gains", kp, kind=OutputKindEnum.KP)
 ```
 
-> **Note:** While LEAPP does not enforce using `InputKindEnum` exclusively for inputs or `OutputKindEnum` exclusively for outputs, it is strongly recommended to follow this convention for clarity. The `kind` field accepts any enum value.
+> **Note:** While LEAPP does not enforce using `InputKindEnum` exclusively for inputs or `OutputKindEnum` exclusively for outputs, it is strongly recommended to follow this convention for clarity. The `kind` field accepts enum values and plain strings.
 
 ### `element_names`
 
