@@ -234,6 +234,33 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         self.assertIsNotNone(rgb_entry)
         self.assertEqual(rgb_entry['element_names'], [["r", "g", "b"]])
 
+    def test_static_output_td_with_kind(self):
+        """Test that kind metadata from static output TensorSemantics appears in YAML."""
+        tensor = torch.randn(1, 6)
+        static_output = torch.ones(1, 6)
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        traced = annotate.input_tensors("static_out_kind_node", {"pos": tensor})
+
+        annotate.output_tensors(
+            "static_out_kind_node",
+            {"computed": traced * 2.0},
+            static_outputs=TensorSemantics(
+                name="command_bias",
+                ref=static_output,
+                kind=OutputKindEnum.JOINT_TORQUES,
+            ),
+        )
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        config = self._load_yaml()
+        _, outputs = self._get_node_io_from_yaml(config, "static_out_kind_node")
+
+        static_entry = self._find_io_by_name(outputs, "command_bias")
+        self.assertIsNotNone(static_entry)
+        self.assertEqual(static_entry['kind'], "target/joint/torques")
+
     # =========================================================================
     # Both inputs and outputs
     # =========================================================================

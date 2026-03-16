@@ -81,6 +81,23 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         finally:
             leapp.stop()
 
+    def test_static_outputs_bare_tensor_fails(self):
+        """Bare static outputs must be wrapped in a dict or TensorSemantics."""
+        leapp.start(name=self.TEST_GRAPH_NAME)
+
+        try:
+            traced = annotate.input_tensors('func', {'input': torch.tensor([1.0, 2.0, 3.0])})
+            with self.assertRaises(TypeError) as exc:
+                annotate.output_tensors(
+                    'func',
+                    {'output': traced + 1.0},
+                    static_outputs=torch.tensor([4.0, 5.0, 6.0]),
+                    export_with="jit",
+                )
+            self.assertIn("does not accept a bare tensor", str(exc.exception))
+        finally:
+            leapp.stop()
+
     def test_input_tensors_top_level_raw_list_fails(self):
         """Top-level raw collections must be named via a dict."""
         with self.assertRaises(TypeError) as exc:

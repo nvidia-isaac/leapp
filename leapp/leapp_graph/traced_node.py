@@ -51,7 +51,8 @@ class TracedTensorNode(LeappNode):
 
     def compile_trace(self, tensors: dict[str, "TracedTensor"], backend=None, backend_params={},
                        static_tensors: dict[str, torch.Tensor] | None = None,
-                       semantics_map: dict[str, object] | None = None):
+                       semantics_map: dict[str, object] | None = None,
+                       static_semantics_map: dict[str, object] | None = None):
         # Auto-collect buffer mutations before merging state outputs.
         # collect() may remove non-mutated buffers from _state_tensors and
         # bake them as constants, so it must run before get_state_outputs().
@@ -76,7 +77,7 @@ class TracedTensorNode(LeappNode):
             if static_tensors:
                 for name, tensor in static_tensors.items():
                     self.tag_data(tensor, name)
-                    self.add_output(name, name, tensor)
+                    self.add_output(name, name, tensor, semantics=(static_semantics_map or {}).get(name))
             self._apply_state_tags()
             values = list(tensors.values())
             return values[0] if len(values) == 1 else tuple(values)
@@ -93,7 +94,12 @@ class TracedTensorNode(LeappNode):
         # Static tensors go through the same create_output path with static=True
         if static_tensors:
             for name, tensor in static_tensors.items():
-                wrapped = self.create_output(tensor, name, static=True)
+                wrapped = self.create_output(
+                    tensor,
+                    name,
+                    static=True,
+                    semantics=(static_semantics_map or {}).get(name),
+                )
                 tensors[name] = wrapped
 
         # Apply state tags after buffer collection (which may remove placeholder

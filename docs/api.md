@@ -139,7 +139,7 @@ annotate.output_tensors(node_name: str, tensors, static_outputs = None, **kwargs
 
 - **`node_name`** (str, required): The node name. Must match the name used in the corresponding `input_tensors()` call.
 
-- **`static_outputs`** (optional): Constant raw tensors that should be emitted as outputs but are not derived from traced inputs. These must be plain `torch.Tensor` values, not `TracedTensor` values.
+- **`static_outputs`** (optional): Constant outputs that should be emitted but are not derived from traced inputs. The top-level payload follows the same naming contract as `tensors`: pass either a dictionary of named raw tensors or a `TensorSemantics` object / list of `TensorSemantics`. The referenced values must still be plain `torch.Tensor` values, not `TracedTensor` values.
 
 - **`**kwargs`**: Export configuration options:
   - **`export_with`** (str | None): Backend for exporting. Common values are `"jit"` and `"onnx"`. You can also specify `"jit-script"`, `"jit-trace"`, `"onnx-dynamo"`, or `"onnx-torchscript"` to control the exact backend — see [Advanced Export](2_advanced_export.md) for details.

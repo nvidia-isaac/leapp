@@ -327,12 +327,16 @@ class ExportManager:
         # process outputs
         flattened_tensors = flatten_io_structure(tensors, '')
 
+        static_outputs_metadata = {}
+        normalized_static_outputs = None
+        if static_outputs is not None:
+            normalized_static_outputs, static_outputs_metadata = self._normalize_named_tensor_payload(
+                "output_tensors static_outputs", node_name, static_outputs)
+
         if not traced_tensors_node.is_tracing:
             flattened_static = {}
-            if static_outputs is not None:
-                if not isinstance(static_outputs, dict):
-                    static_outputs = {'static_output': static_outputs}
-                flattened_static = flatten_io_structure(static_outputs, '')
+            if normalized_static_outputs is not None:
+                flattened_static = flatten_io_structure(normalized_static_outputs, '')
             traced_tensors_node.reentry_validate_and_tag_outputs(
                 flattened_tensors, flattened_static)
             return self._passthrough_dict_values(tensors)
@@ -368,24 +372,16 @@ class ExportManager:
 
         # process static outputs (constant tensors that should be returned but aren't derived from inputs)
         flattened_static_outputs = None
-        if static_outputs is not None:
-            static_outputs_changed = False
-            if not isinstance(static_outputs, dict):
-                static_outputs_changed = True
-                static_outputs = {'static_output': static_outputs}
-
-            flattened_static_outputs = flatten_io_structure(static_outputs, '')
-
-            if static_outputs_changed:
-                _get_logger().warning(f"Warning: no tensor name provided for static_outputs in node {node_name}\n"
-                                      "Assuming default tensor name")
+        if normalized_static_outputs is not None:
+            flattened_static_outputs = flatten_io_structure(normalized_static_outputs, '')
 
         export_with = None if self.is_dry_run(node_name) else kwargs.get("export_with", None)
         traced_tensors_node.compile_trace(flattened_tensors,
                                           backend=export_with,
                                           backend_params=kwargs.get("backend_params", {}),
                                           static_tensors=flattened_static_outputs,
-                                          semantics_map=metadata)
+                                          semantics_map=metadata,
+                                          static_semantics_map=static_outputs_metadata)
         self._assign_completion_index(traced_tensors_node)
 
         return self._passthrough_dict_values(tensors)

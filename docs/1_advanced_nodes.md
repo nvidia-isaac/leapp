@@ -212,6 +212,10 @@ leapp.compile_graph()
 
 The exported model will return both outputs: `computed` (input-dependent) and `static` (always `[4, 5, 6]`).
 
+`static_outputs` follows the same top-level naming contract as `output_tensors()`:
+- pass a dict of named raw tensors for plain static outputs
+- or pass `TensorSemantics(...)` / a list of `TensorSemantics(...)` if the static outputs should carry semantic metadata in the exported YAML
+
 **Key rules:**
 - Static outputs must be **raw `torch.Tensor`** values. Using a `TracedTensor` (anything derived from `input_tensors()`) as a static output will raise an error.
 - If you pass a single tensor without a dict, LEAPP assigns the default name `static_output` and logs a warning. Always prefer a named dict.
