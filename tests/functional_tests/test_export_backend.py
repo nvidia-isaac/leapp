@@ -16,15 +16,49 @@
 #
 import os
 import unittest
+from unittest import mock
 import torch
 import yaml
 import onnx
 import leapp
 from leapp.leapp import _MANAGER as annotate
 from leapp import TensorSemantics, InputKindEnum, OutputKindEnum
+from leapp.backends.export_backend import SimplifiedONNXProgram
 from .base import LEAPPFunctionalTestBase
 import pytest
 
+
+
+class TestOnnxProviderSelection(unittest.TestCase):
+    def test_cuda_provider_is_always_preferred(self):
+        program = SimplifiedONNXProgram("fake.onnx")
+
+        with mock.patch(
+            "leapp.backends.export_backend.ort.get_available_providers",
+            return_value=["CPUExecutionProvider", "CUDAExecutionProvider"],
+        ):
+            self.assertEqual(
+                program._get_providers(),
+                ["CUDAExecutionProvider", "CPUExecutionProvider"],
+            )
+            self.assertEqual(
+                program._get_providers(),
+                ["CUDAExecutionProvider", "CPUExecutionProvider"],
+            )
+
+    def test_warns_when_cuda_provider_is_unavailable(self):
+        program = SimplifiedONNXProgram("fake.onnx")
+
+        with mock.patch(
+            "leapp.backends.export_backend.ort.get_available_providers",
+            return_value=["CPUExecutionProvider"],
+        ), mock.patch("leapp.backends.export_backend._get_logger") as get_logger:
+            providers = program._get_providers()
+
+        self.assertEqual(providers, ["CPUExecutionProvider"])
+        get_logger.return_value.warning.assert_called_once_with(
+            "CUDA execution provider not available. Falling back to CPU."
+        )
 
 
 class TestOnnxBackend(LEAPPFunctionalTestBase):

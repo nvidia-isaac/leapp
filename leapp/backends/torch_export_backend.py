@@ -49,8 +49,8 @@ class TorchExportBackend(ExportBackend):
         md5sum, sha256sum = self._verify_model_location_and_get_hash(path)
         return path, md5sum, sha256sum
 
-    def load(self, model_path: str, sha256sum: str, device: str):
-        self._load_torchscript(model_path, sha256sum, device)
+    def load(self, model_path: str, sha256sum: str):
+        self._load_torchscript(model_path, sha256sum)
 
     def compile(self):
         raise NotImplementedError(

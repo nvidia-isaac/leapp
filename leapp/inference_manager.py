@@ -21,13 +21,11 @@ class NodeManager:
         self.output_descriptions = outputs
 
 
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
         backend = self._create_backend(parameters['backend'])
-        backend.load(model_path, parameters['sha256sum'], device)
+        backend.load(model_path, parameters['sha256sum'])
         self.model = backend.compiled_model
 
-        self.device = device
+        self.device = backend.runtime_device
 
     @property
     def input_names(self):

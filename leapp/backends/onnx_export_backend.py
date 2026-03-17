@@ -107,8 +107,8 @@ class ONNXExportBackend(ExportBackend):
             ]
 
 
-    def load(self, model_path: str, sha256sum: str, device: str):
-        self._load_onnx(model_path, sha256sum, device)
+    def load(self, model_path: str, sha256sum: str):
+        self._load_onnx(model_path, sha256sum)
 
     @staticmethod
     def _fix_scalar_slice_inputs(model: onnx.ModelProto) -> int:

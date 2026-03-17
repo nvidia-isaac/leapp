@@ -37,16 +37,13 @@ class SimplifiedONNXProgram:
     Keeps source files on disk and copies on save. Cleans up temp dir on delete.
     """
 
-    def __init__(self, onnx_model_path, device=None, temp_dir=None):
+    def __init__(self, onnx_model_path, temp_dir=None):
         """Initialize the ONNX program.
 
         Args:
             onnx_model_path: Path to an ONNX file.
-            device: Device to run on ('cuda', 'cpu', or None for auto-detect).
-                    If None, will use CUDA if available, otherwise CPU.
             temp_dir: If provided, this temp directory will be cleaned up when the object is deleted.
         """
-        self._device = device
         model_path = str(onnx_model_path)
         self._source_dir = os.path.dirname(os.path.abspath(model_path))
         self._source_filename = os.path.basename(model_path)
@@ -66,24 +63,17 @@ class SimplifiedONNXProgram:
             except Exception:
                 pass  # Silently ignore cleanup errors
 
-    def _get_providers(self, device):
-        """Get the list of execution providers based on device preference."""
+    def _get_providers(self):
+        """Get execution providers, always preferring CUDA when available."""
         available_providers = ort.get_available_providers()
 
-        if device is None:
-            # Auto-detect: prefer CUDA if available
-            if 'CUDAExecutionProvider' in available_providers:
-                return ['CUDAExecutionProvider', 'CPUExecutionProvider']
-            return ['CPUExecutionProvider']
-        elif device == 'cuda' or (isinstance(device, torch.device) and device.type == 'cuda'):
-            if 'CUDAExecutionProvider' not in available_providers:
-                _get_logger().warning(
-                    "CUDA execution provider requested but not available. Falling back to CPU."
-                )
-                return ['CPUExecutionProvider']
+        if 'CUDAExecutionProvider' in available_providers:
             return ['CUDAExecutionProvider', 'CPUExecutionProvider']
-        else:
-            return ['CPUExecutionProvider']
+
+        _get_logger().warning(
+            "CUDA execution provider not available. Falling back to CPU."
+        )
+        return ['CPUExecutionProvider']
 
     def _get_source_size(self):
         """Get total size of all files in the source directory."""
@@ -165,7 +155,7 @@ class SimplifiedONNXProgram:
         """Create the inference session if not already created."""
         if self._session is None:
             model_path = os.path.join(self._source_dir, self._source_filename)
-            providers = self._get_providers(self._device)
+            providers = self._get_providers()
             sess_options = ort.SessionOptions()
             # ORT_ENABLE_ALL can silently corrupt results for certain graph
             # patterns (e.g. Gemm chains produced by FX make_fx decomposition).
@@ -258,6 +248,7 @@ class ExportBackend(abc.ABC):
 
         self.compiled_model = None
         self.compiled_module = None
+        self.runtime_device = None
     
     def override_module_builder(self, module_builder: Callable):
         self.module_builder = module_builder
@@ -323,10 +314,13 @@ class ExportBackend(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def load(self, model_path: str, sha256sum: str, device: str):
+    def load(self, model_path: str, sha256sum: str):
         raise NotImplementedError
     
-    def _load_onnx(self, model_path: str, sha256sum: str, device: str):
+    def _select_runtime_device(self):
+        return 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    def _load_onnx(self, model_path: str, sha256sum: str):
         _, actual_sha256sum = self._verify_model_location_and_get_hash(
             model_path)
         if actual_sha256sum != sha256sum:
@@ -334,11 +328,12 @@ class ExportBackend(abc.ABC):
                 f"SHA256 checksum mismatch for {model_path}: "
                 f"expected {sha256sum}, got {actual_sha256sum}"
             )
-        model = SimplifiedONNXProgram(model_path, device=device)
+        model = SimplifiedONNXProgram(model_path)
         self.compiled_model = model
+        self.runtime_device = self._select_runtime_device()
         self.compiled_module = None # ONNX models cannot be represented as a module for reexport.
     
-    def _load_torchscript(self, model_path: str, sha256sum: str, device: str):
+    def _load_torchscript(self, model_path: str, sha256sum: str):
         _, actual_sha256sum = self._verify_model_location_and_get_hash(
             model_path)
         if actual_sha256sum != sha256sum:
@@ -346,9 +341,11 @@ class ExportBackend(abc.ABC):
                 f"SHA256 checksum mismatch for {model_path}: "
                 f"expected {sha256sum}, got {actual_sha256sum}"
             )
+        device = self._select_runtime_device()
         model = torch.jit.load(model_path, map_location=device)
         model = model.to(device)
         self.compiled_model = model.eval()
+        self.runtime_device = device
         self.compiled_module = model
 
 
@@ -372,9 +369,7 @@ class NoneExportBackend(ExportBackend):
                                   "in the generated yaml file. Otherwise, please manually fill in the backend parameters.")
         else:
             _, sha256sum = self._verify_model_location_and_get_hash(self.backend_params['model_path'])
-            device = 'cuda' if torch.cuda.is_available() else 'cpu'
-            device = self.backend_params['device'] if 'device' in self.backend_params else device
-            self.load(self.backend_params['model_path'], sha256sum, device, self.get_backend_model_type())
+            self.load(self.backend_params['model_path'], sha256sum, self.get_backend_model_type())
 
 
     def save(self, save_path: str) -> Tuple[str, str, str]:
@@ -389,13 +384,13 @@ class NoneExportBackend(ExportBackend):
 
         return model_path, md5sum, sha256sum
 
-    def load(self, model_path: str, sha256sum: str, device: str, model_type=None):
+    def load(self, model_path: str, sha256sum: str, model_type=None):
         if model_type is None: 
             return
         if model_type == "onnx":
-            self._load_onnx(model_path, sha256sum, device)
+            self._load_onnx(model_path, sha256sum)
         elif model_type == "jit":
-            self._load_torchscript(model_path, sha256sum, device)
+            self._load_torchscript(model_path, sha256sum)
         else:
             raise ValueError(f"Unsupported model type: {model_type}")
 
