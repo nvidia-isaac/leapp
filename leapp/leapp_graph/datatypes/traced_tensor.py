@@ -576,7 +576,8 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
     def __radd__(self, other):
         """Reverse addition operator."""
-        return torch.add(other, self)
+        # Keep commutative reverse ops tensor-first for exporter compatibility.
+        return torch.add(self, other)
 
     def __sub__(self, other):
         """Subtraction operator."""
@@ -592,7 +593,8 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
     def __rmul__(self, other):
         """Reverse multiplication operator."""
-        return torch.mul(other, self)
+        # Keep commutative reverse ops tensor-first for exporter compatibility.
+        return torch.mul(self, other)
 
     def __truediv__(self, other):
         """Division operator."""

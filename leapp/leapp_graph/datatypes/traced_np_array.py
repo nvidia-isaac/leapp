@@ -638,7 +638,8 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         return np.add(self, other)
 
     def __radd__(self, other):
-        return np.add(other, self)
+        # Keep commutative reverse ops array-first for exporter compatibility.
+        return np.add(self, other)
 
     def __sub__(self, other):
         return np.subtract(self, other)
@@ -650,7 +651,8 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         return np.multiply(self, other)
 
     def __rmul__(self, other):
-        return np.multiply(other, self)
+        # Keep commutative reverse ops array-first for exporter compatibility.
+        return np.multiply(self, other)
 
     def __truediv__(self, other):
         return np.divide(self, other)

@@ -653,6 +653,32 @@ class TestTracedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(
             scripted(torch.tensor([2.0, 4.0, 6.0])), expected))
 
+    def test_tensor_norm_method_rewrites_torch_tensor_function_target(self):
+        """Test tensor.norm() becomes a call_method node before export."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([[3.0, 4.0], [5.0, 12.0]]), name="x")
+
+        result = x.norm(p=2, dim=-1)
+
+        self.assertIsInstance(result, TracedTensor)
+        expected = torch.tensor([5.0, 13.0])
+        self.assertTrue(torch.allclose(result.tensor, expected))
+
+        ctx.compile_trace({'result': result})
+
+        norm_nodes = [
+            node for node in ctx.m.graph.nodes
+            if node.op == "call_method" and node.target == "norm"
+        ]
+        self.assertTrue(norm_nodes, "Expected tensor.norm() to be rewritten to call_method")
+
+        traced = torch.jit.trace(
+            ctx.m,
+            (torch.tensor([[3.0, 4.0], [5.0, 12.0]]),),
+        )
+        self.assertTrue(torch.allclose(
+            traced(torch.tensor([[3.0, 4.0], [5.0, 12.0]])), expected))
+
     def test_regular_tensor_mul_traced_tensor(self):
         """Test regular_tensor * traced_tensor."""
         ctx = TracedTensorNode(name="test", node_index=0)

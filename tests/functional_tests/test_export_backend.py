@@ -76,7 +76,30 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
             return inputA*2.0
 
         input_tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
-        expected_output = input_tensor*2.0
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        funcA(input_tensor)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+    def test_onnx_backend_reverse_scalar_mul(self):
+        @annotate.method(export_with="onnx")
+        def funcA(inputA: torch.Tensor):
+            return 2.0 * inputA
+
+        input_tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        funcA(input_tensor)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+    def test_onnx_backend_reverse_scalar_add(self):
+        @annotate.method(export_with="onnx")
+        def funcA(inputA: torch.Tensor):
+            return 2.0 + inputA
+
+        input_tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
 
         leapp.start(name=self.TEST_GRAPH_NAME)
         funcA(input_tensor)
@@ -91,7 +114,6 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
             return inputA*2.0
 
         input_tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
-        expected_output = input_tensor*2.0
 
         leapp.start(name=self.TEST_GRAPH_NAME)
         funcA(input_tensor)
@@ -1098,6 +1120,23 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         leapp.stop()
         leapp.compile_graph(visualize=False)
         self.verify_all_models_exist('reduction_ops')
+
+    def test_torch_trace_tensor_method_norm(self):
+        """Test jit-trace export with tensor.norm() method calls."""
+
+        @annotate.method(export_with="jit-trace")
+        def tensor_method_norm(x: torch.Tensor):
+            return x.norm(p=2, dim=-1)
+
+        x = torch.randn(4, 8, dtype=torch.float32)
+        expected = x.norm(p=2, dim=-1)
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        tensor_method_norm(x)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+        self.verify_single_torchscript_model_expected_value(
+            [x], [expected], 'tensor_method_norm')
 
     def test_torch_script_reduction_operations(self):
         """Test jit-script export with reduction operations."""

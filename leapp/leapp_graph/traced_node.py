@@ -146,28 +146,45 @@ class TracedTensorNode(LeappNode):
 
     @staticmethod
     def _rewrite_method_descriptors(graph: fx.Graph):
-        """Convert call_function nodes with method_descriptor targets to call_method.
+        """Convert tensor-method call_function nodes to call_method.
 
         Method descriptors (e.g. torch.Tensor.view, torch.Tensor.float) don't
         support weak references, which causes torch.jit.script to fail with:
             TypeError: cannot create weak reference to 'method_descriptor' object
 
-        Converting them to call_method nodes uses a string target instead,
-        sidestepping the issue entirely. The args layout is identical — args[0]
-        is already ``self`` for unbound method descriptors, which is exactly
-        what call_method expects.
+        Recent PyTorch versions also surface some tensor methods (for example
+        ``torch.Tensor.norm``) as plain functions from ``torch._tensor``. If
+        those targets remain as call_function nodes, FX may serialize them as
+        ``torch._tensor.*`` calls that TorchScript cannot resolve at runtime.
+
+        Converting both representations to call_method nodes uses a string
+        target instead, sidestepping the issue entirely. The args layout is
+        identical: args[0] is already ``self`` for unbound tensor methods,
+        which is exactly what call_method expects.
         """
         rewritten = []
         for node in graph.nodes:
-            if node.op == "call_function" and type(node.target).__name__ == "method_descriptor":
-                method_name = getattr(node.target, "__name__", None)
-                if method_name is not None:
-                    node.op = "call_method"
-                    node.target = method_name
-                    rewritten.append(method_name)
+            if node.op != "call_function":
+                continue
+
+            target = node.target
+            target_type_name = type(target).__name__
+            target_module = getattr(target, "__module__", "")
+            is_tensor_method_target = (
+                target_type_name == "method_descriptor" or
+                target_module.startswith("torch._tensor")
+            )
+            if not is_tensor_method_target:
+                continue
+
+            method_name = getattr(target, "__name__", None)
+            if method_name is not None:
+                node.op = "call_method"
+                node.target = method_name
+                rewritten.append(method_name)
         if rewritten:
             _get_logger().debug(
-                f"Rewrote {len(rewritten)} method_descriptor call_function node(s) "
+                f"Rewrote {len(rewritten)} tensor-method call_function node(s) "
                 f"to call_method: {rewritten}")
         graph.lint()
 
