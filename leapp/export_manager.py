@@ -345,30 +345,8 @@ class ExportManager:
         warn_if_script_functions_in_scope()
 
         if not getattr(traced_tensors_node, 'dry_run', False):
-            instances = set(is_traced_type(tensor) for tensor in flattened_tensors.values())
-
-            if not all(instances):
-                types = set(type(tensor).__name__ for tensor in flattened_tensors.values())
-                msg = (
-                    f"output_tensors() for node '{node_name}' received non-traced tensors: {types}\n"
-                    "Possible causes:\n"
-                    "1. You did not use the traced tensors returned by input_tensors() — "
-                    "make sure to replace your original tensors with the return value of annotate.input_tensors().\n"
-                    "2. An operation in your computation broke tracing (e.g. converting to numpy and back).\n"
-                    "3. You passed raw tensors instead of the traced ones to output_tensors().")
-                _get_logger().error(msg)
-                raise Exception(msg)
-
-            context_names = {
-                tensor.context for tensor in flattened_tensors.values()}
-            # Check that all tensors come from exactly one context matching the node name
-            if not (len(context_names) == 1 and next(iter(context_names)) == traced_tensors_node.name):
-                msg = (
-                    f"output_tensors() for node '{node_name}' received tensors that belong to a different node: "
-                    f"{context_names}. Make sure you are passing tensors derived from "
-                    f"annotate.input_tensors('{node_name}', ...) to annotate.output_tensors('{node_name}', ...).")
-                _get_logger().error(msg)
-                raise Exception(msg)
+            self._validate_initial_traced_payload(
+                "output_tensors", node_name, traced_tensors_node, flattened_tensors)
 
         # process static outputs (constant tensors that should be returned but aren't derived from inputs)
         flattened_static_outputs = None
@@ -487,6 +465,49 @@ class ExportManager:
                     "or use input_tensors() and rely on LEAPP feedback detection."
                 )
 
+    @staticmethod
+    def _validate_initial_traced_payload(api_name: str, node_name: str,
+                                         traced_tensors_node: TracedTensorNode,
+                                         flattened_tensors: dict) -> None:
+        """Validate first-trace payloads for APIs that require active TracedTensors.
+
+        This helper is only for the initial tracing path, before a node has been
+        compiled. It enforces two invariants:
+        1. Every provided value is a traced tensor, not a raw torch/numpy value.
+        2. Every traced tensor belongs to the same active node context as
+           ``traced_tensors_node``.
+
+        Matching these checks keeps user-facing errors consistent for
+        ``output_tensors()`` and ``update_state()`` and avoids later internal FX
+        failures when raw tensors slip into graph outputs/state updates.
+        """
+        instances = set(is_traced_type(tensor)
+                        for tensor in flattened_tensors.values())
+
+        if not all(instances):
+            types = set(type(tensor).__name__
+                        for tensor in flattened_tensors.values())
+            msg = (
+                f"{api_name}() for node '{node_name}' received non-traced tensors: {types}\n"
+                "Possible causes:\n"
+                "1. You did not use the traced tensors returned by leapp functions — "
+                "make sure to replace your original tensors with the return value of annotation functions.\n"
+                "2. An operation in your computation broke tracing (e.g. converting to numpy and back).\n"
+                f"3. You passed raw tensors instead of the traced ones to {api_name}().")
+            _get_logger().error(msg)
+            raise Exception(msg)
+
+        context_names = {
+            tensor.context for tensor in flattened_tensors.values()
+        }
+        if not (len(context_names) == 1 and next(iter(context_names)) == traced_tensors_node.name):
+            msg = (
+                f"{api_name}() for node '{node_name}' received tensors that belong to a different node: "
+                f"{context_names}. Make sure you are passing tensors derived from "
+                f"annotate.input_tensors('{node_name}', ...) to annotate.{api_name}('{node_name}', ...).")
+            _get_logger().error(msg)
+            raise Exception(msg)
+
     def state_tensors(self, node_name: str, tensors: dict[str, torch.Tensor]) -> TracedTensor | tuple[TracedTensor, ...]:
         """Register state tensors (both inputs AND outputs) for a traced node.
 
@@ -555,6 +576,9 @@ class ExportManager:
             traced_node.reentry_validate_state_update(tensors)
             return self._passthrough_dict_values(tensors)
 
+        if not getattr(traced_node, 'dry_run', False):
+            self._validate_initial_traced_payload(
+                "update_state", node_name, traced_node, tensors)
         traced_node.update_state_tensors(tensors)
         return self._passthrough_dict_values(tensors)
 

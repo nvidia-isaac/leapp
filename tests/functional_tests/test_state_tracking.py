@@ -528,6 +528,23 @@ class TestStateTensorErrors(LEAPPFunctionalTestBase):
         self.assertIn("does not support nested state structures", str(exc.exception))
         leapp.stop()
 
+    def test_update_state_non_traced_tensor_raises_clean_error(self):
+        """Raw tensors passed to update_state during first trace should fail cleanly."""
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        obs = annotate.input_tensors("policy", {"obs": torch.zeros(3)})
+        state = annotate.state_tensors("policy", {"counter": torch.zeros(3)})
+
+        with self.assertRaises(Exception) as exc:
+            annotate.update_state("policy", {"counter": torch.ones(3)})
+
+        msg = str(exc.exception)
+        self.assertIn("update_state() for node 'policy' received non-traced tensors", msg)
+        self.assertNotIn("proxy", msg)
+
+        annotate.update_state("policy", {"counter": state + obs})
+        annotate.output_tensors("policy", {"action": obs + state}, export_with="jit")
+        leapp.stop()
+
 
 # ── Test models ──────────────────────────────────────────────────────────────
 
