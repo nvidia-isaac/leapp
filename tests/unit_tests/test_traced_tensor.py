@@ -1471,6 +1471,28 @@ class TestTracedTensor(unittest.TestCase):
         self.assertIsInstance(y, TracedTensor)
         self.assertEqual(y.shape, torch.Size([3, 3]))
 
+    def test_torch_index_select_with_traced_indices(self):
+        """Test torch.index_select with traced tensor indices from the same node."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        input_tensor = torch.tensor([10.0, 20.0, 30.0, 40.0, 50.0])
+        input_indices = torch.tensor([0, 2, 4], dtype=torch.long)
+        x = ctx.create_input(input_tensor, name="x")
+        indices = ctx.create_input(input_indices, name="indices")
+
+        y = torch.index_select(x, dim=0, index=indices)
+
+        self.assertIsInstance(y, TracedTensor)
+        expected = torch.tensor([10.0, 30.0, 50.0])
+        self.assertTrue(torch.allclose(y.tensor, expected))
+
+        ctx.compile_trace({'y': y})
+        self.validate_export(
+            ctx.m,
+            (input_tensor, input_indices),
+            expected,
+            "index_select_1d_traced_indices",
+        )
+
     def test_indexing_negative_indices_advanced(self):
         """Test negative indices in various contexts."""
         ctx = TracedTensorNode(name="test", node_index=0)
@@ -2224,12 +2246,12 @@ class TestTracedTensor(unittest.TestCase):
 
         # Try to use TracedTensor as index - should raise NotImplementedError
         with self.assertRaises(NotImplementedError) as context:
-            y = x[indices]
+            _ = x[indices]
 
         error_msg = str(context.exception)
         self.assertIn("Advanced indexing", error_msg)
         self.assertIn("not supported", error_msg)
-        self.assertIn("indices.tensor", error_msg)
+        self.assertIn("torch.index_select", error_msg)
 
     # ==================== TorchScript Module Interaction Tests ====================
     def test_tracing_through_torchscript_module(self):

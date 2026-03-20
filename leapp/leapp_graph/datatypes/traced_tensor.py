@@ -870,7 +870,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                 raise NotImplementedError(
                     "Advanced indexing with TracedTensor indices is not supported. "
                     "The FX tracer cannot serialize TracedTensor objects as indexing arguments.\n"
-                    "Convert to regular tensor first: tensor[indices.tensor]"
+                    "Use torch.index_select() when selecting along a dimension with traced indices"
                 )
 
         # Check for tuple containing TracedTensor
@@ -887,7 +887,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                         raise NotImplementedError(
                             "Advanced indexing with TracedTensor indices is not supported. "
                             "The FX tracer cannot serialize TracedTensor objects as indexing arguments.\n"
-                            "Convert to regular tensor first."
+                            "Use torch.index_select() when selecting along a dimension with traced indices"
                         )
 
         result_tensor = self.tensor[key]
