@@ -69,7 +69,7 @@ class TensorSemantics:
 
     Convention:
         - Internal fields (ref, name) are listed in _INTERNAL_FIELDS and excluded from serialization.
-        - Public fields (kind, source, element_names, ...) are semantic data that gets serialized to YAML.
+        - Public fields (kind, element_names, ...) are semantic data that gets serialized to YAML.
     """
 
     # Fields excluded from serialization (internal use only)
@@ -80,7 +80,6 @@ class TensorSemantics:
 
     # Semantic fields
     kind: Optional[InputKindEnum | OutputKindEnum | str] = None
-    source: Optional[str] = None
     element_names: Optional[List] = None
 
     def __post_init__(self):
@@ -90,10 +89,6 @@ class TensorSemantics:
                 f"TensorSemantics 'ref' must be a traceable tensor type "
                 f"accepted types are: {TRACABLE_BASE_TYPES}"
                 f"got {type(self.ref).__name__}")
-        if self.source is not None and not isinstance(self.source, str):
-            raise TypeError(
-                f"TensorSemantics 'source' must be a string, got {type(self.source).__name__}"
-            )
         if self.element_names is not None:
             self.element_names = self._normalize_element_names(self.element_names)
 
@@ -143,8 +138,8 @@ class TensorSemantics:
 class TensorDescription:
     """Describes a tensor input/output in the computational graph.
 
-    Composes TensorSemantics for semantic metadata (kind, source, element_names, etc.).
-    Access semantic fields directly via properties (td.kind, td.source, td.element_names)
+    Composes TensorSemantics for semantic metadata (kind, element_names, etc.).
+    Access semantic fields directly via properties (td.kind, td.element_names)
     or in bulk via get_semantics()/set_semantics().
     """
 

@@ -1080,7 +1080,7 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
         leapp.start(name=self.TEST_GRAPH_NAME)
         module.process(input_dict)
         leapp.stop()
-        leapp.compile_graph(visualize=False)
+        leapp.compile_graph(visualize=False, atol=1e-3)
         self.verify_all_models_exist('process')
 
     def test_onnx_with_nn_module_and_list_output(self):

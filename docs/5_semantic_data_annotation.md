@@ -1,6 +1,6 @@
 # Semantic Data Annotation in LEAPP
 
-This guide covers how to add semantic metadata to your tensors using `TensorSemantics`. Semantic annotations let you describe **what** a tensor represents (e.g., joint positions, target torques), **where it comes from** (e.g., IMU, camera, estimator), and provide element-level naming, making generated YAML specifications self-documenting and enabling downstream consumers to interpret the data correctly.
+This guide covers how to add semantic metadata to your tensors using `TensorSemantics`. Semantic annotations let you describe **what** a tensor represents (e.g., joint positions, target torques) and provide element-level naming, making generated YAML specifications self-documenting and enabling downstream consumers to interpret the data correctly.
 
 > **Note:** Semantic annotation is only available for `annotate.input_tensors()` and `annotate.output_tensors()`. It is not supported for `@annotate.method()` nodes.
 
@@ -23,14 +23,12 @@ leapp.start("my_robot")
 traced_pos, traced_vel = annotate.input_tensors("policy", [
     TensorSemantics("joint_pos", joint_pos,
                      kind=InputKindEnum.JOINT_POSITION,
-                     source="encoder/joint_pos",
                      element_names=["hip_l", "knee_l", "ankle_l",
                                     "hip_r", "knee_r", "ankle_r",
                                     "shoulder_l", "elbow_l", "wrist_l",
                                     "shoulder_r", "elbow_r", "wrist_r"]),
     TensorSemantics("joint_vel", joint_vel,
-                     kind=InputKindEnum.JOINT_VELOCITY,
-                     source="imu/root"),
+                     kind=InputKindEnum.JOINT_VELOCITY),
 ])
 
 # Compute output
@@ -40,7 +38,6 @@ command = traced_pos + traced_vel
 annotate.output_tensors("policy", [
     TensorSemantics("command", command,
                      kind=OutputKindEnum.JOINT_TORQUES,
-                     source="controller/policy_head",
                      element_names=["hip_l", "knee_l", "ankle_l",
                                     "hip_r", "knee_r", "ankle_r",
                                     "shoulder_l", "elbow_l", "wrist_l",
@@ -62,7 +59,6 @@ models:
       shape: [1, 12]
       type: tensor
       kind: state/joint/position
-      source: encoder/joint_pos
       element_names: [[hip_l, knee_l, ankle_l, hip_r, knee_r, ankle_r,
           shoulder_l, elbow_l, wrist_l, shoulder_r, elbow_r, wrist_r]]
     - name: joint_vel
@@ -70,14 +66,12 @@ models:
       shape: [1, 12]
       type: tensor
       kind: state/joint/velocity
-      source: imu/root
     outputs:
     - name: command
       dtype: float32
       shape: [1, 12]
       type: tensor
       kind: target/joint/torques
-      source: controller/policy_head
       element_names: [[hip_l, knee_l, ankle_l, hip_r, knee_r, ankle_r,
           shoulder_l, elbow_l, wrist_l, shoulder_r, elbow_r, wrist_r]]
 ```
@@ -143,23 +137,6 @@ TensorSemantics("kp_gains", kp, kind=OutputKindEnum.KP)
 ```
 
 > **Note:** While LEAPP does not enforce using `InputKindEnum` exclusively for inputs or `OutputKindEnum` exclusively for outputs, it is strongly recommended to follow this convention for clarity. The `kind` field accepts enum values and plain strings.
-
-### `source`
-
-The `source` field describes which sensor, subsystem, measurement stream, or upstream producer the tensor came from. This is a free-form string that LEAPP stores in the YAML exactly as provided.
-
-There is intentionally no enforced format. Recommended examples include paths such as `imu/root`, `realsense/right`, `encoder/right_wheel`, or `estimator/base_pose`.
-
-```python
-TensorSemantics("imu_gyro", tensor,
-                kind=InputKindEnum.BODY_ANGULAR_VELOCITY,
-                source="imu/root")
-
-TensorSemantics("depth_features", tensor,
-                source="realsense/right")
-```
-
-> **Note:** `source` is optional. If omitted, it does not appear in the generated YAML.
 
 ### `element_names`
 
@@ -230,4 +207,4 @@ annotate.input_tensors("node", [
 
 4. **Name uniqueness** — Each TensorSemantics' `name` must be unique within the same node's inputs (or outputs). Duplicate names will raise an error.
 
-5. **Semantic fields are optional** — All semantic fields (`kind`, `source`, `element_names`) are optional. A TensorSemantics with no semantic fields behaves identically to passing a raw tensor with the same name.
+5. **Semantic fields are optional** — All semantic fields (`kind`, `element_names`) are optional. A TensorSemantics with no semantic fields behaves identically to passing a raw tensor with the same name.

@@ -158,8 +158,8 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         self.assertEqual(entry['dtype'], "float32")
         self.assertEqual(entry['shape'], [1, 6])
 
-    def test_input_and_output_td_with_source(self):
-        """Test that source metadata from TensorSemantics appears in YAML."""
+    def test_input_and_output_td_without_source(self):
+        """Test that TensorSemantics YAML no longer includes a source field."""
         tensor = torch.randn(1, 6)
 
         leapp.start(name=self.TEST_GRAPH_NAME)
@@ -169,7 +169,6 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
                 name="imu",
                 ref=tensor,
                 kind=InputKindEnum.BODY_ANGULAR_VELOCITY,
-                source="imu/root",
             ),
         )
 
@@ -178,7 +177,6 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
                 name="filtered_imu",
                 ref=traced * 0.5,
                 kind=OutputKindEnum.BODY_ANGULAR_ACCELERATION,
-                source="realsense/right",
             ),
         ])
         leapp.stop()
@@ -192,8 +190,8 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         self.assertIsNotNone(input_entry)
         self.assertIsNotNone(output_entry)
-        self.assertEqual(input_entry["source"], "imu/root")
-        self.assertEqual(output_entry["source"], "realsense/right")
+        self.assertNotIn("source", input_entry)
+        self.assertNotIn("source", output_entry)
         self.assertEqual(input_entry["kind"], "state/body/angular_velocity")
         self.assertEqual(output_entry["kind"], "target/body/angular_acceleration")
     
