@@ -136,9 +136,9 @@ On re-entry LEAPP validates:
 
 These checks catch cases where later executions no longer match the original trace shape, dtype, or connection structure.
 
-## Runtime Validation with `InferenceManager`
+## Python Runtime Tooling with `InferenceManager`
 
-After export, `InferenceManager` gives you an end-to-end way to validate the exported graph as a deployable runtime artifact.
+After export, `InferenceManager` serves as a lightweight Python-side deployment and testing tool for exported LEAPP graphs. You can use it to smoke-test the full pipeline, validate exported artifacts end to end, and run the graph directly from Python before handing it off to a production deployer.
 
 ```python
 from leapp import InferenceManager
@@ -153,9 +153,15 @@ outputs = manager.run_policy(mock_inputs)
 ```
 
 `InferenceManager` is useful for:
-- smoke-testing the full exported pipeline
+- smoke-testing the full exported pipeline from Python
 - checking that the YAML, models, and graph wiring are internally consistent
 - validating that runtime inputs and outputs look sane after export
+- prototyping or deploying the exported graph from a Python runtime without writing a custom runner first
+
+Runtime note for ONNX models:
+- LEAPP uses `onnxruntime` by default, which is CPU-safe on all systems.
+- If you want `InferenceManager` to use ONNX Runtime's CUDA execution provider, install `onnxruntime-gpu` in the environment where you run inference.
+- When the CUDA execution provider is available, LEAPP will prefer it automatically for ONNX-backed nodes and can use the faster CUDA I/O binding path.
 
 On construction it:
 - loads the YAML description
@@ -185,6 +191,7 @@ For high-confidence exports, a practical workflow is:
 3. Run `leapp.compile_graph(validate=True, strict=True)`
 4. If needed, relax `rtol` / `atol` only when the mismatch is expected numerical drift
 5. Run a quick `InferenceManager` smoke test on the exported YAML
+6. If desired, keep using `InferenceManager` as a simple Python deployment/runtime wrapper for the exported graph
 
 ## When Validation Fails
 

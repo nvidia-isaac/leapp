@@ -565,7 +565,7 @@ exports/complete_pipeline/
 
 ## `InferenceManager`
 
-Load an exported LEAPP graph from YAML and run the full pipeline at inference time.
+Load an exported LEAPP graph from YAML and run the full pipeline from Python. `InferenceManager` is intended as a convenient testing, smoke-validation, and lightweight deployment utility for exported LEAPP graphs.
 
 ### Signature
 
@@ -604,6 +604,11 @@ outputs = manager.run_policy(sample_inputs)
 outputs = manager(sample_inputs)
 ```
 
+Typical use cases:
+- validate an exported graph end to end from Python
+- build a simple Python deployer around exported LEAPP artifacts
+- inspect expected graph inputs, outputs, and feedback state during integration
+
 ### Methods
 
 | Method | Description |
@@ -625,6 +630,7 @@ outputs = manager(sample_inputs)
 - Input dictionaries passed to `run_policy()` must use keys in `node_name/input_name` format
 - `InferenceManager` currently runs exported or referenced `jit` and `onnx` models
 - Feedback state persists across successive `run_policy()` calls unless you overwrite it manually
+- `InferenceManager` is best thought of as a Python runtime wrapper for testing, integration, and lightweight deployment of exported graphs
 
 ---
 

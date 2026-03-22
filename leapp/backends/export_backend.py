@@ -20,6 +20,7 @@ import os
 import shutil
 from typing import Callable, Tuple, Any
 
+import numpy as np
 import torch
 import onnx
 import onnxruntime as ort
@@ -52,7 +53,132 @@ class SimplifiedONNXProgram:
         # Session created lazily on first __call__
         self._session = None
         self._input_names = None
+        self._output_metas = None
         self._active_provider = None
+
+    @staticmethod
+    def _torch_dtype_to_numpy_dtype(dtype):
+        mapping = {
+            torch.bool: np.bool_,
+            torch.uint8: np.uint8,
+            torch.int8: np.int8,
+            torch.int16: np.int16,
+            torch.int32: np.int32,
+            torch.int64: np.int64,
+            torch.float16: np.float16,
+            torch.float32: np.float32,
+            torch.float64: np.float64,
+        }
+        return mapping.get(dtype)
+
+    @staticmethod
+    def _onnx_type_to_torch_dtype(type_str):
+        mapping = {
+            "tensor(bool)": torch.bool,
+            "tensor(uint8)": torch.uint8,
+            "tensor(int8)": torch.int8,
+            "tensor(int16)": torch.int16,
+            "tensor(int32)": torch.int32,
+            "tensor(int64)": torch.int64,
+            "tensor(float16)": torch.float16,
+            "tensor(float)": torch.float32,
+            "tensor(double)": torch.float64,
+        }
+        return mapping.get(type_str)
+
+    @staticmethod
+    def _output_shape_is_static(shape):
+        if shape is None:
+            return False
+        return all(isinstance(dim, int) and dim >= 0 for dim in shape)
+
+    def _can_use_cuda_iobinding(self, args):
+        if self._active_provider != 'CUDAExecutionProvider':
+            return False
+
+        if not args:
+            return False
+
+        first_tensor = args[0]
+        if not isinstance(first_tensor, torch.Tensor) or not first_tensor.is_cuda:
+            return False
+
+        for tensor in args:
+            if not isinstance(tensor, torch.Tensor) or not tensor.is_cuda:
+                return False
+            if tensor.device != first_tensor.device:
+                return False
+
+        if self._output_metas is None:
+            return False
+
+        for output_meta in self._output_metas:
+            if not self._output_shape_is_static(output_meta.shape):
+                return False
+            if self._onnx_type_to_torch_dtype(output_meta.type) is None:
+                return False
+
+        return True
+
+    def _run_with_standard_inference(self, args, output_device):
+        input_dict = {}
+        for name, tensor in zip(self._input_names, args):
+            if isinstance(tensor, torch.Tensor):
+                input_dict[name] = tensor.detach().cpu().numpy()
+            else:
+                input_dict[name] = tensor
+
+        outputs = self._session.run(None, input_dict)
+        return tuple(torch.from_numpy(out).to(output_device) for out in outputs)
+
+    def _run_with_cuda_iobinding(self, args):
+        binding = self._session.io_binding()
+
+        prepared_inputs = []
+        for name, tensor in zip(self._input_names, args):
+            prepared = tensor.detach().contiguous()
+            prepared_inputs.append(prepared)
+            device_id = prepared.device.index or 0
+            np_dtype = self._torch_dtype_to_numpy_dtype(prepared.dtype)
+            if np_dtype is None:
+                raise TypeError(
+                    f"Unsupported CUDA input dtype for ONNX Runtime I/O binding: {prepared.dtype}"
+                )
+            binding.bind_input(
+                name=name,
+                device_type='cuda',
+                device_id=device_id,
+                element_type=np_dtype,
+                shape=tuple(prepared.shape),
+                buffer_ptr=prepared.data_ptr(),
+            )
+
+        output_device = prepared_inputs[0].device
+        outputs = []
+        for output_meta in self._output_metas:
+            torch_dtype = self._onnx_type_to_torch_dtype(output_meta.type)
+            if torch_dtype is None:
+                raise TypeError(
+                    f"Unsupported ONNX output dtype for CUDA I/O binding: {output_meta.type}"
+                )
+
+            output_tensor = torch.empty(
+                tuple(output_meta.shape),
+                dtype=torch_dtype,
+                device=output_device,
+            ).contiguous()
+            binding.bind_output(
+                name=output_meta.name,
+                device_type='cuda',
+                device_id=output_device.index or 0,
+                element_type=self._torch_dtype_to_numpy_dtype(torch_dtype),
+                shape=tuple(output_tensor.shape),
+                buffer_ptr=output_tensor.data_ptr(),
+            )
+            outputs.append(output_tensor)
+
+        self._session.run_with_iobinding(binding)
+        return tuple(outputs)
 
     def __del__(self):
         """Clean up temp directory if we own it."""
@@ -166,6 +292,7 @@ class SimplifiedONNXProgram:
                 model_path, sess_options, providers=providers)
             self._input_names = [
                 inp.name for inp in self._session.get_inputs()]
+            self._output_metas = list(self._session.get_outputs())
             self._active_provider = self._session.get_providers(
             )[0] if self._session.get_providers() else 'CPUExecutionProvider'
 
@@ -193,19 +320,10 @@ class SimplifiedONNXProgram:
                 output_device = tensor.device
                 break
 
-        # Build input dict: convert torch tensors to numpy
-        input_dict = {}
-        for name, tensor in zip(self._input_names, args):
-            if isinstance(tensor, torch.Tensor):
-                input_dict[name] = tensor.detach().cpu().numpy()
-            else:
-                input_dict[name] = tensor
+        if self._can_use_cuda_iobinding(args):
+            return self._run_with_cuda_iobinding(args)
 
-        # Run inference
-        outputs = self._session.run(None, input_dict)
-
-        # Convert outputs back to torch tensors on the appropriate device
-        return tuple(torch.from_numpy(out).to(output_device) for out in outputs)
+        return self._run_with_standard_inference(args, output_device)
 
 
 def prepare_tensors_for_export(tensors):
@@ -330,7 +448,10 @@ class ExportBackend(abc.ABC):
             )
         model = SimplifiedONNXProgram(model_path)
         self.compiled_model = model
-        self.runtime_device = self._select_runtime_device()
+        has_ort_cuda = 'CUDAExecutionProvider' in ort.get_available_providers()
+        self.runtime_device = 'cuda' if (
+            torch.cuda.is_available() and has_ort_cuda
+        ) else 'cpu'
         self.compiled_module = None # ONNX models cannot be represented as a module for reexport.
     
     def _load_torchscript(self, model_path: str, sha256sum: str):

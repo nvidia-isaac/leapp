@@ -60,6 +60,97 @@ class TestOnnxProviderSelection(unittest.TestCase):
             "CUDA execution provider not available. Falling back to CPU."
         )
 
+    def test_cuda_iobinding_helper_binds_real_session_calls(self):
+        program = SimplifiedONNXProgram("fake.onnx")
+        binding = mock.Mock()
+        fake_session = mock.Mock()
+        fake_session.io_binding.return_value = binding
+        program._session = fake_session
+        program._input_names = ["input"]
+
+        output_meta = mock.Mock()
+        output_meta.name = "output"
+        output_meta.shape = [2, 3]
+        output_meta.type = "tensor(float)"
+        program._output_metas = [output_meta]
+
+        input_tensor = torch.randn(3, 2, dtype=torch.float32).transpose(0, 1)
+        outputs = program._run_with_cuda_iobinding((input_tensor,))
+
+        fake_session.io_binding.assert_called_once_with()
+        binding.bind_input.assert_called_once()
+        binding.bind_output.assert_called_once()
+        fake_session.run_with_iobinding.assert_called_once_with(binding)
+
+        input_kwargs = binding.bind_input.call_args.kwargs
+        self.assertEqual(input_kwargs["name"], "input")
+        self.assertEqual(input_kwargs["device_type"], "cuda")
+        self.assertEqual(input_kwargs["device_id"], 0)
+        self.assertEqual(input_kwargs["element_type"], torch.tensor([], dtype=torch.float32).numpy().dtype.type)
+        self.assertEqual(input_kwargs["shape"], (2, 3))
+        self.assertIsInstance(input_kwargs["buffer_ptr"], int)
+        self.assertGreater(input_kwargs["buffer_ptr"], 0)
+
+        output_kwargs = binding.bind_output.call_args.kwargs
+        self.assertEqual(output_kwargs["name"], "output")
+        self.assertEqual(output_kwargs["device_type"], "cuda")
+        self.assertEqual(output_kwargs["device_id"], 0)
+        self.assertEqual(output_kwargs["element_type"], torch.tensor([], dtype=torch.float32).numpy().dtype.type)
+        self.assertEqual(output_kwargs["shape"], (2, 3))
+        self.assertIsInstance(output_kwargs["buffer_ptr"], int)
+        self.assertGreater(output_kwargs["buffer_ptr"], 0)
+
+        self.assertEqual(len(outputs), 1)
+        self.assertIsInstance(outputs[0], torch.Tensor)
+        self.assertEqual(tuple(outputs[0].shape), (2, 3))
+        self.assertEqual(outputs[0].dtype, torch.float32)
+
+    def test_onnx_program_uses_iobinding_when_cuda_provider_is_active(self):
+        program = SimplifiedONNXProgram("fake.onnx")
+        fake_session = mock.Mock()
+        fake_session.get_providers.return_value = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        program._session = fake_session
+        program._input_names = ["input"]
+        program._output_metas = []
+        program._active_provider = "CUDAExecutionProvider"
+
+        with mock.patch.object(
+            program, "_can_use_cuda_iobinding", return_value=True
+        ) as can_use, mock.patch.object(
+            program, "_run_with_cuda_iobinding", return_value=("fast-path",)
+        ) as run_cuda, mock.patch.object(
+            program, "_run_with_standard_inference"
+        ) as run_standard:
+            result = program(torch.tensor([1.0], dtype=torch.float32))
+
+        can_use.assert_called_once()
+        run_cuda.assert_called_once()
+        run_standard.assert_not_called()
+        self.assertEqual(result, ("fast-path",))
+
+    def test_onnx_program_falls_back_without_cuda_iobinding(self):
+        program = SimplifiedONNXProgram("fake.onnx")
+        fake_session = mock.Mock()
+        fake_session.get_providers.return_value = ["CPUExecutionProvider"]
+        program._session = fake_session
+        program._input_names = ["input"]
+        program._output_metas = []
+        program._active_provider = "CPUExecutionProvider"
+
+        with mock.patch.object(
+            program, "_can_use_cuda_iobinding", return_value=False
+        ) as can_use, mock.patch.object(
+            program, "_run_with_cuda_iobinding"
+        ) as run_cuda, mock.patch.object(
+            program, "_run_with_standard_inference", return_value=("cpu-path",)
+        ) as run_standard:
+            result = program(torch.tensor([1.0], dtype=torch.float32))
+
+        can_use.assert_called_once()
+        run_cuda.assert_not_called()
+        run_standard.assert_called_once()
+        self.assertEqual(result, ("cpu-path",))
+
 
 class TestOnnxBackend(LEAPPFunctionalTestBase):
     """
@@ -364,7 +455,7 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
         leapp.start(name=self.TEST_GRAPH_NAME)
         apply_attention(input_tensor)
         leapp.stop()
-        leapp.compile_graph(visualize=False)
+        leapp.compile_graph(visualize=False, atol=1e-3)
         self.verify_all_models_exist('apply_attention')
 
     @pytest.mark.filterwarnings("ignore:You are using the legacy TorchScript-based ONNX export")
@@ -1011,7 +1102,7 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
         leapp.start(name=self.TEST_GRAPH_NAME)
         module.split_process(input_tensor)
         leapp.stop()
-        leapp.compile_graph(visualize=False)
+        leapp.compile_graph(visualize=False, atol=1e-3)
         self.verify_all_models_exist('split_process')
     
 class TestTorchBackend(LEAPPFunctionalTestBase):

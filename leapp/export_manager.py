@@ -552,8 +552,6 @@ class ExportManager:
             self._validate_flat_state_payload("update_state", node_name, tensors)
             return self._passthrough_dict_values(tensors)
 
- 
-
         if node_name not in self.nodes:
             msg = (
                 f"update_state() called for node '{node_name}' but node not found. "
