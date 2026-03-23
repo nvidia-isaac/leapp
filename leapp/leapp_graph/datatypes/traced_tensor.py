@@ -11,6 +11,7 @@ and graph recording.
 """
 
 import operator
+import warnings
 from abc import ABCMeta
 
 import torch
@@ -1004,21 +1005,32 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             return
         
         # Handle unsupported cases with warnings
-        if isinstance(key, tuple):
-            if all(isinstance(k, int) for k in key):
-                _get_logger().warning(
-                    "Multi-dimensional integer indexing in setitem may not export correctly. "
-                    "Consider using torch.index_put directly."
-                )
-            else:
-                _get_logger().warning(
-                    "Complex multi-dimensional indexing in setitem may not export correctly. "
-                    "Consider restructuring to use simple slices or torch.index_put."
-                )
+        has_slice = isinstance(key, tuple) and any(isinstance(k, slice) for k in key)
+        if has_slice:
+            warnings.warn(
+                f"TracedTensor setitem with multi-dimensional slice key {key} "
+                "cannot be lowered to a functional op. The exported graph will "
+                "contain a raw __setitem__ node that is invalid for FX execution, "
+                "TorchScript, and ONNX export.\n"
+                "To fix this, replace the slice assignment with functional ops:\n"
+                "  - torch.slice_scatter (one call per dimension)\n"
+                "  - torch.index_put with explicit index tensors\n"
+                "  - Functional assembly with torch.cat / torch.stack",
+                stacklevel=2,
+            )
+        elif isinstance(key, tuple):
+            warnings.warn(
+                f"TracedTensor setitem with multi-dimensional key {key} "
+                "may produce an invalid graph for export. "
+                "Consider using torch.index_put directly.",
+                stacklevel=2,
+            )
         else:
-            _get_logger().warning(
-                f"Indexing with {type(key).__name__} in setitem may not export correctly. "
-                "Consider using torch.index_put or torch.masked_scatter directly."
+            warnings.warn(
+                f"TracedTensor setitem with {type(key).__name__} key "
+                "may produce an invalid graph for export. "
+                "Consider using torch.index_put or torch.masked_scatter directly.",
+                stacklevel=2,
             )
         
         # Fallback: record __setitem__ directly (may not export)
