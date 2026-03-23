@@ -2208,6 +2208,36 @@ class TestTracedTensor(unittest.TestCase):
         # x after mutations: [1.0, 2.0, 20.0, 30.0, 5.0]
         expected = torch.tensor([2.0, 4.0, 40.0, 60.0, 10.0])
         self.validate_export(ctx.m, (input_x, input_other), expected, "setitem_cross_tensor")
+
+    @pytest.mark.skip(reason="Tuple-of-slices keys are not lowered by _create_setitem_proxy(), so export is expected to fail until that lowering is implemented.")
+    def test_setitem_multidim_partial_slice_fx_torchscript_onnx(self):
+        """Test multi-dimensional partial slice assignment export.
+
+        This currently falls back to raw __setitem__ because tuple-of-slices
+        keys are not lowered by _create_setitem_proxy(), so export is expected
+        to fail until that lowering is implemented.
+        """
+        ctx = TracedTensorNode(name="test_setitem_multidim_partial_export", node_index=0)
+        x = ctx.create_input(torch.arange(36.0).reshape(1, 6, 6), name="x")
+        other = ctx.create_input(torch.arange(36.0, 72.0).reshape(1, 6, 6), name="other")
+
+        x[:, 0:3, 0:3] = other[:, 0:3, 0:3]
+        y = x[:, 3:6, 3:6] * 2.0
+
+        ctx.compile_trace({'y': y})
+
+        input_x = torch.arange(36.0).reshape(1, 6, 6)
+        input_other = torch.arange(36.0, 72.0).reshape(1, 6, 6)
+        expected = input_x.clone()
+        expected[:, 0:3, 0:3] = input_other[:, 0:3, 0:3]
+        expected = expected[:, 3:6, 3:6] * 2.0
+
+        self.validate_export(
+            ctx.m,
+            (input_x, input_other),
+            expected,
+            "setitem_multidim_partial",
+        )
         
     # ==================== Class Swap: plain_tensor[:] = TracedTensor ====================
     # When a plain torch.Tensor is the target of a full-slice assignment or
