@@ -335,6 +335,102 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     # =========================================================================
 
     @classmethod
+    def _handle_class_swap(cls, func, args=(), kwargs=None):
+        """Upgrade plain tensor targets to TracedTensor for full-copy mutations.
+
+        Returns:
+            tuple[bool, object]: (handled, result). When handled is True, result
+            should be returned directly from __torch_function__.
+        """
+        if kwargs is None:
+            kwargs = {}
+
+        original_func_name = getattr(func, '__name__', '')
+
+        if original_func_name == '__setitem__' and len(args) >= 3:
+            target, key, value = args[0], args[1], args[2]
+            if type(target) is torch.Tensor and isinstance(value, TracedTensor):
+                is_full_copy = (
+                    (isinstance(key, slice) and key == slice(None))
+                    or key is Ellipsis
+                )
+                if is_full_copy:
+                    target.__class__ = TracedTensor
+                    target._name = value._name
+                    target._context = value._context
+                    target._proxy = value._proxy
+                    return True, None
+
+                _get_logger().warning(
+                    f"Partial-slice assignment (plain_tensor[{key}] = TracedTensor) "
+                    "copies data but does NOT propagate tracing to the target tensor. "
+                    "Subsequent operations on the target will be untraced. "
+                    "Use full-slice assignment (target[:] = source) or "
+                    "reassign the variable (target = source) instead."
+                )
+
+        elif original_func_name == 'copy_' and len(args) >= 2:
+            target, source = args[0], args[1]
+            if type(target) is torch.Tensor and isinstance(source, TracedTensor):
+                target.__class__ = TracedTensor
+                target._name = source._name
+                target._context = source._context
+                target._proxy = source._proxy
+                return True, target
+
+        return False, None
+
+    @classmethod
+    def _handle_scripted_call(
+        cls,
+        func,
+        traced_tensor,
+        real_args,
+        real_kwargs,
+        tensor_out,
+        args=(),
+        kwargs=None,
+    ):
+        """Handle TorchScript calls by decomposing or rewrapping outputs.
+
+        Returns:
+            tuple[bool, object]: (handled, result). When handled is True, result
+            should be returned directly from __torch_function__.
+        """
+        if kwargs is None:
+            kwargs = {}
+
+        func_type_name = type(func).__name__
+        func_module = type(func).__module__ if hasattr(type(func), '__module__') else ''
+
+        is_scripted = ('ScriptMethod' in func_type_name or 'ScriptModule' in func_type_name)
+
+        if not is_scripted:
+            if func_module.startswith('torch.jit') or func_module.startswith('torch._C'):
+                if hasattr(func, '__self__') and hasattr(func.__self__, '__class__'):
+                    self_class_name = func.__self__.__class__.__name__
+                    is_scripted = 'Script' in self_class_name
+
+        if not is_scripted:
+            return False, None
+
+        fx_module = TracedTensor._handle_TS_decomposition(func, real_args, real_kwargs)
+        if fx_module is not None:
+            return True, fx_module(*args, **kwargs)
+
+        if isinstance(tensor_out, (tuple, list)):
+            result = []
+            for t in tensor_out:
+                if isinstance(t, torch.Tensor):
+                    result.append(traced_tensor._new(t, traced_tensor.proxy))
+                else:
+                    result.append(t)
+            return True, type(tensor_out)(result)
+        if isinstance(tensor_out, torch.Tensor):
+            return True, traced_tensor._new(tensor_out, traced_tensor.proxy)
+        return True, tensor_out
+
+    @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
         """Intercept torch operations to record them in the graph.
 
@@ -373,46 +469,24 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         if not traced_tensor.validate_status(args, kwargs):
             return tensor_out
 
-        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ TorchScript handling ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        # Check if we're trying to call a TorchScript module/method
-        # If detected, decompose into individual aten ops via TS2EPConverter
-        # so the tracing chain is preserved transparently.
-        func_type_name = type(func).__name__
-        func_module = type(func).__module__ if hasattr(
-            type(func), '__module__') else ''
+        # ================== SPECIAL CASES IN HANDLING ==================
+        handled, result = cls._handle_class_swap(func, args, kwargs)
+        if handled:
+            return result
 
-        is_scripted = ('ScriptMethod' in func_type_name or 'ScriptModule' in func_type_name)
+        handled, result = cls._handle_scripted_call(
+            func,
+            traced_tensor,
+            real_args,
+            real_kwargs,
+            tensor_out,
+            args,
+            kwargs,
+        )
+        if handled:
+            return result
 
-        if not is_scripted:
-            # Also check if the function comes from torch.jit module
-            if func_module.startswith('torch.jit') or func_module.startswith('torch._C'):
-                if hasattr(func, '__self__') and hasattr(func.__self__, '__class__'):
-                    self_class_name = func.__self__.__class__.__name__
-                    is_scripted = 'Script' in self_class_name
-        
-        if is_scripted:
-            # Decompose the TorchScript module into individual aten ops
-            fx_module = TracedTensor._handle_TS_decomposition(func, real_args, real_kwargs)
-            # Replay the decomposed FX module with TracedTensors.
-            # Each aten op triggers __torch_function__, recording it in our graph.
-            if fx_module is not None:
-                return fx_module(*args, **kwargs)
-
-            # Decomposition failed — wrap raw outputs as TracedTensors
-            # using the input's proxy/context so the tracing chain stays intact.
-            if isinstance(tensor_out, (tuple, list)):
-                result = []
-                for t in tensor_out:
-                    if isinstance(t, torch.Tensor):
-                        result.append(traced_tensor._new(t, traced_tensor.proxy))
-                    else:
-                        result.append(t)
-                return type(tensor_out)(result)
-            elif isinstance(tensor_out, torch.Tensor):
-                return traced_tensor._new(tensor_out, traced_tensor.proxy)
-            return tensor_out
-
-        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ END OF TorchScript handling ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        # ================== SPECIAL CASES IN HANDLING ==================
 
         # Helper to recursively extract proxies
         def extract_proxy(obj):

@@ -2209,6 +2209,126 @@ class TestTracedTensor(unittest.TestCase):
         expected = torch.tensor([2.0, 4.0, 40.0, 60.0, 10.0])
         self.validate_export(ctx.m, (input_x, input_other), expected, "setitem_cross_tensor")
         
+    # ==================== Class Swap: plain_tensor[:] = TracedTensor ====================
+    # When a plain torch.Tensor is the target of a full-slice assignment or
+    # copy_() with a TracedTensor source, the plain tensor is silently upgraded
+    # to a TracedTensor so subsequent operations continue the FX trace.
+
+    def test_class_swap_full_slice(self):
+        """plain_buf[:] = traced upgrades buf and continues the trace."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+
+        buf = torch.zeros(3)
+        buf[:] = x
+
+        self.assertIsInstance(buf, TracedTensor)
+        y = buf * 2
+        self.assertIsInstance(y, TracedTensor)
+
+        ctx.compile_trace({'y': y})
+
+        input_tensor = torch.tensor([4.0, 5.0, 6.0])
+        expected = input_tensor * 2
+        self.validate_export(ctx.m, (input_tensor,), expected, "class_swap_full_slice")
+
+    def test_class_swap_ellipsis(self):
+        """plain_buf[...] = traced upgrades buf identically to [:]."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+
+        buf = torch.zeros(3)
+        buf[...] = x
+
+        self.assertIsInstance(buf, TracedTensor)
+        y = buf + 1.0
+
+        ctx.compile_trace({'y': y})
+
+        input_tensor = torch.tensor([4.0, 5.0, 6.0])
+        expected = input_tensor + 1.0
+        self.validate_export(ctx.m, (input_tensor,), expected, "class_swap_ellipsis")
+
+    def test_class_swap_copy_(self):
+        """plain_buf.copy_(traced) upgrades buf and continues the trace."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([7.0, 8.0, 9.0]), name="x")
+
+        buf = torch.zeros(3)
+        buf.copy_(x)
+
+        self.assertIsInstance(buf, TracedTensor)
+        y = buf - 1.0
+
+        ctx.compile_trace({'y': y})
+
+        input_tensor = torch.tensor([1.0, 2.0, 3.0])
+        expected = input_tensor - 1.0
+        self.validate_export(ctx.m, (input_tensor,), expected, "class_swap_copy")
+
+    def test_class_swap_multidim(self):
+        """2-D buf[:] = traced works for higher-rank tensors."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.randn(3, 4), name="x")
+
+        buf = torch.zeros(3, 4)
+        buf[:] = x
+
+        self.assertIsInstance(buf, TracedTensor)
+        y = torch.relu(buf)
+
+        ctx.compile_trace({'y': y})
+
+        input_tensor = torch.randn(3, 4)
+        expected = torch.relu(input_tensor)
+        self.validate_export(ctx.m, (input_tensor,), expected, "class_swap_multidim")
+
+    def test_class_swap_chained(self):
+        """Chain: buf1[:] = traced, buf2[:] = (buf1 * 3)."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+
+        buf1 = torch.zeros(3)
+        buf2 = torch.zeros(3)
+        buf1[:] = x
+        intermediate = buf1 * 3.0
+        buf2[:] = intermediate
+        y = buf2 + 10.0
+
+        ctx.compile_trace({'y': y})
+
+        input_tensor = torch.tensor([4.0, 5.0, 6.0])
+        expected = input_tensor * 3.0 + 10.0
+        self.validate_export(ctx.m, (input_tensor,), expected, "class_swap_chained")
+
+    def test_class_swap_does_not_fire_for_partial_slice(self):
+        """Partial slice buf[0:2] = traced should NOT upgrade buf."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+
+        buf = torch.zeros(3)
+        buf[0:2] = x[0:2]
+
+        self.assertNotIsInstance(buf, TracedTensor)
+
+    def test_class_swap_does_not_fire_for_traced_target(self):
+        """When target is already a TracedTensor, the existing __setitem__ handles it."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+        y = ctx.create_input(torch.tensor([4.0, 5.0, 6.0]), name="y")
+
+        x[:] = y
+
+        self.assertIsInstance(x, TracedTensor)
+        z = x * 2
+        ctx.compile_trace({'z': z})
+
+        input_x = torch.tensor([0.0, 0.0, 0.0])
+        input_y = torch.tensor([7.0, 8.0, 9.0])
+        expected = input_y * 2
+        output = ctx.m(input_x, input_y)
+        self.assertTrue(torch.allclose(output, expected))
+
     # ==================== Unsupported Operation error message ====================
     def test_boolean_indexing_raises_error(self):
         """Test that boolean indexing with TracedTensor raises a clear error."""
