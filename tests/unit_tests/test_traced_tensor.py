@@ -1863,6 +1863,85 @@ class TestTracedTensor(unittest.TestCase):
         expected = torch.tensor([2.0, 3.0])
         self.assertTrue(torch.allclose(y.tensor, expected))
 
+    def test_boolean_indexing_with_traced_mask_lowers_to_masked_select(self):
+        """Test that x[mask] lowers to torch.masked_select for whole-key masks."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        input_x = torch.tensor([1.0, 2.0, 3.0])
+        x = ctx.create_input(input_x, name="x")
+
+        mask = x > 1.5
+        y = x[mask]
+
+        self.assertIsInstance(y, TracedTensor)
+        expected = torch.tensor([2.0, 3.0])
+        self.assertTrue(torch.allclose(y.tensor, expected))
+
+        ctx.compile_trace({'y': y})
+        self.validate_export(
+            ctx.m,
+            (input_x,),
+            expected,
+            "masked_select_whole_key_traced_mask",
+        )
+
+    def test_advanced_indexing_with_traced_indices_lowers_to_index_select(self):
+        """Test that x[indices] lowers to torch.index_select for whole-key indices."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        input_x = torch.tensor([10.0, 20.0, 30.0, 40.0, 50.0])
+        input_indices = torch.tensor([0, 2, 4], dtype=torch.long)
+        x = ctx.create_input(input_x, name="x")
+        indices = ctx.create_input(input_indices, name="indices")
+
+        y = x[indices]
+
+        self.assertIsInstance(y, TracedTensor)
+        expected = torch.tensor([10.0, 30.0, 50.0])
+        self.assertTrue(torch.allclose(y.tensor, expected))
+
+        ctx.compile_trace({'y': y})
+        self.validate_export(
+            ctx.m,
+            (input_x, input_indices),
+            expected,
+            "index_select_whole_key_traced_indices",
+        )
+
+    def test_nd_advanced_indexing_with_traced_indices_lowers_to_index_select(self):
+        """Test that x[indices_nd] lowers via flatten+reshape for N-D traced indices."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        input_x = torch.tensor(
+            [
+                [10.0, 11.0],
+                [20.0, 21.0],
+                [30.0, 31.0],
+                [40.0, 41.0],
+                [50.0, 51.0],
+            ]
+        )
+        input_indices = torch.tensor([[0, 2], [4, 1]], dtype=torch.long)
+        x = ctx.create_input(input_x, name="x")
+        indices = ctx.create_input(input_indices, name="indices")
+
+        y = x[indices]
+
+        self.assertIsInstance(y, TracedTensor)
+        expected = torch.tensor(
+            [
+                [[10.0, 11.0], [30.0, 31.0]],
+                [[50.0, 51.0], [20.0, 21.0]],
+            ]
+        )
+        self.assertEqual(y.shape, expected.shape)
+        self.assertTrue(torch.allclose(y.tensor, expected))
+
+        ctx.compile_trace({'y': y})
+        self.validate_export(
+            ctx.m,
+            (input_x, input_indices),
+            expected,
+            "index_select_nd_whole_key_traced_indices",
+        )
+
     def test_all_arithmetic_functions(self):
         """Test all arithmetic functions with tracking, TorchScript, and ONNX."""
         # Get all static methods from TensorArithmeticFunctions
@@ -2360,43 +2439,29 @@ class TestTracedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(output, expected))
 
     # ==================== Unsupported Operation error message ====================
-    def test_boolean_indexing_raises_error(self):
-        """Test that boolean indexing with TracedTensor raises a clear error."""
+    def test_tuple_boolean_indexing_with_traced_mask_raises_error(self):
+        """Test that tuple boolean indexing with TracedTensor remains unsupported."""
         ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+        x = ctx.create_input(torch.tensor([[1.0, 2.0], [3.0, 4.0]]), name="x")
+        mask = ctx.create_input(torch.tensor([True, False]), name="mask")
 
-        # Create a boolean mask (which is also a TracedTensor)
-        mask = x > 1.5  # TracedTensor with dtype bool
-
-        # Verify mask is indeed a TracedTensor with bool dtype
-        self.assertIsInstance(mask, TracedTensor)
-        self.assertEqual(mask.dtype, torch.bool)
-
-        # Try to use boolean indexing - should raise NotImplementedError with helpful message
         with self.assertRaises(NotImplementedError) as context:
-            y = x[mask]
+            _ = x[:, mask]
 
-        # Verify the error message is helpful
         error_msg = str(context.exception)
         self.assertIn("Boolean/mask indexing", error_msg)
         self.assertIn("not supported", error_msg)
-        self.assertIn("torch.masked_select", error_msg)
-        self.assertIn("mask.tensor", error_msg)
+        self.assertIn("masked_select", error_msg)
 
-    def test_advanced_indexing_with_tracedtensor_raises_error(self):
-        """Test that advanced indexing with TracedTensor indices raises clear error."""
+    def test_tuple_advanced_indexing_with_traced_indices_raises_error(self):
+        """Test that tuple advanced indexing with TracedTensor indices remains unsupported."""
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(torch.tensor(
-            [10.0, 20.0, 30.0, 40.0, 50.0]), name="x")
+            [[10.0, 20.0, 30.0], [40.0, 50.0, 60.0]]), name="x")
+        indices = ctx.create_input(torch.tensor([0, 2], dtype=torch.long), name="indices")
 
-        # Create indices as TracedTensor (non-boolean)
-        indices_tensor = torch.tensor([0, 2, 4], dtype=torch.long)
-        ctx2 = TracedTensorNode(name="test2", node_index=1)
-        indices = ctx2.create_input(indices_tensor, name="indices")
-
-        # Try to use TracedTensor as index - should raise NotImplementedError
         with self.assertRaises(NotImplementedError) as context:
-            _ = x[indices]
+            _ = x[:, indices]
 
         error_msg = str(context.exception)
         self.assertIn("Advanced indexing", error_msg)

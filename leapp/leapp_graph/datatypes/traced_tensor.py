@@ -925,28 +925,46 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         Supports all Python indexing operations: slicing, integer indexing,
         tensor indexing, etc. The operation is recorded in the computation graph.
 
-        Note: Boolean/mask indexing with TracedTensor masks is not supported
-        because FX tracer cannot serialize TracedTensor objects as arguments.
+        Whole-key traced masks/indices are lowered to torch.masked_select and
+        torch.index_select respectively. Tuple/mixed traced indexing remains
+        unsupported because FX cannot serialize TracedTensor objects as
+        indexing arguments directly.
         """
         # Check for boolean mask indexing with TracedTensor
         if isinstance(key, TracedTensor):
+            result_tensor = self.tensor[key.tensor]
+
+            # Skip tracing if context is not tracing - return raw tensor
+            if not self.validate_status(args=(key,)):
+                return result_tensor
+
             # Check if it's a boolean tensor (mask)
             if key.dtype == torch.bool:
-                raise NotImplementedError(
-                    "Boolean/mask indexing with TracedTensor is not supported. "
-                    "The FX tracer cannot serialize TracedTensor objects as indexing arguments.\n"
-                    "Alternatives:\n"
-                    "  1. Use torch.masked_select(tensor, mask) instead\n"
-                    "  2. Convert mask to regular tensor: tensor[mask.tensor]\n"
-                    "  3. Use torch.where() for conditional selection"
+                proxy_out = self._context.tracer.create_proxy(
+                    "call_function", torch.masked_select, (self._proxy, key.proxy), {}
                 )
-            else:
-                # Non-boolean tensor indexing with TracedTensor
+                return self._new(result_tensor, proxy_out)
+
+            if key.dtype not in (torch.int32, torch.int64):
                 raise NotImplementedError(
-                    "Advanced indexing with TracedTensor indices is not supported. "
-                    "The FX tracer cannot serialize TracedTensor objects as indexing arguments.\n"
-                    "Use torch.index_select() when selecting along a dimension with traced indices"
+                    "Advanced indexing with TracedTensor indices is only auto-lowered "
+                    "for integer index tensors. "
+                    f"Received dtype {key.dtype}."
                 )
+
+            flat_index_proxy = self._context.tracer.create_proxy(
+                "call_method", "reshape", (key.proxy, (-1,)), {}
+            )
+            proxy_out = self._context.tracer.create_proxy(
+                "call_function", torch.index_select, (self._proxy, 0, flat_index_proxy), {}
+            )
+
+            if key.ndim > 1:
+                output_shape = tuple(key.shape) + tuple(self.shape[1:])
+                proxy_out = self._context.tracer.create_proxy(
+                    "call_method", "reshape", (proxy_out, output_shape), {}
+                )
+            return self._new(result_tensor, proxy_out)
 
         # Check for tuple containing TracedTensor
         if isinstance(key, tuple):

@@ -21,11 +21,18 @@ from enum import Enum
 class InputKindEnum(Enum):
     JOINT_POSITION= "state/joint/position"
     JOINT_VELOCITY= "state/joint/velocity"
+    JOINT_EFFORT= "state/joint/effort"
+    BODY_POSE= "state/body/pose"
+    BODY_VEL= "state/body/velocity"
+    BODY_ACC= "state/body/acceleration"
     BODY_LINEAR_ACCELERATION= "state/body/linear_acceleration"
     BODY_LINEAR_VELOCITY= "state/body/linear_velocity"
     BODY_ANGULAR_ACCELERATION= "state/body/angular_acceleration"
     BODY_ANGULAR_VELOCITY= "state/body/angular_velocity"
     BODY_ROTATION= "state/body/rotation"
+    BODY_POSITION= "state/body/position"
+    WRENCH= "state/wrench"
+    VECTOR3D = "state/vector3d"
     COMMAND_JOINT_POSITION= "command/joint/position"
     COMMAND_JOINT_VELOCITY= "command/joint/velocity"
     COMMAND_JOINT_TORQUES= "command/joint/torques"
@@ -39,11 +46,10 @@ class OutputKindEnum(Enum):
     JOINT_POSITION="target/joint/position"
     JOINT_VELOCITY="target/joint/velocity"
     JOINT_TORQUES="target/joint/torques"
+    JOINT_EFFORT="target/joint/effort"
     BODY_POSITION="target/body/position"
     BODY_LINEAR_ACCELERATION="target/body/linear_acceleration"
     BODY_ORIENTATION="target/body/orientation"
     BODY_LINEAR_VELOCITY="target/body/linear_velocity"
     BODY_ANGULAR_ACCELERATION="target/body/angular_acceleration"
-
-
 

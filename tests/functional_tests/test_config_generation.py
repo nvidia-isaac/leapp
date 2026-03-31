@@ -328,6 +328,36 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         self.assertEqual(self._find_io_by_name(inputs, "vel")['kind'], "state/joint/velocity")
         self.assertEqual(self._find_io_by_name(outputs, "torques")['kind'], "target/joint/torques")
 
+    def test_input_td_with_extra_fields_flattened_into_yaml(self):
+        """Test that TensorSemantics.extra fields are emitted as top-level YAML keys."""
+        tensor = torch.randn(1, 4)
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        traced = annotate.input_tensors(
+            "extra_meta_node",
+            TensorSemantics(
+                name="joint_pos",
+                ref=tensor,
+                kind=InputKindEnum.JOINT_POSITION,
+                extra={"id": "abc", "frame": "base"},
+            ),
+        )
+
+        output = traced * 2.0
+        annotate.output_tensors("extra_meta_node", {"out": output})
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        config = self._load_yaml()
+        inputs, _ = self._get_node_io_from_yaml(config, "extra_meta_node")
+
+        entry = self._find_io_by_name(inputs, "joint_pos")
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry["kind"], "state/joint/position")
+        self.assertEqual(entry["id"], "abc")
+        self.assertEqual(entry["frame"], "base")
+        self.assertNotIn("extra", entry)
+
     # =========================================================================
     # No metadata (baseline)
     # =========================================================================

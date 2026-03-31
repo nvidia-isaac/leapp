@@ -81,6 +81,7 @@ class TensorSemantics:
     # Semantic fields
     kind: Optional[InputKindEnum | OutputKindEnum | str] = None
     element_names: Optional[List] = None
+    extra: Optional[Dict[str, Any]] = None
 
     def __post_init__(self):
         '''error checking, auto conditioning'''
@@ -94,24 +95,36 @@ class TensorSemantics:
 
 
     def to_dict(self) -> Dict[str, Any]:
-        """Return all non-None semantic fields, excluding internal fields."""
+        """Return all non-None semantic fields, excluding internal fields.
+
+        Extra fields are flattened directly into the result dict rather than
+        nested under an 'extra' key.
+        """
         result = {}
         for f in fields(self):
-            if f.name not in self._INTERNAL_FIELDS:
-                value = getattr(self, f.name)
-                if value is not None:
-                    result[f.name] = value
+            if f.name in self._INTERNAL_FIELDS or f.name == 'extra':
+                continue
+            value = getattr(self, f.name)
+            if value is not None:
+                result[f.name] = value
+        if self.extra:
+            result.update(self.extra)
         return result
 
     def update(self, values: Dict[str, Any]):
-        """Set semantic fields from a dict."""
+        """Set semantic fields from a dict.
+
+        Known dataclass fields are set directly. Unknown keys are stored
+        in the ``extra`` dict so they still appear in the serialized YAML.
+        """
         valid_fields = {f.name for f in fields(self)} - self._INTERNAL_FIELDS
         for key, value in values.items():
-            if key not in valid_fields:
-                _get_logger().warning(
-                    f"Unknown semantic field '{key}' for TensorSemantics, ignoring")
-                continue
-            setattr(self, key, value)
+            if key in valid_fields:
+                setattr(self, key, value)
+            else:
+                if self.extra is None:
+                    self.extra = {}
+                self.extra[key] = value
         self.__post_init__()
 
     @staticmethod
