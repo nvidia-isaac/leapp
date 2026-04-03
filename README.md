@@ -108,7 +108,7 @@ from leapp import annotate
 - `annotate.method(export_with, node_name, ...)` — decorator, shorthand for annotating i/o with function structure
 - `annotate.state_tensors(node_name, tensors)` — declare recurrent/state inputs
 - `annotate.update_state(node_name, tensors)` — update recurrent state outputs
-- `annotate.register_buffer(node_name, tensors)` — register frozen constant buffers
+- `annotate.register_buffer(node_name, tensors)` — register traced persistent buffers for in-place writes
 - `annotate.module(node_name, model, ...)` — trace an `nn.Module` with buffer tracking
 - `annotate.mirror_leapp_tags(source, target)` — copy tracing tags between tensors
 
@@ -124,7 +124,7 @@ See `docs/api.md` for the full reference and `docs/` for advanced features.
 - onnx ≥ 1.19.0
 - onnxruntime ≥ 1.20.0
 - onnxscript ≥ 0.1.0
-- safetensors ≥ 0.4.0
+- safetensors ≥ 0.5.0
 
 ## License
 

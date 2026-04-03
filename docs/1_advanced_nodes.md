@@ -181,7 +181,7 @@ Use `state_tensors()` or `annotate.module()` when the value should behave like e
 
 ## Static Outputs: Constant Output Tensors
 
-Sometimes a node needs to output a **constant tensor that is not derived from any input**. Passing it as a regular output will fail because LEAPP expects all outputs to be traced computations. The `static_outputs` parameter on `output_tensors()` handles this case:
+Sometimes a node needs to output a **constant tensor that is not derived from any input**. The `static_outputs` parameter on `output_tensors()` handles this case:
 
 ```python
 import torch
@@ -218,7 +218,7 @@ The exported model will return both outputs: `computed` (input-dependent) and `s
 
 **Key rules:**
 - Static outputs must be **raw `torch.Tensor`** values. Using a `TracedTensor` (anything derived from `input_tensors()`) as a static output will raise an error.
-- If you pass a single tensor without a dict, LEAPP assigns the default name `static_output` and logs a warning. Always prefer a named dict.
+- Bare top-level tensors are not accepted for `static_outputs`. Pass either a dict of named raw tensors or `TensorSemantics(...)` / a list of `TensorSemantics(...)`.
 - Static outputs are merged with the regular outputs in the compiled model — downstream nodes can consume them like any other output.
 
 ## Nested Data Connections

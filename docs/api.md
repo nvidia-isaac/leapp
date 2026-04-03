@@ -238,7 +238,7 @@ annotate.register_buffer(node_name: str, tensors)
 
 ## `annotate.state_tensors()`
 
-Declare recurrent/state tensors for a traced node. State tensors behave as both inputs and outputs of the node.
+Declare recurrent/state tensors for a traced node. These values are registered as additional node inputs and become feedback outputs only when paired with `update_state()`.
 
 ### Signature
 
@@ -413,7 +413,7 @@ pipeline:
 system information:
   python version: "3.12.9"
   torch version: "2.7.0+cu126"
-  leapp version: "0.4.0"
+  leapp version: "0.5.0"
   leapp config version: "1.0"
   cuda version: "12.6"
   os: Linux

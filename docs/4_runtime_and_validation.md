@@ -24,7 +24,8 @@ When `validate=True`, LEAPP:
 - runs each exported node model
 - feeds it the captured traced inputs
 - compares exported outputs against the outputs seen during tracing
-- returns a dict mapping node names to validation results
+- logs if any deviation is detected
+- returns a dict mapping node names to validation results when validation runs
 
 `strict=True` raises if any node fails validation.
 `strict=False` still runs validation, but lets you inspect the result dict even when some nodes fail.
@@ -70,11 +71,9 @@ For each node, LEAPP caches:
 - output values
 - updated tags needed for feedback detection across re-entry
 
-The validation log labels these examples as:
-- `trace`
-- `cached[0]`
-- `cached[1]`
-- ...
+The validation log labels these examples using numeric sample indices:
+- `sample 0` for the original traced example
+- `sample 1`, `sample 2`, ... for cached re-entry examples
 
 So if a later example fails while the first one passes, you can see exactly which replayed example exposed the mismatch.
 
@@ -87,7 +86,7 @@ Depending on the failure mode, LEAPP reports different diagnostics.
 
 If the exported model returns a different number of outputs than the traced node, LEAPP logs:
 - node name
-- example label (`trace`, `cached[0]`, ...)
+- example label (`sample 0`, `sample 1`, ...)
 - actual output count
 - expected output count
 
@@ -104,7 +103,7 @@ This is useful for quickly distinguishing export corruption from already-unstabl
 
 When values differ outside `rtol` / `atol`, LEAPP logs:
 - node name and output name
-- example label (`trace`, `cached[i]`)
+- example label (`sample N`)
 - active `rtol` and `atol`
 - shape and dtype of source and exported outputs
 - source and exported value ranges

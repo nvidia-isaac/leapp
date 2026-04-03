@@ -21,7 +21,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "leapp"
-version = "0.4.0"
+version = "0.5.0"
 description = "LEAPP - Lightweight Export Annotations for Policy Pipelines: A Python package for tracing and exporting computational graphs from PyTorch code"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -58,7 +58,7 @@ dependencies = [
     "onnx>=1.19.0",
     "onnxruntime>=1.20.0",
     "onnxscript>=0.1.0",
-    "safetensors>=0.4.0",
+    "safetensors>=0.5.0",
 ]
 
 [project.optional-dependencies]
