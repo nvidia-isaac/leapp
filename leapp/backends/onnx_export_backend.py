@@ -256,7 +256,6 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
 
             verbose=_get_logger().is_verbose(),
             report=self.backend_params.get('report', False),
-            fallback=self.backend_params.get('fallback', None),
             opset_version=self.opset_version,
         )
         

@@ -76,7 +76,6 @@ All ONNX backend parameters are passed through `backend_params`.
 | `report` | `False` | both ONNX backends | Emit exporter diagnostics/reporting |
 | `verify` | `False` | `onnx-dynamo` | Enable exporter-side verification |
 | `optimize` | `True` | `onnx-dynamo` | Enable dynamo ONNX optimization |
-| `fallback` | `None` | `onnx-dynamo` | Configure exporter fallback behavior |
 | `prescript` | `False` | `onnx-torchscript` | Script the module before ONNX export |
 | `skip_validation` | `False` | both ONNX backends at save time | Skip `onnx.checker.check_model()` when saving |
 
