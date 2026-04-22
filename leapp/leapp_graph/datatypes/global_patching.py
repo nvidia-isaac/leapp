@@ -148,14 +148,14 @@ def apply_traced_data_patches():
     - np.array, np.asarray
     
     Also disables torch.jit.script via torch.jit._state so that any new
-    @torch.jit.script decorators during tracing return the original Python
+    `@torch.jit.script` decorators during tracing return the original Python
     function, allowing TracedTensor.__torch_function__ to trace through them.
     """
     global _patches_applied
     if not _patches_applied:
         for (module, name), patched in _patches.items():
             setattr(module, name, patched)
-        #TODO: this is exparamental, if it causes issues, we should remove it
+        # TODO: this is experimental, if it causes issues, we should remove it
         torch.jit._state.disable()
         _patches_applied = True
 

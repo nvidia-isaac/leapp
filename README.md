@@ -61,7 +61,7 @@ def get_obs2_from_env():
 leapp.start(name="my_pipeline")
 
 obs1 = get_obs1_from_env()
-obs2 =  get_obs2_from_env()
+obs2 = get_obs2_from_env()
 
 # Simple feature construction from the two observation tensors.
 obs1_centered = obs1 - obs1.mean()
@@ -70,7 +70,7 @@ features = torch.cat([obs1_centered, obs2_scaled], dim=-1)
 
 annotate.output_tensors("preprocess", {"processed_features": features}, export_with="jit")  #inserted annotation
 
-featues = annotate.input_tensors("predict", {"features": features}) #inserted annotation
+features = annotate.input_tensors("predict", {"features": features}) `#inserted` annotation
 output = torch.relu(featues @ torch.randn(16, 4))
 annotate.output_tensors("predict", {"output": output}, export_with="onnx") #inserted annotation
 
@@ -78,7 +78,7 @@ leapp.stop()
 leapp.compile_graph()
 ```
 
-On top of simply tracing inputs and outputs, leapp provides various annotations to accomodate a variety of policies. Please refer to `docs/api.md` for more details. 
+On top of simply tracing inputs and outputs, leapp provides various annotations to accommodate a variety of policies. Please refer to `docs/api.md` for more details. 
 
 ## Output Files
 
