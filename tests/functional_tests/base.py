@@ -1,5 +1,5 @@
 #
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,6 +18,9 @@ import unittest
 import os
 import shutil
 import torch
+from safetensors.torch import load_file
+from leapp.export_manager import ExportManager
+from leapp.leapp import _MANAGER as annotate # non-protected access to annotate singleton
 
 
 class LEAPPFunctionalTestBase(unittest.TestCase):
@@ -27,6 +30,10 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
     def tearDown(self):
         if os.path.exists(self.TEST_GRAPH_NAME):
             shutil.rmtree(self.TEST_GRAPH_NAME)
+        if ExportManager.is_interpret_graph_enabled():
+            ExportManager.set_interpret_graph(False)
+        annotate.reset_nodes()
+        annotate.set_dry_run_and_non_traced(False, [])
     
     def verify_all_models_exist(self, *model_names):
         for model_name in model_names:
@@ -245,6 +252,12 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
         print("\n" + "="*60)
 
     def verify_data_exact_match(self, source_data, target_data):
+        from leapp.leapp_graph.datatypes.traced_data import TracedData
+        if isinstance(source_data, TracedData):
+            source_data = source_data.data
+        if isinstance(target_data, TracedData):
+            target_data = target_data.data
+
         if type(source_data) is not type(target_data):
             return False
 
@@ -295,6 +308,127 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
         
         _flatten(data)
         return tensors
+
+    def verify_feedback_initial_values(self, expected_values, graph_name=None):
+        """Verify that the feedback initial values safetensors file exists and contains expected values.
+
+        Args:
+            expected_values: Dict mapping key names (e.g. "policy/counter") to expected tensors.
+                Values can be:
+                - torch.Tensor: exact value match
+                - tuple: expected shape only (e.g. (1, 3, 4)) — useful when values are random
+            graph_name: Optional graph name. Defaults to TEST_GRAPH_NAME.
+        """
+        if graph_name is None:
+            graph_name = self.TEST_GRAPH_NAME
+        safetensors_path = os.path.join(graph_name, f"{graph_name}_initial_values.safetensors")
+        self.assertTrue(os.path.exists(safetensors_path),
+                        f"Feedback initial values safetensors file not found at {safetensors_path}")
+        loaded = load_file(safetensors_path)
+
+        for key, expected in expected_values.items():
+            self.assertIn(key, loaded, f"Key '{key}' not found in feedback initial values")
+            if isinstance(expected, tuple):
+                # Shape-only check
+                self.assertEqual(loaded[key].shape, torch.Size(expected),
+                                 f"Shape mismatch for '{key}': got {loaded[key].shape}, expected {expected}")
+            else:
+                # Exact value check
+                self.assertTrue(torch.equal(loaded[key], expected),
+                                f"Value mismatch for '{key}': got {loaded[key]}, expected {expected}")
+
+    def verify_safetensors_matches_feedback(self, leapp_annotation, graph_name=None):
+        """Verify safetensors keys exactly match the feedback targets in the pipeline.
+
+        When feedback_flow is non-empty, a safetensors file must exist and its
+        keys must correspond 1-to-1 with the feedback target inputs. When
+        feedback_flow is empty, the safetensors file must NOT exist.
+        """
+        if graph_name is None:
+            graph_name = self.TEST_GRAPH_NAME
+        safetensors_path = os.path.join(
+            graph_name, f"{graph_name}_initial_values.safetensors")
+
+        feedback_flow = leapp_annotation.detected_pipeline.get(
+            'feedback_flow', {})
+
+        # Collect all feedback target keys (node_name/input_name)
+        expected_keys = set()
+        for targets in feedback_flow.values():
+            for target in targets:
+                expected_keys.add(target)
+
+        if not expected_keys:
+            self.assertFalse(
+                os.path.exists(safetensors_path),
+                "No feedback connections exist, but safetensors file was created")
+            return
+
+        self.assertTrue(
+            os.path.exists(safetensors_path),
+            f"Feedback connections exist but safetensors file not found at {safetensors_path}")
+
+        loaded = load_file(safetensors_path)
+        actual_keys = set(loaded.keys())
+
+        self.assertEqual(
+            expected_keys, actual_keys,
+            f"Safetensors keys do not match feedback targets.\n"
+            f"  Expected: {sorted(expected_keys)}\n"
+            f"  Actual:   {sorted(actual_keys)}")
+
+    def verify_inference_manager(self, source_inputs, source_outputs,
+                                 graph_name=None, rtol=1e-3, atol=1e-5):
+        """Load the exported graph via InferenceManager, run it, and compare outputs.
+
+        Args:
+            source_inputs: Dict mapping 'node/input' to tensors used during tracing.
+            source_outputs: Dict mapping 'node/output' to expected output tensors.
+            graph_name: Override for TEST_GRAPH_NAME.
+            rtol: Relative tolerance for allclose.
+            atol: Absolute tolerance for allclose.
+        """
+        from leapp import InferenceManager
+
+        if graph_name is None:
+            graph_name = self.TEST_GRAPH_NAME
+        yaml_path = os.path.join(graph_name, f"{graph_name}.yaml")
+        self.assertTrue(os.path.exists(yaml_path),
+                        f"YAML not found at {yaml_path}")
+
+        manager = InferenceManager(yaml_path)
+
+        # Verify expected input/output keys exist
+        for key in source_inputs:
+            self.assertIn(key, manager.inputs,
+                          f"Input key '{key}' not found in InferenceManager inputs: {manager.inputs}")
+        for key in source_outputs:
+            self.assertIn(key, manager.outputs,
+                          f"Output key '{key}' not found in InferenceManager outputs: {manager.outputs}")
+
+        # Move inputs to the device the InferenceManager expects
+        device_inputs = {}
+        for key, tensor in source_inputs.items():
+            node_name = key.split('/')[0]
+            target_device = manager.nodes[node_name].device
+            device_inputs[key] = tensor.to(target_device)
+
+        # Run inference
+        exported_outputs = manager.run_policy(device_inputs)
+
+        # Compare each expected output
+        for key, expected in source_outputs.items():
+            self.assertIn(key, exported_outputs,
+                          f"Output key '{key}' missing from InferenceManager results")
+            actual = exported_outputs[key]
+            if expected.device != actual.device:
+                actual = actual.to(expected.device)
+            self.assertTrue(
+                torch.allclose(expected, actual, rtol=rtol, atol=atol),
+                f"Output mismatch for '{key}':\n"
+                f"  Expected: {expected}\n"
+                f"  Actual:   {actual}\n"
+                f"  Max diff: {(expected - actual).abs().max().item():.6e}")
 
     def verify_single_torchscript_model_expected_value(self, inputs, expected_outputs, model_name, model_path=None):
         if model_path is None:

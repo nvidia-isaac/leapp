@@ -4,8 +4,8 @@ import linecache
 import textwrap
 import re
 from torch.nn.modules.lazy import LazyModuleMixin
-from leapp._logging import _get_logger
-from leapp.utils import extract_source_from_line_range
+from leapp.utils.logging import _get_logger
+from leapp.utils.utils import extract_source_from_line_range
 
 from typing import Tuple, List, Dict
 
@@ -145,7 +145,7 @@ class ModuleBuilder:
             _get_logger().info("Created the following buffers:")
             for buffer_name in self.module_instance.saved_buffers:
                 _get_logger().info(
-                    f"  - self.{buffer_name}: intialized as {getattr(self.module_instance, buffer_name)}")
+                    f"  - self.{buffer_name}: initialized as {getattr(self.module_instance, buffer_name)}")
 
     def _duplicate_attributes(self):
         # copy all the attributes from the original object to the module
@@ -388,8 +388,3 @@ class ModuleBuilder:
         module_class = type(self.module_instance)
         module_class._core = _core
         module_class.forward = forward
-
-
-if __name__ == "__main__":
-    module_builder = ModuleBuilder("TestModule", None, {})
-    print(module_builder.module)

@@ -1,184 +1,241 @@
 # Advanced Export Configurations in LEAPP
 
-This guide covers advanced export configurations in LEAPP. LEAPP relies on PyTorch's built-in export backends to generate models. For more details on the underlying export mechanisms, see:
+This guide covers export backend selection and advanced export options in the current LEAPP API.
 
-- [torch.jit.script](https://docs.pytorch.org/docs/stable/generated/torch.jit.script.html) — Converts Python code to TorchScript via static analysis
-- [torch.jit.trace](https://docs.pytorch.org/docs/stable/generated/torch.jit.trace.html) — Converts Python code to TorchScript by tracing execution
-- [torch.onnx.export](https://docs.pytorch.org/docs/stable/onnx_export.html) — Exports models to ONNX format
+## Backend Names and Aliases
 
+LEAPP supports these public backend names:
 
-## ONNX Export: Dynamo vs TorchScript
+| `export_with` value | Actual backend | Output |
+|---|---|---|
+| `"jit"` | `jit-script` | TorchScript `.pt` |
+| `"jit-script"` | `jit-script` | TorchScript `.pt` |
+| `"jit-trace"` | `jit-trace` | TorchScript `.pt` |
+| `"onnx"` | `onnx-dynamo` | ONNX `.onnx` |
+| `"onnx-dynamo"` | `onnx-dynamo` | ONNX `.onnx` |
+| `"onnx-torchscript"` | `onnx-torchscript` | ONNX `.onnx` |
+| `None` | `NoneExportBackend` | No compilation |
 
-LEAPP supports two methods for exporting models to ONNX format:
+Recommended defaults:
+- start with `"jit"` for the fastest bring-up
+- use `"onnx"` when you want the default ONNX exporter
+- use `"onnx-torchscript"` for recurrent models such as `nn.GRU` and `nn.LSTM`
 
-1. **Dynamo-based export** (default) — Uses PyTorch 2.0's TorchDynamo for modern, graph-based export
-2. **TorchScript-based export** (legacy) — Uses the traditional `torch.jit.script` approach
+## TorchScript Export
 
-### Dynamo Export (Default)
-
-Dynamo export is the modern approach introduced in PyTorch 2.0. It captures the computation graph using TorchDynamo and converts it to ONNX. TochDynamo is the backend used for the new torch.export module.
+`"jit"` and `"jit-script"` select the TorchScript scripting backend.
+`"jit-trace"` selects the tracing backend.
 
 ```python
 import torch
+import leapp
 from leapp import annotate
 
-@annotate.method(export_with="onnx")  # Uses dynamo by default
-def process_data(input_tensor: torch.Tensor):
-    normalized = (input_tensor - input_tensor.mean()) / input_tensor.std()
-    return torch.relu(normalized)
+leapp.start("torchscript_example")
 
-annotate.start(name="dynamo_example")
-process_data(torch.randn(10))
-annotate.stop()
-annotate.compile_graph()
+x = annotate.input_tensors("normalize", {"x": torch.randn(16)})
+y = torch.relu((x - x.mean()) / (x.std() + 1e-6))
+annotate.output_tensors("normalize", {"y": y}, export_with="jit")
+
+leapp.stop()
+leapp.compile_graph(validate=True)
 ```
-These options can be configured by passing a dict with the expected keys to `backend_params`.
 
-**Advantages of Dynamo export:**
-- Generally produces more optimized ONNX graphs
-- Automatically performs testing
-- Significantly recdues memory usage during export
+## ONNX Export: `onnx-dynamo` vs `onnx-torchscript`
 
-### TorchScript-based Export (Legacy)
+LEAPP exposes two ONNX backends:
 
-While it is ideal to use dynamo, It comes with a few limitations. You may consider setting `dynamo = False` if the following apply: 
+- `onnx-dynamo` is the default behind `export_with="onnx"`
+- `onnx-torchscript` is the TorchScript-based ONNX path
 
-1. internal logic has input dependant control flow.
-2. you want to export to an older onnx opset
-3. your processing logic contains a torch.jit.ScriptModule
+Use `onnx-dynamo` for typical feedforward models.
+Use `onnx-torchscript` when the dynamo path produces unstable graphs or when exporting recurrent models (e.g. `nn.GRU`, `nn.LSTM`). See `examples/stateful_gru_export.py` for a complete example.
 
 ```python
 import torch
+import leapp
 from leapp import annotate
 
-@annotate.method(
-    export_with="onnx",
-    backend_params={"dynamo": False}
+leapp.start("onnx_example")
+
+x = annotate.input_tensors("policy", {"obs": torch.randn(1, 32)})
+action = torch.tanh(x[..., :12])
+annotate.output_tensors("policy", {"action": action}, export_with="onnx")
+
+leapp.stop()
+leapp.compile_graph(validate=True)
+```
+
+### ONNX backend parameters
+
+All ONNX backend parameters are passed through `backend_params`.
+
+| Parameter | Default | Used by | Description |
+|---|---|---|---|
+| `opset_version` | PyTorch default | both ONNX backends | Override the ONNX opset version |
+| `report` | `False` | both ONNX backends | Emit exporter diagnostics/reporting |
+| `verify` | `False` | `onnx-dynamo` | Enable exporter-side verification |
+| `optimize` | `True` | `onnx-dynamo` | Enable dynamo ONNX optimization |
+| `prescript` | `False` | `onnx-torchscript` | Script the module before ONNX export |
+| `skip_validation` | `False` | both ONNX backends at save time | Skip `onnx.checker.check_model()` when saving |
+
+Example:
+
+```python
+annotate.output_tensors(
+    "policy",
+    {"action": action},
+    export_with="onnx-dynamo",
+    backend_params={
+        "opset_version": 17,
+        "verify": False,
+        "optimize": True,
+        "report": True,
+    },
 )
-def process_data(input_tensor: torch.Tensor):
-    normalized = (input_tensor - input_tensor.mean()) / input_tensor.std()
-    return torch.relu(normalized)
-
-annotate.start(name="torchscript_onnx_example")
-process_data(torch.randn(10))
-annotate.stop()
-annotate.compile_graph()
 ```
 
-**When to use TorchScript export:**
-- When working with pre-traced or pre-scripted models
-- When dynamo export produces errors for specific operations
-- For compatibility with older ONNX runtimes
+### Validation guidance
 
-### Using Pre-Scripted Models with ONNX Export
+Exporter-side options like `verify` are optional and backend-specific.
+The main LEAPP validation path is still:
 
-In some situations, especially when your logic involves many submodules, you may need to pre-script your function first. on top of setting `dynamo` to false This wraps your entire logic and scripts it using `torch.jit.script` first. This may help eliminate some bugs but generally produces a less optimal graph. ⚠️ **Use with caution**
+```python
+leapp.compile_graph(validate=True, rtol=1e-3, atol=1e-5, strict=True)
+```
 
+That validation compares exported model outputs against the captured traced outputs.
 
-### Backend Parameters for ONNX Export
+## Export Without Compilation: `export_with=None`
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `prescript` | `False` | Pre-script the model before ONNX export (only applies when `dynamo=False`) |
-| `opset_version` | `None` | ONNX opset version (e.g., `17`). Uses PyTorch default if not specified |
-| `verify` | `True` | Verify the exported model (dynamo only) |
-| `optimize` | `True` | Apply ONNX optimizations (dynamo only) |
-| `fallback` | `None` | Whether to fallback to the TorchScript exporter if the dynamo exporter fails. (dynamo only)|
-| `report` | `False` | Generates a detailed export report showing which operations were converted and any issues encountered. (dynamo only)|
-
-
-## Using Pre-Compiled Models: Export Without a Backend
-
-Sometimes you have a pre-compiled model (e.g., a ONNX model, or TensorRT engine) that you want to include in your LEAPP graph without recompiling it, or there is a section of code that you want to add to the graph and provide the model details offline. LEAPP supports this use case by allowing you to set `export_with=None`.
-
-### When to Use This Approach
-
-Use this when you have:
-- Pre-compiled models from external sources
-- Models that were optimized with custom compilation pipelines
-- Legacy models that you want to integrate into your graph
-- Models that require special compilation flags or tools not supported by LEAPP's backends
-- Models or processes that you cannot export
-
-### Basic Usage
-
-Instead of providing a backend name like `"torch"` or `"onnx"`, you can set `export_with=None` and specify the model path in `backend_params`:
+Set `export_with=None` when you want the node to appear in the graph without asking LEAPP to compile it.
+This is useful for:
+- prebuilt `.pt` or `.onnx` artifacts
+- placeholder nodes that will be filled in later
+- flows where LEAPP should capture I/O and graph edges but not produce a model
 
 ```python
 import torch
+import leapp
 from leapp import annotate
 
-def use_precompiled_model():
-    annotate.start(name="precompiled_example")
-    
-    # Some input data
-    input_data = torch.randn(1, 10)
-    
-    # Reference a pre-compiled model without recompiling
-    with annotate.block("precompiled_inference",
-                        inputs=["input_data"],
-                        outputs=["predictions"],
-                        export_with=None,
-                        backend_params={"model_path": "/path/to/model.pt"}):
-        # Load and use the pre-compiled model
-        model = torch.jit.load("/path/to/model.pt")
-        predictions = model(input_data)
-    
-    annotate.stop()
-    annotate.compile_graph()
-    return predictions
-```
+leapp.start("precompiled_example")
 
-### Backend Parameters for None Export
+x = annotate.input_tensors("precompiled_inference", {"input_data": torch.randn(1, 10)})
+predictions = x  # representative traced output shape
 
-When using `export_with=None`, the following `backend_params` are available:
-
-- **`model_path`** (optional): Path to the pre-compiled model file. If the model path is not provided a warning will be printed and the model is expected to be manually filled in at a later time.
-- **`copy_original_model`** (optional): If `True`, copies the model file to the LEAPP output directory. If `False` (default), the YAML will reference the original path.
-
-```python
-@annotate.method(
+annotate.output_tensors(
+    "precompiled_inference",
+    {"predictions": predictions},
     export_with=None,
     backend_params={
         "model_path": "/models/my_optimized_model.pt",
-        "copy_original_model": True  # Copy model to output directory
-    }
+        "copy_original_model": True,
+    },
 )
-def inference_with_precompiled(data):
-    model = torch.jit.load("/models/my_optimized_model.pt")
-    return model(data)
+
+leapp.stop()
+leapp.compile_graph()
 ```
 
-### Important Considerations
+### `None` backend parameters
 
-**⚠️ No Compilation or Validation**
+- `model_path` (optional): Path to an existing model artifact
+- `copy_original_model` (optional, default `False`): Copy the provided artifact into the LEAPP output directory
+- `device` (optional): Device hint used when loading the referenced artifact
 
-When using `export_with=None`:
-- LEAPP does **not** compile or modify the model
-- LEAPP does **not** validate that the model exists during tracing
-- The model path is only verified during `compile_graph()` when generating the YAML
+### Important behavior
 
-**⚠️ Input/Output Shape Tracing**
+- LEAPP still records input/output shapes and graph connectivity from the traced example tensors
+- if `model_path` is provided, LEAPP verifies the file and stores checksums in the YAML
+- the model path written into the YAML is made relative to the YAML directory when possible
+- `InferenceManager` currently only runs referenced `.pt` and `.onnx` artifacts
 
-LEAPP still traces the input and output shapes based on the actual data flowing through your code. Make sure:
-- The tensor shapes you use during tracing match what your pre-compiled model expects
-- You provide representative data shapes for accurate graph generation
+## Dry Run and Selective Non-Traced Nodes
 
-**⚠️ Model Path in Generated YAML**
+Sometimes you want LEAPP to preserve graph structure and connectivity without fully compiling every node.
+LEAPP provides three related options, and they behave differently:
 
-If `copy_original_model=False` (default):
-- The YAML will contain the original absolute path to the model
-- Ensure the model is accessible at that path in your deployment environment
-- Consider using relative paths or environment variables for portability
+- `leapp.start(..., dry_run=True)` makes the entire trace metadata-only from the start
+- `leapp.start(..., non_traced=[...])` disables tracing/export for only selected nodes
+- `leapp.compile_graph(..., dry_run=True)` keeps an already-captured trace but skips compile/save/validate
 
-If `copy_original_model=True`:
-- The model is copied to the LEAPP output directory
-- The YAML references the copied model
-- This increases output directory size but improves portability
+### `start(dry_run=True)`: whole-graph metadata-only mode
 
-### Best Practices
+Use this when you want to explore graph boundaries, graph I/O, and connectivity without paying export cost.
 
-1. **Use absolute paths during development**: Makes debugging easier
-2. **Copy models for deployment**: Set `copy_original_model=True` for production bundles
-3. **Verify model compatibility**: Ensure your pre-compiled model's input/output shapes match the traced shapes
-4. **Document model provenance**: Add comments explaining where the pre-compiled model came from and how it was created
+In this mode:
+- `input_tensors()` and related APIs return normal tensors instead of `TracedTensor`
+- LEAPP still tags outputs so graph connectivity can be detected
+- YAML and graph structure are still produced
+- model files are not exported
+
+```python
+leapp.start("debug_graph", dry_run=True)
+# ... run your traced code ...
+leapp.stop()
+leapp.compile_graph()
+```
+
+This is useful for:
+- debugging node boundaries
+- checking graph inputs/outputs quickly
+- validating connectivity before expensive export
+
+### `non_traced=[...]`: selective not-compiled / not-traced nodes
+
+This is the selective option when only some nodes should stay in the graph but should not be traced through or compiled.
+
+This is especially useful because traced-tensor nodes normally try to trace through the computation inside the node. For some nodes, that is exactly what you do **not** want:
+- the code may call into functionality that is not trace-friendly
+- the node may intentionally act as a placeholder or opaque stage
+- tracing through that node may raise errors even though you still want it represented in the graph
+
+With `non_traced=[...]`, LEAPP lets that node run on normal tensors, skips export for it, but still tags its outputs so downstream traced nodes can connect to it.
+
+```python
+import torch
+import leapp
+from leapp import annotate
+
+leapp.start("mixed_graph", non_traced=["raw_node"])
+
+x = annotate.input_tensors("raw_node", {"x": torch.tensor([1.0, 2.0, 3.0])})
+raw_y = x * 2.0
+annotate.output_tensors("raw_node", {"y": raw_y}, export_with="jit")
+
+traced_y = annotate.input_tensors("traced_node", {"y": raw_y})
+traced_z = traced_y + 1.0
+annotate.output_tensors("traced_node", {"z": traced_z}, export_with="jit")
+
+leapp.stop()
+leapp.compile_graph(validate=True)
+```
+
+Result:
+- `raw_node` appears in the graph
+- `raw_node` outputs still connect to `traced_node`
+- `raw_node` does not produce a compiled model artifact
+- `traced_node` is still traced and exported normally
+
+### `compile_graph(dry_run=True)`: skip export after tracing
+
+Use this when you want a normal trace session first, but want to skip compile/save/validate at the final export step.
+
+```python
+leapp.start("captured_graph")
+# ... normal tracing ...
+leapp.stop()
+leapp.compile_graph(dry_run=True, validate=False)
+```
+
+This differs from `start(dry_run=True)`:
+- tracing still happens normally during the session
+- FX graphs and node traces are still built
+- compile/save/validate are skipped only at the end
+
+### Choosing the right option
+
+- Use `start(dry_run=True)` when the whole graph should be metadata-only
+- Use `non_traced=[...]` when only specific nodes should stay uncompiled / untraced
+- Use `compile_graph(dry_run=True)` when you already did a real trace and only want to skip final export work

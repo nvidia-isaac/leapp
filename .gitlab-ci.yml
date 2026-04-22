@@ -25,14 +25,19 @@ build-job:
 
 unit-test-job:
   stage: test
+  image: nvcr.io/nvidia/pytorch:24.12-py3
+  tags:
+    - gpu
+    - isaac
+  variables:
+    NVIDIA_VISIBLE_DEVICES: all
+    NVIDIA_DRIVER_CAPABILITIES: compute,utility
+  before_script:
+    - python --version ; pip --version
   script:
     - pip install pytest
     - pip install dist/*.whl
-    - pip install -r examples/requirements.txt
     - pytest
-
-# add this back in when there are tests
-#    - pytest
 
 deploy-job:
   stage: deploy

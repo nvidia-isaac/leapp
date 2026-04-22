@@ -1,5 +1,5 @@
 #
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,21 +15,18 @@
 # limitations under the License.
 #
 import abc
-from typing import Tuple, Any
-import os
 import hashlib
+import os
 import shutil
-from typing import Callable
-import functools
+from typing import Callable, Tuple, Any
+
+import numpy as np
 import torch
-
-from leapp._logging import _get_logger
-from leapp.backends.module_builder import ModuleBuilder
-
-
-
 import onnx
 import onnxruntime as ort
+
+from leapp.utils.logging import _get_logger
+from leapp.backends.module_builder import ModuleBuilder
 
 
 class SimplifiedONNXProgram:
@@ -41,16 +38,13 @@ class SimplifiedONNXProgram:
     Keeps source files on disk and copies on save. Cleans up temp dir on delete.
     """
 
-    def __init__(self, onnx_model_path, device=None, temp_dir=None):
+    def __init__(self, onnx_model_path, temp_dir=None):
         """Initialize the ONNX program.
 
         Args:
             onnx_model_path: Path to an ONNX file.
-            device: Device to run on ('cuda', 'cpu', or None for auto-detect).
-                    If None, will use CUDA if available, otherwise CPU.
             temp_dir: If provided, this temp directory will be cleaned up when the object is deleted.
         """
-        self._device = device
         model_path = str(onnx_model_path)
         self._source_dir = os.path.dirname(os.path.abspath(model_path))
         self._source_filename = os.path.basename(model_path)
@@ -59,36 +53,153 @@ class SimplifiedONNXProgram:
         # Session created lazily on first __call__
         self._session = None
         self._input_names = None
+        self._output_metas = None
         self._active_provider = None
+
+    @staticmethod
+    def _torch_dtype_to_numpy_dtype(dtype):
+        mapping = {
+            torch.bool: np.bool_,
+            torch.uint8: np.uint8,
+            torch.int8: np.int8,
+            torch.int16: np.int16,
+            torch.int32: np.int32,
+            torch.int64: np.int64,
+            torch.float16: np.float16,
+            torch.float32: np.float32,
+            torch.float64: np.float64,
+        }
+        return mapping.get(dtype)
+
+    @staticmethod
+    def _onnx_type_to_torch_dtype(type_str):
+        mapping = {
+            "tensor(bool)": torch.bool,
+            "tensor(uint8)": torch.uint8,
+            "tensor(int8)": torch.int8,
+            "tensor(int16)": torch.int16,
+            "tensor(int32)": torch.int32,
+            "tensor(int64)": torch.int64,
+            "tensor(float16)": torch.float16,
+            "tensor(float)": torch.float32,
+            "tensor(double)": torch.float64,
+        }
+        return mapping.get(type_str)
+
+    @staticmethod
+    def _output_shape_is_static(shape):
+        if shape is None:
+            return False
+        return all(isinstance(dim, int) and dim >= 0 for dim in shape)
+
+    def _can_use_cuda_iobinding(self, args):
+        if self._active_provider != 'CUDAExecutionProvider':
+            return False
+
+        if not args:
+            return False
+
+        first_tensor = args[0]
+        if not isinstance(first_tensor, torch.Tensor) or not first_tensor.is_cuda:
+            return False
+
+        for tensor in args:
+            if not isinstance(tensor, torch.Tensor) or not tensor.is_cuda:
+                return False
+            if tensor.device != first_tensor.device:
+                return False
+
+        if self._output_metas is None:
+            return False
+
+        for output_meta in self._output_metas:
+            if not self._output_shape_is_static(output_meta.shape):
+                return False
+            if self._onnx_type_to_torch_dtype(output_meta.type) is None:
+                return False
+
+        return True
+
+    def _run_with_standard_inference(self, args, output_device):
+        input_dict = {}
+        for name, tensor in zip(self._input_names, args):
+            if isinstance(tensor, torch.Tensor):
+                input_dict[name] = tensor.detach().cpu().numpy()
+            else:
+                input_dict[name] = tensor
+
+        outputs = self._session.run(None, input_dict)
+        return tuple(torch.from_numpy(out).to(output_device) for out in outputs)
+
+    def _run_with_cuda_iobinding(self, args):
+        binding = self._session.io_binding()
+
+        prepared_inputs = []
+        for name, tensor in zip(self._input_names, args):
+            prepared = tensor.detach().contiguous()
+            prepared_inputs.append(prepared)
+            device_id = prepared.device.index or 0
+            np_dtype = self._torch_dtype_to_numpy_dtype(prepared.dtype)
+            if np_dtype is None:
+                raise TypeError(
+                    f"Unsupported CUDA input dtype for ONNX Runtime I/O binding: {prepared.dtype}"
+                )
+            binding.bind_input(
+                name=name,
+                device_type='cuda',
+                device_id=device_id,
+                element_type=np_dtype,
+                shape=tuple(prepared.shape),
+                buffer_ptr=prepared.data_ptr(),
+            )
+
+        output_device = prepared_inputs[0].device
+        outputs = []
+        for output_meta in self._output_metas:
+            torch_dtype = self._onnx_type_to_torch_dtype(output_meta.type)
+            if torch_dtype is None:
+                raise TypeError(
+                    f"Unsupported ONNX output dtype for CUDA I/O binding: {output_meta.type}"
+                )
+
+            output_tensor = torch.empty(
+                tuple(output_meta.shape),
+                dtype=torch_dtype,
+                device=output_device,
+            ).contiguous()
+            binding.bind_output(
+                name=output_meta.name,
+                device_type='cuda',
+                device_id=output_device.index or 0,
+                element_type=self._torch_dtype_to_numpy_dtype(torch_dtype),
+                shape=tuple(output_tensor.shape),
+                buffer_ptr=output_tensor.data_ptr(),
+            )
+            outputs.append(output_tensor)
+
+        self._session.run_with_iobinding(binding)
+        return tuple(outputs)
 
     def __del__(self):
         """Clean up temp directory if we own it."""
         if getattr(self, '_temp_dir', None) is not None:
-            import shutil
             try:
                 if os.path.exists(self._temp_dir):
                     shutil.rmtree(self._temp_dir)
             except Exception:
                 pass  # Silently ignore cleanup errors
 
-    def _get_providers(self, device):
-        """Get the list of execution providers based on device preference."""
+    def _get_providers(self):
+        """Get execution providers, always preferring CUDA when available."""
         available_providers = ort.get_available_providers()
 
-        if device is None:
-            # Auto-detect: prefer CUDA if available
-            if 'CUDAExecutionProvider' in available_providers:
-                return ['CUDAExecutionProvider', 'CPUExecutionProvider']
-            return ['CPUExecutionProvider']
-        elif device == 'cuda' or (isinstance(device, torch.device) and device.type == 'cuda'):
-            if 'CUDAExecutionProvider' not in available_providers:
-                _get_logger().warning(
-                    "CUDA execution provider requested but not available. Falling back to CPU."
-                )
-                return ['CPUExecutionProvider']
+        if 'CUDAExecutionProvider' in available_providers:
             return ['CUDAExecutionProvider', 'CPUExecutionProvider']
-        else:
-            return ['CPUExecutionProvider']
+
+        _get_logger().warning(
+            "CUDA execution provider not available. Falling back to CPU."
+        )
+        return ['CPUExecutionProvider']
 
     def _get_source_size(self):
         """Get total size of all files in the source directory."""
@@ -109,8 +220,6 @@ class SimplifiedONNXProgram:
         For large models (>2GB), re-saves with external data format.
         For small models, copies files directly.
         """
-        import shutil
-
         # 2GB threshold for protobuf limit
         SIZE_THRESHOLD = 2 * 1024 * 1024 * 1024
 
@@ -172,11 +281,18 @@ class SimplifiedONNXProgram:
         """Create the inference session if not already created."""
         if self._session is None:
             model_path = os.path.join(self._source_dir, self._source_filename)
-            providers = self._get_providers(self._device)
+            providers = self._get_providers()
+            sess_options = ort.SessionOptions()
+            # ORT_ENABLE_ALL can silently corrupt results for certain graph
+            # patterns (e.g. Gemm chains produced by FX make_fx decomposition).
+            # ORT_ENABLE_BASIC is safe and still applies constant folding.
+            sess_options.graph_optimization_level = (
+                ort.GraphOptimizationLevel.ORT_ENABLE_BASIC)
             self._session = ort.InferenceSession(
-                model_path, providers=providers)
+                model_path, sess_options, providers=providers)
             self._input_names = [
                 inp.name for inp in self._session.get_inputs()]
+            self._output_metas = list(self._session.get_outputs())
             self._active_provider = self._session.get_providers(
             )[0] if self._session.get_providers() else 'CPUExecutionProvider'
 
@@ -204,19 +320,10 @@ class SimplifiedONNXProgram:
                 output_device = tensor.device
                 break
 
-        # Build input dict: convert torch tensors to numpy
-        input_dict = {}
-        for name, tensor in zip(self._input_names, args):
-            if isinstance(tensor, torch.Tensor):
-                input_dict[name] = tensor.detach().cpu().numpy()
-            else:
-                input_dict[name] = tensor
+        if self._can_use_cuda_iobinding(args):
+            return self._run_with_cuda_iobinding(args)
 
-        # Run inference
-        outputs = self._session.run(None, input_dict)
-
-        # Convert outputs back to torch tensors on the appropriate device
-        return tuple(torch.from_numpy(out).to(output_device) for out in outputs)
+        return self._run_with_standard_inference(args, output_device)
 
 
 def prepare_tensors_for_export(tensors):
@@ -259,7 +366,8 @@ class ExportBackend(abc.ABC):
 
         self.compiled_model = None
         self.compiled_module = None
-
+        self.runtime_device = None
+    
     def override_module_builder(self, module_builder: Callable):
         self.module_builder = module_builder
 
@@ -296,8 +404,13 @@ class ExportBackend(abc.ABC):
         return dest_path
 
     @abc.abstractmethod
-    def get_backed_model_type(self):
+    def get_backend_model_type(self):
         raise NotImplementedError
+
+    @abc.abstractmethod
+    def get_backend_metadata(self) -> dict:
+        """Optional backend-specific metadata to include in node YAML parameters."""
+        return {}
 
     @abc.abstractmethod
     def compile(self, m: torch.nn.Module = None) -> Any:
@@ -319,10 +432,13 @@ class ExportBackend(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def load(self, model_path: str, sha256sum: str, device: str):
+    def load(self, model_path: str, sha256sum: str):
         raise NotImplementedError
     
-    def _load_onnx(self, model_path: str, sha256sum: str, device: str):
+    def _select_runtime_device(self):
+        return 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    def _load_onnx(self, model_path: str, sha256sum: str):
         _, actual_sha256sum = self._verify_model_location_and_get_hash(
             model_path)
         if actual_sha256sum != sha256sum:
@@ -330,11 +446,15 @@ class ExportBackend(abc.ABC):
                 f"SHA256 checksum mismatch for {model_path}: "
                 f"expected {sha256sum}, got {actual_sha256sum}"
             )
-        model = SimplifiedONNXProgram(model_path, device=device)
+        model = SimplifiedONNXProgram(model_path)
         self.compiled_model = model
+        has_ort_cuda = 'CUDAExecutionProvider' in ort.get_available_providers()
+        self.runtime_device = 'cuda' if (
+            torch.cuda.is_available() and has_ort_cuda
+        ) else 'cpu'
         self.compiled_module = None # ONNX models cannot be represented as a module for reexport.
     
-    def _load_torchscript(self, model_path: str, sha256sum: str, device: str):
+    def _load_torchscript(self, model_path: str, sha256sum: str):
         _, actual_sha256sum = self._verify_model_location_and_get_hash(
             model_path)
         if actual_sha256sum != sha256sum:
@@ -342,12 +462,26 @@ class ExportBackend(abc.ABC):
                 f"SHA256 checksum mismatch for {model_path}: "
                 f"expected {sha256sum}, got {actual_sha256sum}"
             )
-        model = torch.jit.load(model_path)
+        device = self._select_runtime_device()
+        model = torch.jit.load(model_path, map_location=device)
+        model = model.to(device)
         self.compiled_model = model.eval()
+        self.runtime_device = device
         self.compiled_module = model
 
 
 class NoneExportBackend(ExportBackend):
+    """Null export backend for nodes without an active export backend.
+
+    This backend represents "no export" behavior in normal usage. It can also
+    optionally act as a thin wrapper for existing model artifacts when
+    ``backend_params['model_path']`` is provided, including checksum validation
+    and backend-specific loading.
+    """
+
+    def get_backend_metadata(self):
+        return {}
+
     def compile(self, m: torch.nn.Module = None):
         if "model_path" not in self.backend_params or self.backend_params['model_path'] is None:
             _get_logger().warning(
@@ -356,9 +490,7 @@ class NoneExportBackend(ExportBackend):
                                   "in the generated yaml file. Otherwise, please manually fill in the backend parameters.")
         else:
             _, sha256sum = self._verify_model_location_and_get_hash(self.backend_params['model_path'])
-            device = 'cuda' if torch.cuda.is_available() else 'cpu'
-            device = self.backend_params['device'] if 'device' in self.backend_params else device
-            self.load(self.backend_params['model_path'], sha256sum, device, self.get_backed_model_type())
+            self.load(self.backend_params['model_path'], sha256sum, self.get_backend_model_type())
 
 
     def save(self, save_path: str) -> Tuple[str, str, str]:
@@ -373,24 +505,24 @@ class NoneExportBackend(ExportBackend):
 
         return model_path, md5sum, sha256sum
 
-    def load(self, model_path: str, sha256sum: str, device: str, type=None):
-        if type is None: 
+    def load(self, model_path: str, sha256sum: str, model_type=None):
+        if model_type is None: 
             return
-        if type == "onnx":
-            self._load_onnx(model_path, sha256sum, device)
-        elif type == "torchscript":
-            self._load_torchscript(model_path, sha256sum, device)
+        if model_type == "onnx":
+            self._load_onnx(model_path, sha256sum)
+        elif model_type == "jit":
+            self._load_torchscript(model_path, sha256sum)
         else:
-            raise Exception(f"Unsupported model type: {type}")
+            raise ValueError(f"Unsupported model type: {model_type}")
 
-    def get_backed_model_type(self):
+    def get_backend_model_type(self):
         if "model_path" not in self.backend_params:
             return None
 
         path = self.backend_params['model_path']
         suffix = path.split('.')[-1]
         if suffix == 'pt':
-            return "torch"
+            return "jit"
         elif suffix == 'pt2':
             return "torchscript2"
         elif suffix == 'onnx':
@@ -402,5 +534,5 @@ class NoneExportBackend(ExportBackend):
         elif suffix == 'engine' or suffix == 'plan':
             return 'trt'
         else:
-            raise Exception(
+            raise ValueError(
                 f"Unsupported model file suffix: {suffix}")

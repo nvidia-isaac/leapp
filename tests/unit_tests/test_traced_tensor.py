@@ -129,6 +129,48 @@ class TensorArithmeticFunctions:
         return b
 
     @staticmethod
+    def var_operator_tensor(a: Tensor) -> Tensor:
+        """Var operation (scalar)."""
+        b = a.var()
+        return b
+
+    @staticmethod
+    def var_operator_torch(a: Tensor) -> Tensor:
+        """Var operation (scalar)."""
+        b = torch.var(a)
+        return b
+
+    @staticmethod
+    def std_operator_tensor(a: Tensor) -> Tensor:
+        """Std operation (scalar)."""
+        b = a.std()
+        return b
+
+    @staticmethod
+    def std_operator_torch(a: Tensor) -> Tensor:
+        """Std operation (scalar)."""
+        b = torch.std(a)
+        return b
+
+    @staticmethod
+    def prod_operator_tensor(a: Tensor) -> Tensor:
+        """Prod operation (scalar)."""
+        b = a.prod()
+        return b
+
+    @staticmethod
+    def prod_operator_torch(a: Tensor) -> Tensor:
+        """Prod operation (scalar)."""
+        b = torch.prod(a)
+        return b
+
+    @staticmethod
+    def norm_operator_linalg(a: Tensor) -> Tensor:
+        """Norm operation (scalar) via torch.linalg.norm."""
+        b = torch.linalg.norm(a)
+        return b
+
+    @staticmethod
     def argmax_operator_tensor(a: Tensor) -> Tensor:
         """Argmax operation."""
         b = a.argmax()
@@ -233,11 +275,65 @@ class TensorArithmeticFunctions:
     @staticmethod
     def type_conversion_operator_tensor(a: Tensor) -> Tensor:
         """Type conversion operation."""
-        b = a.to(torch.float32)
-        # Somehow ONNX fails to use the "to" operation as the last operation in
-        # the graph, so we add a dummy operation after it.
-        c = b * 1.0
-        return c
+        return a.to(torch.float32)
+
+    @staticmethod
+    def type_conversion_operator_float_method(a: Tensor) -> Tensor:
+        """Type conversion via tensor.float()."""
+        return a.float()
+
+    @staticmethod
+    def type_conversion_operator_to_dtype_kwarg(a: Tensor) -> Tensor:
+        """Type conversion via tensor.to(dtype=...)."""
+        return a.to(dtype=torch.float64)
+
+    @staticmethod
+    def type_conversion_operator_double_method(a: Tensor) -> Tensor:
+        """Type conversion via tensor.double()."""
+        return a.double()
+
+    @staticmethod
+    def type_conversion_operator_half_method(a: Tensor) -> Tensor:
+        """Type conversion via tensor.half()."""
+        return a.half()
+
+    @staticmethod
+    def type_conversion_operator_long_method(a: Tensor) -> Tensor:
+        """Type conversion via tensor.long()."""
+        return a.long()
+
+    @staticmethod
+    def type_conversion_operator_int_method(a: Tensor) -> Tensor:
+        """Type conversion via tensor.int()."""
+        return a.int()
+
+    @staticmethod
+    def type_conversion_operator_short_method(a: Tensor) -> Tensor:
+        """Type conversion via tensor.short()."""
+        return a.short()
+
+    @staticmethod
+    def type_conversion_operator_byte_method(a: Tensor) -> Tensor:
+        """Type conversion via tensor.byte()."""
+        return a.byte()
+
+    @staticmethod
+    def type_conversion_operator_bool_method(a: Tensor) -> Tensor:
+        """Type conversion via tensor.bool()."""
+        # TorchScript can reject tensor.bool() in scripted GraphModule code.
+        # Use to(torch.bool) to keep bool conversion coverage across backends.
+        return a.to(torch.bool)
+
+    @staticmethod
+    def type_conversion_operator_type_method(a: Tensor) -> Tensor:
+        """Type conversion via tensor.type(...)."""
+        return a.type(torch.float64)
+
+    @staticmethod
+    def type_conversion_operator_type_as_method(a: Tensor) -> Tensor:
+        """Type conversion via tensor.type_as(...)."""
+        reference = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float64)
+        return a.type_as(reference)
 
     @staticmethod
     def broadcasting_operation(a: Tensor) -> Tensor:
@@ -553,9 +649,35 @@ class TestTracedTensor(unittest.TestCase):
 
         # Verify it compiles to TorchScript
         ctx.compile_trace({'result': result})
-        scripted = torch.jit.script(ctx.compiled_graph_module)
+        scripted = torch.jit.script(ctx.m)
         self.assertTrue(torch.allclose(
             scripted(torch.tensor([2.0, 4.0, 6.0])), expected))
+
+    def test_tensor_norm_method_rewrites_torch_tensor_function_target(self):
+        """Test tensor.norm() becomes a call_method node before export."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([[3.0, 4.0], [5.0, 12.0]]), name="x")
+
+        result = x.norm(p=2, dim=-1)
+
+        self.assertIsInstance(result, TracedTensor)
+        expected = torch.tensor([5.0, 13.0])
+        self.assertTrue(torch.allclose(result.tensor, expected))
+
+        ctx.compile_trace({'result': result})
+
+        norm_nodes = [
+            node for node in ctx.m.graph.nodes
+            if node.op == "call_method" and node.target == "norm"
+        ]
+        self.assertTrue(norm_nodes, "Expected tensor.norm() to be rewritten to call_method")
+
+        traced = torch.jit.trace(
+            ctx.m,
+            (torch.tensor([[3.0, 4.0], [5.0, 12.0]]),),
+        )
+        self.assertTrue(torch.allclose(
+            traced(torch.tensor([[3.0, 4.0], [5.0, 12.0]])), expected))
 
     def test_regular_tensor_mul_traced_tensor(self):
         """Test regular_tensor * traced_tensor."""
@@ -677,7 +799,7 @@ class TestTracedTensor(unittest.TestCase):
         # Test compiled graph works
         input_tensor = torch.tensor([4.0, 5.0, 6.0])
         expected = input_tensor.detach() * 2
-        output = ctx.compiled_graph_module(input_tensor)
+        output = ctx.m(input_tensor)
         self.assertTrue(torch.allclose(output, expected))
 
     def test_cpu(self):
@@ -701,7 +823,7 @@ class TestTracedTensor(unittest.TestCase):
         # Test compiled graph works
         input_tensor = torch.tensor([4.0, 5.0, 6.0])
         expected = input_tensor.clone() * 2
-        output = ctx.compiled_graph_module(input_tensor)
+        output = ctx.m(input_tensor)
         self.assertTrue(torch.allclose(output, expected))
 
     # ==================== Additional Math Operations ====================
@@ -953,7 +1075,7 @@ class TestTracedTensor(unittest.TestCase):
 
         # Should compile successfully
         ctx.compile_trace({'x': x})
-        result = ctx.compiled_graph_module(torch.tensor([1.0, 2.0, 3.0]))
+        result = ctx.m(torch.tensor([1.0, 2.0, 3.0]))
         self.assertTrue(torch.allclose(result, expected))
 
     def test_inplace_sub(self):
@@ -969,7 +1091,7 @@ class TestTracedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(x.tensor, expected))
 
         ctx.compile_trace({'x': x})
-        result = ctx.compiled_graph_module(torch.tensor([5.0, 6.0, 7.0]))
+        result = ctx.m(torch.tensor([5.0, 6.0, 7.0]))
         self.assertTrue(torch.allclose(result, expected))
 
     def test_inplace_mul(self):
@@ -985,7 +1107,7 @@ class TestTracedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(x.tensor, expected))
 
         ctx.compile_trace({'x': x})
-        result = ctx.compiled_graph_module(torch.tensor([1.0, 2.0, 3.0]))
+        result = ctx.m(torch.tensor([1.0, 2.0, 3.0]))
         self.assertTrue(torch.allclose(result, expected))
 
     def test_inplace_div(self):
@@ -1001,7 +1123,7 @@ class TestTracedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(x.tensor, expected))
 
         ctx.compile_trace({'x': x})
-        result = ctx.compiled_graph_module(torch.tensor([4.0, 8.0, 12.0]))
+        result = ctx.m(torch.tensor([4.0, 8.0, 12.0]))
         self.assertTrue(torch.allclose(result, expected))
 
     def test_inplace_pow(self):
@@ -1017,7 +1139,7 @@ class TestTracedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(x.tensor, expected))
 
         ctx.compile_trace({'x': x})
-        result = ctx.compiled_graph_module(torch.tensor([2.0, 3.0, 4.0]))
+        result = ctx.m(torch.tensor([2.0, 3.0, 4.0]))
         self.assertTrue(torch.allclose(result, expected))
 
     def test_inplace_method_add_(self):
@@ -1036,7 +1158,7 @@ class TestTracedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(x.tensor, expected))
 
         ctx.compile_trace({'x': x})
-        graph_result = ctx.compiled_graph_module(torch.tensor([1.0, 2.0, 3.0]))
+        graph_result = ctx.m(torch.tensor([1.0, 2.0, 3.0]))
         self.assertTrue(torch.allclose(graph_result, expected))
 
     def test_inplace_method_mul_(self):
@@ -1052,7 +1174,7 @@ class TestTracedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(x.tensor, expected))
 
         ctx.compile_trace({'x': x})
-        graph_result = ctx.compiled_graph_module(torch.tensor([1.0, 2.0, 3.0]))
+        graph_result = ctx.m(torch.tensor([1.0, 2.0, 3.0]))
         self.assertTrue(torch.allclose(graph_result, expected))
 
     def test_inplace_chained_operations(self):
@@ -1072,7 +1194,7 @@ class TestTracedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(x.tensor, expected))
 
         ctx.compile_trace({'x': x})
-        result = ctx.compiled_graph_module(torch.tensor([1.0, 2.0, 3.0]))
+        result = ctx.m(torch.tensor([1.0, 2.0, 3.0]))
         self.assertTrue(torch.allclose(result, expected))
 
     def test_inplace_with_tensor_operand(self):
@@ -1087,7 +1209,7 @@ class TestTracedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(x.tensor, expected))
 
         ctx.compile_trace({'x': x})
-        result = ctx.compiled_graph_module(torch.tensor([1.0, 2.0, 3.0]))
+        result = ctx.m(torch.tensor([1.0, 2.0, 3.0]))
         self.assertTrue(torch.allclose(result, expected))
 
     def test_inplace_after_compile_returns_raw_tensor(self):
@@ -1235,7 +1357,7 @@ class TestTracedTensor(unittest.TestCase):
         
         # Verify it works after compile too
         ctx.compile_trace({'x': x})
-        result = ctx.compiled_graph_module(torch.tensor([[1.0, 1.0, 1.0], [2.0, 2.0, 2.0]]))
+        result = ctx.m(torch.tensor([[1.0, 1.0, 1.0], [2.0, 2.0, 2.0]]))
         self.assertTrue(torch.allclose(result, torch.tensor([[11.0, 21.0, 31.0], [12.0, 22.0, 32.0]])))
 
     # ==================== Advanced Indexing Tests ====================
@@ -1255,11 +1377,11 @@ class TestTracedTensor(unittest.TestCase):
 
         # Test compilation
         ctx.compile_trace({'y': y})
-        result = ctx.compiled_graph_module(torch.tensor([1.0, 2.0, 3.0]))
+        result = ctx.m(torch.tensor([1.0, 2.0, 3.0]))
         self.assertTrue(torch.allclose(result, expected))
 
         # Test TorchScript
-        scripted = torch.jit.script(ctx.compiled_graph_module)
+        scripted = torch.jit.script(ctx.m)
         result_scripted = scripted(torch.tensor([1.0, 2.0, 3.0]))
         self.assertTrue(torch.allclose(result_scripted, expected))
 
@@ -1288,7 +1410,7 @@ class TestTracedTensor(unittest.TestCase):
         # Test compilation
         ctx.compile_trace({'y': y})
         input_tensor = torch.randn(2, 3, 4)
-        result = ctx.compiled_graph_module(input_tensor)
+        result = ctx.m(input_tensor)
         expected = input_tensor[..., 0]
         self.assertTrue(torch.allclose(result, expected))
 
@@ -1315,7 +1437,7 @@ class TestTracedTensor(unittest.TestCase):
 
         # Test compilation
         ctx.compile_trace({'y': y})
-        result = ctx.compiled_graph_module(torch.tensor([1.0, 2.0, 3.0]))
+        result = ctx.m(torch.tensor([1.0, 2.0, 3.0]))
         self.assertEqual(result.shape, torch.Size([0]))
 
     def test_indexing_with_list_advanced(self):
@@ -1334,7 +1456,7 @@ class TestTracedTensor(unittest.TestCase):
 
         # Test compilation
         ctx.compile_trace({'y': y})
-        result = ctx.compiled_graph_module(
+        result = ctx.m(
             torch.tensor([10.0, 20.0, 30.0, 40.0, 50.0]))
         self.assertTrue(torch.allclose(result, expected))
 
@@ -1348,6 +1470,28 @@ class TestTracedTensor(unittest.TestCase):
 
         self.assertIsInstance(y, TracedTensor)
         self.assertEqual(y.shape, torch.Size([3, 3]))
+
+    def test_torch_index_select_with_traced_indices(self):
+        """Test torch.index_select with traced tensor indices from the same node."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        input_tensor = torch.tensor([10.0, 20.0, 30.0, 40.0, 50.0])
+        input_indices = torch.tensor([0, 2, 4], dtype=torch.long)
+        x = ctx.create_input(input_tensor, name="x")
+        indices = ctx.create_input(input_indices, name="indices")
+
+        y = torch.index_select(x, dim=0, index=indices)
+
+        self.assertIsInstance(y, TracedTensor)
+        expected = torch.tensor([10.0, 30.0, 50.0])
+        self.assertTrue(torch.allclose(y.tensor, expected))
+
+        ctx.compile_trace({'y': y})
+        self.validate_export(
+            ctx.m,
+            (input_tensor, input_indices),
+            expected,
+            "index_select_1d_traced_indices",
+        )
 
     def test_indexing_negative_indices_advanced(self):
         """Test negative indices in various contexts."""
@@ -1382,7 +1526,7 @@ class TestTracedTensor(unittest.TestCase):
         # Test compilation
         ctx.compile_trace({'y': y})
         input_tensor = torch.randn(2, 3, 4, 5)
-        result = ctx.compiled_graph_module(input_tensor)
+        result = ctx.m(input_tensor)
         expected = input_tensor[0, :, 1:3, -2]
         self.assertTrue(torch.allclose(result, expected))
 
@@ -1409,11 +1553,11 @@ class TestTracedTensor(unittest.TestCase):
 
         # Test compilation
         ctx.compile_trace({'z': z})
-        result = ctx.compiled_graph_module(torch.tensor([1.0, 2.0, 3.0]))
+        result = ctx.m(torch.tensor([1.0, 2.0, 3.0]))
         self.assertTrue(torch.allclose(result, expected))
 
         # Verify TorchScript compilation
-        scripted = torch.jit.script(ctx.compiled_graph_module)
+        scripted = torch.jit.script(ctx.m)
         result_scripted = scripted(torch.tensor([1.0, 2.0, 3.0]))
         self.assertTrue(torch.allclose(result_scripted, expected))
 
@@ -1434,7 +1578,7 @@ class TestTracedTensor(unittest.TestCase):
         ctx.compile_trace({'out1': out1, 'out2': out2, 'out3': out3})
 
         # Test execution
-        result = ctx.compiled_graph_module(torch.tensor([1.0, 2.0, 3.0]))
+        result = ctx.m(torch.tensor([1.0, 2.0, 3.0]))
 
         # When multiple outputs, result should be a tuple
         if isinstance(result, tuple):
@@ -1467,7 +1611,7 @@ class TestTracedTensor(unittest.TestCase):
 
         # Test compilation
         ctx.compile_trace({'c': c})
-        result = ctx.compiled_graph_module(torch.tensor([1.0, 2.0, 3.0]))
+        result = ctx.m(torch.tensor([1.0, 2.0, 3.0]))
         self.assertTrue(torch.allclose(result, expected))
 
     def test_deep_computation_chain(self):
@@ -1486,7 +1630,7 @@ class TestTracedTensor(unittest.TestCase):
 
         # Test compilation
         ctx.compile_trace({'result': result})
-        output = ctx.compiled_graph_module(torch.tensor([1.0]))
+        output = ctx.m(torch.tensor([1.0]))
         self.assertTrue(torch.allclose(output, expected, atol=1e-5))
 
     def test_unused_intermediate_values(self):
@@ -1504,11 +1648,11 @@ class TestTracedTensor(unittest.TestCase):
         ctx.compile_trace({'result': result})
 
         # Check that the graph doesn't contain the unused operations
-        graph_str = str(ctx.compiled_graph_module.graph)
+        graph_str = str(ctx.m.graph)
 
         # The graph should have: placeholder (x), add (x + 1), output
         # Count the number of operations (excluding placeholder and output)
-        nodes = list(ctx.compiled_graph_module.graph.nodes)
+        nodes = list(ctx.m.graph.nodes)
         call_function_nodes = [n for n in nodes if n.op == 'call_function']
 
         # Should only have 1 call_function (the add for result)
@@ -1533,7 +1677,7 @@ class TestTracedTensor(unittest.TestCase):
 
         # Test compilation
         ctx.compile_trace({'result': result})
-        output = ctx.compiled_graph_module(torch.tensor([1.0, 2.0, 3.0]))
+        output = ctx.m(torch.tensor([1.0, 2.0, 3.0]))
 
         # Verify result matches
         self.assertTrue(torch.allclose(output, result.tensor))
@@ -1719,6 +1863,85 @@ class TestTracedTensor(unittest.TestCase):
         expected = torch.tensor([2.0, 3.0])
         self.assertTrue(torch.allclose(y.tensor, expected))
 
+    def test_boolean_indexing_with_traced_mask_lowers_to_masked_select(self):
+        """Test that x[mask] lowers to torch.masked_select for whole-key masks."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        input_x = torch.tensor([1.0, 2.0, 3.0])
+        x = ctx.create_input(input_x, name="x")
+
+        mask = x > 1.5
+        y = x[mask]
+
+        self.assertIsInstance(y, TracedTensor)
+        expected = torch.tensor([2.0, 3.0])
+        self.assertTrue(torch.allclose(y.tensor, expected))
+
+        ctx.compile_trace({'y': y})
+        self.validate_export(
+            ctx.m,
+            (input_x,),
+            expected,
+            "masked_select_whole_key_traced_mask",
+        )
+
+    def test_advanced_indexing_with_traced_indices_lowers_to_index_select(self):
+        """Test that x[indices] lowers to torch.index_select for whole-key indices."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        input_x = torch.tensor([10.0, 20.0, 30.0, 40.0, 50.0])
+        input_indices = torch.tensor([0, 2, 4], dtype=torch.long)
+        x = ctx.create_input(input_x, name="x")
+        indices = ctx.create_input(input_indices, name="indices")
+
+        y = x[indices]
+
+        self.assertIsInstance(y, TracedTensor)
+        expected = torch.tensor([10.0, 30.0, 50.0])
+        self.assertTrue(torch.allclose(y.tensor, expected))
+
+        ctx.compile_trace({'y': y})
+        self.validate_export(
+            ctx.m,
+            (input_x, input_indices),
+            expected,
+            "index_select_whole_key_traced_indices",
+        )
+
+    def test_nd_advanced_indexing_with_traced_indices_lowers_to_index_select(self):
+        """Test that x[indices_nd] lowers via flatten+reshape for N-D traced indices."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        input_x = torch.tensor(
+            [
+                [10.0, 11.0],
+                [20.0, 21.0],
+                [30.0, 31.0],
+                [40.0, 41.0],
+                [50.0, 51.0],
+            ]
+        )
+        input_indices = torch.tensor([[0, 2], [4, 1]], dtype=torch.long)
+        x = ctx.create_input(input_x, name="x")
+        indices = ctx.create_input(input_indices, name="indices")
+
+        y = x[indices]
+
+        self.assertIsInstance(y, TracedTensor)
+        expected = torch.tensor(
+            [
+                [[10.0, 11.0], [30.0, 31.0]],
+                [[50.0, 51.0], [20.0, 21.0]],
+            ]
+        )
+        self.assertEqual(y.shape, expected.shape)
+        self.assertTrue(torch.allclose(y.tensor, expected))
+
+        ctx.compile_trace({'y': y})
+        self.validate_export(
+            ctx.m,
+            (input_x, input_indices),
+            expected,
+            "index_select_nd_whole_key_traced_indices",
+        )
+
     def test_all_arithmetic_functions(self):
         """Test all arithmetic functions with tracking, TorchScript, and ONNX."""
         # Get all static methods from TensorArithmeticFunctions
@@ -1740,7 +1963,7 @@ class TestTracedTensor(unittest.TestCase):
                     input_tensor, name="my_test_input")
                 result_tracked = func(input_tracked)
                 ctx.compile_trace({'result_tracked': result_tracked})
-                graph_module = ctx.compiled_graph_module
+                graph_module = ctx.m
 
                 self.assertIsInstance(
                     result_tracked,
@@ -1752,6 +1975,12 @@ class TestTracedTensor(unittest.TestCase):
                     torch.allclose(result_tracked.tensor, expected),
                     f"{func_name}: Tracked result doesn't match expected result",
                 )
+                if func_name.startswith("type_conversion_operator"):
+                    self.assertEqual(
+                        result_tracked.dtype,
+                        expected.dtype,
+                        f"{func_name}: Tracked result dtype doesn't match expected dtype",
+                    )
 
                 # Test 2: GraphModule export
                 result_graph_module = graph_module(input_tensor)
@@ -1759,6 +1988,12 @@ class TestTracedTensor(unittest.TestCase):
                     torch.allclose(result_graph_module, expected),
                     f"{func_name}: GraphModule result doesn't match expected result",
                 )
+                if func_name.startswith("type_conversion_operator"):
+                    self.assertEqual(
+                        result_graph_module.dtype,
+                        expected.dtype,
+                        f"{func_name}: GraphModule result dtype doesn't match expected dtype",
+                    )
 
                 # Test 3: TorchScript export
                 traced_script = torch.jit.script(graph_module)
@@ -1767,6 +2002,12 @@ class TestTracedTensor(unittest.TestCase):
                     torch.allclose(result_traced_script, expected),
                     f"{func_name}: TorchScript result doesn't match expected result",
                 )
+                if func_name.startswith("type_conversion_operator"):
+                    self.assertEqual(
+                        result_traced_script.dtype,
+                        expected.dtype,
+                        f"{func_name}: TorchScript result dtype doesn't match expected dtype",
+                    )
 
                 # Test 4: ONNX export
                 try:
@@ -1796,6 +2037,12 @@ class TestTracedTensor(unittest.TestCase):
                             ),
                             f"{func_name}: ONNX result doesn't match tracked result",
                         )
+                        if func_name.startswith("type_conversion_operator"):
+                            self.assertEqual(
+                                torch.from_numpy(result_onnx).dtype,
+                                expected.dtype,
+                                f"{func_name}: ONNX result dtype doesn't match expected dtype",
+                            )
                 except Exception as e:
                     self.fail(f"{func_name}: Error exporting to ONNX: {e}")
 
@@ -1843,16 +2090,16 @@ class TestTracedTensor(unittest.TestCase):
         # Run GraphModule with both inputs (x and buffer)
         input_x = torch.tensor([1.0, 2.0, 3.0])
         input_buffer = torch.zeros(3)
-        result = ctx.compiled_graph_module(input_x, input_buffer)
+        result = ctx.m(input_x, input_buffer)
         self.assertTrue(torch.allclose(result, expected))
 
         # Also verify TorchScript compilation works
-        scripted = torch.jit.script(ctx.compiled_graph_module)
+        scripted = torch.jit.script(ctx.m)
         result_scripted = scripted(input_x, input_buffer)
         self.assertTrue(torch.allclose(result_scripted, expected))
         
         # Test with different x input to ensure it's actually computing from x
-        result_different = ctx.compiled_graph_module(torch.tensor([10.0, 20.0, 30.0]), input_buffer)
+        result_different = ctx.m(torch.tensor([10.0, 20.0, 30.0]), input_buffer)
         expected_different = torch.tensor([20.0, 40.0, 60.0])
         self.assertTrue(torch.allclose(result_different, expected_different))
 
@@ -1917,7 +2164,7 @@ class TestTracedTensor(unittest.TestCase):
 
         # Test compilation
         ctx.compile_trace({'result': result})
-        output = ctx.compiled_graph_module(torch.tensor([1.0, 2.0, 3.0]))
+        output = ctx.m(torch.tensor([1.0, 2.0, 3.0]))
         self.assertTrue(torch.allclose(output, expected))
 
     def test_copy_into_preserves_buffer_reference(self):
@@ -1979,7 +2226,7 @@ class TestTracedTensor(unittest.TestCase):
         
         input_tensor = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
         expected = torch.tensor([20.0, 4.0, 6.0, 8.0, 10.0])
-        self.validate_export(ctx.compiled_graph_module, (input_tensor,), expected, "setitem_single")
+        self.validate_export(ctx.m, (input_tensor,), expected, "setitem_single")
 
     def test_setitem_slice_fx_torchscript_onnx(self):
         """Test: x[1:3] = [10, 20] exports correctly to FX, TorchScript, and ONNX."""
@@ -1993,7 +2240,7 @@ class TestTracedTensor(unittest.TestCase):
         
         input_tensor = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
         expected = torch.tensor([2.0, 20.0, 40.0, 8.0, 10.0])
-        self.validate_export(ctx.compiled_graph_module, (input_tensor,), expected, "setitem_slice")
+        self.validate_export(ctx.m, (input_tensor,), expected, "setitem_slice")
 
     def test_setitem_full_slice_constant_fx_torchscript_onnx(self):
         """Test: x[:] = constant exports correctly to FX, TorchScript, and ONNX."""
@@ -2007,7 +2254,7 @@ class TestTracedTensor(unittest.TestCase):
         
         input_tensor = torch.tensor([1.0, 2.0, 3.0])
         expected = torch.tensor([20.0, 40.0, 60.0])
-        self.validate_export(ctx.compiled_graph_module, (input_tensor,), expected, "setitem_full")
+        self.validate_export(ctx.m, (input_tensor,), expected, "setitem_full")
 
     def test_setitem_step_slice_fx_torchscript_onnx(self):
         """Test: x[::2] = [10, 20, 30] with step exports correctly."""
@@ -2021,79 +2268,208 @@ class TestTracedTensor(unittest.TestCase):
         
         input_tensor = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
         expected = torch.tensor([20.0, 4.0, 60.0, 8.0, 100.0])
-        self.validate_export(ctx.compiled_graph_module, (input_tensor,), expected, "setitem_step")
+        self.validate_export(ctx.m, (input_tensor,), expected, "setitem_step")
 
-    # ==================== Unsupported Operation error message ====================
-    def test_boolean_indexing_raises_error(self):
-        """Test that boolean indexing with TracedTensor raises a clear error."""
+    def test_setitem_with_traced_tensor_slice_fx_torchscript_onnx(self):
+        """Test: x[0] = 1.0 then x[2:4] = other[1:3] exports correctly."""
+        ctx = TracedTensorNode(name="test_setitem_cross_tensor", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0]), name="x")
+        other = ctx.create_input(torch.tensor([10.0, 20.0, 30.0, 40.0, 50.0]), name="other")
+
+        x[0] = 1.0
+        x[2:4] = other[1:3]
+        y = x * 2
+
+        ctx.compile_trace({'y': y})
+
+        input_x = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
+        input_other = torch.tensor([10.0, 20.0, 30.0, 40.0, 50.0])
+        # x after mutations: [1.0, 2.0, 20.0, 30.0, 5.0]
+        expected = torch.tensor([2.0, 4.0, 40.0, 60.0, 10.0])
+        self.validate_export(ctx.m, (input_x, input_other), expected, "setitem_cross_tensor")
+
+    @pytest.mark.skip(reason="Tuple-of-slices keys are not lowered by _create_setitem_proxy(), so export is expected to fail until that lowering is implemented.")
+    def test_setitem_multidim_partial_slice_fx_torchscript_onnx(self):
+        """Test multi-dimensional partial slice assignment export.
+
+        This currently falls back to raw __setitem__ because tuple-of-slices
+        keys are not lowered by _create_setitem_proxy(), so export is expected
+        to fail until that lowering is implemented.
+        """
+        ctx = TracedTensorNode(name="test_setitem_multidim_partial_export", node_index=0)
+        x = ctx.create_input(torch.arange(36.0).reshape(1, 6, 6), name="x")
+        other = ctx.create_input(torch.arange(36.0, 72.0).reshape(1, 6, 6), name="other")
+
+        x[:, 0:3, 0:3] = other[:, 0:3, 0:3]
+        y = x[:, 3:6, 3:6] * 2.0
+
+        ctx.compile_trace({'y': y})
+
+        input_x = torch.arange(36.0).reshape(1, 6, 6)
+        input_other = torch.arange(36.0, 72.0).reshape(1, 6, 6)
+        expected = input_x.clone()
+        expected[:, 0:3, 0:3] = input_other[:, 0:3, 0:3]
+        expected = expected[:, 3:6, 3:6] * 2.0
+
+        self.validate_export(
+            ctx.m,
+            (input_x, input_other),
+            expected,
+            "setitem_multidim_partial",
+        )
+        
+    # ==================== Class Swap: plain_tensor[:] = TracedTensor ====================
+    # When a plain torch.Tensor is the target of a full-slice assignment or
+    # copy_() with a TracedTensor source, the plain tensor is silently upgraded
+    # to a TracedTensor so subsequent operations continue the FX trace.
+
+    def test_class_swap_full_slice(self):
+        """plain_buf[:] = traced upgrades buf and continues the trace."""
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
 
-        # Create a boolean mask (which is also a TracedTensor)
-        mask = x > 1.5  # TracedTensor with dtype bool
+        buf = torch.zeros(3)
+        buf[:] = x
 
-        # Verify mask is indeed a TracedTensor with bool dtype
-        self.assertIsInstance(mask, TracedTensor)
-        self.assertEqual(mask.dtype, torch.bool)
+        self.assertIsInstance(buf, TracedTensor)
+        y = buf * 2
+        self.assertIsInstance(y, TracedTensor)
 
-        # Try to use boolean indexing - should raise NotImplementedError with helpful message
+        ctx.compile_trace({'y': y})
+
+        input_tensor = torch.tensor([4.0, 5.0, 6.0])
+        expected = input_tensor * 2
+        self.validate_export(ctx.m, (input_tensor,), expected, "class_swap_full_slice")
+
+    def test_class_swap_ellipsis(self):
+        """plain_buf[...] = traced upgrades buf identically to [:]."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+
+        buf = torch.zeros(3)
+        buf[...] = x
+
+        self.assertIsInstance(buf, TracedTensor)
+        y = buf + 1.0
+
+        ctx.compile_trace({'y': y})
+
+        input_tensor = torch.tensor([4.0, 5.0, 6.0])
+        expected = input_tensor + 1.0
+        self.validate_export(ctx.m, (input_tensor,), expected, "class_swap_ellipsis")
+
+    def test_class_swap_copy_(self):
+        """plain_buf.copy_(traced) upgrades buf and continues the trace."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([7.0, 8.0, 9.0]), name="x")
+
+        buf = torch.zeros(3)
+        buf.copy_(x)
+
+        self.assertIsInstance(buf, TracedTensor)
+        y = buf - 1.0
+
+        ctx.compile_trace({'y': y})
+
+        input_tensor = torch.tensor([1.0, 2.0, 3.0])
+        expected = input_tensor - 1.0
+        self.validate_export(ctx.m, (input_tensor,), expected, "class_swap_copy")
+
+    def test_class_swap_multidim(self):
+        """2-D buf[:] = traced works for higher-rank tensors."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.randn(3, 4), name="x")
+
+        buf = torch.zeros(3, 4)
+        buf[:] = x
+
+        self.assertIsInstance(buf, TracedTensor)
+        y = torch.relu(buf)
+
+        ctx.compile_trace({'y': y})
+
+        input_tensor = torch.randn(3, 4)
+        expected = torch.relu(input_tensor)
+        self.validate_export(ctx.m, (input_tensor,), expected, "class_swap_multidim")
+
+    def test_class_swap_chained(self):
+        """Chain: buf1[:] = traced, buf2[:] = (buf1 * 3)."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+
+        buf1 = torch.zeros(3)
+        buf2 = torch.zeros(3)
+        buf1[:] = x
+        intermediate = buf1 * 3.0
+        buf2[:] = intermediate
+        y = buf2 + 10.0
+
+        ctx.compile_trace({'y': y})
+
+        input_tensor = torch.tensor([4.0, 5.0, 6.0])
+        expected = input_tensor * 3.0 + 10.0
+        self.validate_export(ctx.m, (input_tensor,), expected, "class_swap_chained")
+
+    def test_class_swap_does_not_fire_for_partial_slice(self):
+        """Partial slice buf[0:2] = traced should NOT upgrade buf."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+
+        buf = torch.zeros(3)
+        buf[0:2] = x[0:2]
+
+        self.assertNotIsInstance(buf, TracedTensor)
+
+    def test_class_swap_does_not_fire_for_traced_target(self):
+        """When target is already a TracedTensor, the existing __setitem__ handles it."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+        y = ctx.create_input(torch.tensor([4.0, 5.0, 6.0]), name="y")
+
+        x[:] = y
+
+        self.assertIsInstance(x, TracedTensor)
+        z = x * 2
+        ctx.compile_trace({'z': z})
+
+        input_x = torch.tensor([0.0, 0.0, 0.0])
+        input_y = torch.tensor([7.0, 8.0, 9.0])
+        expected = input_y * 2
+        output = ctx.m(input_x, input_y)
+        self.assertTrue(torch.allclose(output, expected))
+
+    # ==================== Unsupported Operation error message ====================
+    def test_tuple_boolean_indexing_with_traced_mask_raises_error(self):
+        """Test that tuple boolean indexing with TracedTensor remains unsupported."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([[1.0, 2.0], [3.0, 4.0]]), name="x")
+        mask = ctx.create_input(torch.tensor([True, False]), name="mask")
+
         with self.assertRaises(NotImplementedError) as context:
-            y = x[mask]
+            _ = x[:, mask]
 
-        # Verify the error message is helpful
         error_msg = str(context.exception)
         self.assertIn("Boolean/mask indexing", error_msg)
         self.assertIn("not supported", error_msg)
-        self.assertIn("torch.masked_select", error_msg)
-        self.assertIn("mask.tensor", error_msg)
+        self.assertIn("masked_select", error_msg)
 
-    def test_advanced_indexing_with_tracedtensor_raises_error(self):
-        """Test that advanced indexing with TracedTensor indices raises clear error."""
+    def test_tuple_advanced_indexing_with_traced_indices_raises_error(self):
+        """Test that tuple advanced indexing with TracedTensor indices remains unsupported."""
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(torch.tensor(
-            [10.0, 20.0, 30.0, 40.0, 50.0]), name="x")
+            [[10.0, 20.0, 30.0], [40.0, 50.0, 60.0]]), name="x")
+        indices = ctx.create_input(torch.tensor([0, 2], dtype=torch.long), name="indices")
 
-        # Create indices as TracedTensor (non-boolean)
-        indices_tensor = torch.tensor([0, 2, 4], dtype=torch.long)
-        ctx2 = TracedTensorNode(name="test2", node_index=1)
-        indices = ctx2.create_input(indices_tensor, name="indices")
-
-        # Try to use TracedTensor as index - should raise NotImplementedError
         with self.assertRaises(NotImplementedError) as context:
-            y = x[indices]
+            _ = x[:, indices]
 
         error_msg = str(context.exception)
         self.assertIn("Advanced indexing", error_msg)
         self.assertIn("not supported", error_msg)
-        self.assertIn("indices.tensor", error_msg)
+        self.assertIn("torch.index_select", error_msg)
 
     # ==================== TorchScript Module Interaction Tests ====================
-
-    def test_tracedtensor_with_torchscript_module_raises_error(self):
-        """Test that using TorchScript module with TracedTensor raises clear error."""
-        # Create a simple TorchScript module
-        class SimpleModule(torch.nn.Module):
-            def forward(self, x):
-                return x * 2 + 1
-
-        module = SimpleModule()
-        scripted_module = torch.jit.script(module)
-
-        # Use it with TracedTensor
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
-
-        # This should raise ValueError during tracing
-        with self.assertRaises(ValueError) as context:
-            y = scripted_module(x)
-
-        # Verify the error message is correct
-        error_msg = str(context.exception)
-        self.assertIn("TorchScript modules cannot be used", error_msg)
-        self.assertIn("TracedTensor", error_msg)
-        self.assertIn("during tracing", error_msg)
-
-    def test_torchscript_module_with_parameters_raises_error(self):
+    def test_tracing_through_torchscript_module(self):
         """Test that TorchScript module with parameters raises error with TracedTensor."""
         # Create a TorchScript module with parameters
         class LinearModule(torch.nn.Module):
@@ -2111,17 +2487,16 @@ class TestTracedTensor(unittest.TestCase):
         # Use it in tracing context
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+        y = scripted_module(x)
+        ctx.compile_trace({'y': y})
 
-        # Should raise ValueError during tracing
-        with self.assertRaises(ValueError) as context:
-            y = scripted_module(x)
+        torch.manual_seed(42)
+        input_tensor = torch.randn((3,))
+        expected = scripted_module(input_tensor)
+        output = ctx.m(input_tensor)
+        self.assertTrue(torch.allclose(output, expected))
 
-        error_msg = str(context.exception)
-        self.assertIn("TorchScript modules cannot be used", error_msg)
-        self.assertIn("TracedTensor", error_msg)
-        self.assertIn("during tracing", error_msg)
-
-    def test_nested_torchscript_in_traced_operations_raises_error(self):
+    def test_torchscript_with_normal_normal_torch_operations(self):
         """Test that TorchScript module nested with traced ops raises error."""
         class ReLUModule(torch.nn.Module):
             def forward(self, x):
@@ -2132,19 +2507,23 @@ class TestTracedTensor(unittest.TestCase):
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(torch.tensor([-1.0, 0.0, 1.0, 2.0]), name="x")
 
-        # Regular operation first
-        y = x * 2  # This works fine
+        def operation_chain(x):
+            y = x * 2
+            z = torch.abs(y)-1
+            z = scripted_relu(z)
+            return z
+        z = operation_chain(x)
 
-        # TorchScript module should raise ValueError
-        with self.assertRaises(ValueError) as context:
-            z = scripted_relu(y)  # TorchScript module with TracedTensor
+        ctx.compile_trace({'z': z})
+        output = ctx.m(torch.tensor([-1.0, 0.0, 1.0, 2.0]))
 
-        error_msg = str(context.exception)
-        self.assertIn("TorchScript modules cannot be used", error_msg)
-        self.assertIn("TracedTensor", error_msg)
-        self.assertIn("during tracing", error_msg)
+        torch.manual_seed(42)
+        input_tensor = torch.randn((4,))*2
+        expected = operation_chain(input_tensor)
+        output = ctx.m(input_tensor)
+        self.assertTrue(torch.allclose(output, expected))
 
-    def test_torchscript_with_multiple_inputs_raises_error(self):
+    def test_torchscript_with_multiple_inputs(self):
         """Test that TorchScript module with multiple TracedTensor inputs raises error."""
         class AddModule(torch.nn.Module):
             def forward(self, x, y):
@@ -2156,16 +2535,18 @@ class TestTracedTensor(unittest.TestCase):
         x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
         y = ctx.create_input(torch.tensor([4.0, 5.0, 6.0]), name="y")
 
-        # Should raise ValueError when calling with TracedTensors
-        with self.assertRaises(ValueError) as context:
-            z = scripted_add(x, y)
 
-        error_msg = str(context.exception)
-        self.assertIn("TorchScript modules cannot be used", error_msg)
-        self.assertIn("TracedTensor", error_msg)
-        self.assertIn("during tracing", error_msg)
+        z = scripted_add(x, y)
 
-    def test_torchscript_module_with_state_raises_error(self):
+        ctx.compile_trace({'z': z})
+        input_x = torch.randn((3,))
+        input_y = torch.randn((3,))
+
+        expected = scripted_add(input_x, input_y)
+        output = ctx.m(input_x, input_y)
+        self.assertTrue(torch.allclose(output, expected))
+
+    def test_torchscript_module_with_state_and_untraced_tensor_input(self):
         """Test that TorchScript module with state raises error with TracedTensor."""
         class StatefulModule(torch.nn.Module):
             def __init__(self):
@@ -2176,23 +2557,27 @@ class TestTracedTensor(unittest.TestCase):
                     [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
                 self.linear.bias.data = torch.tensor([0.0, 0.0])
 
-            def forward(self, x):
-                return self.linear(x)
+            def forward(self, x, y):
+                return self.linear(x) + y
 
         module = StatefulModule()
         scripted_module = torch.jit.script(module)
 
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+        y = torch.tensor([4.0, 5.0]) #<-- this should stay constant for the tests too
 
-        # Should raise ValueError when calling with TracedTensor
-        with self.assertRaises(ValueError) as context:
-            y = scripted_module(x)
+        z = scripted_module(x, y)
+        ctx.compile_trace({'z': z})
+        input_x = torch.randn((3,))
 
-        error_msg = str(context.exception)
-        self.assertIn("TorchScript modules cannot be used", error_msg)
-        self.assertIn("TracedTensor", error_msg)
-        self.assertIn("during tracing", error_msg)
+        # we expect the other input is actually inlined into the graph
+        torch.manual_seed(42)
+        input_x = torch.randn((3,))
+        expected = scripted_module(input_x, y)
+
+        output = ctx.m(input_x)
+        self.assertTrue(torch.allclose(output, expected))
 
 
 if __name__ == "__main__":

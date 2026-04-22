@@ -1,5 +1,5 @@
 #
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 
@@ -11,14 +11,15 @@ and graph recording.
 """
 
 import operator
+import warnings
 from abc import ABCMeta
 
-import numpy as np
 import torch
 from torch.fx.proxy import Proxy
+import io as _io
+from torch._export.converter import TS2EPConverter
 
-from leapp._logging import _get_logger
-from leapp.tracing_lock import TracingLock
+from leapp.utils.logging import _get_logger
 from .traced_data import TracedData
 
 
@@ -74,7 +75,6 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         self._name = name
         self._context = context
         self._proxy = proxy
-        self._global_tracing_lock = TracingLock()
 
     # =========================================================================
     # Properties
@@ -124,10 +124,6 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     # Abstract method implementations from TracedData
     # =========================================================================
 
-    def _unwrap(self) -> torch.Tensor:
-        """Get the underlying raw tensor."""
-        return self.as_subclass(torch.Tensor)
-
     def _new(self, tensor: torch.Tensor, proxy: Proxy = None) -> "TracedTensor":
         """Create a new TracedTensor in the same context.
 
@@ -175,11 +171,11 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                     if torch_func is not None and callable(torch_func):
                         return torch_func
 
-                # Log warning if we couldn't find the equivalent torch function
                 if context is not None:
-                    _get_logger().warning(
+                    _get_logger().debug(
                         f"while tracing for {context} detected method_descriptor or builtin_function_or_method {func_name} "
-                        f"but failed to find equivalent torch function. this may cause issues during graph creation"
+                        f"but failed to find equivalent torch function. "
+                        f"downstream _rewrite_method_descriptors should handle this by converting to call_method"
                     )
         return func
 
@@ -254,55 +250,186 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             source._context,
             source.proxy
         )
+    
+    @staticmethod
+    def _handle_TS_decomposition(func, real_args, real_kwargs):
+        """Handle TorchScript decomposition."""
+        # Decompose the TorchScript module into individual aten ops via
+        # TS2EPConverter, then replay with TracedTensors so each op gets
+        # recorded in our FX graph transparently.
 
-    # =========================================================================
-    # Validation
-    # =========================================================================
+        _get_logger().info(
+            f"Detected TorchScript call to {type(func).__name__}. "
+            f"Decomposing via TS2EPConverter for transparent tracing."
+        )
 
-    def validate_status(self, args=None, kwargs=None):
-        """Validate that this TracedTensor can be used in the current context."""
-        if not self.is_tracing:
-            return False
-        if self.is_tracing and self._global_tracing_lock.is_active:
-            _get_logger().error(
-                f"Error: detected active TracedTensor {self._name} from node {self.context} inside of a traced function.\n"
-                f"\n"
-                f"This happens when you have an active TracedTensor and it is being used for computation inside of a traced function/block."
-                f"\n"
-                f"You must call output_tensors() to finalize the TracedTensor node first"
-            )
-            raise Exception(
-                "Cannot use TracedTensor inside of a traced function/block. "
-                "Call output_tensors() first to finalize the TracedTensor node"
-            )
+        try:
+            # Obtain a fully-initialized RecursiveScriptModule from the
+            # ScriptMethod.  func.owner returns the C++ ScriptModule
+            # (not an nn.Module).  Save → reload via BytesIO so
+            # torch.jit.load performs full Python-level init.
+            script_module = getattr(func, '__self__', None)
+            if not isinstance(script_module, torch.nn.Module):
+                cpp_module = getattr(func, 'owner', None)
+                if cpp_module is not None:
+                    _buf = _io.BytesIO()
+                    _tmp = torch.jit.RecursiveScriptModule._construct(
+                        cpp_module, lambda self: None
+                    )
+                    torch.jit.save(_tmp, _buf)
+                    _buf.seek(0)
+                    _dev = next(
+                        (a.device for a in real_args
+                            if isinstance(a, torch.Tensor)),
+                        torch.device('cpu'),
+                    )
+                    script_module = torch.jit.load(
+                        _buf, map_location=_dev
+                    )
 
-        contexts = set()
-        if args is not None:
-            for arg in args:
-                contexts = TracedTensor.find_all_contexts(arg, contexts)
-        if kwargs is not None:
-            for kwarg in kwargs.values():
-                contexts = TracedTensor.find_all_contexts(kwarg, contexts)
+            #validate the script_module
+            if not isinstance(script_module, torch.nn.Module):
+                raise RuntimeError(
+                    f"Could not obtain nn.Module from {type(func).__name__}. "
+                    f"func.__self__={type(getattr(func, '__self__', None))}, "
+                    f"func.owner={type(getattr(func, 'owner', None))}"
+                )
 
-        if len(contexts) > 1:
-            _get_logger().error(
-                f"Error: detected multiple TracedTensor contexts: {contexts} inside of a traced function.\n"
-                "\n"
-                "This happens when you mix multiple active TracedTensors from different contexts inside of a traced function/block."
-                "\n"
-                "You can call output_tensors() to finalize one of the TracedTensor nodes first "
-                "or combine both nodes into a single node by calling input_tensors() with the same node name"
+            # Clone+detach real_args so they are plain tensors with no
+            # shared storage back to TracedTensors.  Without this,
+            # as_subclass views can trigger __torch_function__ inside
+            # torch.export internals.
+            _clean = tuple(
+                a.clone().detach() if isinstance(a, torch.Tensor) else a
+                for a in real_args
             )
-            raise Exception(
-                "Cannot mix multiple active TracedTensors from different contexts inside of a traced function/block. "
-                "Call output_tensors() to finalize one of the TracedTensor nodes first"
-                "or combine both nodes into a single node by calling input_tensors() with the same node name"
+            _clean_kw = {
+                k: v.clone().detach() if isinstance(v, torch.Tensor) else v
+                for k, v in (real_kwargs or {}).items()
+            }
+            ep = TS2EPConverter(
+                script_module, _clean, _clean_kw
+            ).convert()
+            fx_module = ep.module()
+
+        except Exception as e:
+            _get_logger().warning(
+                f"Failed to decompose TorchScript {type(func).__name__} via "
+                f"TS2EPConverter: {e}\n"
+                f"To resolve, consider one of:\n"
+                f"  1. Use the regular (non-scripted) nn.Module instead "
+                f"during tracing\n"
+                f"  2. Extract and call the underlying operations "
+                f"directly\n"
+                f"  3. Break the chain by calling output_tensors() first "
+                f"then annotate the scripted module usage with other "
+                f"LEAPP API"
             )
-        return True
+            fx_module = None
+
+        # Replay the decomposed FX module with TracedTensors.
+        # Each aten op triggers __torch_function__, recording it in our graph.
+        return fx_module
 
     # =========================================================================
     # Torch Function Interception
     # =========================================================================
+
+    @classmethod
+    def _handle_class_swap(cls, func, args=(), kwargs=None):
+        """Upgrade plain tensor targets to TracedTensor for full-copy mutations.
+
+        Returns:
+            tuple[bool, object]: (handled, result). When handled is True, result
+            should be returned directly from __torch_function__.
+        """
+        if kwargs is None:
+            kwargs = {}
+
+        original_func_name = getattr(func, '__name__', '')
+
+        if original_func_name == '__setitem__' and len(args) >= 3:
+            target, key, value = args[0], args[1], args[2]
+            if type(target) is torch.Tensor and isinstance(value, TracedTensor):
+                is_full_copy = (
+                    (isinstance(key, slice) and key == slice(None))
+                    or key is Ellipsis
+                )
+                if is_full_copy:
+                    target.__class__ = TracedTensor
+                    target._name = value._name
+                    target._context = value._context
+                    target._proxy = value._proxy
+                    return True, None
+
+                _get_logger().warning(
+                    f"Partial-slice assignment (plain_tensor[{key}] = TracedTensor) "
+                    "copies data but does NOT propagate tracing to the target tensor. "
+                    "Subsequent operations on the target will be untraced. "
+                    "Use full-slice assignment (target[:] = source) or "
+                    "reassign the variable (target = source) instead."
+                )
+
+        elif original_func_name == 'copy_' and len(args) >= 2:
+            target, source = args[0], args[1]
+            if type(target) is torch.Tensor and isinstance(source, TracedTensor):
+                target.__class__ = TracedTensor
+                target._name = source._name
+                target._context = source._context
+                target._proxy = source._proxy
+                return True, target
+
+        return False, None
+
+    @classmethod
+    def _handle_scripted_call(
+        cls,
+        func,
+        traced_tensor,
+        real_args,
+        real_kwargs,
+        tensor_out,
+        args=(),
+        kwargs=None,
+    ):
+        """Handle TorchScript calls by decomposing or rewrapping outputs.
+
+        Returns:
+            tuple[bool, object]: (handled, result). When handled is True, result
+            should be returned directly from __torch_function__.
+        """
+        if kwargs is None:
+            kwargs = {}
+
+        func_type_name = type(func).__name__
+        func_module = type(func).__module__ if hasattr(type(func), '__module__') else ''
+
+        is_scripted = ('ScriptMethod' in func_type_name or 'ScriptModule' in func_type_name)
+
+        if not is_scripted:
+            if func_module.startswith('torch.jit') or func_module.startswith('torch._C'):
+                if hasattr(func, '__self__') and hasattr(func.__self__, '__class__'):
+                    self_class_name = func.__self__.__class__.__name__
+                    is_scripted = 'Script' in self_class_name
+
+        if not is_scripted:
+            return False, None
+
+        fx_module = TracedTensor._handle_TS_decomposition(func, real_args, real_kwargs)
+        if fx_module is not None:
+            return True, fx_module(*args, **kwargs)
+
+        if isinstance(tensor_out, (tuple, list)):
+            result = []
+            for t in tensor_out:
+                if isinstance(t, torch.Tensor):
+                    result.append(traced_tensor._new(t, traced_tensor.proxy))
+                else:
+                    result.append(t)
+            return True, type(tensor_out)(result)
+        if isinstance(tensor_out, torch.Tensor):
+            return True, traced_tensor._new(tensor_out, traced_tensor.proxy)
+        return True, tensor_out
 
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
@@ -343,43 +470,24 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         if not traced_tensor.validate_status(args, kwargs):
             return tensor_out
 
-        # Check if we're trying to call a TorchScript module/method
-        # This will fail when trying to script the graph later
-        # We check this here (after confirming we're tracing) to avoid unnecessary
-        # type introspection when not recording to the graph
-        # TODO: figure out a way to handle this. We should be able to incorporate this.
-        func_type_name = type(func).__name__
-        func_module = type(func).__module__ if hasattr(
-            type(func), '__module__') else ''
+        # ================== SPECIAL CASES IN HANDLING ==================
+        handled, result = cls._handle_class_swap(func, args, kwargs)
+        if handled:
+            return result
 
-        # Detect TorchScript ScriptMethod, ScriptModule, or RecursiveScriptModule
-        if 'ScriptMethod' in func_type_name or 'ScriptModule' in func_type_name:
-            _get_logger().error(
-                f"TorchScript modules cannot be used with TracedTensor during tracing.\n"
-                f"Detected call to: {func_type_name}\n"
-                f"Issue: The FX graph will contain references to TorchScript objects that cannot be scripted later.\n"
-                f"Solutions:\n"
-                f"  1. Use the regular (non-scripted) nn.Module instead during tracing\n"
-                f"  2. Extract and call the underlying operations directly\n"
-                f"  3. break the chain by calling output_tensors first then annotate the scripted module usage with other LEAPP api"
-            )
-            raise ValueError(
-                f"TorchScript modules cannot be used with TracedTensor during tracing. Detected call to: {func_type_name}")
+        handled, result = cls._handle_scripted_call(
+            func,
+            traced_tensor,
+            real_args,
+            real_kwargs,
+            tensor_out,
+            args,
+            kwargs,
+        )
+        if handled:
+            return result
 
-        # Also check if the function comes from torch.jit module
-        if func_module.startswith('torch.jit') or func_module.startswith('torch._C'):
-            # Check if it's actually a ScriptMethod by trying to access __self__
-            if hasattr(func, '__self__') and hasattr(func.__self__, '__class__'):
-                self_class_name = func.__self__.__class__.__name__
-                if 'Script' in self_class_name:
-                    _get_logger().error(
-                        f"TorchScript modules cannot be used with TracedTensor during tracing.\n"
-                        f"Detected: {func} from {self_class_name}\n"
-                        f"The compiled FX graph will contain TorchScript references that prevent scripting.\n"
-                        f"Use the original nn.Module instead of the scripted version during tracing."
-                    )
-                    raise ValueError(
-                        f"TorchScript modules cannot be used with TracedTensor during tracing. Detected call to: {func}")
+        # ================== SPECIAL CASES IN HANDLING ==================
 
         # Helper to recursively extract proxies
         def extract_proxy(obj):
@@ -543,7 +651,8 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
     def __radd__(self, other):
         """Reverse addition operator."""
-        return torch.add(other, self)
+        # Keep commutative reverse ops tensor-first for exporter compatibility.
+        return torch.add(self, other)
 
     def __sub__(self, other):
         """Subtraction operator."""
@@ -559,7 +668,8 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
     def __rmul__(self, other):
         """Reverse multiplication operator."""
-        return torch.mul(other, self)
+        # Keep commutative reverse ops tensor-first for exporter compatibility.
+        return torch.mul(self, other)
 
     def __truediv__(self, other):
         """Division operator."""
@@ -815,28 +925,46 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         Supports all Python indexing operations: slicing, integer indexing,
         tensor indexing, etc. The operation is recorded in the computation graph.
 
-        Note: Boolean/mask indexing with TracedTensor masks is not supported
-        because FX tracer cannot serialize TracedTensor objects as arguments.
+        Whole-key traced masks/indices are lowered to torch.masked_select and
+        torch.index_select respectively. Tuple/mixed traced indexing remains
+        unsupported because FX cannot serialize TracedTensor objects as
+        indexing arguments directly.
         """
         # Check for boolean mask indexing with TracedTensor
         if isinstance(key, TracedTensor):
+            result_tensor = self.tensor[key.tensor]
+
+            # Skip tracing if context is not tracing - return raw tensor
+            if not self.validate_status(args=(key,)):
+                return result_tensor
+
             # Check if it's a boolean tensor (mask)
             if key.dtype == torch.bool:
-                raise NotImplementedError(
-                    "Boolean/mask indexing with TracedTensor is not supported. "
-                    "The FX tracer cannot serialize TracedTensor objects as indexing arguments.\n"
-                    "Alternatives:\n"
-                    "  1. Use torch.masked_select(tensor, mask) instead\n"
-                    "  2. Convert mask to regular tensor: tensor[mask.tensor]\n"
-                    "  3. Use torch.where() for conditional selection"
+                proxy_out = self._context.tracer.create_proxy(
+                    "call_function", torch.masked_select, (self._proxy, key.proxy), {}
                 )
-            else:
-                # Non-boolean tensor indexing with TracedTensor
+                return self._new(result_tensor, proxy_out)
+
+            if key.dtype not in (torch.int32, torch.int64):
                 raise NotImplementedError(
-                    "Advanced indexing with TracedTensor indices is not supported. "
-                    "The FX tracer cannot serialize TracedTensor objects as indexing arguments.\n"
-                    "Convert to regular tensor first: tensor[indices.tensor]"
+                    "Advanced indexing with TracedTensor indices is only auto-lowered "
+                    "for integer index tensors. "
+                    f"Received dtype {key.dtype}."
                 )
+
+            flat_index_proxy = self._context.tracer.create_proxy(
+                "call_method", "reshape", (key.proxy, (-1,)), {}
+            )
+            proxy_out = self._context.tracer.create_proxy(
+                "call_function", torch.index_select, (self._proxy, 0, flat_index_proxy), {}
+            )
+
+            if key.ndim > 1:
+                output_shape = tuple(key.shape) + tuple(self.shape[1:])
+                proxy_out = self._context.tracer.create_proxy(
+                    "call_method", "reshape", (proxy_out, output_shape), {}
+                )
+            return self._new(result_tensor, proxy_out)
 
         # Check for tuple containing TracedTensor
         if isinstance(key, tuple):
@@ -852,7 +980,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                         raise NotImplementedError(
                             "Advanced indexing with TracedTensor indices is not supported. "
                             "The FX tracer cannot serialize TracedTensor objects as indexing arguments.\n"
-                            "Convert to regular tensor first."
+                            "Use torch.index_select() when selecting along a dimension with traced indices"
                         )
 
         result_tensor = self.tensor[key]
@@ -895,21 +1023,32 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             return
         
         # Handle unsupported cases with warnings
-        if isinstance(key, tuple):
-            if all(isinstance(k, int) for k in key):
-                _get_logger().warning(
-                    "Multi-dimensional integer indexing in setitem may not export correctly. "
-                    "Consider using torch.index_put directly."
-                )
-            else:
-                _get_logger().warning(
-                    "Complex multi-dimensional indexing in setitem may not export correctly. "
-                    "Consider restructuring to use simple slices or torch.index_put."
-                )
+        has_slice = isinstance(key, tuple) and any(isinstance(k, slice) for k in key)
+        if has_slice:
+            warnings.warn(
+                f"TracedTensor setitem with multi-dimensional slice key {key} "
+                "cannot be lowered to a functional op. The exported graph will "
+                "contain a raw __setitem__ node that is invalid for FX execution, "
+                "TorchScript, and ONNX export.\n"
+                "To fix this, replace the slice assignment with functional ops:\n"
+                "  - torch.slice_scatter (one call per dimension)\n"
+                "  - torch.index_put with explicit index tensors\n"
+                "  - Functional assembly with torch.cat / torch.stack",
+                stacklevel=2,
+            )
+        elif isinstance(key, tuple):
+            warnings.warn(
+                f"TracedTensor setitem with multi-dimensional key {key} "
+                "may produce an invalid graph for export. "
+                "Consider using torch.index_put directly.",
+                stacklevel=2,
+            )
         else:
-            _get_logger().warning(
-                f"Indexing with {type(key).__name__} in setitem may not export correctly. "
-                "Consider using torch.index_put or torch.masked_scatter directly."
+            warnings.warn(
+                f"TracedTensor setitem with {type(key).__name__} key "
+                "may produce an invalid graph for export. "
+                "Consider using torch.index_put or torch.masked_scatter directly.",
+                stacklevel=2,
             )
         
         # Fallback: record __setitem__ directly (may not export)
@@ -924,10 +1063,6 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     def __len__(self) -> int:
         """Length operator for TracedTensor."""
         return self.tensor.__len__()
-
-    def __bool__(self) -> bool:
-        """Boolean conversion for TracedTensor."""
-        return bool(self.tensor)
 
     def __str__(self) -> str:
         """String representation of TracedTensor."""

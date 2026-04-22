@@ -1,5 +1,5 @@
 #
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 
@@ -9,8 +9,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Set, Optional
 
 from torch.fx.proxy import Proxy
-from leapp._logging import _get_logger
-from leapp.tracing_lock import TracingLock
+from leapp.utils.logging import _get_logger
 
 import torch
 
@@ -42,7 +41,6 @@ class TracedData(ABC):
         self._name = name
         self._context = context
         self._proxy = proxy
-        self._global_tracing_lock = TracingLock()
     
     # =========================================================================
     # Common Properties
@@ -101,15 +99,6 @@ class TracedData(ABC):
         """
         pass
     
-    @abstractmethod
-    def _unwrap(self) -> Any:
-        """Get the underlying raw value.
-        
-        Returns:
-            The underlying value (torch.Tensor, numpy.ndarray, etc.)
-        """
-        pass
-    
     # =========================================================================
     # Common Static Methods
     # =========================================================================
@@ -144,7 +133,7 @@ class TracedData(ABC):
             The unwrapped value with all TracedData replaced by their raw values
         """
         if isinstance(obj, TracedData):
-            return obj._unwrap()
+            return obj.data
         elif isinstance(obj, (list, tuple)):
             return type(obj)(TracedData.unwrap_traced_data(item) for item in obj)
         elif isinstance(obj, dict):
@@ -217,20 +206,7 @@ class TracedData(ABC):
         """
         if not self.is_tracing:
             return False
-        
-        if self.is_tracing and self._global_tracing_lock.is_active:
-            _get_logger().error(
-                f"Error: detected active TracedData {self._name} from node {self.context} inside of a traced function.\n"
-                f"\n"
-                f"This happens when you have an active TracedData and it is being used for computation inside of a traced function/block."
-                f"\n"
-                f"You must call output_tensors() to finalize the TracedData node first"
-            )
-            raise Exception(
-                "Cannot use TracedData inside of a traced function/block. "
-                "Call output_tensors() first to finalize the TracedData node"
-            )
-        
+
         contexts = set()
         if args is not None:
             for arg in args:
@@ -240,18 +216,22 @@ class TracedData(ABC):
                 contexts = TracedData.find_all_contexts(kwarg, contexts)
         
         if len(contexts) > 1:
+            cls_name = self.__class__.__name__
             _get_logger().error(
-                f"Error: detected multiple TracedData contexts: {contexts} inside of a traced function.\n"
+                f"Error: detected multiple {cls_name} contexts: {contexts} inside of a traced function.\n"
                 "\n"
-                "This happens when you mix multiple active TracedData from different contexts inside of a traced function/block."
+                f"This happens when you mix multiple active {cls_name}s from different contexts "
+                "inside of a traced function/block.\n"
                 "\n"
-                "You can call output_tensors() to finalize one of the TracedData nodes first "
-                "or combine both nodes into a single node by calling input_tensors() with the same node name"
+                "Mixing active contexts is not allowed. You can: \n"
+                "1. call output_tensors() to finalize one of the nodes first\n"
+                "2. combine both nodes into a single node by calling input_tensors() with the same node name"
             )
             raise Exception(
-                "Cannot mix multiple active TracedData from different contexts inside of a traced function/block. "
-                "Call output_tensors() to finalize one of the TracedData nodes first "
-                "or combine both nodes into a single node by calling input_tensors() with the same node name"
+                f"Cannot mix multiple active {cls_name}s from different contexts inside of a traced function/block. "
+                "Mixing active contexts is not allowed. You can: \n"
+                "1. call output_tensors() to finalize one of the nodes first\n"
+                "2. combine both nodes into a single node by calling input_tensors() with the same node name"
             )
         return True
     
@@ -264,8 +244,32 @@ class TracedData(ABC):
         return len(self._value)
     
     def __bool__(self) -> bool:
-        """Boolean conversion."""
-        return bool(self._value)
+        """Boolean conversion for TracedNpArray.
+        
+        During tracing, this indicates tensor-dependent control flow which
+        produces a silently incorrect graph. Logs an error to alert the user.
+        """
+        if self.is_tracing:
+            _get_logger().error(
+                f"Attempted to use {self.__class__.__name__} '{self._name}' from node '{self.context}' "
+                f"in a boolean context (if/while/and/or/not) during tracing.\n"
+                f"\n"
+                f"This typically happens with array-value-dependent control flow:\n"
+                f"  - if array.mean() > 0.9: return early   (Early Exit)\n"
+                f"  - while error.sum() > eps: refine()      (Iterative Refinement)\n"
+                f"  - if array.any(): ...                     (Conditional on values)\n"
+                f"\n"
+                f"The traced graph is a static DAG and cannot represent dynamic branches.\n"
+                f"Only the branch taken during tracing would be recorded, producing a\n"
+                f"silently incorrect graph for other inputs.\n"
+                f"\n"
+                f"Alternatives:\n"
+                f"  1. Use torch.where(condition, true_val, false_val) for simple if/else\n"
+                f"  2. Use fixed iteration counts instead of dynamic while loops\n"
+                f"  3. Break the trace: call output_tensors() before the conditional,\n"
+                f"     then start a new input_tensors() after it"
+            )
+        return bool(self.data)
     
     def __str__(self) -> str:
         """String representation."""

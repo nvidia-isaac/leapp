@@ -1,5 +1,5 @@
 #
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,17 +25,25 @@ various formats including PyTorch JIT, ONNX, and generate visualization and YAML
 """
 
 from .export_manager import ExportManager
-from .enums import MergeCfgEnum
-# Create a global annotate instance that's ready to use
-annotate = ExportManager()
+from .inference_manager import InferenceManager
+from .leapp import annotate, start, stop, compile_graph
+from .utils.enums import InputKindEnum, OutputKindEnum
+from .utils.tensor_description import TensorSemantics
 
-__version__ = "0.3.0"
+__version__ = "0.5.0"
+__config_version__ = "1.1"
 __author__ = "Frank Lai"
 __email__ = "frlai@nvidia.com"
 
 __all__ = [
     "ExportManager",
-    "MergeCfgEnum",
+    "InferenceManager",
+    "InputKindEnum",
+    "OutputKindEnum",
     "annotate",
+    "start",
+    "stop",
+    "compile_graph",
     "__version__",
+    "TensorSemantics",
 ]

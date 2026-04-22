@@ -1,193 +1,133 @@
 # LEAPP - Lightweight Export Annotations for Policy Pipelines
 
-A Python package for tracing and exporting computational graphs from PyTorch code. Convert your multi-step computations into exportable models with automatic graph generation. LEAPP is specifically designed for robotics and autonomous agent applications where efficient policy export is crucial.
+A Python package for tracing and exporting multi-step PyTorch computational graphs. Annotate your existing code with lightweight markers, and LEAPP captures the graph structure, exports each stage as an individual model, and generates a deployment-ready YAML specification.
 
 ## What is LEAPP?
 
-**LEAPP** stands for **Lightweight Export Annotations for Policy Pipelines**. It's designed to make it easy to export and deploy complex policy pipelines for robotics, autonomous vehicles, and other embodied AI systems. LEAPP excels at capturing entire computational graphs composed of multiple interconnected policies and models.
+**LEAPP** stands for **Lightweight Export Annotations for Policy Pipelines**. It is designed for pipelines that chain multiple PyTorch models or processing stages together — where you need to export the whole pipeline, not just a single model.
+
+LEAPP works by tracing real execution of your code. It records which tensors flow between stages, exports each stage independently, and writes a YAML that describes how to wire them back together at inference time. Unlike other solutions, LEAPP is designed to be non-invasive and eliminates the need to have another export-specific implementation of your processing.
 
 ## Features
 
-- 🎯 **Export to Multiple Formats**: Torchscript, ONNX, and more
-- 🔧 **BYOM (Bring Your Own Model)**: Works with preexported models - simply load and integrate your existing trained models
-- 📊 **Automatic Graph Visualization**: Generate graph diagrams
-- 📝 **YAML Specifications**: Complete graph metadata for deployment
-- 🧩 **Flexible API**: Annotate functions, code snippets, or even individual tensors
-- 🤖 **Policy Pipelines**: Designed for complex multi-component policies that conain pre and post processing
-- ⚡ **Lightweight**: Minimal code insertions to capture entire compute graphs
+- **Export to Multiple Formats**: TorchScript and ONNX
+- **BYOM (Bring Your Own Model)**: Integrate pre-compiled models into the graph without recompiling
+- **YAML Specification**: Complete metadata for deployment and downstream frameworks
+- **Flexible Structuring**: Easily define complex node boundaries or multi-node graph structures
+- **Lightweight**: Minimal insertions — no rewrites of existing model code required, annotations safely noop if not exporting
+- **Automatic Graph Visualization**: Generate a diagram of your pipeline
 
 ## Installation
 
-### Pip Command
+pip: You will need a GitLab personal access token.
+```
 pip install leapp --index-url https://__token__:<your_personal_token>@gitlab-master.nvidia.com/api/v4/projects/202237/packages/pypi/simple
-You will need a gitlab personal access token.
+```
+from source:
+```
+# clone this repository
+cd <repository location> && pip install .
+```
 
 ## Documentation
 
-For more detailed documentation, examples, and guides, see the `docs/` directory in this repository.
-
-## Quick Start
-
-The recommended way to explore this package is by running the included examples:
-
-```bash
-python examples/wbc_obj.py
-```
-
-This demonstrates a complete robotics control pipeline that processes sensor data, runs neural network inference, and exports the entire computational graph.
+For detailed guides and API reference, see the `docs/` directory.
 
 ## Usage
 
-LEAPP provides three methods for marking nodes in your computational graph:
-- **Decorators**: Use `@annotate.method()` to mark entire functions/methods as nodes
-- **Context Managers**: Use `with annotate.block()` to mark code blocks as nodes
-- **Traced Tensors**: Use `annotate.input_tensors()` and `annotate.output_tensors()` to programmatically define nodes by tracking tensor operations
 
 
-### Method 1: Traced Tensors Pattern
-
-TracedTensors provide the most flexible approach, allowing you to programmatically capture tensor operations without decorators or context managers. This is especially useful for dynamic workflows or when integrating with existing code.
+LEAPP operates using traced datatypes. Traced datatypes extend the original datatype and silently add tracing capabilities to them. The result the ability to define node boundaries explicitly, including across helper functions or when inputs come from multiple call sites.
 
 ```python
 import torch
+import leapp
+import env # mock environment setup
 from leapp import annotate
 
-annotate.start(name="my_graph")
+def get_obs1_from_env():
+    obs1 = env.get_from_env('obs')
+    obs1 = annotate.input_tensors("preprocess", {"obs1_name": obs1}) #inserted annotation
+    # **some processing**
+    return obs1
 
-# Create traced inputs - returns TracedTensor objects that record operations
-joint_pos, joint_vel = annotate.input_tensors({
-    'joint_pos': torch.randn(12),
-    'joint_vel': torch.randn(12)
-}, 'preprocessing')
+def get_obs2_from_env():
+    obs2 = env.get_from_env('obs2')
+    obs2 = annotate.input_tensors("preprocess", {"obs2_name": obs2}) #inserted annotation
+    # **some processing**
+    return obs2
 
-# Perform operations - all ops are automatically traced
-normalized_pos = joint_pos / 3.14
-normalized_vel = joint_vel / 10.0
-combined = torch.cat([normalized_pos, normalized_vel])
 
-# Mark outputs and specify export format
-annotate.output_tensors('preprocessing', {
-    'features': combined
-}, export_with="jit")
+leapp.start(name="my_pipeline")
 
-# Chain to another node - traced tensors automatically connect nodes
-features = annotate.input_tensors({'features': combined}, 'inference')
-predictions = features @ torch.randn(24, 3)  # Simple linear transform
-annotate.output_tensors('inference', {'predictions': predictions}, export_with="onnx")
+obs1 = get_obs1_from_env()
+obs2 = get_obs2_from_env()
 
-annotate.stop()
-annotate.compile_graph()
+# Simple feature construction from the two observation tensors.
+obs1_centered = obs1 - obs1.mean()
+obs2_scaled = obs2 / (obs2.abs().max() + 1e-6)
+features = torch.cat([obs1_centered, obs2_scaled], dim=-1)
+
+annotate.output_tensors("preprocess", {"processed_features": features}, export_with="jit")  #inserted annotation
+
+features = annotate.input_tensors("predict", {"features": features}) `#inserted` annotation
+output = torch.relu(featues @ torch.randn(16, 4))
+annotate.output_tensors("predict", {"output": output}, export_with="onnx") #inserted annotation
+
+leapp.stop()
+leapp.compile_graph()
 ```
 
-### Method 2: Decorator Pattern
-
-```python
-import torch
-from leapp import annotate
-
-@annotate.method(export_with="jit")
-def process_data(input_tensor):
-    # Your computation here
-    result = input_tensor * 2 + 1
-    return result
-
-# Start tracing
-annotate.start(name="my_graph")
-# Run your functions
-output = process_data(torch.randn(10))
-# Stop tracing and compile graph
-annotate.stop()
-annotate.compile_graph()
-```
-
-### Method 3: Context Manager Pattern
-
-```python
-import torch
-from leapp import annotate
-
-annotate.start(name="my_graph")
-
-# Example data
-raw_data = torch.randn(100, 10)
-model = torch.nn.Linear(64, 3)
-
-with annotate.block("preprocessing",
-                     inputs=["raw_data"],
-                     outputs=["processed_data"],
-                     export_with="jit"):
-    processed_data = raw_data.normalize()
-    processed_data = processed_data.reshape(-1, 64)
-
-with annotate.block("inference",
-                     inputs=["processed_data"],
-                     outputs=["predictions"],
-                     export_with="jit"):
-    predictions = model(processed_data)
-
-annotate.stop()
-annotate.compile_graph()
-```
-
-
-## API Reference
-
-### ExportManager
-
-#### import
-```python
-from leapp import annotate  # Singleton, export manager
-```
-
-#### Flow Control methods
-- `start(name, save_path=".", verbose=False, dry_run=False, patch_numpy=True)`: Begin tracing mode with graph name
-  - `dry_run` (bool): If True, skips model compilation and export. This is used to verify graph structure and i/o. Defaults to False.
-  - `patch_numpy` (bool): If True, patches torch numpy functions for TracedTensor compatibility. Defaults to True but under some cases this is known to cause errors. If not needed try setting this to false.
-- `stop()`: End tracing mode
-
-
-- `compile_graph(visualize=True, verbose=None, merge_nodes=MergeCfgEnum.NO_MERGE, validate=True, rtol=1e-3, atol=1e-5, strict=True)`: Generate final graph and exports
-  - `visualize` (bool): Generate graph visualization. Defaults to True.
-  - `verbose` (bool | None): Override verbose logging. Defaults to None (unchanged).
-  - `merge_nodes` (MergeCfgEnum): Node merging strategy — `NO_MERGE` (default), `MERGE_ALL`, or `MERGE_SEQUENTIAL`.
-  - `validate` (bool): If True, validates exported models against captured outputs. Defaults to True.
-  - `rtol` (float): Relative tolerance for validation. Defaults to 1e-3.
-  - `atol` (float): Absolute tolerance for validation. Defaults to 1e-5.
-  - `strict` (bool): If True, raises an exception when validation fails. Defaults to True.
-
-#### Annotations
-- `method(**params)`: Decorator for functions/methods
-- `block(name, **params)`: Context manager for code blocks
-- `input_tensors(tensors_dict, node_name)`: Create traced tensor inputs for a node
-- `output_tensors(tensors_dict, node_name, **params)`: Mark traced tensor outputs and finalize a node
-
-#### Annotations Parameters
-- `node_name`: name of the node to generate
-- `export_with`: Export format ("torch", "onnx")
-- `inputs`: Input variable names (for context manager)
-- `outputs`: Output variable names (for context manager)
-- `environment_constants`: Variables to treat as constants
-- `register_buffers` : mutable variables to register to the buffer.
+On top of simply tracing inputs and outputs, leapp provides various annotations to accommodate a variety of policies. Please refer to `docs/api.md` for more details. 
 
 ## Output Files
 
-Running `compile_graph()` generates:
-- **`{graph_name}.yaml`**: Complete graph specification
-- **`{graph_name}_graph.png`**: Visual graph representation
-- **Individual model files**: Exported models for each function
+Running `compile_graph()` creates a directory named after your graph containing:
+
+- **`{graph_name}.yaml`** — complete pipeline specification (node I/O, model paths, data flow)
+- **`{graph_name}.png`** — visual diagram of the pipeline
+- **Individual model files** — one exported model per node (`.pt`, `.onnx`, etc...)
+
+## API Reference
+
+```python
+import leapp
+from leapp import annotate
+```
+
+**Lifecycle**
+
+- `leapp.start(name, save_path=".", verbose=False, dry_run=False, non_traced=None, max_cached_io=5, global_patching=True)`
+- `leapp.stop()`
+- `leapp.compile_graph(visualize=True, verbose=None, validate=True, dry_run=False, rtol=1e-3, atol=1e-5, strict=True)`
+
+**Annotations**
+
+- `annotate.input_tensors(node_name, tensors)` — begin a traced tensor node
+- `annotate.output_tensors(node_name, tensors, export_with, ...)` — finalize a traced tensor node
+- `annotate.method(export_with, node_name, ...)` — decorator, shorthand for annotating i/o with function structure
+- `annotate.state_tensors(node_name, tensors)` — declare recurrent/state inputs
+- `annotate.update_state(node_name, tensors)` — update recurrent state outputs
+- `annotate.register_buffer(node_name, tensors)` — register traced persistent buffers for in-place writes
+- `annotate.module(node_name, model, ...)` — trace an `nn.Module` with buffer tracking
+- `annotate.mirror_leapp_tags(source, target)` — copy tracing tags between tensors
+
+See `docs/api.md` for the full reference and `docs/` for advanced features.
 
 ## Requirements
 
 - Python ≥ 3.8
-- PyTorch ≥ 2.5.0
+- PyTorch ≥ 2.6.0
 - PyYAML ≥ 6.0
 - matplotlib ≥ 3.5.0
 - networkx ≥ 2.6
-- onnx
-- onnxscript
+- onnx ≥ 1.19.0
+- onnxruntime ≥ 1.20.0
+- onnxscript ≥ 0.1.0
+- safetensors ≥ 0.5.0
 
 ## License
 
-Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
+Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 
-This software is proprietary to NVIDIA and is protected by copyright and other intellectual property rights.
+Licensed under the Apache License, Version 2.0.

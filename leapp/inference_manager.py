@@ -1,10 +1,13 @@
-import yaml
 import os
-import torch
 import json
-from typing import Dict
+import yaml
 
-from leapp.utils import map_to_torch_dtype
+import torch
+
+from safetensors.torch import load_file
+
+
+from leapp.utils.tensor_description import map_to_torch_dtype, validate_connection_compatibility
 
 from leapp.backends.torch_export_backend import TorchExportBackend
 from leapp.backends.onnx_export_backend import ONNXExportBackend
@@ -17,12 +20,12 @@ class NodeManager:
         self.input_descriptions = inputs
         self.output_descriptions = outputs
 
+
         backend = self._create_backend(parameters['backend'])
-        backend.load(
-            model_path, parameters['sha256sum'], parameters['device'])
+        backend.load(model_path, parameters['sha256sum'])
         self.model = backend.compiled_model
 
-        self.device = parameters['device']
+        self.device = backend.runtime_device
 
     @property
     def input_names(self):
@@ -78,7 +81,7 @@ class NodeManager:
         return output_values_to_populate
 
     def _create_backend(self, backend):
-        'utilizes the backends just to load the model. the backend is not used for compilation or saving.'
+        """utilizes the backends just to load the model. the backend is not used for compilation or saving."""
         if backend == "jit":
             return TorchExportBackend(None)
         elif backend == "onnx":
@@ -107,7 +110,7 @@ class NodeManager:
 
 
 class InferenceManager:
-    def __init__(self, model_path, verbose=False):
+    def __init__(self, model_path):
         # data reading variables
         self.models = None
         self.pipeline = None
@@ -153,9 +156,9 @@ class InferenceManager:
                     f"Model description must contain inputs, outputs, and parameters, got {description.keys()}")
             # load the model
             parameters = description['parameters']
-            if any(key not in parameters for key in ["model_path", "md5sum", "sha256sum", "device", "backend"]):
+            if any(key not in parameters for key in ["model_path", "md5sum", "sha256sum", "backend"]):
                 raise ValueError(
-                    f"Model description must contain model_path, sha256sum, device, and backend, got {parameters.keys()}")
+                    f"Model description must contain model_path, md5sum, sha256sum, and backend, got {parameters.keys()}")
 
             model_path = parameters['model_path']
             base_path = os.path.dirname(self.model_path)
@@ -180,7 +183,7 @@ class InferenceManager:
         self.organized_pipeline_connections = {}
         # Merge data_flow and feedback_flow, combining target lists for shared keys
         all_flows = {}
-        for flow_dict in [self.pipeline['data_flow'], self.pipeline['feedback_flow']]:
+        for flow_dict in [self.pipeline.get('data_flow', {}), self.pipeline.get('feedback_flow', {})]:
             for source, targets in flow_dict.items():
                 if source in all_flows:
                     all_flows[source] = all_flows[source] + targets
@@ -227,14 +230,43 @@ class InferenceManager:
 
         self.value_dict['==out=='] = output_cache
 
-        # Validate shape and dtype compatibility for all data_flow connections
-        for source, targets in self.pipeline['data_flow'].items():
+        self._validate_output_routing()
+
+        # Validate shape and dtype compatibility for all pipeline connections.
+        self._validate_connection_compatibility()
+
+    def _validate_output_routing(self):
+        """Ensure every model output is routed somewhere before inference starts."""
+        for node_name, node in self.nodes.items():
+            pipeline_map = self.organized_pipeline_connections.get(node_name, {})
+            missing_outputs = [
+                output_name for output_name in node.output_names
+                if output_name not in pipeline_map
+            ]
+            if missing_outputs:
+                raise ValueError(
+                    f"Node '{node_name}' has unroutable outputs: {missing_outputs}. "
+                    "Every model output must appear in pipeline data_flow, "
+                    "feedback_flow, or pipeline outputs. This may indicate the "
+                    "YAML was edited manually and is inconsistent with the exported model."
+                )
+
+    def _validate_connection_compatibility(self):
+        all_flows = {}
+        for flow_key in ('data_flow', 'feedback_flow'):
+            for source, targets in self.pipeline.get(flow_key, {}).items():
+                if source in all_flows:
+                    all_flows[source] = all_flows[source] + targets
+                else:
+                    all_flows[source] = list(targets)
+
+        for source, targets in all_flows.items():
             source_node_name, source_output_name = source.split('/')
 
             # Validate source node exists
             if source_node_name not in self.nodes:
                 raise ValueError(
-                    f"Source node '{source_node_name}' in data_flow not found in models")
+                    f"Source node '{source_node_name}' not found in models")
 
             source_node = self.nodes[source_node_name]
 
@@ -262,7 +294,7 @@ class InferenceManager:
                 # Validate target node exists
                 if target_node_name not in self.nodes:
                     raise ValueError(
-                        f"Target node '{target_node_name}' in data_flow not found in models")
+                        f"Target node '{target_node_name}' not found in models")
 
                 # Validate target input exists
                 if target_input_name not in self.value_dict[target_node_name]:
@@ -275,23 +307,46 @@ class InferenceManager:
 
                 target_tensor = self.value_dict[target_node_name][target_input_name]
 
-                if list(target_tensor.shape) != list(source_shape):
-                    raise ValueError(
-                        f"Shape mismatch in pipeline connection: "
-                        f"{source} {tuple(source_shape)} -> "
-                        f"{target} {tuple(target_tensor.shape)}"
-                    )
-                if target_tensor.dtype != source_dtype:
-                    raise ValueError(
-                        f"Dtype mismatch in pipeline connection: "
-                        f"{source} {source_dtype} -> "
-                        f"{target} {target_tensor.dtype}"
-                    )
+                validate_connection_compatibility(
+                    source_name=source,
+                    source_shape=source_shape,
+                    source_dtype=source_dtype,
+                    target_name=target,
+                    target_shape=target_tensor.shape,
+                    target_dtype=target_tensor.dtype,
+                )
 
     def _prepopulate_feedback_inputs(self):
-        pass
+        """Load feedback initial values from safetensors and populate input buffers.
+        
+        If the pipeline has an 'initial_values' field pointing to a safetensors file,
+        load it and overwrite the corresponding feedback input buffers so deployers
+        don't need to know what to initialize them as.
+        """
+        initial_values_file = self.pipeline.get('initial_values')
+        if not initial_values_file:
+            return
 
-    def run_policy(self, inputs: Dict[str, torch.Tensor], verbose: bool = False):
+        base_path = os.path.dirname(self.model_path)
+        safetensors_path = os.path.join(base_path, initial_values_file)
+
+        if not os.path.exists(safetensors_path):
+            raise FileNotFoundError(
+                f"Feedback initial values file not found at {safetensors_path}")
+
+        initial_values = load_file(safetensors_path)
+
+        for key, tensor in initial_values.items():
+            node_name, input_name = key.split('/')
+            if node_name in self.value_dict and input_name in self.value_dict[node_name]:
+                device = self.value_dict[node_name][input_name].device
+                self.value_dict[node_name][input_name] = tensor.to(device)
+            else:
+                raise ValueError(
+                    f"Feedback initial value key '{key}' does not match any node input. "
+                    f"Available nodes: {list(self.value_dict.keys())}")
+
+    def run_policy(self, inputs: dict[str, torch.Tensor]):
         # Update input tensors with provided values (keys are "node_name/input_name")
         for key, input_value in inputs.items():
             try:
@@ -347,7 +402,10 @@ class InferenceManager:
 
     @property
     def feedback_inputs(self) -> list:
-        return list(self.pipeline['feedback_flow'].values())
+        keys = []
+        for targets in self.pipeline.get('feedback_flow', {}).values():
+            keys.extend(targets)
+        return keys
 
     def set_input_value(self, node_name: str, input_name: str, value: torch.Tensor):
         self.value_dict[node_name][input_name].copy_(value)
@@ -383,6 +441,20 @@ class InferenceManager:
                 mock_inputs[f"{node_name}/{input_name}"] = tensor
 
         return mock_inputs
+    
+    def reset(self):
+        """resets the inference manager to its initial state
+        
+        This method does not reset the internal state of the nodes, only the input and output buffers.
+        It uses default initial values for feedback inputs.
+        """
+        with torch.no_grad():
+            for buffer_group in self.value_dict.values():
+                for tensor in buffer_group.values():
+                    tensor.zero_()
 
-    def __call__(self, inputs: Dict[str, torch.Tensor]):
+        self._prepopulate_feedback_inputs()
+
+
+    def __call__(self, inputs: dict[str, torch.Tensor]):
         return self.run_policy(inputs)
