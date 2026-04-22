@@ -1,5 +1,5 @@
 #
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,15 +14,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-import torch
 import os
+import warnings
 from typing import Tuple
+
+import torch
 from leapp.backends.export_backend import ExportBackend, prepare_tensors_for_export
-from leapp._logging import _get_logger
+from leapp.utils.logging import _get_logger
 
 
 class TorchExportBackend(ExportBackend):
-    def get_backed_model_type(self):
+    def get_backend_metadata(self):
+        return {}
+    
+    def get_backend_model_type(self):
         return "jit"
 
     def save(self, save_path: str) -> Tuple[str, str, str]:
@@ -37,15 +42,15 @@ class TorchExportBackend(ExportBackend):
                 compiled_model.eval(), preserved_attrs=preserved_attrs)
         else:
             _get_logger().error(
-                "No compiled model found for {self.node_context.name}")
+                f"No compiled model found for {self.node_context.name}")
 
         path = os.path.join(save_path, f"{self.node_context.name}.pt")
         compiled_model.save(path)
         md5sum, sha256sum = self._verify_model_location_and_get_hash(path)
         return path, md5sum, sha256sum
 
-    def load(self, model_path: str, sha256sum: str, device: str):
-        self._load_torchscript(model_path, sha256sum, device)
+    def load(self, model_path: str, sha256sum: str):
+        self._load_torchscript(model_path, sha256sum)
 
     def compile(self):
         raise NotImplementedError(
@@ -60,9 +65,8 @@ class TorchTraceExportBackend(TorchExportBackend):
                 "TorchTraceExportBackend does not support buffers, "
                 "consider using export_with='jit-trace'")
         if m is None:
-            m = self.module_builder().eval()
-        else:
-            m = m.eval()
+            m = self.module_builder()
+        m = m.eval()
         # Get flat tensor values directly from inputs (not input_formats which preserves nested structure)
         input_values = [
             tensor_desc.value for tensor_desc in self.node_context.inputs]
@@ -78,10 +82,19 @@ class TorchTraceExportBackend(TorchExportBackend):
 class TorchScriptExportBackend(TorchExportBackend):
     def compile(self, m: torch.nn.Module = None):
         if m is None:
-            m = self.module_builder().eval()
-        else:
-            m = m.eval()
-        compiled_model = torch.jit.script(m, **self.backend_params)
+            m = self.module_builder()
+        m = m.eval()
+        torch.jit._state.enable()
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=(
+                    "The TorchScript type system doesn't support instance-level "
+                    "annotations on empty non-base types in `__init__`.*"
+                ),
+                category=UserWarning,
+            )
+            compiled_model = torch.jit.script(m, **self.backend_params)
         self.compiled_model = compiled_model
         self.compiled_module = m
         # Freezing moved to save() method to allow node combination

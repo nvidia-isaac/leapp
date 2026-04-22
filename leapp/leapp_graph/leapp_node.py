@@ -1,5 +1,5 @@
 #
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,21 +16,21 @@
 #
 import collections
 import functools
-import os
-
 import torch
-from leapp.utils import describe_io, tag_tensor
+from leapp.utils.tensor_description import describe_io, TensorSemantics
+from leapp.utils.utils import tag_tensor
 from leapp.leapp_graph.datatypes import is_tracable_tensor_type
 from leapp.backends.export_backend import NoneExportBackend
-from leapp._logging import _get_logger
+from leapp.utils.logging import _get_logger
 
 
 class LeappNode():
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
-        # Only wrap if this class defines its own __init__
         if '__init__' in cls.__dict__:
             original_init = cls.__init__
+            if getattr(original_init, '_leapp_wrapped', False):
+                return
 
             @functools.wraps(original_init)
             def wrapped_init(self, *args, **kwargs):
@@ -40,6 +40,7 @@ class LeappNode():
                 if type(self) is cls:
                     _get_logger().info(
                         f"Node context initialized: {self.name}")
+            wrapped_init._leapp_wrapped = True
             cls.__init__ = wrapped_init
 
         # Wrap compile_trace to set _model_captured = True after execution
@@ -53,10 +54,13 @@ class LeappNode():
                 return result
             cls.compile_trace = wrapped_compile_trace
 
-    def __init__(self, name, node_index):
-        self.name = name
-        self.node_index = node_index
+    UNSET_NODE_INDEX = -1
 
+    def __init__(self, name, dry_run=False):
+        self.name = name
+        self._node_index = self.UNSET_NODE_INDEX
+        self.dry_run = dry_run
+        
         # Attributes expected by export backends (subclasses may override)
         self.register_buffers = set()
         self.environment_constants = set()
@@ -66,7 +70,6 @@ class LeappNode():
         self.model_path = None
         self.md5sum = None
         self.sha256sum = None
-        self.model_device = None
         self.export_backend = NoneExportBackend(self, {})
         self.backend = None
 
@@ -77,6 +80,28 @@ class LeappNode():
         self.output_formats = []
         # trimmed inputs are inputs that are not used in the computation or directly returned as output
         self.trimmed_inputs = set()
+        # caller identities track which call sites created this node's inputs
+        self._caller_identities = set()
+
+        # i/o caching for multi-example validation
+        self._max_cached_io = 0
+        self._cache_write_idx = 0
+
+        # storage for the fx graph or compiled module
+        self.m = None
+
+    @property
+    def node_index(self):
+        return self._node_index
+
+    @node_index.setter
+    def node_index(self, value):
+        if self._node_index != self.UNSET_NODE_INDEX:
+            raise Exception(
+                f"Node index for '{self.name}' is already set to {self._node_index} "
+                "and cannot be reassigned."
+            )
+        self._node_index = value
 
     @property
     def captured(self):
@@ -90,9 +115,6 @@ class LeappNode():
         if self.export_backend.compiled_model is None:
             return None
         return self.export_backend.compiled_model
-        # assert self.export_backend is not None, f"Error: {self.name} has no export backend, please setup the backend first"
-        # assert self.export_backend.compiled_model is not None, f"Error: {self.name} has no compiled model, please compile the model first"
-        # return self.export_backend.compiled_model
     
     @property
     def compiled_module(self):
@@ -101,17 +123,14 @@ class LeappNode():
         if self.export_backend.compiled_module is None:
             return None
         return self.export_backend.compiled_module
-        # assert self.export_backend is not None, f"Error: {self.name} has no export backend, please setup the backend first"
-        # assert self.export_backend.compiled_module is not None, f"Error: {self.name} has no compiled module, please compile the model first"
-        # return self.export_backend.compiled_module
     
     def delete_compiled_model(self):
         if self.export_backend is None:
             return
-        if self.export_backend.compiled_model is not None:
-            del self.export_backend.compiled_model
-        if self.export_backend.compiled_module is not None:
-            del self.export_backend.compiled_module
+        self.export_backend.compiled_model = None
+        self.export_backend.compiled_module = None
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     def get_description(self):
         # dynamically generate i/o descriptions depending on need
@@ -121,16 +140,21 @@ class LeappNode():
         # Directly use the TensorDescription objects in self.outputs
         output_descriptions = [output.dict() for output in self.outputs]
 
-        description = {}
-        description['inputs'] = input_descriptions
-        description['outputs'] = output_descriptions
-        description['parameters'] = {
+        parameters = {
             'model_path': self.model_path,
             'md5sum': self.md5sum,
             'sha256sum': self.sha256sum,
-            'device': self.model_device,
             'backend': self.get_backend(),
         }
+
+        backend_metadata = self.export_backend.get_backend_metadata()
+        if backend_metadata:
+            parameters.update(backend_metadata)
+
+        description = {}
+        description['inputs'] = input_descriptions
+        description['outputs'] = output_descriptions
+        description['parameters'] = parameters
 
         return description
 
@@ -174,17 +198,16 @@ class LeappNode():
 
     def save_model(self, save_path: str):
         self.model_path, self.md5sum, self.sha256sum = self.export_backend.save(save_path)
-        self.model_device = 'cuda'
 
     def compile_model(self):
         try:
-            self.export_backend.compile()
+            self.export_backend.compile(self.m)
         except Exception as e:
             _get_logger().error(f"Error compiling model {self.name}: {e}")
             raise e
 
     def get_backend(self):
-        return self.export_backend.get_backed_model_type()
+        return self.export_backend.get_backend_model_type()
 
     def tag_data(self, tensor, tag):
         # the tag is the name of the tensor, with the node name prepended
@@ -202,7 +225,7 @@ class LeappNode():
             for idx, item in enumerate(tensor):
                 self.tag_data(item, tag + "[" + str(idx) + "]")
         else:
-            print(
+            _get_logger().warning(
                 f"\033[93mWarning: Untaggable datatype in i/o: {type(tensor)}\033[0m")
 
     @staticmethod
@@ -222,17 +245,39 @@ class LeappNode():
             existing_names.add(description.name_str)
             current_io_list.append(description)
 
-    def add_output(self, outout_name, raw_output_name, output_value):
+    @staticmethod
+    def _apply_semantics_to_descriptions(io_descriptions, semantics):
+        if semantics is None:
+            return
+        if len(io_descriptions) == 1:
+            io_descriptions[0].init_semantics(semantics)
+            return
+
+        semantic_fields = semantics.to_dict()
+        for desc in io_descriptions:
+            desc.init_semantics(TensorSemantics(
+                name=desc.name,
+                ref=desc.value,
+                **semantic_fields,
+            ))
+
+    def add_output(self, output_name, raw_output_name, output_value, semantics=None):
         io_descriptions, output_format = describe_io(
-            outout_name, raw_output_name, output_value)
+            output_name, raw_output_name, output_value)
+        self._apply_semantics_to_descriptions(io_descriptions, semantics)
+        for desc in io_descriptions:
+            desc.cached_values = [torch.zeros_like(desc.value) for _ in range(self._max_cached_io)]
         self._validate_and_add_to_list(
             io_descriptions, self.outputs, self.name)
         # used to rebuild the nested i/o
         self.output_formats.append(output_format)
 
-    def add_input(self, input_name, raw_input_name, input_value):
+    def add_input(self, input_name, raw_input_name, input_value, semantics=None):
         io_descriptions, input_format = describe_io(
             input_name, raw_input_name, input_value)
+        self._apply_semantics_to_descriptions(io_descriptions, semantics)
+        for desc in io_descriptions:
+            desc.cached_values = [torch.zeros_like(desc.value) for _ in range(self._max_cached_io)]
         self._validate_and_add_to_list(io_descriptions, self.inputs, self.name)
         # used to rebuild the nested i/o
         self.input_formats.append(input_format)
@@ -266,7 +311,7 @@ class LeappNode():
             elif existing_io_description.tag is None:
                 # THIS STEP UPDATES THE TAG FOR FEEDBACK DETECTION
                 existing_io_description.tag = io_description.tag
-            elif existing_io_description.tag != io_description.tag:
+            elif io_description.tag is not None and existing_io_description.tag != io_description.tag:
                 _get_logger().error(
                     f"Error: Reentering {self.name} with new i/o {io_description.name_str} \n"
                     f"but the tag has changed from {existing_io_description.tag} to {io_description.tag}.\n"
@@ -277,13 +322,122 @@ class LeappNode():
             existing_io_description_dict = existing_io_description.dict()
             current_io_description_dict = io_description.dict()
 
-            if not all([existing_io_description_dict[key] == current_io_description_dict[key] for key in existing_io_description_dict.keys()]):
+            common_keys = existing_io_description_dict.keys() & current_io_description_dict.keys()
+            if not all(existing_io_description_dict[key] == current_io_description_dict[key] for key in common_keys):
                 _get_logger().error(
                     f"Error: Reentering {self.name} with new i/o {io_description.name_str} \n"
                     f"but the description has changed from {existing_io_description_dict} to {current_io_description_dict}.\n"
                     f"This can happen if some dynamic behavior is not captured by the annotations"
                 )
                 raise Exception("Validation error when reentering node")
+
+            if self._cache_write_idx < self._max_cached_io:
+                existing_io_description.cached_values[self._cache_write_idx] = io_description.value
+
+    def increment_cache_idx(self):
+        if self._cache_write_idx < self._max_cached_io:
+            self._cache_write_idx += 1
+
+    def _build_validation_examples(self):
+        examples = [(0,
+            [td.value for td in self.inputs],
+            tuple(td.value for td in self.outputs))]
+
+        for cache_idx in range(self._cache_write_idx):
+            cached_inputs = [td.cached_values[cache_idx] for td in self.inputs]
+            cached_outputs = tuple(td.cached_values[cache_idx] for td in self.outputs)
+            examples.append((cache_idx + 1, cached_inputs, cached_outputs))
+        return examples
+
+    def validate_compiled_model(self, rtol: float = 1e-3, atol: float = 1e-5) -> bool:
+        if self.compiled_model is None:
+            _get_logger().warning(
+                f"Model {self.name} does not have a compiled model. Skipping validation.")
+            return True
+
+        examples = self._build_validation_examples()
+        all_match = True
+        for sample_idx, input_values, source_outputs in examples:
+            with torch.no_grad():
+                exported_outputs = self.compiled_model(*input_values)
+
+            if not isinstance(exported_outputs, tuple):
+                exported_outputs = (exported_outputs,)
+
+            if len(exported_outputs) != len(source_outputs):
+                _get_logger().error(
+                    f"{self.name} sample {sample_idx}: Output count mismatch - "
+                    f"got {len(exported_outputs)}, expected {len(source_outputs)}")
+                all_match = False
+                continue
+
+            for idx, (exported, source) in enumerate(zip(exported_outputs, source_outputs)):
+                output_name = self.outputs[idx].name if idx < len(
+                    self.outputs) else f"output_{idx}"
+
+                if exported.device != source.device:
+                    exported = exported.to(source.device)
+
+                exported_nan = torch.isnan(exported).sum().item()
+                exported_inf = torch.isinf(exported).sum().item()
+                source_nan = torch.isnan(source).sum().item()
+                source_inf = torch.isinf(source).sum().item()
+
+                if exported_nan > 0 or exported_inf > 0 or source_nan > 0 or source_inf > 0:
+                    all_match = False
+                    num_elements = exported.numel()
+                    _get_logger().error(
+                        f"{self.name}/{output_name} sample {sample_idx}: NaN/Inf detected!")
+                    if exported_nan > 0:
+                        _get_logger().error(
+                            f"  Exported has {exported_nan}/{num_elements} NaN values ({100*exported_nan/num_elements:.3f}%)")
+                    if exported_inf > 0:
+                        _get_logger().error(
+                            f"  Exported has {exported_inf}/{num_elements} Inf values ({100*exported_inf/num_elements:.3f}%)")
+                    if source_nan > 0:
+                        _get_logger().warning(
+                            f"  Source has {source_nan}/{num_elements} NaN values ({100*source_nan/num_elements:.3f}%)")
+                    if source_inf > 0:
+                        _get_logger().warning(
+                            f"  Source has {source_inf}/{num_elements} Inf values ({100*source_inf/num_elements:.3f}%)")
+                    continue
+
+                if not torch.allclose(exported, source, rtol=rtol, atol=atol):
+                    all_match = False
+                    diff = (exported - source).abs()
+                    diff_flat = diff.flatten().float()
+
+                    max_diff = diff.max().item()
+                    mean_diff = diff.mean().item()
+
+                    percentiles = torch.tensor([0.50, 0.75, 0.90, 0.99, 0.995], device=diff_flat.device)
+                    pct_values = torch.quantile(diff_flat, percentiles)
+                    p50, p75, p90, p99, p995 = pct_values.tolist()
+
+                    source_min, source_max = source.min().item(), source.max().item()
+                    exported_min, exported_max = exported.min().item(), exported.max().item()
+
+                    log_path = _get_logger().path
+                    _get_logger().error(
+                        f"{self.name}/{output_name} sample {sample_idx}: Mismatch detected (rtol={rtol}, atol={atol}). Please check {log_path} for more details.")
+                    _get_logger().info(
+                        f"  Source shape: {source.shape}, dtype: {source.dtype}")
+                    _get_logger().info(
+                        f"  Exported shape: {exported.shape}, dtype: {exported.dtype}")
+                    _get_logger().info(
+                        f"  Source range:   [{source_min:.6e}, {source_max:.6e}]")
+                    _get_logger().info(
+                        f"  Exported range: [{exported_min:.6e}, {exported_max:.6e}]")
+                    _get_logger().info(
+                        f"  Diff stats: max={max_diff:.6e}, mean={mean_diff:.6e}")
+                    _get_logger().info(
+                        f"  Diff percentiles: p50={p50:.6e}, p75={p75:.6e}, p90={p90:.6e}, p99={p99:.6e}, p995={p995:.6e}")
+
+        if all_match:
+            num_examples = len(examples)
+            _get_logger().info(
+                f"  ✓ {self.name} passed validation ({num_examples} example{'s' if num_examples > 1 else ''})")
+        return all_match
 
     def validate_input_and_update_tags(self, input_name, raw_input_name, input_value):
         self.validate_io_and_update_tags(
@@ -293,8 +447,29 @@ class LeappNode():
         self.validate_io_and_update_tags(
             output_name, raw_output_name, output_value, self.outputs)
 
+    def reentry_validate_inputs(self, tensors: dict):
+        """Validate input tensors on re-entry (node already compiled)."""
+        for tensor_name, tensor in tensors.items():
+            self.validate_input_and_update_tags(tensor_name, tensor_name, tensor)
+
+    def reentry_validate_and_tag_outputs(self, tensors: dict,
+                                         static_tensors: dict | None = None):
+        """Tag and validate output tensors on re-entry, then advance the cache index."""
+        all_tensors = {**tensors, **(static_tensors or {})}
+        for tensor_name, tensor in all_tensors.items():
+            self.tag_data(tensor, tensor_name)
+            self.validate_output_and_update_tags(tensor_name, tensor_name, tensor)
+
+        self.increment_cache_idx()
+
+    def reentry_validate_state_update(self, tensors: dict):
+        """Validate state tensor updates on re-entry."""
+        for tensor_name, tensor in tensors.items():
+            self.validate_output_and_update_tags(
+                tensor_name, tensor_name, tensor)
+
     def change_input_name(self, old_name, new_name):
-        _get_logger().warning(
+        _get_logger().debug(
             f"changing input name from {old_name} to {new_name} for model {self.name}")
         if old_name == new_name:
             return
@@ -308,7 +483,7 @@ class LeappNode():
                 input.change_name(new_name)
 
     def change_output_name(self, old_name, new_name):
-        _get_logger().warning(
+        _get_logger().debug(
             f"changing output name from {old_name} to {new_name} for model {self.name}")
         if old_name == new_name:
             return

@@ -738,7 +738,7 @@ class TestTracedNpArray(unittest.TestCase):
         # Test compiled graph works
         input_tensor = torch.tensor([4.0, 5.0, 6.0])
         expected = input_tensor.clone() * 2  # clone is torch equivalent of copy
-        output = ctx.compiled_graph_module(input_tensor)
+        output = ctx.m(input_tensor)
         self.assertTrue(torch.allclose(output, expected))
 
     # ==================== Graph Building Tests ====================
@@ -752,7 +752,7 @@ class TestTracedNpArray(unittest.TestCase):
         
         # Compile and verify graph exists
         ctx.compile_trace({'output': z})
-        self.assertIsNotNone(ctx.compiled_graph_module)
+        self.assertIsNotNone(ctx.m)
         self.assertIsNotNone(ctx.graph)
 
     def test_graph_has_nodes(self):
@@ -776,7 +776,7 @@ class TestTracedNpArray(unittest.TestCase):
         z = x + y
         
         ctx.compile_trace({'output': z})
-        self.assertIsNotNone(ctx.compiled_graph_module)
+        self.assertIsNotNone(ctx.m)
 
     # ==================== Operations After Compile Tests ====================
 
@@ -945,14 +945,12 @@ class TestCompiledGraphExecution(unittest.TestCase):
         traced_input = ctx.create_input(input_data.copy(), name="input")
         traced_result = np_func(traced_input)
         
-        # Handle scalar results (wrap in array for comparison)
-        if not isinstance(traced_result, TracedNpArray):
-            # Scalar result - skip graph tests as scalars aren't supported
-            return
+        self.assertIsInstance(traced_result, TracedNpArray,
+                              f"{op_name}: result should be TracedNpArray, got {type(traced_result)}")
         
         # Compile the trace
         ctx.compile_trace({'output': traced_result})
-        graph_module = ctx.compiled_graph_module
+        graph_module = ctx.m
         
         # Convert input to torch tensor for execution
         input_tensor = torch.from_numpy(input_data.copy()).float()
@@ -1129,6 +1127,48 @@ class TestCompiledGraphExecution(unittest.TestCase):
 
     # ==================== Reduction Operations ====================
 
+    def test_np_sum_scalar(self):
+        """Test: np.sum(x) returning a scalar — must stay traced."""
+        input_data = np.array([1.0, 2.0, 3.0])
+        expected = np.asarray(np.sum(input_data))
+        self._test_operation("np_sum_scalar", lambda x: np.sum(x), input_data, expected)
+
+    def test_np_mean_scalar(self):
+        """Test: np.mean(x) returning a scalar — must stay traced."""
+        input_data = np.array([1.0, 2.0, 3.0])
+        expected = np.asarray(np.mean(input_data))
+        self._test_operation("np_mean_scalar", lambda x: np.mean(x), input_data, expected)
+
+    def test_np_var_scalar(self):
+        """Test: np.var(x) returning a scalar — must stay traced."""
+        input_data = np.array([1.0, 2.0, 3.0])
+        expected = np.asarray(np.var(input_data))
+        self._test_operation("np_var_scalar", lambda x: np.var(x), input_data, expected)
+
+    def test_np_std_scalar(self):
+        """Test: np.std(x) returning a scalar — must stay traced."""
+        input_data = np.array([1.0, 2.0, 3.0])
+        expected = np.asarray(np.std(input_data))
+        self._test_operation("np_std_scalar", lambda x: np.std(x), input_data, expected)
+
+    def test_np_prod_scalar(self):
+        """Test: np.prod(x) returning a scalar — must stay traced."""
+        input_data = np.array([1.0, 2.0, 3.0])
+        expected = np.asarray(np.prod(input_data))
+        self._test_operation("np_prod_scalar", lambda x: np.prod(x), input_data, expected)
+
+    def test_np_max_scalar(self):
+        """Test: np.max(x) returning a scalar — must stay traced."""
+        input_data = np.array([1.0, 3.0, 2.0])
+        expected = np.asarray(np.max(input_data))
+        self._test_operation("np_max_scalar", lambda x: np.max(x), input_data, expected)
+
+    def test_np_min_scalar(self):
+        """Test: np.min(x) returning a scalar — must stay traced."""
+        input_data = np.array([1.0, 3.0, 2.0])
+        expected = np.asarray(np.min(input_data))
+        self._test_operation("np_min_scalar", lambda x: np.min(x), input_data, expected)
+
     def test_np_sum_keepdims(self):
         """Test: np.sum(x, keepdims=True) - tests keepdims→keepdim conversion"""
         input_data = np.array([1.0, 2.0, 3.0])
@@ -1273,7 +1313,7 @@ class TestCompiledGraphExecution(unittest.TestCase):
         
         # Compile the trace
         ctx.compile_trace({'output': traced_result})
-        graph_module = ctx.compiled_graph_module
+        graph_module = ctx.m
         
         # Convert input to torch tensor for execution
         torch_input = torch.from_numpy(input_data.copy()).float()

@@ -1,5 +1,5 @@
 #
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,6 +18,7 @@
 import torch
 import sys
 import os
+import leapp
 from leapp import annotate
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DTYPE = torch.float32
@@ -117,7 +118,6 @@ class WBC:
         # Use broadcasting to apply the weight to each element of the matrices
         return weight_scalar * identity + (1 - weight_scalar) * regular
 
-    @annotate.method(export_with="jit")
     def post_process_actions(self, actions):
         action_scaling = self.action_scaling.to(
             actions.dtype).to(actions.device)
@@ -127,7 +127,6 @@ class WBC:
         actions = actions * action_scaling + default_pos
         return actions
 
-    @annotate.method(export_with="jit")
     def process_odom(self, lin_vel_I: torch.Tensor, ang_vel_I: torch.Tensor, q_IB: torch.Tensor):
         R_IB = self.quat_to_rot_matrix(q_IB)
         R_BI = R_IB.transpose(0, 1)
@@ -139,7 +138,6 @@ class WBC:
 
         return lin_vel_b, ang_vel_b, projected_gravity_b
 
-    @annotate.method(export_with="jit")
     def process_joint_pos(self, joint_pos):
         return joint_pos - self.default_pos.to(joint_pos.dtype).to(joint_pos.device)
 
@@ -148,23 +146,16 @@ class WBC:
             lin_vel_I, ang_vel_I, q_IB)
         processed_joint_pos = self.process_joint_pos(joint_pos)
 
-        with annotate.block("concatenate_and_run_model",
-                            inputs=["lin_vel_b", "ang_vel_b",
-                                    "gravity_b", "velocity_commands",
-                                    "processed_joint_pos", "joint_vel", "self.previous_actions"],
-                            outputs=["actions"],
-                            environment_constants=['self.model'],
-                            register_buffers=['self.previous_actions'],
-                            export_with="jit"):
-            concatenated_tensor = torch.cat([lin_vel_b, ang_vel_b,
-                                            gravity_b, velocity_commands,
-                                            processed_joint_pos, joint_vel, self.previous_actions])
-            transformed = concatenated_tensor.view(
-                1, -1).float().to(dtype=torch.float32)
-            if len(transformed.shape) == 1:
-                transformed = transformed.unsqueeze(0)
-            actions = self.model(transformed).detach().view(-1)
-            self.previous_actions = actions
+
+        concatenated_tensor = torch.cat([lin_vel_b, ang_vel_b,
+                                        gravity_b, velocity_commands,
+                                        processed_joint_pos, joint_vel, self.previous_actions])
+        transformed = concatenated_tensor.view(
+            1, -1).float().to(dtype=torch.float32)
+        if len(transformed.shape) == 1:
+            transformed = transformed.unsqueeze(0)
+        actions = self.model(transformed).detach().view(-1)
+        self.previous_actions = actions
 
         actions = self.post_process_actions(actions)
         return actions
@@ -180,12 +171,17 @@ def main():
         "ang_vel_I": torch.randn(3, device=DEVICE, dtype=DTYPE),
         "q_IB": torch.randn(4, device=DEVICE, dtype=DTYPE)}
 
-    actions = wbc.run_model(**mock_observation_data)
-    print(actions)
+    for i in range(5):
+        observation_data = annotate.input_tensors("wbc_obj", {"": mock_observation_data})
+        wbc.previous_actions = annotate.state_tensors("wbc_obj", {"previous_actions": wbc.previous_actions})
+        actions = wbc.run_model(**observation_data)
+        annotate.update_state("wbc_obj", {"previous_actions": actions})
+        annotate.output_tensors("wbc_obj", {"actions": actions}, export_with="onnx")
+        print(actions)
 
 
 if __name__ == "__main__":
-    annotate.start(name="sample_wbc_obj", verbose=True)
+    leapp.start(name="sample_wbc_obj", verbose=True)
     main()
-    annotate.stop()
-    annotate.compile_graph()
+    leapp.stop()
+    leapp.compile_graph()
