@@ -11,22 +11,17 @@ LEAPP works by tracing real execution of your code. It records which tensors flo
 ## Features
 
 - **Export to Multiple Formats**: TorchScript and ONNX
-- **BYOM (Bring Your Own Model)**: Integrate pre-compiled models into the graph without recompiling
-- **YAML Specification**: Complete metadata for deployment and downstream frameworks
 - **Flexible Structuring**: Easily define complex node boundaries or multi-node graph structures
 - **Lightweight**: Minimal insertions — no rewrites of existing model code required, annotations safely noop if not exporting
+- **YAML Specification**: Complete metadata for deployment and downstream frameworks
+- **BYOM (Bring Your Own Model)**: Integrate pre-compiled models into the graph without recompiling
 - **Automatic Graph Visualization**: Generate a diagram of your pipeline
 
 ## Installation
 
-pip: You will need a GitLab personal access token.
+pip:
 ```
-pip install leapp --index-url https://__token__:<your_personal_token>@gitlab-master.nvidia.com/api/v4/projects/202237/packages/pypi/simple
-```
-from source:
-```
-# clone this repository
-cd <repository location> && pip install .
+pip install leapp
 ```
 
 ## Documentation
@@ -37,7 +32,7 @@ For detailed guides and API reference, see the `docs/` directory.
 
 
 
-LEAPP operates using traced datatypes. Traced datatypes extend the original datatype and silently add tracing capabilities to them. The result the ability to define node boundaries explicitly, including across helper functions or when inputs come from multiple call sites.
+LEAPP operates using traced datatypes. Traced datatypes extend the original datatype and silently add tracing capabilities to them. The result is the ability to define node boundaries explicitly, including across helper functions or when inputs come from multiple call sites.
 
 ```python
 import torch
@@ -70,7 +65,7 @@ features = torch.cat([obs1_centered, obs2_scaled], dim=-1)
 
 annotate.output_tensors("preprocess", {"processed_features": features}, export_with="jit")  #inserted annotation
 
-features = annotate.input_tensors("predict", {"features": features}) `#inserted` annotation
+features = annotate.input_tensors("predict", {"features": features}) #inserted annotation
 output = torch.relu(featues @ torch.randn(16, 4))
 annotate.output_tensors("predict", {"output": output}, export_with="onnx") #inserted annotation
 
