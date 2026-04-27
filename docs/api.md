@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # LEAPP API Reference
 
 This document provides a reference for LEAPP's public runtime and annotation APIs. Use the `leapp` module for graph lifecycle control and the global `annotate` instance for node annotations.

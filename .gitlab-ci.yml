@@ -1,3 +1,8 @@
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+
 default:
   image: python:3.12
   cache:
@@ -10,10 +15,20 @@ default:
   - source venv/bin/activate
   - pip install build twine
 
+variables:
+  SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"  # Defines the location of the analysis task cache
+  GIT_DEPTH: "0"  # Tells git to fetch all the branches of the project, required by the analysis task
+
 stages:
   - build
   - test
   - deploy
+  - sonarqube
+
+.sonarqube_rules: &sonarqube_rules
+  rules:
+    - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+    - if: $CI_COMMIT_BRANCH == 'main'
 
 build-job:
   stage: build
@@ -45,3 +60,37 @@ deploy-job:
   - TWINE_PASSWORD=${CI_JOB_TOKEN} TWINE_USERNAME=gitlab-ci-token python -m twine upload --repository-url ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi dist/*
   rules:
   - if: $CI_COMMIT_TAG
+
+build-sonar:
+  stage: sonarqube
+  <<: *sonarqube_rules
+  needs: []
+  image:
+    name: sonarsource/sonar-scanner-cli:11
+    entrypoint: [""]
+  before_script: []
+  cache:
+    policy: pull-push
+    key: "sonar-cache-$CI_COMMIT_REF_SLUG"
+    paths:
+      - "${SONAR_USER_HOME}/cache"
+      - sonar-scanner/
+  script:
+    - sonar-scanner -Dsonar.host.url="${SONAR_HOST_URL}"
+  allow_failure: true
+
+sonarqube-vulnerability-report:
+  stage: sonarqube
+  <<: *sonarqube_rules
+  needs: [build-sonar]
+  image:
+    name: sonarsource/sonar-scanner-cli:11
+    entrypoint: [""]
+  before_script: []
+  script:
+    - 'curl -u "${SONAR_TOKEN}:" "${SONAR_HOST_URL}/api/issues/gitlab_sast_export?projectKey=TEGRASW_Isaac_Isaac_leapp&branch=${CI_COMMIT_BRANCH}&pullRequest=${CI_MERGE_REQUEST_IID}" -o gl-sast-sonar-report.json'
+  allow_failure: true
+  artifacts:
+    expire_in: 1 day
+    reports:
+      sast: gl-sast-sonar-report.json

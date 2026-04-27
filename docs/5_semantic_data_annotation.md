@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Semantic Data Annotation in LEAPP
 
 This guide covers how to add semantic metadata to your tensors using `TensorSemantics`. Semantic annotations let you describe **what** a tensor represents (e.g., joint positions, target torques) and provide element-level naming, making generated YAML specifications self-documenting and enabling downstream consumers to interpret the data correctly.

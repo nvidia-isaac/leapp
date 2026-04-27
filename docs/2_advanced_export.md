@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Advanced Export Configurations in LEAPP
 
 This guide covers export backend selection and advanced export options in the current LEAPP API.

@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Advanced Graph Operations
 
 This guide explores advanced graph-level operations in LEAPP, focusing on cycles, feedback connections, and tracing continuity across graph edges.
