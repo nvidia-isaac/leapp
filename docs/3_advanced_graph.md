@@ -94,8 +94,8 @@ You must run the loop **at least twice** for LEAPP to detect inferred cross-node
 
 Explicit feedback declared with `state_tensors()` / `update_state()` or detected via `annotate.module()` does not require a second iteration.
 
-**⚠️ feedback i/o names are not reconciled**
-- LEAPP currently reconciles names only for forward internal connections in `data_flow`. Feedback connections in `feedback_flow` are emitted as-is, so downstream frameworks should not assume the source and target port names will match.
+**⚠️ port names are preserved**
+- LEAPP emits source and target port names as annotated. Downstream frameworks should read the explicit `data_flow` / `feedback_flow` mappings rather than assuming connected port names match.
 
 ## Maintaining Tracing with `mirror_leapp_tags`
 
@@ -204,37 +204,6 @@ You **shouldn't** use this function when:
 new_tensor = old_tensor+10       # computation performed
 new_tensor[:5] = old_tensor      # a subsection of new_tensor is replaced with old_tensor
 ```
-
-## IO Reconciliation
-
-IO reconciliation happens during graph construction, when LEAPP tries to connect node outputs to downstream node inputs even if the names do not already match.
-
-This is useful as a fallback, but it can also create ambiguous or conflicting graph interfaces. As a rule, it is better to keep names consistent yourself and treat reconciliation as a last resort.
-
-### Practical Guidance
-
-- Keep output names and downstream input names consistent when you can
-- Prefer explicit names with `input_tensors()` / `output_tensors()` for graph boundaries
-- If `compile_graph()` warns that names were changed, inspect the generated YAML and verify the final interface names
-
-### Common Failure Pattern
-
-This kind of graph is risky:
-
-```python
-@annotate.method()
-def detect(x):
-    detections = x + 1
-    return detections
-
-@annotate.method()
-def consume(detections, x):
-    return detections + x
-```
-
-If a graph has multiple candidate names that LEAPP tries to reconcile into the same slot, `compile_graph()` can fail with an unrecoverable naming conflict.
-
-The simplest fix is usually to rename the node inputs or outputs so the intended graph wiring is already explicit before reconciliation runs.
 
 ## Summary
 
