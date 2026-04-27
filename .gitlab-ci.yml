@@ -30,8 +30,15 @@ stages:
     - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
     - if: $CI_COMMIT_BRANCH == 'main'
 
+.build_and_test_rules: &build_and_test_rules
+  rules:
+    - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
+
 build-job:
   stage: build
+  <<: *build_and_test_rules
   script:
     - python -m build --wheel
   artifacts:
@@ -40,6 +47,7 @@ build-job:
 
 unit-test-job:
   stage: test
+  <<: *build_and_test_rules
   image: nvcr.io/nvidia/pytorch:24.12-py3
   tags:
     - gpu
