@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Getting Started with LEAPP
 
 Welcome to LEAPP - Lightweight Export Annotations for Policy Pipelines! This guide will walk you through the basics of using LEAPP to trace and export computational graphs from your PyTorch code.
