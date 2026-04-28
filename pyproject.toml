@@ -24,7 +24,7 @@ name = "leapp"
 version = "0.5.1"
 description = "LEAPP - Lightweight Export Annotations for Policy Pipelines: A Python package for tracing and exporting computational graphs from PyTorch code"
 readme = "README.md"
-license = {text = "Apache-2.0"}
+license = "Apache-2.0"
 authors = [
     {name = "Frank Lai", email = "frlai@nvidia.com"}
 ]
@@ -35,7 +35,6 @@ keywords = ["machine-learning", "pytorch", "robotics", "policy-pipelines", "grap
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
@@ -70,9 +69,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://gitlab-master.nvidia.com/frlai/leapp"
-Repository = "https://gitlab-master.nvidia.com/frlai/leapp"
-Issues = "https://gitlab-master.nvidia.com/frlai/leapp/-/issues"
+Homepage = "https://github.com/nvidia-isaac/leapp"
+Repository = "https://github.com/nvidia-isaac/leapp"
+Issues = "https://github.com/nvidia-isaac/leapp/issues"
 
 [tool.setuptools]
 include-package-data = true
