@@ -110,7 +110,7 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
             for source, targets in annotate.detected_pipeline["feedback_flow"].items()
         }
 
-        self.assertEqual({"node_b/from_b": ["node_a/from_b"]}, data_flow)
+        self.assertEqual({"node_b/b_out": ["node_a/from_b"]}, data_flow)
         self.assertEqual({}, feedback_flow)
         self.verify_num_connections(
             annotate,

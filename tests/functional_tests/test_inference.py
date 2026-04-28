@@ -320,7 +320,7 @@ class TestInferenceManagerRobustness(LEAPPFunctionalTestBase):
         yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
         manager = InferenceManager(yaml_path)
 
-        self.assertIn("x", manager.organized_pipeline_connections["node_a"])
+        self.assertIn("to_b", manager.organized_pipeline_connections["node_a"])
         self.assertIn("final_a", manager.organized_pipeline_connections["node_a"])
 
         result = manager.run_policy({"node_a/x": trace_input})

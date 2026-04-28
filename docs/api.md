@@ -418,8 +418,8 @@ pipeline:
 system information:
   python version: "3.12.9"
   torch version: "2.7.0+cu126"
-  leapp version: "0.5.0"
-  leapp config version: "1.0"
+  leapp version: "0.5.1"
+  leapp config version: "1.1"
   cuda version: "12.6"
   os: Linux
 ```
