@@ -34,9 +34,6 @@ class LeappGraph:
         self.connections, self.feedback_connections = self._build_connections(
             self.nodes)
 
-        _get_logger().section("Reconciling internal i/o names")
-        self._reconcile_io_names(self.connections)
-
         _get_logger().section("Discovering graph inputs and outputs")
         self.graph_inputs, self.graph_outputs = self._compile_graph_io(
             self.nodes, self.connections, self.feedback_connections)
@@ -228,33 +225,6 @@ class LeappGraph:
         _get_logger().info(f"Discovered {len(graph_inputs)} graph inputs")
         _get_logger().info(f"Discovered {len(graph_outputs)} graph outputs")
         return graph_inputs, graph_outputs
-
-    def _reconcile_io_names(self, connections):
-        names_changed = False
-        for connection in connections:
-            source = connection['source']
-            targets = connection['targets']
-
-            # Use name_str property for TensorDescription objects
-            target_names = [target['node'].inputs[target['idx']].name_str
-                            for target in targets]
-            desired_target_name = target_names[0]
-            if not all(name == desired_target_name for name in target_names):
-                names_changed = True
-                for target in targets:
-                    target['node'].change_input_name(
-                        target['node'].inputs[target['idx']].name_str, desired_target_name)
-
-            if not source['node'].outputs[source['idx']].name_str == desired_target_name:
-                names_changed = True
-                source['node'].change_output_name(
-                    source['node'].outputs[source['idx']].name_str, desired_target_name)
-        if names_changed:
-            _get_logger().debug("i/o names changed, this process edits the node specifications, and may produce "
-                                "unexpected behavior. Please check the graph for correctness. If this is not desired, "
-                                "please make sure to match io names in the source code")
-        else:
-            _get_logger().debug("no names changed")
 
     def _validate_connection_compatibility(self):
         for connection in self.connections + self.feedback_connections:
