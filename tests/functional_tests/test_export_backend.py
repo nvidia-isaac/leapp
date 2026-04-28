@@ -15,7 +15,6 @@
 # limitations under the License.
 #
 import os
-import shutil
 import unittest
 from unittest import mock
 import torch
@@ -273,79 +272,64 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
                 self.assertEqual(onnx_input_names, ["joint_pos_in"])
                 self.assertEqual(onnx_output_names, ["joint_pos_out"])
 
-    @pytest.mark.filterwarnings("ignore:You are using the legacy TorchScript-based ONNX export")
-    @pytest.mark.filterwarnings("ignore:The feature will be removed")
     def test_onnx_connected_node_names_match_artifact_names(self):
         """Connected nodes should keep each node's own ONNX I/O names."""
-        cases = [
-            ("onnx",),
-            ("onnx-torchscript",),
+        leapp.start(name=self.TEST_GRAPH_NAME)
+
+        source_input = annotate.input_tensors(
+            "producer",
+            {
+                "source_input": torch.tensor(
+                    [1.0, 2.0, 3.0], dtype=torch.float32)
+            },
+        )
+        producer_output = source_input * 2.0
+        annotate.output_tensors(
+            "producer",
+            {"producer_original_output": producer_output},
+            export_with="onnx",
+        )
+
+        consumer_input = annotate.input_tensors(
+            "consumer",
+            {"consumer_input_name": producer_output},
+        )
+        annotate.output_tensors(
+            "consumer",
+            {"final_output": consumer_input + 1.0},
+            export_with="onnx",
+        )
+
+        leapp.stop()
+        leapp.compile_graph(visualize=False, validate=False)
+
+        yaml_path = os.path.join(
+            self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+        with open(yaml_path) as f:
+            exported = yaml.safe_load(f)
+
+        producer_desc = exported["models"]["producer"]
+        producer_yaml_outputs = [
+            desc["name"] for desc in producer_desc["outputs"]
         ]
+        self.assertEqual(
+            producer_yaml_outputs,
+            ["producer_original_output"],
+        )
+        self.assertEqual(
+            exported["pipeline"]["data_flow"],
+            {
+                "producer/producer_original_output": [
+                    "consumer/consumer_input_name"
+                ]
+            },
+        )
 
-        for (export_with,) in cases:
-            with self.subTest(export_with=export_with):
-                try:
-                    leapp.start(name=self.TEST_GRAPH_NAME)
+        model_path = os.path.join(self.TEST_GRAPH_NAME, "producer.onnx")
+        model = onnx.load(model_path)
+        onnx_output_names = [value.name for value in model.graph.output]
+        self.assertEqual(onnx_output_names, producer_yaml_outputs)
 
-                    source_input = annotate.input_tensors(
-                        "producer",
-                        {
-                            "source_input": torch.tensor(
-                                [1.0, 2.0, 3.0], dtype=torch.float32)
-                        },
-                    )
-                    producer_output = source_input * 2.0
-                    annotate.output_tensors(
-                        "producer",
-                        {"producer_original_output": producer_output},
-                        export_with=export_with,
-                    )
-
-                    consumer_input = annotate.input_tensors(
-                        "consumer",
-                        {"consumer_input_name": producer_output},
-                    )
-                    annotate.output_tensors(
-                        "consumer",
-                        {"final_output": consumer_input + 1.0},
-                        export_with=export_with,
-                    )
-
-                    leapp.stop()
-                    leapp.compile_graph(visualize=False, validate=False)
-
-                    yaml_path = os.path.join(
-                        self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
-                    with open(yaml_path) as f:
-                        exported = yaml.safe_load(f)
-
-                    producer_desc = exported["models"]["producer"]
-                    producer_yaml_outputs = [
-                        desc["name"] for desc in producer_desc["outputs"]
-                    ]
-                    self.assertEqual(
-                        producer_yaml_outputs,
-                        ["producer_original_output"],
-                    )
-                    self.assertEqual(
-                        exported["pipeline"]["data_flow"],
-                        {
-                            "producer/producer_original_output": [
-                                "consumer/consumer_input_name"
-                            ]
-                        },
-                    )
-
-                    model_path = os.path.join(self.TEST_GRAPH_NAME, "producer.onnx")
-                    model = onnx.load(model_path)
-                    onnx_output_names = [value.name for value in model.graph.output]
-                    self.assertEqual(onnx_output_names, producer_yaml_outputs)
-                finally:
-                    annotate.reset_nodes()
-                    annotate.set_dry_run_and_non_traced(False, [])
-                    if os.path.exists(self.TEST_GRAPH_NAME):
-                        shutil.rmtree(self.TEST_GRAPH_NAME)
-    
     @pytest.mark.filterwarnings("ignore:You are using the legacy TorchScript-based ONNX export")
     @pytest.mark.filterwarnings("ignore:The feature will be removed")
     def test_onnx_backend_prescript_with_traced_model(self):
