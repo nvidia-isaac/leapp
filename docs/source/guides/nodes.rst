@@ -1,0 +1,384 @@
+=============
+Node patterns
+=============
+
+This guide covers advanced node patterns. The primary interface is
+:func:`~leapp.annotate.input_tensors` and
+:func:`~leapp.annotate.output_tensors`; use :func:`~leapp.annotate.method`
+when a node fits cleanly inside one function and you want a shorthand.
+
+Distributed inputs: one node, many call sites
+=============================================
+
+Each node should have one finalizing ``output_tensors()`` call, but it may
+have multiple ``input_tensors()`` calls with the same ``node_name``. This is
+useful when a node collects data from multiple helpers or files before
+producing an output.
+
+.. code-block:: python
+
+   import torch
+   import leapp
+   from leapp import annotate
+
+   def get_lidar_data(env):
+       lidar_data = env.get("lidar_data")
+       return annotate.input_tensors("sensor_fusion",
+                                     {"lidar_data": lidar_data})
+
+   def get_camera_features(env):
+       camera_features = env.get("camera_features")
+       return annotate.input_tensors("sensor_fusion",
+                                     {"camera_features": camera_features})
+
+   def run_pipeline(env, model):
+       leapp.start(name="distributed_inputs_example")
+
+       lidar = get_lidar_data(env)
+       camera = get_camera_features(env)
+
+       fused = torch.cat([lidar, camera], dim=-1)
+       annotate.output_tensors("sensor_fusion",
+                               {"model_input": fused},
+                               export_with="jit")
+
+       leapp.stop()
+       leapp.compile_graph()
+
+Both ``input_tensors()`` calls reference the same node name, so LEAPP
+treats them as one node with multiple inputs.
+
+``annotate.method()`` as a shorthand
+====================================
+
+:func:`~leapp.annotate.method` is a convenience wrapper over the
+traced-tensor path.
+
+.. code-block:: python
+
+   import torch
+   from leapp import annotate
+
+   @annotate.method(export_with="jit", node_name="preprocess")
+   def preprocess(obs):
+       return (obs - obs.mean()) / (obs.std() + 1e-6)
+
+Use it when:
+
+* one function naturally defines the node input and output boundary
+* parameter names and return values already match the API you want to export
+
+Prefer ``input_tensors()`` / ``output_tensors()`` when:
+
+* node logic spans multiple helpers
+* you want explicit tensor names
+* you need explicit state handling
+
+Explicit recurrent state
+========================
+
+For recurrent or feedback-like node-local state, use the explicit state
+APIs.
+
+.. code-block:: python
+
+   import torch
+   import leapp
+   from leapp import annotate
+
+   leapp.start("stateful_node")
+
+   obs = annotate.input_tensors("policy", {"obs": torch.randn(1, 16)})
+   h = annotate.state_tensors("policy", {"h": torch.zeros(1, 32)})
+
+   h_next = torch.tanh(torch.cat([obs, h], dim=-1))[..., :32]
+   annotate.update_state("policy", {"h": h_next})
+   annotate.output_tensors("policy",
+                           {"action_features": h_next},
+                           export_with="jit")
+
+   leapp.stop()
+   leapp.compile_graph()
+
+Key points:
+
+* ``state_tensors()`` creates values that are both node inputs and node
+  outputs.
+* ``update_state()`` sets the next value of that state.
+* If you omit ``update_state()`` for a registered state tensor, LEAPP
+  leaves it as a regular input and does not create a feedback edge.
+* Nested state structures are not supported; declare each state tensor
+  with its own explicit name, or use ``input_tensors()`` and rely on
+  LEAPP feedback detection.
+
+Automatic module buffer tracking
+================================
+
+If a stateful ``nn.Module`` already stores state in registered buffers,
+:func:`~leapp.annotate.module` can track that automatically.
+
+.. code-block:: python
+
+   import torch
+   import torch.nn as nn
+   import leapp
+   from leapp import annotate
+
+   class StatefulPolicy(nn.Module):
+       def __init__(self):
+           super().__init__()
+           self.register_buffer("h", torch.zeros(1, 32))
+           self.linear = nn.Linear(16 + 32, 32)
+
+       def forward(self, obs):
+           h_next = torch.tanh(
+               self.linear(torch.cat([obs, self.h], dim=-1)))
+           self.h = h_next
+           return h_next
+
+   model = StatefulPolicy().eval()
+
+   leapp.start("module_state_example")
+   obs = annotate.input_tensors("policy", {"obs": torch.randn(1, 16)})
+   annotate.module("policy", model)
+   action = model(obs)
+   annotate.output_tensors("policy",
+                           {"action": action},
+                           export_with="onnx-torchscript")
+   leapp.stop()
+   leapp.compile_graph()
+
+Use ``annotate.module()`` when you want LEAPP to discover buffer-based
+feedback automatically. It tracks reassignment such as ``self.h = h_next``,
+not in-place updates such as ``self.h.copy_(h_next)``.
+
+See ``examples/stateful_gru_export.py`` for a complete working example
+using a GRU policy with ``annotate.module()`` and
+``export_with="onnx-torchscript"``.
+
+Fixed-location buffers inside a traced node
+===========================================
+
+:func:`~leapp.annotate.register_buffer` is for tensors that already exist
+at a fixed location and should participate in tracing. The common use case
+is a preallocated tensor that you update in place to avoid repeated
+allocations:
+
+.. code-block:: python
+
+   obs_buffer[:] = observation
+   action = policy(obs_buffer)
+
+Without ``register_buffer()``, that in-place write is a raw tensor mutation
+and LEAPP cannot trace it as part of the node. Registering the buffer wraps
+the preallocated tensor so operations like ``buffer[:] = traced_input`` are
+traced too.
+
+.. code-block:: python
+
+   import torch
+   import leapp
+   from leapp import annotate
+
+   class PolicyWrapper:
+       def __init__(self):
+           self.obs_buffer = torch.zeros(6)
+
+       def forward(self, obs):
+           self.obs_buffer = annotate.register_buffer(
+               "policy",
+               {"obs_buffer": self.obs_buffer},
+           )
+           self.obs_buffer[:] = obs
+           return self.obs_buffer * 2.0
+
+   wrapper = PolicyWrapper()
+   leapp.start("buffer_example")
+
+   obs = annotate.input_tensors("policy", {"obs": torch.randn(6)})
+   action = wrapper.forward(obs)
+   annotate.output_tensors("policy",
+                           {"action": action},
+                           export_with="jit")
+
+   leapp.stop()
+   leapp.compile_graph()
+
+Use ``register_buffer()`` for:
+
+* preallocated tensors updated with in-place writes
+* fixed-location staging buffers used before calling another function or
+  module
+* cases where you need ``tensor[:] = traced_value`` to become part of the
+  traced computation
+
+.. important::
+
+   * Call ``input_tensors()`` first so the traced node already exists.
+   * Reassign the return value back to the attribute or variable you will
+     mutate.
+   * The original payload passed to ``register_buffer()`` must be raw
+     tensor data, not already-traced tensors.
+
+Use ``state_tensors()`` or ``annotate.module()`` when the value should
+behave like explicit recurrent feedback across calls.
+
+Static outputs
+==============
+
+Sometimes a node needs to output a **constant tensor** that is not derived
+from any input. The ``static_outputs`` parameter on ``output_tensors()``
+handles this case:
+
+.. code-block:: python
+
+   import torch
+   import leapp
+   from leapp import annotate
+
+   leapp.start(name="static_example")
+
+   input_tensor = torch.tensor([1.0, 2.0, 3.0])
+   traced_input = annotate.input_tensors('my_node',
+                                         {'input': input_tensor})
+
+   # Computed output -- derived from the traced input.
+   computed_output = traced_input + 1.0
+
+   # Static output -- a constant, NOT derived from any input.
+   static_tensor = torch.tensor([4.0, 5.0, 6.0])
+
+   annotate.output_tensors(
+       'my_node',
+       {'computed': computed_output},
+       static_outputs={'static': static_tensor},
+       export_with="jit",
+   )
+
+   leapp.stop()
+   leapp.compile_graph()
+
+The exported model returns both outputs: ``computed`` (input-dependent) and
+``static`` (always ``[4, 5, 6]``).
+
+``static_outputs`` follows the same top-level naming contract as
+``output_tensors()``:
+
+* pass a dict of named raw tensors for plain static outputs, or
+* pass ``TensorSemantics(...)`` / a list of ``TensorSemantics(...)`` if the
+  static outputs should carry semantic metadata in the exported YAML.
+
+.. warning::
+
+   * Static outputs must be **raw** ``torch.Tensor`` values. Using a
+     ``TracedTensor`` will raise an error.
+   * Bare top-level tensors are not accepted. Pass a dict of named raw
+     tensors or ``TensorSemantics(...)`` / a list of ``TensorSemantics(...)``.
+   * Static outputs are merged with the regular outputs in the compiled
+     model --- downstream nodes can consume them like any other output.
+
+Nested data connections
+=======================
+
+LEAPP can track connections through complex nested structures. Each
+individual tensor within nested dicts, lists, or custom objects is tracked
+separately.
+
+.. code-block:: python
+
+   import torch
+   import leapp
+   from leapp import annotate
+
+   @annotate.method(export_with="jit", node_name="process_robot_state")
+   def process_robot_state(state_dict):
+       processed_state = {
+           'position': state_dict['position'] * 2.0,
+           'velocity': state_dict['velocity'] + 1.0,
+           'sensors': {
+               'lidar': state_dict['sensors']['lidar'].mean(dim=1),
+               'camera': state_dict['sensors']['camera'].flatten(),
+           },
+       }
+       return processed_state
+
+   def main():
+       leapp.start(name="nested_data_example")
+
+       robot_state = {
+           'position': torch.tensor([1.0, 2.0, 3.0]),
+           'velocity': torch.tensor([0.5, 0.5, 0.0]),
+           'sensors': {
+               'lidar': torch.randn(360, 3),
+               'camera': torch.randn(3, 224, 224),
+           },
+       }
+
+       processed = process_robot_state(robot_state)
+
+       # LEAPP creates connections per individual tensor path:
+       #   robot_state['position']            -> processed['position']
+       #   robot_state['velocity']            -> processed['velocity']
+       #   robot_state['sensors']['lidar']    -> processed['sensors']['lidar']
+       #   robot_state['sensors']['camera']   -> processed['sensors']['camera']
+
+       p = annotate.input_tensors("decision_maker", {"processed": processed})
+
+       position_factor = p['position'].norm()
+       velocity_factor = p['velocity'].sum()
+       sensor_confidence = p['sensors']['lidar'].std()
+
+       action = torch.stack(
+           [position_factor, velocity_factor, sensor_confidence])
+       annotate.output_tensors("decision_maker",
+                               {"action": action},
+                               export_with="jit")
+
+       leapp.stop()
+       leapp.compile_graph()
+
+How LEAPP handles nested structures
+-----------------------------------
+
+When LEAPP sees a complex nested data structure (dicts, lists, tuples) as
+an input or output, it automatically:
+
+#. **Flattens the structure.** Each individual tensor within the nested
+   structure is extracted and tracked separately. For example,
+   ``state_dict['sensors']['lidar']`` becomes a distinct input named
+   ``state_dict_sensors_lidar``.
+#. **Generates an auto-interface.** LEAPP generates wrapper code that
+   accepts flat tensors and reconstructs them into the nested structure
+   your original code expects on input, then unpacks the returned nested
+   structure into flat tensors on output.
+#. **Tracks connections at tensor level.** This flattening enables LEAPP
+   to track data flow between nodes at the individual tensor level, not at
+   the parameter level.
+
+The result: all exported nodes have simple, flat tensor interfaces, while
+your original code continues to use nested structures naturally. This
+guarantees:
+
+* consistent tensor-level connection tracking across all nodes
+* compatibility with deployment frameworks that expect flat tensor I/O
+* clear visibility into exactly which tensors flow between which nodes
+
+In the code above, the ``process_robot_state`` node's exported model has
+four separate tensor inputs (``state_dict_position``,
+``state_dict_velocity``, ``state_dict_sensors_lidar``,
+``state_dict_sensors_camera``) rather than a single complex dictionary
+input.
+
+Summary
+=======
+
+* Distributed traced inputs let one node collect data from multiple call
+  sites.
+* Explicit state APIs handle recurrent feedback cleanly.
+* ``annotate.module()`` tracks reassigned module buffers automatically.
+* ``annotate.register_buffer()`` handles fixed-location tensors and traced
+  in-place writes.
+* Nested data structures are automatically tracked.
+
+LEAPP's goal is to capture your computational graph accurately. Being
+explicit about data dependencies and naming will help avoid most issues.
