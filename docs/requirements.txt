@@ -4,7 +4,5 @@ nvidia-sphinx-theme
 sphinx-copybutton
 sphinx-design
 sphinx-tabs
-
-# Doc QA
 sphinxcontrib-spelling
 pyenchant
