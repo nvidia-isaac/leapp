@@ -34,10 +34,33 @@ _MANAGER = ExportManager()
 
 
 def start(name, save_path=".", verbose=False, dry_run=False, non_traced=None, max_cached_io=5, global_patching=True):
-    """Initialize and start LEAPP graph interpretation."""
+    """Initialize and start LEAPP graph interpretation.
+
+    ``name`` may be a bare graph name (``"my_graph"``), a relative path
+    (``"foo/bar"``), or an absolute path (``"/tmp/my_graph"``). LEAPP always
+    uses the trailing path component as the graph name for emitted artifacts
+    (``<graph_name>.yaml``, ``<graph_name>.png``, ``<graph_name>_initial_values.safetensors``)
+    and resolves the final output directory as ``save_path / dirname(name) / basename(name)``.
+    An absolute ``name`` overrides ``save_path`` (mirroring ``os.path.join`` semantics).
+    """
+    if not isinstance(name, str):
+        raise TypeError(f"leapp.start(name=...) must be a string, got {type(name).__name__}")
+    normalized_name = os.path.normpath(os.path.expanduser(name))
+    if normalized_name in ("", ".", os.sep):
+        raise ValueError(
+            f"leapp.start(name={name!r}) does not contain a usable graph name; "
+            "provide a non-empty basename such as 'my_graph' or '/tmp/my_graph'."
+        )
+    name_dir, graph_name = os.path.split(normalized_name)
+    if not graph_name:
+        raise ValueError(
+            f"leapp.start(name={name!r}) resolved to an empty graph name basename; "
+            "provide a name whose basename is non-empty (e.g. 'my_graph')."
+        )
+
     manager = _MANAGER
-    manager.set_graph_name(name)
-    manager.set_save_path(os.path.join(save_path, manager.get_graph_name()))
+    manager.set_graph_name(graph_name)
+    manager.set_save_path(os.path.join(save_path, name_dir, graph_name))
     manager.ensure_save_path_exists()
     manager.configure_logger(verbose=verbose)
 
