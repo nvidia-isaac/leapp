@@ -349,15 +349,33 @@ class LeappNode():
             examples.append((cache_idx + 1, cached_inputs, cached_outputs))
         return examples
 
-    def validate_compiled_model(self, rtol: float = 1e-3, atol: float = 1e-5) -> bool:
+    def _reentry_validation_hint(self, sample_passed: dict) -> str | None:
+        """Return a hint when only the initial trace passes and re-entry samples fail."""
+        later_indices = [idx for idx in sample_passed if idx > 0]
+        if not later_indices:
+            return None
+        if not sample_passed.get(0):
+            return None
+        if not any(not sample_passed[idx] for idx in later_indices):
+            return None
+        return (
+            "Sample 0 (initial trace) passed validation, but one or more re-entry "
+            "samples failed. This pattern often means a value that changes across "
+            "iterations was inlined as a constant during export. Consider declaring "
+            "it with annotate.input_tensors() for this node."
+        )
+
+    def validate_compiled_model(self, rtol: float = 1e-3, atol: float = 1e-5) -> tuple[bool, str | None]:
         if self.compiled_model is None:
             _get_logger().warning(
                 f"Model {self.name} does not have a compiled model. Skipping validation.")
-            return True
+            return True, None
 
         examples = self._build_validation_examples()
         all_match = True
+        sample_passed = {}
         for sample_idx, input_values, source_outputs in examples:
+            sample_passed[sample_idx] = True
             with torch.no_grad():
                 exported_outputs = self.compiled_model(*input_values)
 
@@ -369,6 +387,7 @@ class LeappNode():
                     f"{self.name} sample {sample_idx}: Output count mismatch - "
                     f"got {len(exported_outputs)}, expected {len(source_outputs)}")
                 all_match = False
+                sample_passed[sample_idx] = False
                 continue
 
             for idx, (exported, source) in enumerate(zip(exported_outputs, source_outputs)):
@@ -385,6 +404,7 @@ class LeappNode():
 
                 if exported_nan > 0 or exported_inf > 0 or source_nan > 0 or source_inf > 0:
                     all_match = False
+                    sample_passed[sample_idx] = False
                     num_elements = exported.numel()
                     _get_logger().error(
                         f"{self.name}/{output_name} sample {sample_idx}: NaN/Inf detected!")
@@ -404,6 +424,7 @@ class LeappNode():
 
                 if not torch.allclose(exported, source, rtol=rtol, atol=atol):
                     all_match = False
+                    sample_passed[sample_idx] = False
                     diff = (exported - source).abs()
                     diff_flat = diff.flatten().float()
 
@@ -433,11 +454,15 @@ class LeappNode():
                     _get_logger().info(
                         f"  Diff percentiles: p50={p50:.6e}, p75={p75:.6e}, p90={p90:.6e}, p99={p99:.6e}, p995={p995:.6e}")
 
+        error_hint = self._reentry_validation_hint(sample_passed)
+        if error_hint is not None:
+            _get_logger().warning(f"  {self.name}: {error_hint}")
+
         if all_match:
             num_examples = len(examples)
             _get_logger().info(
                 f"  ✓ {self.name} passed validation ({num_examples} example{'s' if num_examples > 1 else ''})")
-        return all_match
+        return all_match, error_hint
 
     def validate_input_and_update_tags(self, input_name, raw_input_name, input_value):
         self.validate_io_and_update_tags(
