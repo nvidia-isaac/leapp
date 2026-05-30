@@ -20,6 +20,13 @@ from .traced_data import TracedData
 from .traced_tensor import TracedTensor
 from .traced_np_array import TracedNpArray
 
+try:
+    import warp as wp
+    from .traced_warp_array import TracedWarpArray
+
+except ImportError:
+    wp = None
+
 from .global_patching import (
     apply_traced_data_patches,
     remove_traced_data_patches,
@@ -37,6 +44,10 @@ TRACED_TYPE_REGISTRY: dict[type, Type[TracedData]] = {
     torch.Tensor: TracedTensor,
     np.ndarray: TracedNpArray,
 }
+
+# optional patching for warp arrays
+if wp is not None:
+    TRACED_TYPE_REGISTRY[wp.array] = TracedWarpArray
 
 # Tuple of all base types that can be traced (for isinstance checks)
 TRACABLE_BASE_TYPES: tuple[type, ...] = tuple(TRACED_TYPE_REGISTRY.keys())
