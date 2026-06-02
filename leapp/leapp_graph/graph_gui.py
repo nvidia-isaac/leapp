@@ -15,6 +15,8 @@
 # limitations under the License.
 #
 
+import os
+
 import matplotlib.pyplot as plt
 import networkx as nx
 import matplotlib.patches as patches
@@ -611,5 +613,5 @@ def visualize_graph(nodes, connections, feedback_connections, inputs, outputs, s
     visualizer.show()
 
     # Save after user closes the window
-    save_file_path = f"{save_path}/{graph_name}.png"
+    save_file_path = os.path.join(save_path, f"{graph_name}.png")
     visualizer.save(save_file_path)

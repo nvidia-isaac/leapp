@@ -20,6 +20,7 @@ import collections.abc
 import copy
 import inspect
 import os
+import platform
 import sys
 import textwrap
 
@@ -472,6 +473,24 @@ def get_relative_path(model_path, yaml_save_path):
         # If relative path calculation fails (e.g., different drives on Windows), keep absolute path
         return model_path
 
+def _get_os_description():
+    freedesktop_os_release = getattr(platform, "freedesktop_os_release", None)
+    if freedesktop_os_release is None:
+        return platform.platform()
+
+    try:
+        os_release = freedesktop_os_release()
+    except OSError:
+        return platform.platform()
+
+    name = os_release.get("NAME")
+    version = os_release.get("VERSION_ID") or os_release.get("VERSION")
+    if name and version:
+        return f"{name} {version}"
+
+    return os_release.get("PRETTY_NAME") or platform.platform()
+
+
 def get_system_info():
     import leapp
     metadata = {'system information': {}}
@@ -480,7 +499,7 @@ def get_system_info():
     metadata['system information']['torch version'] = str(torch.__version__)
     metadata['system information']['python version'] = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     metadata['system information']['cuda version'] = str(torch.version.cuda)
-    metadata['system information']['os'] = os.uname().sysname
+    metadata['system information']['os'] = _get_os_description()
 
     return metadata
 

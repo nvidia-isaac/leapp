@@ -762,12 +762,12 @@ class ExportManager:
                     node_context.snapshot_buffer_values(input_namespace)
 
                     trace_fn = node_context.create_trace_function(
-                        __file__.split('/')[-1], entry_hook=None)
+                        os.path.basename(__file__), entry_hook=None)
                 else:
                     node_context.validate_function_boundaries(func)
                     node_context.validate_function_inputs(func, args, kwargs)
                     trace_fn = node_context.create_trace_function(
-                        __file__.split('/')[-1], entry_hook=None)
+                        os.path.basename(__file__), entry_hook=None)
 
                 sys._getframe(1).f_trace = trace_fn
 
