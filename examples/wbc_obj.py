@@ -16,7 +16,6 @@
 #
 
 import torch
-import sys
 import os
 import leapp
 from leapp import annotate
@@ -175,7 +174,7 @@ def main():
         observation_data = annotate.input_tensors("wbc_obj", {"": mock_observation_data})
         wbc.previous_actions = annotate.state_tensors("wbc_obj", {"previous_actions": wbc.previous_actions})
         actions = wbc.run_model(**observation_data)
-        annotate.update_state("wbc_obj", {"previous_actions": actions})
+        annotate.update_state("wbc_obj", {"previous_actions": wbc.previous_actions})
         annotate.output_tensors("wbc_obj", {"actions": actions}, export_with="onnx")
         print(actions)
 
