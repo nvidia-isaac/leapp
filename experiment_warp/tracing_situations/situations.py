@@ -59,11 +59,6 @@ def _as_warp_array(value: wp.array) -> wp.array:
 
 def run_kernel_chain(a, b, summed, scaled, averaged) -> None:
     shape = (HEIGHT, WIDTH)
-    # a = _as_warp_array(a)
-    # b = _as_warp_array(b)
-    # summed = _as_warp_array(summed)
-    # scaled = _as_warp_array(scaled)
-    # averaged = _as_warp_array(averaged)
     wp.launch(add_fields, dim=shape, inputs=[a, b], outputs=[summed], device=DEVICE)
     wp.launch(scale_and_bias, dim=shape, inputs=[summed, 2.0, 1.0], outputs=[scaled], device=DEVICE)
     wp.launch(neighbor_average, dim=shape, inputs=[scaled], outputs=[averaged], device=DEVICE)
