@@ -75,7 +75,8 @@ class _LeappLogger:
         if os.path.exists(savepath):
             filepath = os.path.join(savepath, 'log.txt')
             self.log_path = filepath
-            self.file_handler = logging.FileHandler(filepath, mode='w')
+            self.file_handler = logging.FileHandler(
+                filepath, mode='w', encoding='utf-8')
             self.file_handler.setLevel(logging.DEBUG)
             # Plain format for file (with timestamp, no colors)
             file_formatter = logging.Formatter(

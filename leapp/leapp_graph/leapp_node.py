@@ -461,7 +461,7 @@ class LeappNode():
         if all_match:
             num_examples = len(examples)
             _get_logger().info(
-                f"  ✓ {self.name} passed validation ({num_examples} example{'s' if num_examples > 1 else ''})")
+                f"  [PASS] {self.name} passed validation ({num_examples} example{'s' if num_examples > 1 else ''})")
         return all_match, error_hint
 
     def validate_input_and_update_tags(self, input_name, raw_input_name, input_value):
