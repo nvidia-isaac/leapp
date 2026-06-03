@@ -119,5 +119,25 @@ class TestStartNamePathNormalization(LEAPPFunctionalTestBase):
             leapp.start(123)  # type: ignore[arg-type]
 
 
+class TestCompileGraphLogging(LEAPPFunctionalTestBase):
+    def test_compile_graph_logs_saved_model_locations(self):
+        @annotate.method(export_with="jit")
+        def identity(inputA: torch.Tensor):
+            return inputA + 1.0
+
+        leapp.start(self.TEST_GRAPH_NAME)
+        identity(torch.tensor([1.0, 2.0, 3.0]))
+        leapp.stop()
+
+        expected_model_path = os.path.abspath(
+            os.path.join(self.TEST_GRAPH_NAME, "identity.pt"))
+        with self.assertLogs("leapp", level=25) as logs:
+            leapp.compile_graph(visualize=False, validate=False)
+
+        logged_output = "\n".join(logs.output)
+        self.assertIn("Model artifacts saved:", logged_output)
+        self.assertIn(f"- identity: {expected_model_path}", logged_output)
+
+
 if __name__ == "__main__":
     unittest.main()

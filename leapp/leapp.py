@@ -136,6 +136,7 @@ def compile_graph(visualize=True, verbose=None, validate=True, dry_run=False, rt
 
     if not manager.is_dry_run():
         manager.save_models()
+        _get_logger().log_saved_model_locations(manager.get_nodes().values())
 
     models = manager.get_io_descriptions()
 

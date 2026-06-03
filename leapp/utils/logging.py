@@ -122,6 +122,32 @@ class _LeappLogger:
             # Add blank lines around section for visual separation
             self.logger.log(SECTION, f"{msg}\n")
 
+    def log_saved_model_locations(self, nodes):
+        """Log saved model artifact locations as an always-visible section."""
+        saved_models = []
+        nodes_without_artifacts = []
+
+        nodes_to_report = sorted(nodes, key=lambda node: node.node_index)
+        for node in nodes_to_report:
+            if node.model_path:
+                saved_models.append(
+                    f"- {node.name}: {os.path.abspath(node.model_path)}")
+            else:
+                nodes_without_artifacts.append(node.name)
+
+        if saved_models:
+            message = "Model artifacts saved:\n" + "\n".join(saved_models)
+        else:
+            message = "No model artifacts were saved."
+
+        if nodes_without_artifacts:
+            message += (
+                "\nNodes without saved model artifacts: "
+                + ", ".join(nodes_without_artifacts)
+            )
+
+        self.section(message)
+
     def warning(self, msg):
         """Log warning message (file always, console always)."""
         if self.initialized:
