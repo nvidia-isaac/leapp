@@ -136,7 +136,6 @@ def compile_graph(visualize=True, verbose=None, validate=True, dry_run=False, rt
 
     if not manager.is_dry_run():
         manager.save_models()
-        _get_logger().log_saved_model_locations(manager.get_nodes().values())
 
     models = manager.get_io_descriptions()
 
@@ -163,6 +162,13 @@ def compile_graph(visualize=True, verbose=None, validate=True, dry_run=False, rt
         f.write("\n")
         yaml.dump(system_info, f)
         f.write("\n")
+
+    if not manager.is_dry_run():
+        _get_logger().log_export_artifact_locations(
+            manager.get_save_path(),
+            manager.get_graph_name(),
+            manager.get_nodes().values(),
+        )
 
     manager.set_detected_graph(models, pipeline)
 

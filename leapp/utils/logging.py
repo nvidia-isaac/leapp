@@ -28,9 +28,11 @@ import logging
 import os
 
 
-# Define custom log level for SECTION (between INFO and WARNING)
+# Define custom log levels.
 SECTION = 25
+SYSTEM = 31
 logging.addLevelName(SECTION, 'SECTION')
+logging.addLevelName(SYSTEM, 'SYSTEM')
 
 
 class _ColoredFormatter(logging.Formatter):
@@ -41,6 +43,7 @@ class _ColoredFormatter(logging.Formatter):
         'DEBUG': '',              # White (no color)
         'INFO': '',               # White
         'SECTION': '\033[1;4;97m',     # Bold white (for section headers)
+        'SYSTEM': '',             # White, but above WARNING for non-verbose console output
         'WARNING': '\033[1;33m',  # Bold yellow (matching export_manager.py)
         'ERROR': '\033[91m',      # Bright red
         'CRITICAL': '\033[1;31m',  # Bold red
@@ -117,14 +120,21 @@ class _LeappLogger:
         if self.initialized:
             self.logger.info(msg)
 
+    def system(self, msg):
+        """Log system message (file always, console always)."""
+        if self.initialized:
+            self.logger.log(SYSTEM, msg)
+
     def section(self, msg):
         """Log section message (file always, console always) - bold in console."""
         if self.initialized:
             # Add blank lines around section for visual separation
             self.logger.log(SECTION, f"{msg}\n")
 
-    def log_saved_model_locations(self, nodes):
-        """Log saved model artifact locations as an always-visible section."""
+    def log_export_artifact_locations(self, save_path, graph_name, nodes):
+        """Log exported graph and model artifact locations as an always-visible system message."""
+        export_dir = os.path.abspath(save_path)
+        yaml_path = os.path.join(export_dir, f"{graph_name}.yaml")
         saved_models = []
         nodes_without_artifacts = []
 
@@ -136,18 +146,24 @@ class _LeappLogger:
             else:
                 nodes_without_artifacts.append(node.name)
 
+        message_lines = [
+            "LEAPP export artifacts saved:",
+            f"Export directory: {export_dir}",
+            f"Graph YAML: {yaml_path}",
+        ]
+
         if saved_models:
-            message = "Model artifacts saved:\n" + "\n".join(saved_models)
+            message_lines.append("Models:")
+            message_lines.extend(saved_models)
         else:
-            message = "No model artifacts were saved."
+            message_lines.append("Models: none")
 
         if nodes_without_artifacts:
-            message += (
-                "\nNodes without saved model artifacts: "
-                + ", ".join(nodes_without_artifacts)
+            message_lines.append(
+                "Nodes without saved model artifacts: " + ", ".join(nodes_without_artifacts)
             )
 
-        self.section(message)
+        self.system("\n".join(message_lines))
 
     def warning(self, msg):
         """Log warning message (file always, console always)."""
