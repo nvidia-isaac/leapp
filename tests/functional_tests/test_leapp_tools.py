@@ -135,7 +135,7 @@ class TestCompileGraphLogging(LEAPPFunctionalTestBase):
             leapp.compile_graph(visualize=False, validate=False)
 
         logged_output = "\n".join(logs.output)
-        self.assertIn("Model artifacts saved:", logged_output)
+        self.assertIn("LEAPP export artifacts saved:", logged_output)
         self.assertIn(f"- identity: {expected_model_path}", logged_output)
 
 
