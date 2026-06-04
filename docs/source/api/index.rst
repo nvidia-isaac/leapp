@@ -219,6 +219,107 @@ The method logs statistics including:
 * Internal connections --- node-to-node connection count
 * Total edges --- total edge count
 
+Semantic metadata
+=================
+
+``TensorSemantics``
+-------------------
+
+Describe a named tensor and optional semantic metadata for YAML serialization.
+Use ``TensorSemantics`` with :func:`~leapp.annotate.input_tensors` and
+:func:`~leapp.annotate.output_tensors` when tensor entries need meaning beyond
+shape and dtype.
+
+Signature
+~~~~~~~~~
+
+.. code-block:: python
+
+   TensorSemantics(
+       name: str = None,
+       ref = None,
+       kind: InputKindEnum | OutputKindEnum | str | None = None,
+       element_names: list | None = None,
+       extra: dict | None = None,
+   )
+
+Parameters
+~~~~~~~~~~
+
+* ``name`` (str, required): Tensor name to use in the generated pipeline YAML.
+* ``ref`` (Tensor or ndarray, required): Tensor value being annotated.
+* ``kind`` (InputKindEnum | OutputKindEnum | str, optional): Semantic role for
+  the tensor. Enum values are serialized to their string ``.value``.
+* ``element_names`` (list | str, optional): Human-readable element names. A
+  string becomes ``[[name]]``; a flat list of strings becomes ``[[...]]``; a
+  per-dimension list is preserved with optional ``None`` entries.
+* ``extra`` (dict, optional): Additional semantic fields. Keys are flattened
+  into the tensor YAML entry rather than serialized under an ``extra`` key.
+
+Behavior
+~~~~~~~~
+
+* ``TensorSemantics`` can be passed as a single object or as a list of objects.
+* When using a list, every item must be ``TensorSemantics``; mixing raw tensors
+  and ``TensorSemantics`` in the same list is not supported.
+* ``TensorSemantics`` objects are not placed inside dicts. The ``name`` field
+  provides the tensor key.
+* Public semantic fields with non-``None`` values are serialized in the YAML.
+* ``extra`` fields are flattened into the same YAML mapping as built-in fields.
+
+.. warning::
+
+   ``extra`` fields are non-standard, project-defined metadata. Downstream
+   deployment frameworks should not be expected to understand or support them.
+   Use ``extra`` only for project-specific integration data, and prefer
+   standard LEAPP semantic fields whenever possible.
+
+Enum values
+~~~~~~~~~~~
+
+``InputKindEnum`` currently defines:
+
+.. code-block:: text
+
+   JOINT_POSITION = state/joint/position
+   JOINT_VELOCITY = state/joint/velocity
+   JOINT_EFFORT = state/joint/effort
+   BODY_POSE = state/body/pose
+   BODY_VEL = state/body/velocity
+   BODY_ACC = state/body/acceleration
+   BODY_LINEAR_ACCELERATION = state/body/linear_acceleration
+   BODY_LINEAR_VELOCITY = state/body/linear_velocity
+   BODY_ANGULAR_ACCELERATION = state/body/angular_acceleration
+   BODY_ANGULAR_VELOCITY = state/body/angular_velocity
+   BODY_ROTATION = state/body/rotation
+   BODY_POSITION = state/body/position
+   WRENCH = state/wrench
+   VECTOR3D = state/vector3d
+   COMMAND_JOINT_POSITION = command/joint/position
+   COMMAND_JOINT_VELOCITY = command/joint/velocity
+   COMMAND_JOINT_TORQUES = command/joint/torques
+   COMMAND_BODY_ROTATION = command/body/rotation
+   COMMAND_BODY_VELOCITY = command/body/velocity
+   COMMAND_POSE = command/body/pose
+
+``OutputKindEnum`` currently defines:
+
+.. code-block:: text
+
+   KP = kp
+   KD = kd
+   JOINT_POSITION = target/joint/position
+   JOINT_VELOCITY = target/joint/velocity
+   JOINT_TORQUES = target/joint/torques
+   JOINT_EFFORT = target/joint/effort
+   BODY_POSITION = target/body/position
+   BODY_LINEAR_ACCELERATION = target/body/linear_acceleration
+   BODY_ORIENTATION = target/body/orientation
+   BODY_LINEAR_VELOCITY = target/body/linear_velocity
+   BODY_ANGULAR_ACCELERATION = target/body/angular_acceleration
+
+See :doc:`/guides/semantics` for examples and field guidance.
+
 Annotations
 ===========
 
@@ -345,7 +446,7 @@ Behavior
 * If interpretation is disabled, the function runs normally without
   tracing.
 * Tensor-valued default arguments that are not explicitly passed are
-  registered as buffers.
+  captured as node-local constants.
 
 Notes
 ~~~~~
@@ -353,53 +454,6 @@ Notes
 * Recommended shorthand for self-contained functions.
 * You may still use other ``annotate.*`` APIs inside a decorated method
   to annotate additional inputs or state values.
-
-``annotate.register_buffer()``
-------------------------------
-
-Register a preallocated tensor for a traced node.
-
-Signature
-~~~~~~~~~
-
-.. code-block:: python
-
-   annotate.register_buffer(node_name: str, tensors)
-
-Parameters
-~~~~~~~~~~
-
-* ``node_name`` (str, required): Existing traced node. Call
-  ``input_tensors()`` first.
-* ``tensors`` (required): A single tensor, a list/tuple of tensors, or a
-  dict mapping buffer names to tensors.
-
-Returns
-~~~~~~~
-
-* A single traced value for a single input, or a tuple for multi-value
-  inputs.
-
-Behavior
-~~~~~~~~
-
-* Wraps the preallocated tensor so subsequent in-place writes
-  (``buffer[:] = value``) are traced.
-* Supports repeated calls; unnamed list/tuple entries receive
-  auto-generated names like ``buffer_0``, ``buffer_1``.
-* The return value must be reassigned to the variable or attribute you
-  intend to mutate.
-
-Notes
-~~~~~
-
-* Only supported for traced nodes created with ``input_tensors()`` or
-  ``method()``.
-* The tensor passed in must be raw (not already traced).
-* Use this for fixed-location staging buffers updated in-place each
-  call --- not for constants.
-* Use ``state_tensors()`` or ``annotate.module()`` when the value should
-  behave as recurrent feedback across calls.
 
 ``annotate.state_tensors()``
 ----------------------------

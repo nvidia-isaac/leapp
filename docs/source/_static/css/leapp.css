@@ -20,3 +20,149 @@ a.reference.external::after {
     color: unset !important;
     background-color: unset !important;
 }
+
+
+.leapp-diagram {
+    border: 1px solid rgba(118, 118, 118, 0.35);
+    border-radius: 8px;
+    padding: 1.25rem;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(0, 0, 0, 0.03));
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.08);
+}
+
+.leapp-diagram-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.leapp-diagram-box {
+    border: 1px solid rgba(118, 118, 118, 0.45);
+    border-radius: 6px;
+    padding: 0.8rem 0.95rem;
+    font-weight: 700;
+    text-align: center;
+    background: rgba(255, 255, 255, 0.12);
+}
+
+.leapp-box-code {
+    border-color: rgba(75, 120, 190, 0.65);
+    background: rgba(75, 120, 190, 0.07);
+}
+
+.leapp-box-annotation {
+    border-color: rgba(118, 185, 0, 0.72);
+    background: rgba(118, 185, 0, 0.08);
+    color: #5f8f00;
+    font-size: 0.86rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.leapp-diagram-chevron {
+    color: #767676;
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    padding-top: 0.25rem;
+    text-align: center;
+    text-transform: uppercase;
+}
+
+.leapp-diagram-output {
+    border: 1px solid rgba(118, 118, 118, 0.35);
+    border-radius: 6px;
+    margin-top: 0.35rem;
+    padding: 0.9rem;
+    background: rgba(0, 0, 0, 0.025);
+}
+
+.leapp-artifact-grid span {
+    border: 1px solid rgba(118, 118, 118, 0.3);
+    border-radius: 6px;
+    padding: 0.55rem 0.65rem;
+    background: rgba(118, 185, 0, 0.08);
+    font-size: 0.9rem;
+    text-align: center;
+}
+
+.leapp-artifact-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.55rem;
+}
+
+@media (max-width: 720px) {
+    .leapp-artifact-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+
+.leapp-fit-grid {
+    margin-top: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.leapp-fit-card {
+    border-left: 4px solid #76b900 !important;
+    transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+
+.leapp-fit-card:hover {
+    border-left-color: #8dd600 !important;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.10);
+    transform: translateY(-1px);
+}
+
+.leapp-fit-card .sd-card-title {
+    font-weight: 700;
+}
+
+.leapp-fit-card .sd-card-body {
+    font-size: 0.94rem;
+}
+
+
+h1:has(+ .leapp-github-link) {
+    display: inline-block;
+    margin-right: 0.8rem;
+}
+
+.leapp-github-link {
+    display: inline-flex;
+    margin: 0 0 1rem;
+    vertical-align: 0.25rem;
+}
+
+.leapp-github-link a {
+    align-items: center;
+    color: #0969da;
+    display: inline-flex;
+    font-family: inherit;
+    font-size: 0.95rem;
+    font-weight: 700;
+    gap: 0.32rem;
+    text-decoration: none;
+}
+
+.leapp-github-link a:hover {
+    color: #054da7;
+    text-decoration: underline;
+}
+
+.leapp-github-link img {
+    height: 0.95rem;
+    width: 0.95rem;
+}
+
+@media (max-width: 520px) {
+    h1:has(+ .leapp-github-link),
+    .leapp-github-link {
+        display: block;
+    }
+
+    .leapp-github-link {
+        margin: -0.4rem 0 1rem;
+    }
+}

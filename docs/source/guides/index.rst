@@ -13,24 +13,39 @@ in order or jump to the topic you need.
       :link-type: doc
       :class-card: sd-rounded-3
 
-      Distributed inputs, explicit recurrent state, module buffer tracking,
-      static outputs, and nested data structures.
+      Distributed inputs, method shorthand, and nested data structures.
 
    .. grid-item-card:: Export configuration
       :link: export
       :link-type: doc
       :class-card: sd-rounded-3
 
-      Backend selection, TorchScript vs ONNX, dry-run modes, and bringing
-      pre-compiled models into the graph.
+      Backend selection, TorchScript vs ONNX, and bringing pre-compiled
+      models into the graph.
 
-   .. grid-item-card:: Graph operations
+   .. grid-item-card:: State capture and feedback
       :link: graph
       :link-type: doc
       :class-card: sd-rounded-3
 
-      Cycle detection, feedback connections, and preserving tracing
-      continuity with ``mirror_leapp_tags``.
+      Explicit state tensors, module buffer tracking, and automatic feedback
+      detection for recurrent or re-entered graph state.
+
+   .. grid-item-card:: Buffers and constant tensors
+      :link: buffers
+      :link-type: doc
+      :class-card: sd-rounded-3
+
+      Registered module buffers, static outputs, embedded constants, and
+      manual tensor-copy tag preservation.
+
+   .. grid-item-card:: Debugging
+      :link: debugging
+      :link-type: doc
+      :class-card: sd-rounded-3
+
+      Dry-run modes, selective non-traced nodes, verbose logs, and full
+      FX graph inspection.
 
    .. grid-item-card:: Runtime and validation
       :link: runtime
@@ -56,5 +71,7 @@ in order or jump to the topic you need.
    nodes
    export
    graph
+   buffers
+   debugging
    runtime
    semantics

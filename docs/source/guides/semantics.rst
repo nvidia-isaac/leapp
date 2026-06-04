@@ -118,6 +118,21 @@ Used with :func:`~leapp.annotate.input_tensors`. These represent
    * - ``JOINT_VELOCITY``
      - ``state/joint/velocity``
      - Observed joint velocities
+   * - ``JOINT_EFFORT``
+     - ``state/joint/effort``
+     - Observed joint effort
+   * - ``BODY_POSE``
+     - ``state/body/pose``
+     - Observed body pose
+   * - ``BODY_POSITION``
+     - ``state/body/position``
+     - Observed body position
+   * - ``BODY_VEL``
+     - ``state/body/velocity``
+     - Observed body velocity
+   * - ``BODY_ACC``
+     - ``state/body/acceleration``
+     - Observed body acceleration
    * - ``BODY_LINEAR_ACCELERATION``
      - ``state/body/linear_acceleration``
      - Body linear acceleration (e.g. from IMU)
@@ -133,6 +148,12 @@ Used with :func:`~leapp.annotate.input_tensors`. These represent
    * - ``BODY_ROTATION``
      - ``state/body/rotation``
      - Body rotation / orientation
+   * - ``WRENCH``
+     - ``state/wrench``
+     - Observed wrench values
+   * - ``VECTOR3D``
+     - ``state/vector3d``
+     - Generic 3D vector state
    * - ``COMMAND_JOINT_POSITION``
      - ``command/joint/position``
      - Commanded joint position reference
@@ -145,6 +166,9 @@ Used with :func:`~leapp.annotate.input_tensors`. These represent
    * - ``COMMAND_BODY_VELOCITY``
      - ``command/body/velocity``
      - Commanded body velocity reference
+   * - ``COMMAND_POSE``
+     - ``command/body/pose``
+     - Commanded body pose reference
    * - ``COMMAND_JOINT_TORQUES``
      - ``command/joint/torques``
      - Commanded joint torques reference
@@ -191,6 +215,9 @@ Used with :func:`~leapp.annotate.output_tensors`. These represent
    * - ``JOINT_TORQUES``
      - ``target/joint/torques``
      - Target joint torques
+   * - ``JOINT_EFFORT``
+     - ``target/joint/effort``
+     - Target joint effort
    * - ``BODY_POSITION``
      - ``target/body/position``
      - Target body position
@@ -267,6 +294,48 @@ automatically:
    # Name a single element.
    TensorSemantics("gravity", tensor, element_names="z")
 
+
+``extra``
+---------
+
+The ``extra`` field accepts a dictionary of additional semantic metadata.
+Keys in ``extra`` are flattened into the generated YAML tensor entry rather
+than nested under an ``extra`` key. Use this for downstream-specific fields
+that LEAPP does not model directly, such as coordinate frames, external IDs,
+units, or application-specific labels.
+
+.. code-block:: python
+
+   TensorSemantics(
+       "joint_pos",
+       tensor,
+       kind=InputKindEnum.JOINT_POSITION,
+       extra={"frame": "base", "units": "rad"},
+   )
+
+The generated YAML includes the extra fields at the same level as ``kind`` and
+``element_names``:
+
+.. code-block:: yaml
+
+   - name: joint_pos
+     dtype: float32
+     shape: [1, 12]
+     type: tensor
+     kind: state/joint/position
+     frame: base
+     units: rad
+
+Unknown semantic keys applied internally through ``update_semantics()`` are
+also stored in ``extra`` and serialized this way.
+
+.. warning::
+
+   ``extra`` fields are non-standard, project-defined metadata. Downstream
+   deployment frameworks should not be expected to understand or support them.
+   Use ``extra`` only for project-specific integration data, and prefer
+   standard LEAPP semantic fields whenever possible.
+
 Passing conventions
 ===================
 
@@ -332,6 +401,10 @@ Limitations
    within the same node's inputs (or outputs). Duplicate names raise an
    error.
 #. **Semantic fields are optional** --- all semantic fields (``kind``,
-   ``element_names``) are optional. A ``TensorSemantics`` with no
-   semantic fields behaves identically to passing a raw tensor with the
-   same name.
+   ``element_names``, and ``extra``) are optional. A ``TensorSemantics``
+   with no semantic fields behaves identically to passing a raw tensor with
+   the same name.
+#. **Extra fields are flattened** --- keys in ``extra`` become top-level YAML
+   fields on the tensor entry. Avoid keys that collide with built-in fields
+   such as ``name``, ``dtype``, ``shape``, ``type``, ``kind``, or
+   ``element_names``.

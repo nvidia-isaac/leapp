@@ -2,6 +2,16 @@
 Getting Started
 ===============
 
+Installation
+============
+
+.. code-block:: bash
+
+   pip install leapp
+
+LEAPP requires Python 3.8+ and PyTorch 2.6.0+. The full dependency list is
+in the :doc:`/index`.
+
 Welcome to LEAPP! This guide walks you through the basics of using LEAPP
 to trace and export computational graphs from PyTorch code.
 
@@ -13,16 +23,6 @@ You'll learn how to:
 * Understand where LEAPP writes models, YAML, and graph visualizations
 * Use :func:`~leapp.annotate.method` as a shorthand for simple,
   self-contained functions
-
-Installation
-============
-
-.. code-block:: bash
-
-   pip install leapp
-
-LEAPP requires Python 3.8+ and PyTorch 2.6.0+. The full dependency list is
-in the :doc:`/index`.
 
 Example: a robot sensor pipeline
 ================================
@@ -203,16 +203,37 @@ Tracing lifecycle
    leapp.stop()                          # 3. stop tracing
    leapp.compile_graph()                 # 4. compile and export
 
-Generated output files
-======================
+What LEAPP Produces
+===================
 
-After ``compile_graph()`` runs, LEAPP writes:
+After ``compile_graph()`` runs, LEAPP writes a directory containing deployable
+artifacts and the metadata needed to wire them together.
 
-* ``sample_pipeline/sample_pipeline.yaml`` --- complete graph specification
-  with metadata.
-* ``sample_pipeline/sample_pipeline.png`` --- visual diagram of the graph.
-* ``sample_pipeline/*.pt`` or ``*.onnx`` --- exported models for each
-  exported node.
+.. grid:: 1 1 2 2
+   :gutter: 3
+
+   .. grid-item-card:: Exported node models
+      :class-card: sd-rounded-3
+
+      Per-node TorchScript or ONNX artifacts containing traced compute,
+      constants, and model weights.
+
+   .. grid-item-card:: Pipeline specification
+      :class-card: sd-rounded-3
+
+      A YAML graph description with node inputs, outputs, backends, tensor
+      metadata, and graph connectivity.
+
+   .. grid-item-card:: Validation results
+      :class-card: sd-rounded-3
+
+      Optional replay checks compare exported model outputs against the traced
+      Python outputs.
+
+   .. grid-item-card:: Graph visualization
+      :class-card: sd-rounded-3
+
+      Optional diagrams make the traced pipeline easier to inspect and discuss.
 
 Try it yourself
 ===============
