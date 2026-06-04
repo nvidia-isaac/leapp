@@ -17,7 +17,7 @@ try:
     from importlib.metadata import version as _pkg_version
     release = _pkg_version('leapp')
 except Exception:
-    release = '0.5.1'
+    release = '0.5.2'
 version = release
 
 # -- General configuration ---------------------------------------------------
