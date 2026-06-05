@@ -91,6 +91,10 @@ class NodeManager:
             return TorchExportBackend(None)
         elif backend == "onnx":
             return ONNXExportBackend(None)
+        elif backend == "warp":
+            # Lazy import so warp stays an optional dependency.
+            from leapp.backends.warp_export_backend import WarpExportBackend
+            return WarpExportBackend(None)
         else:
             raise ValueError(f"Unsupported backend: {backend}")
 

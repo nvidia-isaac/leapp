@@ -162,7 +162,7 @@ class LeappNode():
         self._create_backend(backend, backend_params)
 
     def _create_backend(self, backend, backend_params):
-        available_backends = ["jit-script", "jit-trace", "onnx-dynamo", "onnx-torchscript"]
+        available_backends = ["jit-script", "jit-trace", "onnx-dynamo", "onnx-torchscript", "warp"]
         if backend is None:
             self.backend = "None"
             self.export_backend = NoneExportBackend(
@@ -187,6 +187,10 @@ class LeappNode():
             from leapp.backends.onnx_export_backend import ONNXTorchScriptExportBackend
             self.export_backend = ONNXTorchScriptExportBackend(
                 self, backend_params)
+        elif backend == "warp":
+            self.backend = "warp"
+            from leapp.backends.warp_export_backend import WarpExportBackend
+            self.export_backend = WarpExportBackend(self, backend_params)
         elif backend == "cpp":
             raise Exception("C++ backend not implemented")
         elif backend == "py":

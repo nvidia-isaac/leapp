@@ -527,6 +527,8 @@ class NoneExportBackend(ExportBackend):
             return "torchscript2"
         elif suffix == 'onnx':
             return "onnx"
+        elif suffix == 'wrp':
+            return "warp"
         elif suffix == 'cpp' or suffix == "cc":
             return "cpp"
         elif suffix == 'py':
