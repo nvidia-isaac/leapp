@@ -14,6 +14,7 @@ Requires: warp-lang>=1.13 (APIC), torch (CUDA), a CUDA GPU.
 """
 import os
 import shutil
+import tempfile
 
 import torch
 import warp as wp
@@ -27,7 +28,7 @@ DEVICE = "cuda:0"
 N = 8
 SCALE = 2.0
 BIAS = 0.5
-BUNDLE = "/tmp/leapp-warp/bundles/torchwarp"
+BUNDLE = os.path.join(tempfile.gettempdir(), "leapp_warp_mixed", "torchwarp")
 
 
 # ---------------- torch node (exported as TorchScript) ----------------

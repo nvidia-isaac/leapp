@@ -20,20 +20,24 @@ warp↔onnx tensors stay GPU-resident across the ensemble via the python backend
 |---|---|
 | `warp_apic_runtime.py` | Deploy-side core (no leapp dep): load `.wrp` + verify modules + replay on torch tensors. Fails loudly on dtype/size/checksum/device divergence. |
 | `model.py` | Triton **python-backend** model: `wp.capture_load` in `initialize`; DLPack→`wp.from_torch`→`set_param`→`capture_launch`→DLPack in `execute`. |
+| `affine_passthrough_model.py` | Trivial GPU python-backend model (`out = in*scale+bias`, DLPack) — stand-in for the ONNX neighbor steps in the dockerless multi-step demo. |
 | `make_warp_model_repo.py` | Captures a coarse 2-kernel `.wrp` and lays out the Triton model repo (`warp_node/` + `ensemble/`). |
-| `harness_standalone.py` | Validates `model.py.execute()` on a GPU tensor via a faithful `pb_utils` DLPack mock — **always runs** (no server). |
-| `run_live_triton.py` | Serves the repo in a **real** (dockerless) tritonserver and infers the ensemble over HTTP. |
-| `harness_pytriton.py` | Alt: bind via PyTriton's high-level API. |
+| `_triton_serve.py` | Dockerless helper: discovers the PyTriton-bundled `tritonserver` (no hardcoded paths) and serves a model repo for the demos. |
+| `run_live_triton.py` | Demo: serve a single-node warp ensemble on a real (dockerless) tritonserver and infer over HTTP. Skips if pytriton absent. |
+| `multistep_ensemble.py` | Demo: Part 1 runs the patched generator on a real `onnx→warp→onnx` graph and asserts the emitted ensemble (optional — needs the isaac_3 generator); Part 2 serves a live `python→warp→python` ensemble and asserts GPU-resident internal step→step handoffs. |
 | `create_triton_model_repo.warp.patch` | The actual `isaac_ros_deploy` generator change (Runtime A): adds `backend == "warp"` dispatch + `_create_warp_model_dir` + `_generate_warp_model_config`. Apply in `isaac_ros_deploy_converters/`. |
-| `multistep_ensemble.py` | **Multi-step** `onnx→warp→onnx` proof: Part 1 runs the patched generator on a real onnx→warp→onnx graph and asserts the emitted ensemble; Part 2 serves a live `python→warp→python` ensemble and asserts GPU-resident internal step→step handoffs. |
-| `affine_passthrough_model.py` | Trivial GPU python-backend model (`out = in*scale+bias`, DLPack) — stand-in for the ONNX neighbor steps in the dockerless live multi-step test. |
+| `../../tests/functional_tests/test_triton_warp_node.py` | **Canonical validation** (pytest): Tier A standalone `model.py` path via a `pb_utils` DLPack mock (no server) + loud-failure guards; Tier B live single-node Triton ensemble (auto-skips without pytriton). |
 
-## Run (validated on RTX 6000 Ada, warp 1.14.0, Triton 2.x python backend)
+## Run
+Canonical, portable validation is the pytest (needs warp + CUDA; the live tier auto-skips without `nvidia-pytriton`):
 ```bash
-uv venv --python 3.12 /tmp/leapp-warp/venv
-uv pip install --python /tmp/leapp-warp/venv nvidia-pytriton warp-lang==1.14.0 torch numpy pyyaml onnx
-/tmp/leapp-warp/venv/bin/python harness_standalone.py   # PASS, max_abs_err=0.0
-/tmp/leapp-warp/venv/bin/python run_live_triton.py      # PASS — warp in a live Triton ensemble
+PYTHONPATH=$PWD python3.12 -m pytest tests/functional_tests/test_triton_warp_node.py -q
+```
+Interactive demos (the live parts need an env with `nvidia-pytriton`):
+```bash
+uv venv --python 3.12 .venv && uv pip install --python .venv nvidia-pytriton warp-lang torch numpy pyyaml onnx
+.venv/bin/python examples/triton_warp_node/run_live_triton.py
+.venv/bin/python examples/triton_warp_node/multistep_ensemble.py   # Part 1 also needs LEAPP_WARP_GENERATOR_DIR -> the patched generator
 ```
 
 ## Results
@@ -56,7 +60,7 @@ uv pip install --python /tmp/leapp-warp/venv nvidia-pytriton warp-lang==1.14.0 t
   `WarpRunner : InferenceRunner` behind `InferenceRunner::create`, selected by
   `parameters.backend: warp`; load the `.wrp` in `warmup()` (off-RT) and replay the captured CUDA
   graph (`wp_apic_get_cuda_graph_exec` + `cudaGraphLaunch`) allocation-free in `run()`. (Not
-  prototyped here — C++/CUDA + the Triton 2.60 ABI; design in `/tmp/leapp-warp/03-triton-runtime-map.md`.)
+  prototyped here — needs C++/CUDA against the Triton 2.60 ABI.)
 
 ## Hardening applied (after adversarial review)
 - **H1 (CUDA stream ordering):** `model.py`/`warp_apic_runtime.py` and the export `_WarpGraphCallable`
@@ -80,6 +84,6 @@ uv pip install --python /tmp/leapp-warp/venv nvidia-pytriton warp-lang==1.14.0 t
 - **Now proven (`multistep_ensemble.py`):** the generator emits a correct onnx→warp→onnx ensemble, and
   a live 3-step ensemble keeps tensors GPU-resident across both internal step→step edges.
 - **Still not proven:** a *live onnxruntime-backend* onnx→warp→onnx run (needs the full Triton container);
-  batching; the Runtime B `WarpRunner`; Jetson/aarch64. See `/tmp/leapp-warp/04-export-and-triton-runtime.md` §4.
+  batching; the Runtime B `WarpRunner`; Jetson/aarch64.
 - For hard-RT, prefer the Runtime B `WarpRunner` (no GIL/IPC) or a custom C++ Triton backend; the
   python-backend `execute()` logic ports near-verbatim.

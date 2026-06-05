@@ -131,8 +131,9 @@ def reference(x):
 
 
 if __name__ == "__main__":
-    repo = os.path.join("/tmp/leapp-warp/triton_repo")
-    vd = build_repo(repo)
+    import tempfile
+    repo = tempfile.mkdtemp(prefix="warp_triton_repo_")
+    build_repo(repo)
     print("built model repo at", repo)
     for root, _, files in os.walk(repo):
         for fn in sorted(files):
