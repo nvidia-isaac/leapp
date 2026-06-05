@@ -42,11 +42,17 @@ class TritonPythonModel:
         self.runner = WarpApicRunner(wrps[0], device=device)
 
     def execute(self, requests):
+        debug_dev = os.environ.get("WARP_TRITON_DEBUG_DEVICE")
         responses = []
         for request in requests:
             inputs = {}
             for name in self.runner.input_names:
                 in_t = pb_utils.get_input_tensor_by_name(request, name)
+                if debug_dev:
+                    # Prove GPU-resident step->step handoff: is_cpu()==False means the upstream
+                    # step's GPU output reached us without a host copy.
+                    sys.stderr.write(f"[warp_node] input '{name}' is_cpu={in_t.is_cpu()}\n")
+                    sys.stderr.flush()
                 # Zero-copy Triton -> torch (-> warp) over DLPack.
                 inputs[name] = torch.from_dlpack(in_t.to_dlpack())
 

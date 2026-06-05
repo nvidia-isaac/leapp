@@ -25,6 +25,8 @@ warp↔onnx tensors stay GPU-resident across the ensemble via the python backend
 | `run_live_triton.py` | Serves the repo in a **real** (dockerless) tritonserver and infers the ensemble over HTTP. |
 | `harness_pytriton.py` | Alt: bind via PyTriton's high-level API. |
 | `create_triton_model_repo.warp.patch` | The actual `isaac_ros_deploy` generator change (Runtime A): adds `backend == "warp"` dispatch + `_create_warp_model_dir` + `_generate_warp_model_config`. Apply in `isaac_ros_deploy_converters/`. |
+| `multistep_ensemble.py` | **Multi-step** `onnx→warp→onnx` proof: Part 1 runs the patched generator on a real onnx→warp→onnx graph and asserts the emitted ensemble; Part 2 serves a live `python→warp→python` ensemble and asserts GPU-resident internal step→step handoffs. |
+| `affine_passthrough_model.py` | Trivial GPU python-backend model (`out = in*scale+bias`, DLPack) — stand-in for the ONNX neighbor steps in the dockerless live multi-step test. |
 
 ## Run (validated on RTX 6000 Ada, warp 1.14.0, Triton 2.x python backend)
 ```bash
@@ -40,6 +42,12 @@ uv pip install --python /tmp/leapp-warp/venv nvidia-pytriton warp-lang==1.14.0 t
   ensemble served over HTTP, `max_abs_err = 0.0`.
 - **Patched generator**: `create_triton_model_repo.py` (with the patch) emits a `warp_node` +
   ensemble that serves correctly live, `max_abs_err = 0.0`.
+- **Multi-step (`multistep_ensemble.py`)**: the patched generator emits a correct `onnx→warp→onnx`
+  ensemble (Part 1); and a live 3-step `python→warp→python` ensemble round-trips with
+  `max_abs_err = 0.0` while keeping tensors **GPU-resident across both internal step→step edges**
+  (`is_cpu=False` at the warp input and the post input) — Part 2. A *live onnxruntime-backend* run
+  needs the full Triton container (the dockerless PyTriton bundle ships only the python backend);
+  Part 1 validates the generated onnx config, Part 2 validates the live GPU-resident handoff.
 
 ## Two runtimes
 - **Runtime A (ros2 nodes, Triton ensemble)** — covered here: the patch is the whole integration;
@@ -69,7 +77,9 @@ uv pip install --python /tmp/leapp-warp/venv nvidia-pytriton warp-lang==1.14.0 t
   `_warp_templates/` next to the module. In the real `isaac_ros_deploy_converters` Bazel/wheel build these
   templates **must** be added to the target `srcs`/`data` (`glob(["_warp_templates/**"])`) + `package_data`/
   `MANIFEST.in`, and resolved via runfiles — otherwise every warp generation raises `FileNotFoundError`.
-- **Not yet proven:** a true multi-step onnx→warp→onnx GPU-resident ensemble; batching; the Runtime B
-  `WarpRunner`; Jetson/aarch64. See `/tmp/leapp-warp/04-export-and-triton-runtime.md` §4 for the full ledger.
+- **Now proven (`multistep_ensemble.py`):** the generator emits a correct onnx→warp→onnx ensemble, and
+  a live 3-step ensemble keeps tensors GPU-resident across both internal step→step edges.
+- **Still not proven:** a *live onnxruntime-backend* onnx→warp→onnx run (needs the full Triton container);
+  batching; the Runtime B `WarpRunner`; Jetson/aarch64. See `/tmp/leapp-warp/04-export-and-triton-runtime.md` §4.
 - For hard-RT, prefer the Runtime B `WarpRunner` (no GIL/IPC) or a custom C++ Triton backend; the
   python-backend `execute()` logic ports near-verbatim.
