@@ -5,7 +5,7 @@
 """Tests for running a LEAPP Warp (APIC) node as a Triton python-backend ensemble step.
 
 Two tiers, both GPU/warp-guarded:
-  * Tier A (no server) — exercises the real ``examples/triton_warp_node/model.py`` ``execute()``
+  * Tier A (no server) — exercises the real ``leapp_runtimes/triton/warp_node/model.py`` ``execute()``
     path via a faithful ``triton_python_backend_utils`` (pb_utils) DLPack mock, plus the runtime's
     loud-failure guards. Needs only ``warp`` + ``torch`` + CUDA.
   * Tier B (live) — serves a real single-node Triton ensemble via the PyTriton-bundled
@@ -33,10 +33,11 @@ pytestmark = pytest.mark.skipif(
 
 _REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 _EXAMPLES = os.path.join(_REPO, "examples", "triton_warp_node")
-sys.path.insert(0, _EXAMPLES)
+sys.path.insert(0, _REPO)        # leapp_runtimes
+sys.path.insert(0, _EXAMPLES)    # make_warp_model_repo (demo repo builder)
 
 import make_warp_model_repo as twn  # noqa: E402  (capture + repo builder)
-from warp_apic_runtime import WarpApicRunner  # noqa: E402
+from leapp_runtimes.triton.warp_node.warp_apic_runtime import WarpApicRunner  # noqa: E402
 
 
 # --------------------------- pb_utils DLPack mock (Tier A) ---------------------------

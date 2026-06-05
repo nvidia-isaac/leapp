@@ -4,11 +4,9 @@
 #
 """Multi-step ensemble demo: a Warp node BETWEEN two neighbor steps.
 
-Part 1 (generator / real ONNX) — OPTIONAL: if the patched ``create_triton_model_repo.py`` is
-available (env ``LEAPP_WARP_GENERATOR_DIR``, default ``/tmp/leapp-warp/gen``; this is the
-isaac_ros_deploy change, applied via ``create_triton_model_repo.warp.patch``), build real
-pre.onnx + warp .wrp + post.onnx, run the generator, and assert it emits a correct
-``onnx -> warp -> onnx`` ensemble. Skipped if that generator is not on this machine.
+Part 1 (generator / real ONNX): build real pre.onnx + warp .wrp + post.onnx, run the LEAPP-owned
+``leapp_runtimes.triton.create_triton_model_repo``, and assert it emits a correct
+``onnx -> warp -> onnx`` ensemble (onnxruntime_onnx steps + warp python step + internal tensors).
 
 Part 2 (live / GPU-resident) — needs ``nvidia-pytriton``: the dockerless bundle ships only the
 python backend, so the ONNX neighbors can't be served here (they run in the real Triton container
@@ -20,7 +18,6 @@ Pipeline:  obs --[pre: *1.5 - 0.2]--> h --[warp: relu(x*2+1)]--> y --[post: *0.5
 
 Run: python examples/triton_warp_node/multistep_ensemble.py   (Part 2 needs nvidia-pytriton)
 """
-import importlib.util
 import json
 import os
 import shutil
@@ -34,7 +31,14 @@ import yaml
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.abspath(os.path.join(HERE, "..", "..")))  # repo root -> leapp_runtimes
 from _triton_serve import TritonServer, discover_tritonserver
+
+import leapp_runtimes.triton.warp_node as _warp_node_pkg
+from leapp_runtimes.triton.create_triton_model_repo import create_triton_model_repo
+
+# The LEAPP-owned warp python-backend templates (model.py + warp_apic_runtime.py).
+WARP_NODE_DIR = os.path.dirname(_warp_node_pkg.__file__)
 
 N = 8
 
@@ -88,21 +92,9 @@ def reference(obs):
     return np.maximum((obs * 1.5 - 0.2) * 2.0 + 1.0, 0.0) * 0.5
 
 
-# ---------------- Part 1: generator emits onnx -> warp -> onnx (optional) ----------------
+# ---------------- Part 1: generator emits onnx -> warp -> onnx ----------------
 def part1_generator(work):
-    print("\n========== PART 1: patched generator on a real onnx -> warp -> onnx graph ==========")
-    gen_dir = os.environ.get("LEAPP_WARP_GENERATOR_DIR", "/tmp/leapp-warp/gen")
-    gen_py = os.path.join(gen_dir, "create_triton_model_repo.py")
-    if not os.path.exists(gen_py):
-        print(f"SKIP: patched generator not found at {gen_py} "
-              "(apply create_triton_model_repo.warp.patch to isaac_ros_deploy and point "
-              "LEAPP_WARP_GENERATOR_DIR at it).")
-        return None
-    spec = importlib.util.spec_from_file_location("patched_gen", gen_py)
-    gen = importlib.util.module_from_spec(spec)
-    sys.path.insert(0, gen_dir)
-    spec.loader.exec_module(gen)
-
+    print("\n========== PART 1: LEAPP generator on a real onnx -> warp -> onnx graph ==========")
     stage = os.path.join(work, "p1_stage")
     os.makedirs(stage, exist_ok=True)
     wrp = capture_warp(stage, "x", "y")
@@ -133,7 +125,7 @@ def part1_generator(work):
     open(cfg_path, "w").write(yaml.safe_dump(cfg, sort_keys=False))
     repo = os.path.join(work, "p1_repo")
     shutil.rmtree(repo, ignore_errors=True)
-    gen.create_triton_model_repo(Path(cfg_path), Path(repo))
+    create_triton_model_repo(Path(cfg_path), Path(repo))
 
     ens = open(os.path.join(repo, "ensemble", "config.pbtxt")).read()
     checks = {
@@ -200,8 +192,8 @@ def build_live_repo(repo):
     _py_model_dir(repo, "post", "z", "out", 0.5, 0.0)
     wv = os.path.join(repo, "warp_node", "1")
     capture_warp(wv, "x", "y")
-    shutil.copy2(os.path.join(HERE, "model.py"), os.path.join(wv, "model.py"))
-    shutil.copy2(os.path.join(HERE, "warp_apic_runtime.py"), os.path.join(wv, "warp_apic_runtime.py"))
+    shutil.copy2(os.path.join(WARP_NODE_DIR, "model.py"), os.path.join(wv, "model.py"))
+    shutil.copy2(os.path.join(WARP_NODE_DIR, "warp_apic_runtime.py"), os.path.join(wv, "warp_apic_runtime.py"))
     open(os.path.join(repo, "warp_node", "config.pbtxt"), "w").write(_WARP_CFG.format(n=N))
     os.makedirs(os.path.join(repo, "ensemble", "1"), exist_ok=True)
     open(os.path.join(repo, "ensemble", "config.pbtxt"), "w").write(_ENS_CFG.format(n=N))
