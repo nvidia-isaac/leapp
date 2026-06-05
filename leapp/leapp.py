@@ -178,6 +178,22 @@ def compile_graph(visualize=True, verbose=None, validate=True, dry_run=False, rt
     return True
 
 
+def warp_node(name, save_path=".", device=None):
+    """Non-invasively capture a region of plain Warp code as a LEAPP warp node.
+
+    Returns a context manager; the user's Warp code inside the ``with`` block is unchanged::
+
+        with leapp.warp_node("solver", save_path=out) as wn:
+            wp.launch(...); wp.launch(...)   # existing warp code, untouched
+        wn.node      # YAML models entry (backend: warp)
+        wn.wrp_path  # the emitted <name>.wrp
+
+    See ``leapp.backends.warp_capture`` for details. Warp is an optional dependency, imported lazily.
+    """
+    from leapp.backends.warp_capture import warp_node as _warp_node
+    return _warp_node(name, save_path=save_path, device=device)
+
+
 class AnnotateAPI:
     """Annotation-only facade over ExportManager."""
 
