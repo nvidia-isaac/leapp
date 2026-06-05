@@ -50,10 +50,26 @@ uv pip install --python /tmp/leapp-warp/venv nvidia-pytriton warp-lang==1.14.0 t
   graph (`wp_apic_get_cuda_graph_exec` + `cudaGraphLaunch`) allocation-free in `run()`. (Not
   prototyped here — C++/CUDA + the Triton 2.60 ABI; design in `/tmp/leapp-warp/03-triton-runtime-map.md`.)
 
+## Hardening applied (after adversarial review)
+- **H1 (CUDA stream ordering):** `model.py`/`warp_apic_runtime.py` and the export `_WarpGraphCallable`
+  bind + `capture_launch(stream=…)` + read back on **torch's current stream** (via `wp.ScopedStream`),
+  then sync only that stream — no producer→graph cross-stream race, no whole-device sync. *Still needs an
+  N-instance concurrent-HTTP stress test before any concurrency-safe claim.*
+- **H3 (dtype mismatch):** the generator validates warp-node I/O dtypes at **generation time** (clear error,
+  not an opaque serve-time crash); runtime dtype map expanded (fp16/int/uint/bool) and unsupported dtypes raise.
+- **I1 (batch guard):** `run_torch` rejects a wrong-element-count (batched) input loudly.
+- **I2 (device id):** `model.py` binds to the instance's actual GPU (`model_instance_device_id`), not bare `cuda:0`.
+
 ## Production notes
-- `.wrp` is **version-gated/experimental** — pin warp, treat `.wrp` as a re-captured build artifact.
+- `.wrp` is **version-gated/experimental** — pin warp, treat `.wrp` as a re-captured build artifact; add a
+  `warp_version`/`wrp_format_version` gate at load (not yet enforced).
 - The python backend's env must have `torch`+`warp` (in the Triton container it does; the dockerless
   prototype injects them via `WARP_TRITON_SITE_PACKAGES`, a no-op in real deploy).
-- Package `model.py` + `warp_apic_runtime.py` as data with `isaac_ros_deploy_converters`.
+- **H2 (packaging — hard break if skipped):** the generator copies `model.py` + `warp_apic_runtime.py` from
+  `_warp_templates/` next to the module. In the real `isaac_ros_deploy_converters` Bazel/wheel build these
+  templates **must** be added to the target `srcs`/`data` (`glob(["_warp_templates/**"])`) + `package_data`/
+  `MANIFEST.in`, and resolved via runfiles — otherwise every warp generation raises `FileNotFoundError`.
+- **Not yet proven:** a true multi-step onnx→warp→onnx GPU-resident ensemble; batching; the Runtime B
+  `WarpRunner`; Jetson/aarch64. See `/tmp/leapp-warp/04-export-and-triton-runtime.md` §4 for the full ledger.
 - For hard-RT, prefer the Runtime B `WarpRunner` (no GIL/IPC) or a custom C++ Triton backend; the
   python-backend `execute()` logic ports near-verbatim.

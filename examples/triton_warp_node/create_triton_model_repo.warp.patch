@@ -1,6 +1,6 @@
 --- a/isaac_ros_deploy_converters/create_triton_model_repo.py
 +++ b/isaac_ros_deploy_converters/create_triton_model_repo.py
-@@ -260,6 +260,85 @@
+@@ -260,6 +260,97 @@
      return dynamic_batch
  
  
@@ -21,6 +21,18 @@
 +    ensemble (the python backend's DLPack path then hands them to warp zero-copy). Shapes/dtypes
 +    come from the LEAPP YAML (a ``.wrp`` is not introspectable like an ``.onnx``); static shapes.
 +    """
++    # H3: fail at GENERATION time (not opaquely at serve time) for dtypes the warp runtime
++    # (warp_apic_runtime.py) does not support. Keep this set in sync with that module.
++    _WARP_SUPPORTED_DTYPES = {
++        "float16", "float32", "float64", "int8", "int16", "int32", "int64", "uint8", "bool",
++    }
++    for t in list(inputs) + list(outputs):
++        dt = t.get("dtype", "float32")
++        if dt not in _WARP_SUPPORTED_DTYPES:
++            raise ValueError(
++                f"Warp node '{model_name}' tensor '{t['name']}' has dtype '{dt}' which the warp "
++                f"runtime does not support (supported: {sorted(_WARP_SUPPORTED_DTYPES)})")
++
 +    def _blocks(direction: str, tensors: list[dict]) -> str:
 +        return "".join(
 +            _TENSOR_BLOCK_TEMPLATE.format(
@@ -86,7 +98,7 @@
  @dataclass
  class TritonRepoResult:
      """
-@@ -309,10 +388,14 @@
+@@ -309,10 +400,14 @@
      models = config["models"]
      pipeline = config.get("pipeline", {})
  

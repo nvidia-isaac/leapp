@@ -35,7 +35,11 @@ class TritonPythonModel:
         wrps = sorted(glob.glob(os.path.join(version_dir, "*.wrp")))
         if len(wrps) != 1:
             raise RuntimeError(f"expected exactly one .wrp in {version_dir}, found {wrps}")
-        self.runner = WarpApicRunner(wrps[0])
+        # I2: bind to the GPU Triton actually placed this instance on (multi-GPU servers).
+        device = None
+        if str(args.get("model_instance_kind", "")).upper() == "GPU":
+            device = f"cuda:{int(args.get('model_instance_device_id', 0))}"
+        self.runner = WarpApicRunner(wrps[0], device=device)
 
     def execute(self, requests):
         responses = []

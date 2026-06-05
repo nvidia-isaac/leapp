@@ -30,6 +30,7 @@ import json
 import math
 import os
 import shutil
+from contextlib import nullcontext
 from typing import Any, Dict, Tuple
 
 import torch
@@ -38,10 +39,17 @@ import warp as wp
 from leapp.backends.export_backend import ExportBackend
 
 WARP_BACKEND = "warp"
-_WARP_DTYPE_TO_STR = {wp.float32: "float32", wp.float64: "float64", wp.int32: "int32", wp.int64: "int64"}
+_WARP_DTYPE_TO_STR = {
+    wp.float16: "float16", wp.float32: "float32", wp.float64: "float64",
+    wp.int8: "int8", wp.int16: "int16", wp.int32: "int32", wp.int64: "int64",
+    wp.uint8: "uint8", wp.bool: "bool",
+}
 _STR_TO_WARP_DTYPE = {v: k for k, v in _WARP_DTYPE_TO_STR.items()}
-_STR_TO_TORCH = {"float32": torch.float32, "float64": torch.float64,
-                 "int32": torch.int32, "int64": torch.int64}
+_STR_TO_TORCH = {
+    "float16": torch.float16, "float32": torch.float32, "float64": torch.float64,
+    "int8": torch.int8, "int16": torch.int16, "int32": torch.int32, "int64": torch.int64,
+    "uint8": torch.uint8, "bool": torch.bool,
+}
 
 
 def _sha256(path: str) -> str:
@@ -85,26 +93,37 @@ class _WarpGraphCallable:
                 f"warp node expected {len(self.input_names)} inputs {self.input_names}, "
                 f"got {len(torch_inputs)}")
 
-        for name, dstr, t in zip(self.input_names, self.input_dtypes, torch_inputs):
-            expected = _STR_TO_TORCH.get(dstr)
-            if expected is None:
-                raise ValueError(f"warp node '{name}': unsupported declared dtype '{dstr}'")
-            if t.dtype != expected:
-                raise TypeError(
-                    f"warp node input '{name}' expected dtype {dstr}, got {t.dtype}. "
-                    "This backend does not reinterpret dtypes (would corrupt results).")
-            tt = t.to(self.device).contiguous().reshape(-1)
-            self.graph.set_param(name, wp.from_torch(tt, dtype=_STR_TO_WARP_DTYPE[dstr]))
-
-        wp.capture_launch(self.graph)
-        wp.synchronize_device(self.device)
+        # H1: bind/launch/read-back on the producer's CUDA stream (torch's current stream) so the
+        # whole region is ordered on one stream; sync only that stream, not the whole device.
+        torch_stream = torch.cuda.current_stream(self.device) if str(self.device).startswith("cuda") else None
+        wp_stream = wp.Stream(self.device, cuda_stream=torch_stream.cuda_stream) if torch_stream else None
+        ctx = wp.ScopedStream(wp_stream) if wp_stream else nullcontext()
 
         outs = []
-        for name, dstr, shape in zip(self.output_names, self.output_dtypes, self.output_shapes):
-            numel = int(math.prod(shape)) if shape else 1
-            buf = wp.empty(numel, dtype=_STR_TO_WARP_DTYPE[dstr], device=self.device)
-            self.graph.get_param(name, buf)  # raises on byte-size mismatch
-            outs.append(wp.to_torch(buf).reshape(tuple(shape)))
+        with ctx:
+            for name, dstr, t in zip(self.input_names, self.input_dtypes, torch_inputs):
+                expected = _STR_TO_TORCH.get(dstr)
+                if expected is None:
+                    raise ValueError(f"warp node '{name}': unsupported declared dtype '{dstr}'")
+                if t.dtype != expected:
+                    raise TypeError(
+                        f"warp node input '{name}' expected dtype {dstr}, got {t.dtype}. "
+                        "This backend does not reinterpret dtypes (would corrupt results).")
+                tt = t.to(self.device).contiguous().reshape(-1)
+                self.graph.set_param(name, wp.from_torch(tt, dtype=_STR_TO_WARP_DTYPE[dstr]))
+
+            wp.capture_launch(self.graph, stream=wp_stream)
+
+            for name, dstr, shape in zip(self.output_names, self.output_dtypes, self.output_shapes):
+                numel = int(math.prod(shape)) if shape else 1
+                buf = wp.empty(numel, dtype=_STR_TO_WARP_DTYPE[dstr], device=self.device)
+                self.graph.get_param(name, buf)  # raises on byte-size mismatch
+                outs.append(wp.to_torch(buf).reshape(tuple(shape)))
+
+        if wp_stream:
+            wp.synchronize_stream(wp_stream)
+        else:
+            wp.synchronize_device(self.device)
         return outs[0] if len(outs) == 1 else tuple(outs)
 
 
