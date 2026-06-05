@@ -1,0 +1,8 @@
+# Sphinx + NVIDIA theme + extensions for LEAPP docs.
+sphinx>=7.0
+nvidia-sphinx-theme
+sphinx-copybutton
+sphinx-design
+sphinx-tabs
+sphinxcontrib-spelling
+pyenchant

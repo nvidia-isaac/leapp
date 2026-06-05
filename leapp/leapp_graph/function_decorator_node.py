@@ -16,6 +16,7 @@
 #
 
 import inspect
+import os
 
 from leapp.utils.utils import (
     safe_deepcopy,
@@ -123,7 +124,7 @@ class FunctionDecoratorNode(LeappNode):
         def trace_function(frame, event, arg):
             if event == 'call':
                 code = frame.f_code
-                if code.co_filename.split('/')[-1] == skip_file:
+                if os.path.basename(code.co_filename) == skip_file:
                     return trace_function
 
                 if (code.co_filename == self.executed_lines['filename'] and

@@ -762,12 +762,12 @@ class ExportManager:
                     node_context.snapshot_buffer_values(input_namespace)
 
                     trace_fn = node_context.create_trace_function(
-                        __file__.split('/')[-1], entry_hook=None)
+                        os.path.basename(__file__), entry_hook=None)
                 else:
                     node_context.validate_function_boundaries(func)
                     node_context.validate_function_inputs(func, args, kwargs)
                     trace_fn = node_context.create_trace_function(
-                        __file__.split('/')[-1], entry_hook=None)
+                        os.path.basename(__file__), entry_hook=None)
 
                 sys._getframe(1).f_trace = trace_fn
 
@@ -889,6 +889,7 @@ class ExportManager:
             return {}
 
         results = {}
+        error_hints = []
 
         _get_logger().section(f"Validating {len(self.nodes)} models")
 
@@ -897,7 +898,11 @@ class ExportManager:
             _get_logger().info(f"Validating {node_name}...")
 
             try:
-                results[node_name] = node.validate_compiled_model(rtol=rtol, atol=atol)
+                passed, error_hint = node.validate_compiled_model(
+                    rtol=rtol, atol=atol)
+                results[node_name] = passed
+                if error_hint is not None:
+                    error_hints.append(f"{node_name}: {error_hint}")
 
             except Exception as e:
                 _get_logger().error(
@@ -927,8 +932,11 @@ class ExportManager:
         if strict and (failed > 0 or errors > 0):
             failed_nodes = [name for name,
                             v in results.items() if v is not True]
-            raise Exception(
+            message = (
                 f"Model validation failed for {len(failed_nodes)} node(s): {failed_nodes}"
             )
+            if error_hints:
+                message += "\n\n" + "\n".join(error_hints)
+            raise Exception(message)
 
         return results

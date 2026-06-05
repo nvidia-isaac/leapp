@@ -21,6 +21,7 @@ import torch
 from safetensors.torch import load_file
 from leapp.export_manager import ExportManager
 from leapp.leapp import _MANAGER as annotate # non-protected access to annotate singleton
+import yaml
 
 
 class LEAPPFunctionalTestBase(unittest.TestCase):
@@ -308,6 +309,21 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
         
         _flatten(data)
         return tensors
+
+    def _assert_artifacts(self, save_dir, graph_name):
+        yaml_path = os.path.join(save_dir, f"{graph_name}.yaml")
+        model_path = os.path.join(save_dir, "identity.pt")
+        self.assertTrue(os.path.exists(yaml_path),
+                        f"YAML not found at {yaml_path}")
+        self.assertTrue(os.path.exists(model_path),
+                        f"Model not found at {model_path}")
+        # The exported model_path entry in YAML must be relative to the YAML dir.
+        with open(yaml_path, "r") as f:
+            config = yaml.safe_load(f)
+        identity_params = config["models"]["identity"]["parameters"]
+        self.assertEqual(identity_params["model_path"], "identity.pt",
+                         f"model_path should be relative to YAML directory, "
+                         f"got {identity_params['model_path']!r}")
 
     def verify_feedback_initial_values(self, expected_values, graph_name=None):
         """Verify that the feedback initial values safetensors file exists and contains expected values.
