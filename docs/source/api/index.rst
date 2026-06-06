@@ -25,7 +25,7 @@ Graph lifecycle
 ``leapp.start()``
 -----------------
 
-Initialize and start LEAPP graph interpretation.
+Initialize and start LEAPP graph tracing.
 
 Signature
 ~~~~~~~~~
@@ -397,7 +397,7 @@ Parameters
   must be plain ``torch.Tensor``, not ``TracedTensor``.
 * ``**kwargs``:
 
-  * ``export_with`` (str | None): Export backend. Common values
+  * ``export_with`` (str | None): Export backend. Common values are
     ``"jit"`` and ``"onnx"``. Other variants are ``"jit-script"``,
     ``"jit-trace"``, ``"onnx-dynamo"``, and ``"onnx-torchscript"``. See
     :doc:`/guides/export`.
@@ -432,7 +432,7 @@ Parameters
 
 * ``node_name`` (str, optional): Custom node name. Defaults to the
   function name.
-* ``export_with`` (str | None, optional): Export backend. Common values
+* ``export_with`` (str | None, optional): Export backend. Common values are
   ``"jit"`` and ``"onnx"``.
 * ``backend_params`` (dict, optional): Backend-specific parameters.
 
@@ -667,8 +667,8 @@ Methods
    * - Method
      - Description
    * - ``run_policy(inputs)``
-     - Run the full pipeline. ``inputs`` is a dict of
-       ``"node_name/input_name"`` to ``torch.Tensor``. Returns a dict of
+     - Run the full pipeline. ``inputs`` is a dict that maps
+       ``"node_name/input_name"`` keys to ``torch.Tensor`` values. Returns a dict of
        final pipeline outputs. ``manager(inputs)`` is an equivalent
        shorthand.
    * - ``get_mock_input()``
