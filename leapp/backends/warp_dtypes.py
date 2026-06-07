@@ -5,6 +5,7 @@ scalars, and the trailing torch-view shape. Scalars have count 1 and trailing sh
 The torch *view* of a structured-dtype port is always its scalar base with the trailing
 shape appended to the per-element (batch) dims.
 """
+import torch
 import warp as wp
 
 # name -> (warp dtype, scalar base name, scalar count, trailing torch-view shape)
@@ -54,3 +55,19 @@ def trailing_shape(name: str) -> tuple:
 
 def is_structured(name: str) -> bool:
     return _REGISTRY[name][2] > 1
+
+
+_TORCH_TO_WARP_NAME = {
+    torch.float16: "float16", torch.float32: "float32", torch.float64: "float64",
+    torch.int8: "int8", torch.int16: "int16", torch.int32: "int32", torch.int64: "int64",
+    torch.uint8: "uint8", torch.bool: "bool",
+}
+
+
+def torch_dtype_to_warp_str(torch_dtype) -> str:
+    """Map a torch scalar dtype to the warp SCALAR dtype name (used when wp.from_torch is
+    called without an explicit warp dtype — warp then infers a scalar array of this dtype)."""
+    name = _TORCH_TO_WARP_NAME.get(torch_dtype)
+    if name is None:
+        raise KeyError(f"unsupported torch dtype {torch_dtype!r} for warp bridge")
+    return name

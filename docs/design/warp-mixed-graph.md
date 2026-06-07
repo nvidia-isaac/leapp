@@ -24,6 +24,7 @@ Deferred (fast-follow / future):
 - Native warp state (persistent arrays that never cross to torch).
 - Triton-generator support for auto-split graphs.
 - DLPack and `__cuda_array_interface__` bridge detection.
+- Triton deploy runtime (`warp_apic_runtime.py`) structured-dtype OUTPUT handling is untested; it allocates a flat scalar buffer rather than struct-typed elements. Needs a pytriton-backed test (or a struct-typed allocation) before the Triton auto-split deploy path is relied on.
 
 ## Model (summary)
 

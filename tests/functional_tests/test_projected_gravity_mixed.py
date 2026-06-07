@@ -32,6 +32,56 @@ def _norm_vec3(x: wp.array(dtype=wp.vec3f), out: wp.array(dtype=wp.vec3f)):
     out[i] = wp.normalize(x[i])
 
 
+def test_two_sequential_mixed_regions(tmp_path):
+    """Two independent mixed regions in a single leapp.start()/stop() — verifies the segmenter
+    is correctly reset between regions (the _ACTIVE segmenter cleared on each region's
+    output_tensors call)."""
+    wp.init()
+    leapp.start("pg2", save_path=str(tmp_path))
+
+    # Region A: obsA — torch scale -> warp normalize -> torch reshape
+    gA = torch.randn(N, 3, device=DEV, dtype=torch.float32)
+    gtA = annotate.input_tensors("obsA", {"g": gA})
+    scaledA = gtA * 2.0
+    aA = wp.from_torch(scaledA.contiguous().reshape(-1, 3), dtype=wp.vec3f)
+    outA = wp.zeros(N, dtype=wp.vec3f, device=DEV)
+    wp.launch(_norm_vec3, dim=N, inputs=[aA], outputs=[outA], device=DEV)
+    dA = wp.to_torch(outA).reshape(N, 3)
+    annotate.output_tensors("obsA", {"pg": dA}, export_with="onnx-torchscript")
+
+    # Region B: obsB — independent torch scale -> warp normalize -> torch reshape
+    gB = torch.randn(N, 3, device=DEV, dtype=torch.float32)
+    gtB = annotate.input_tensors("obsB", {"g": gB})
+    scaledB = gtB * 3.0
+    aB = wp.from_torch(scaledB.contiguous().reshape(-1, 3), dtype=wp.vec3f)
+    outB = wp.zeros(N, dtype=wp.vec3f, device=DEV)
+    wp.launch(_norm_vec3, dim=N, inputs=[aB], outputs=[outB], device=DEV)
+    dB = wp.to_torch(outB).reshape(N, 3)
+    annotate.output_tensors("obsB", {"pg": dB}, export_with="onnx-torchscript")
+
+    leapp.stop()
+    leapp.compile_graph(visualize=False, validate=True)
+
+    yaml_path = str(tmp_path / "pg2" / "pg2.yaml")
+    im = InferenceManager(yaml_path)
+
+    gA_in = torch.randn(N, 3, device=DEV, dtype=torch.float32)
+    gB_in = torch.randn(N, 3, device=DEV, dtype=torch.float32)
+    in_keyA = [k for k in im.inputs if "obsA" in k and k.endswith("/g")][0]
+    in_keyB = [k for k in im.inputs if "obsB" in k and k.endswith("/g")][0]
+    res = im({in_keyA: gA_in, in_keyB: gB_in})
+
+    out_keyA = [k for k in res if "obsA" in k and k.endswith("/pg")][0]
+    out_keyB = [k for k in res if "obsB" in k and k.endswith("/pg")][0]
+
+    refA = torch.nn.functional.normalize(gA_in * 2.0, dim=1)
+    refB = torch.nn.functional.normalize(gB_in * 3.0, dim=1)
+    assert torch.allclose(res[out_keyA], refA, rtol=1e-4, atol=1e-5), \
+        f"obsA output mismatch: max_err={( res[out_keyA] - refA).abs().max()}"
+    assert torch.allclose(res[out_keyB], refB, rtol=1e-4, atol=1e-5), \
+        f"obsB output mismatch: max_err={(res[out_keyB] - refB).abs().max()}"
+
+
 def test_mixed_autosplit_roundtrips(tmp_path):
     wp.init()
     leapp.start("pg", save_path=str(tmp_path))

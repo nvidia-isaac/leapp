@@ -8,7 +8,7 @@
 #
 # http://www.apache.org/licenses/LICENSE-2.0
 #
-"""PROTOTYPE: NVIDIA Warp export backend for LEAPP (Approach A — Warp as a peer node-kind).
+"""NVIDIA Warp export backend for LEAPP (Approach A — Warp as a peer node-kind).
 
 A "warp" node's artifact is an APIC capture: ``<name>.wrp`` + ``<name>_modules/`` (compiled
 kernels) produced by ``wp.capture_save`` over a coarse ``wp.ScopedCapture(apic=True)`` region

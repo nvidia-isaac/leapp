@@ -12,7 +12,7 @@ Compiled and run via the standard InferenceManager. Result is compared bit-exact
 torch.nn.functional.normalize(g * 2, dim=1).
 
 Run:
-    PYTHONPATH=/home/lgulich/Code/leapp python3.12 examples/warp_autosplit_mixed.py
+    PYTHONPATH=$PWD python3.12 examples/warp_autosplit_mixed.py
 
 Requires: warp-lang>=1.13 (APIC), torch (CUDA), a CUDA GPU.
 """

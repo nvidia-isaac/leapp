@@ -39,9 +39,8 @@ class RegionSegmenter:
         self.open_kind = "torch"
         self._seg_idx = 1
         self._split_happened = False
-        self._bridge_counter = 0  # incremented by the patched wp.from_torch in install() (Task C3)
+        self._bridge_counter = 0  # incremented on each traced wp.from_torch crossing
         self._pending_warp_inputs = {}
-        self._pending_warp_dtypes = {}
         self._finalized_warp = None
 
     def _ensure_first_renamed(self):
@@ -64,10 +63,9 @@ class RegionSegmenter:
         self._seg_idx += 1
         warp_node = WarpRegionNode(_seg_name(self.region, self._seg_idx, "warp"))
         self.mgr.nodes[warp_node.name] = warp_node
+        warp_node._max_cached_io = getattr(self.mgr, "_max_cached_io", 0)
         self.open_node = warp_node
         self.open_kind = "warp"
-        self._pending_warp_inputs[out_name] = torch_tensor
-        self._pending_warp_dtypes[out_name] = warp_dtype
         return torch_tensor
 
     def _make_torch_node(self, region, idx):
@@ -75,7 +73,7 @@ class RegionSegmenter:
         # route correctly. Overridden in unit tests.
         from leapp.leapp_graph.traced_node import TracedTensorNode
         node = TracedTensorNode(_seg_name(region, idx, "torch"))
-        node._max_cached_io = 0
+        node._max_cached_io = getattr(self.mgr, "_max_cached_io", 0)
         self.mgr.nodes[node.name] = node
         return node
 
@@ -122,7 +120,7 @@ class RegionSegmenter:
 
 
 # ---------------------------------------------------------------------------
-# Module-level bridge patches (Task C3)
+# Module-level bridge patches installed by leapp.start()
 # ---------------------------------------------------------------------------
 
 _ACTIVE = {"segmenter": None}
@@ -152,7 +150,10 @@ def install():
         # A raw torch.Tensor (untraced) is a baked constant input to the .wrp (no split).
         if seg is not None and is_traced_type(t) and getattr(t, 'is_tracing', False):
             from leapp.backends import warp_dtypes as wd
-            wdstr = wd.warp_dtype_to_str(dtype) if dtype is not None else "float32"
+            if dtype is not None:
+                wdstr = wd.warp_dtype_to_str(dtype)
+            else:
+                wdstr = wd.torch_dtype_to_warp_str(t.dtype)
             name = f"out{seg._bridge_counter}"
             seg._bridge_counter += 1
             seg.on_from_torch_input(t, out_name=name, warp_dtype=wdstr)
