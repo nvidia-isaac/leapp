@@ -38,16 +38,16 @@ class RegionSegmenter:
         self.open_kind = "torch"
         self._seg_idx = 1
         self._split_happened = False
-        self._bridge_counter = 0
+        self._bridge_counter = 0  # incremented by the patched wp.from_torch in install() (Task C3)
         self._pending_warp_inputs = {}
         self._pending_warp_dtypes = {}
+        self._finalized_warp = None
 
     def _ensure_first_renamed(self):
         if not self._split_happened:
             new = _seg_name(self.region, 1, "torch")
             self.mgr._rename_node(self.open_node.name, new)
             self._split_happened = True
-            self._seg_idx = 1
 
     def on_from_torch_input(self, torch_tensor, out_name, warp_dtype):
         if self.open_kind != "torch":
@@ -68,3 +68,40 @@ class RegionSegmenter:
         self._pending_warp_inputs[out_name] = torch_tensor
         self._pending_warp_dtypes[out_name] = warp_dtype
         return torch_tensor
+
+    def _make_torch_node(self, region, idx):
+        # real impl: create a TracedTensorNode via the manager so input_tensors/output_tensors
+        # route correctly. Overridden in unit tests.
+        from leapp.leapp_graph.traced_node import TracedTensorNode
+        node = TracedTensorNode(_seg_name(region, idx, "torch"))
+        node._max_cached_io = 0
+        self.mgr.nodes[node.name] = node
+        return node
+
+    def on_to_torch_output(self, warp_array, result_tensor):
+        if self.open_kind != "warp":
+            raise RuntimeError(
+                f"warp_bridge: wp.to_torch reached with no open warp segment in region "
+                f"'{self.region}'.")
+        warp_node = self.open_node
+        warp_node._pending_outputs = getattr(warp_node, "_pending_outputs", {})
+        out_name = f"out{len(warp_node._pending_outputs)}"
+        warp_node._pending_outputs[out_name] = warp_array
+        result_tensor.leapp_tag = f"{warp_node.name}/{out_name}/"
+        self._finalize_warp_node(warp_node)
+        self.mgr._assign_index(warp_node)
+        self._finalized_warp = warp_node
+        self._seg_idx += 1
+        cont = self._make_torch_node(self.region, self._seg_idx)
+        self.open_node = cont
+        self.open_kind = "torch"
+        return result_tensor
+
+    def record_launch(self, args, kwargs):
+        self.open_node._records.append({"args": args, "kwargs": kwargs})
+
+    def _finalize_warp_node(self, warp_node):
+        # Assemble bridged I/O onto the WarpRegionNode; the .wrp is built lazily at
+        # compile_model() (manager.compile_models()). Implemented fully in Task E1; here it is
+        # a hook so the state machine is testable in isolation.
+        pass

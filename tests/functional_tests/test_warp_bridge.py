@@ -70,3 +70,32 @@ def test_second_from_torch_while_warp_open_fails_loud():
     seg.on_from_torch_input(torch.ones(3), out_name="out0", warp_dtype="vec3f")
     with pytest.raises(RuntimeError, match="linear"):
         seg.on_from_torch_input(torch.ones(3), out_name="out1", warp_dtype="vec3f")
+
+
+class FakeWarpArray:
+    def __init__(self, ptr): self.ptr = ptr
+
+
+def test_to_torch_opens_continuation(monkeypatch):
+    mgr = FakeManager()
+    seg0 = FakeTorchNode("policy")
+    mgr.nodes["policy"] = seg0
+    seg = RegionSegmenter(mgr, region="policy", first_node=seg0)
+    h = torch.ones(3)
+    seg.on_from_torch_input(h, out_name="out0", warp_dtype="vec3f")
+
+    # stub the continuation-node factory so no real TracedTensorNode is needed
+    def fake_open_torch(region, idx):
+        node = FakeTorchNode(f"{region}.{idx:02d}_torch")
+        return node
+    monkeypatch.setattr(seg, "_make_torch_node", fake_open_torch)
+
+    out_arr = FakeWarpArray(ptr=123)
+    d = torch.zeros(3)
+    seg.on_to_torch_output(out_arr, result_tensor=d)
+
+    assert seg._finalized_warp is not None
+    assert "policy.02_warp" in mgr.indices
+    assert d.leapp_tag == "policy.02_warp/out0/"
+    assert seg.open_kind == "torch"
+    assert seg.open_node.name == "policy.03_torch"
