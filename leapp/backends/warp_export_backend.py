@@ -37,8 +37,10 @@ import torch
 import warp as wp
 
 from leapp.backends.export_backend import ExportBackend
+from leapp.backends import warp_dtypes as wd
 
 WARP_BACKEND = "warp"
+# Keep the legacy scalar-only maps so that any external code that imports them does not break.
 _WARP_DTYPE_TO_STR = {
     wp.float16: "float16", wp.float32: "float32", wp.float64: "float64",
     wp.int8: "int8", wp.int16: "int16", wp.int32: "int32", wp.int64: "int64",
@@ -86,6 +88,9 @@ class _WarpGraphCallable:
         self.input_dtypes = meta["input_dtypes"]
         self.output_dtypes = meta["output_dtypes"]
         self.output_shapes = meta["output_shapes"]
+        # Warp struct dtypes (e.g. "vec3f"); equal to the scalar base for plain scalars.
+        self.input_warp_dtypes = meta.get("input_warp_dtypes", meta["input_dtypes"])
+        self.output_warp_dtypes = meta.get("output_warp_dtypes", meta["output_dtypes"])
 
     def __call__(self, *torch_inputs):
         if len(torch_inputs) != len(self.input_names):
@@ -101,22 +106,27 @@ class _WarpGraphCallable:
 
         outs = []
         with ctx:
-            for name, dstr, t in zip(self.input_names, self.input_dtypes, torch_inputs):
-                expected = _STR_TO_TORCH.get(dstr)
+            for name, base_dstr, wdstr, t in zip(
+                    self.input_names, self.input_dtypes, self.input_warp_dtypes, torch_inputs):
+                expected = _STR_TO_TORCH.get(base_dstr)
                 if expected is None:
-                    raise ValueError(f"warp node '{name}': unsupported declared dtype '{dstr}'")
+                    raise ValueError(f"warp node '{name}': unsupported declared dtype '{base_dstr}'")
                 if t.dtype != expected:
                     raise TypeError(
-                        f"warp node input '{name}' expected dtype {dstr}, got {t.dtype}. "
-                        "This backend does not reinterpret dtypes (would corrupt results).")
-                tt = t.to(self.device).contiguous().reshape(-1)
-                self.graph.set_param(name, wp.from_torch(tt, dtype=_STR_TO_WARP_DTYPE[dstr]))
+                        f"warp node input '{name}' expected dtype {base_dstr}, got {t.dtype}.")
+                count = wd.scalar_count(wdstr)
+                trailing = wd.trailing_shape(wdstr)
+                tt = t.to(self.device).contiguous()
+                tt = tt.reshape(-1) if count == 1 else tt.reshape((-1,) + trailing)
+                self.graph.set_param(name, wp.from_torch(tt, dtype=wd.str_to_warp_dtype(wdstr)))
 
             wp.capture_launch(self.graph, stream=wp_stream)
 
-            for name, dstr, shape in zip(self.output_names, self.output_dtypes, self.output_shapes):
+            for name, base_dstr, wdstr, shape in zip(
+                    self.output_names, self.output_dtypes, self.output_warp_dtypes, self.output_shapes):
                 numel = int(math.prod(shape)) if shape else 1
-                buf = wp.empty(numel, dtype=_STR_TO_WARP_DTYPE[dstr], device=self.device)
+                buf = wp.empty(numel // max(wd.scalar_count(wdstr), 1),
+                               dtype=wd.str_to_warp_dtype(wdstr), device=self.device)
                 self.graph.get_param(name, buf)  # raises on byte-size mismatch
                 outs.append(wp.to_torch(buf).reshape(tuple(shape)))
 
@@ -218,14 +228,16 @@ def save_warp_node(graph, save_dir: str, node_name: str,
     wp.capture_save(graph, base, inputs=inputs, outputs=outputs)
     wrp_path = base + ".wrp"
 
-    def _dstr(arr):
-        d = _WARP_DTYPE_TO_STR.get(arr.dtype)
-        if d is None:
-            raise ValueError(f"unsupported warp array dtype {arr.dtype} for node '{node_name}'")
-        return d
+    def _wstr(arr):
+        return wd.warp_dtype_to_str(arr.dtype)
+
+    def _torch_view_shape(arr):
+        return list(arr.shape) + list(wd.trailing_shape(wd.warp_dtype_to_str(arr.dtype)))
 
     def _desc(name, arr):
-        return {"name": name, "dtype": _dstr(arr), "shape": list(arr.shape), "type": "tensor"}
+        wdstr = _wstr(arr)
+        return {"name": name, "dtype": wd.scalar_base_str(wdstr),
+                "shape": _torch_view_shape(arr), "warp_dtype": wdstr, "type": "tensor"}
 
     modules_dir = base + "_modules"
     modules_sha256 = {}
@@ -239,9 +251,11 @@ def save_warp_node(graph, save_dir: str, node_name: str,
     meta = {
         "inputs": list(inputs.keys()),
         "outputs": list(outputs.keys()),
-        "input_dtypes": [_dstr(a) for a in inputs.values()],
-        "output_dtypes": [_dstr(a) for a in outputs.values()],
-        "output_shapes": [list(a.shape) for a in outputs.values()],
+        "input_dtypes": [wd.scalar_base_str(_wstr(a)) for a in inputs.values()],
+        "output_dtypes": [wd.scalar_base_str(_wstr(a)) for a in outputs.values()],
+        "input_warp_dtypes": [_wstr(a) for a in inputs.values()],
+        "output_warp_dtypes": [_wstr(a) for a in outputs.values()],
+        "output_shapes": [_torch_view_shape(a) for a in outputs.values()],
         "device_type": "cuda",
         "modules_dir": os.path.basename(modules_dir),
         "modules_sha256": modules_sha256,
