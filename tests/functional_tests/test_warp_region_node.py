@@ -46,3 +46,25 @@ def test_vec3f_input_roundtrips(tmp_path):
 
 class _NodeStub:
     name = "normy"
+
+
+from leapp.backends.warp_capture_core import replay_into_apic_capture, resolve_device  # noqa: E402
+
+
+@wp.kernel
+def _scale(x: wp.array(dtype=wp.float32), s: wp.float32, out: wp.array(dtype=wp.float32)):
+    i = wp.tid()
+    out[i] = x[i] * s
+
+
+def test_capture_core_replays(tmp_path):
+    wp.init()
+    n = 4
+    x = wp.array([1.0, 2.0, 3.0, 4.0], dtype=wp.float32, device=DEV)
+    out = wp.zeros(n, dtype=wp.float32, device=DEV)
+    records = [{"args": (_scale,), "kwargs": {"dim": n, "inputs": [x, 2.0],
+                                              "outputs": [out], "device": DEV}}]
+    assert resolve_device(wp, records, None) == DEV
+    graph = replay_into_apic_capture(wp, records, device=DEV)
+    node = save_warp_node(graph, str(tmp_path), "scaler", inputs={"x": x}, outputs={"o": out})
+    assert node["parameters"]["backend"] == "warp"

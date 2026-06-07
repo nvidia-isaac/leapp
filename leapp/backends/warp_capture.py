@@ -28,6 +28,7 @@ such regions. I/O names are auto-assigned ``in{i}``/``out{i}``.
 import inspect
 import os
 
+from leapp.backends.warp_capture_core import replay_into_apic_capture, resolve_device
 from leapp.backends.warp_export_backend import save_warp_node
 
 
@@ -83,17 +84,16 @@ class WarpNodeCapture:
         self.inputs, self.outputs = self._detect_io(wp)
         if not self.outputs:
             raise RuntimeError(f"leapp.warp_node('{self.name}'): could not detect any output arrays")
-        device = self._resolve_device(wp)
+        device = resolve_device(wp, self._records, self.device)
 
         # Kernels are already compiled (the eager pass above launched them); ScopedCapture with
         # force_module_load=True loads them before capture. Replay ONLY the recorded launches into
         # the APIC capture; arrays already exist (allocated eagerly), so nothing allocates in-capture.
-        with wp.ScopedCapture(device=device, force_module_load=True, apic=True) as cap:
-            for r in self._records:
-                self._orig_launch(*r["args"], **r["kwargs"])
+        graph = replay_into_apic_capture(wp, self._records, device=device,
+                                        orig_launch=self._orig_launch)
 
         os.makedirs(self.save_path, exist_ok=True)
-        self.node = save_warp_node(cap.graph, self.save_path, self.name,
+        self.node = save_warp_node(graph, self.save_path, self.name,
                                    inputs=self.inputs, outputs=self.outputs)
         self.wrp_path = os.path.join(self.save_path, f"{self.name}.wrp")
         return False
@@ -110,18 +110,6 @@ class WarpNodeCapture:
         inputs = {f"in{i}": arrs[p] for i, p in enumerate(p for p in first if first[p] == "read")}
         outputs = {f"out{i}": arrs[p] for i, p in enumerate(p for p in last if last[p] == "write")}
         return inputs, outputs
-
-    def _resolve_device(self, wp):
-        if self.device:
-            return self.device
-        for r in self._records:
-            if r["device"] is not None:
-                return str(r["device"])
-        for r in self._records:
-            for a in r["inputs"] + r["outputs"]:
-                if isinstance(a, wp.array):
-                    return str(a.device)
-        return "cuda:0"
 
 
 def warp_node(name: str, save_path: str = ".", device: str = None) -> "WarpNodeCapture":
