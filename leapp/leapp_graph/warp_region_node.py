@@ -22,6 +22,7 @@ that produced it, so the cross-kind edge forms by tag-matching like a torch->tor
 """
 import os
 import torch
+import warp as wp
 from leapp.leapp_graph.leapp_node import LeappNode
 from leapp.backends.warp_capture_core import replay_into_apic_capture, resolve_device
 from leapp.backends.warp_export_backend import save_warp_node
@@ -52,7 +53,6 @@ class WarpRegionNode(LeappNode):
             outputs: Mapping of port name -> wp.array. A placeholder torch tensor is created
                 and tagged ``"<node_name>/<port_name>/"`` so downstream nodes can connect.
         """
-        import warp as wp
         self._records = records
         if self.device is None:
             self.device = resolve_device(wp, records, None)
@@ -80,7 +80,6 @@ class WarpRegionNode(LeappNode):
         The .wrp artifact is written to self._save_dir at this point; save_model() relocates
         it idempotently and records model_path / md5sum / sha256sum.
         """
-        import warp as wp
         if self._save_dir is None:
             raise RuntimeError(
                 f"WarpRegionNode '{self.name}': call set_save_dir() before compile_model()")
@@ -97,3 +96,7 @@ class WarpRegionNode(LeappNode):
         self.setup_backend("warp", params)
         self.export_backend.load(params["model_path"], params["sha256sum"])
         self._model_captured = True
+        # release capture buffers now that the .wrp is built (frees GPU memory)
+        self._records = []
+        self._wp_inputs = {}
+        self._wp_outputs = {}
