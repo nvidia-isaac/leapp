@@ -4,6 +4,27 @@ Living notes for the unified, non-invasive Warp capture work. Terminology lives 
 [`/CONTEXT.md`](../../CONTEXT.md); hard decisions live in [`docs/adr/`](../adr/). This file
 holds scope and known limitations that don't rise to an ADR.
 
+## Status
+
+v1 implemented. Delivered:
+
+- **Structured dtypes** (`vec3f`, `quatf`, `transformf`, …) round-trip correctly through the
+  warp backend; the dtype registry is the single source of truth.
+- **Auto-split of linear torch↔warp regions** at `wp.from_torch` / `wp.to_torch` bridges:
+  a single `leapp.start()/stop()` region is automatically segmented into `<prefix>.NN_torch`
+  and `<prefix>.NN_warp` LEAPP nodes with no user annotation beyond the existing
+  `annotate.input_tensors` / `annotate.output_tensors`.
+- **End-to-end projected-gravity-style normalize validated bit-exactly** via InferenceManager:
+  `torch-scale → warp-vec3-normalize → torch-reshape` compiles, exports, and replays with
+  `max_abs_err < 1e-7` vs. `F.normalize(g * 2, dim=1)`.
+
+Deferred (fast-follow / future):
+
+- Empty-segment pruning (trivial identity torch nodes at pure-warp region boundaries).
+- Native warp state (persistent arrays that never cross to torch).
+- Triton-generator support for auto-split graphs.
+- DLPack and `__cuda_array_interface__` bridge detection.
+
 ## Model (summary)
 
 The user marks tensors with the existing `annotate.input_tensors` / `annotate.output_tensors`.
@@ -29,6 +50,14 @@ APIC `.wrp` ([ADR-0001](../adr/0001-warp-native-wrp-not-onnx.md)).
 - **Bridge set is `wp.from_torch` / `wp.to_torch` only.** Other crossings (DLPack,
   `wp.array(ptr=...)`, `__cuda_array_interface__`) are not detected; v1 fails loudly rather
   than silently dropping a warp segment.
+
+- **Empty-segment pruning is deferred (fast-follow).** The warp→torch bridge returns a
+  TracedTensor bound to the continuation node so post-warp torch ops trace correctly. A region
+  with torch work on both sides of the warp segment therefore yields real (non-empty) nodes. A
+  *pure* warp region (no torch ops before `from_torch` / after `to_torch`) gets trivial
+  identity torch nodes wrapping the warp node — numerically correct and GPU-resident, but
+  not yet pruned. Pruning requires renaming the warp node's output port to the user's marked
+  output name; it is a clean follow-up, not in v1.
 
 ## Motivating use cases (keep in mind; not yet designed)
 
