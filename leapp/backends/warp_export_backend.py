@@ -23,7 +23,7 @@ the artifact a future C++ runtime would replay directly via the ``wp_apic_*`` C 
 Design stance (after code review): every divergence from the recorded contract FAILS LOUDLY
 rather than silently producing a wrong-but-green result — input dtype mismatch, output
 shape/size mismatch, missing/altered ``_modules/`` files, and CUDA-artifact-on-no-CUDA all raise.
-Supported dtypes are limited to those in ``_STR_TO_WARP_DTYPE`` (extend as needed).
+Supported dtypes are defined in ``leapp.backends.warp_dtypes._REGISTRY`` (extend there).
 """
 import hashlib
 import json
@@ -40,13 +40,6 @@ from leapp.backends.export_backend import ExportBackend
 from leapp.backends import warp_dtypes as wd
 
 WARP_BACKEND = "warp"
-# Keep the legacy scalar-only maps so that any external code that imports them does not break.
-_WARP_DTYPE_TO_STR = {
-    wp.float16: "float16", wp.float32: "float32", wp.float64: "float64",
-    wp.int8: "int8", wp.int16: "int16", wp.int32: "int32", wp.int64: "int64",
-    wp.uint8: "uint8", wp.bool: "bool",
-}
-_STR_TO_WARP_DTYPE = {v: k for k, v in _WARP_DTYPE_TO_STR.items()}
 _STR_TO_TORCH = {
     "float16": torch.float16, "float32": torch.float32, "float64": torch.float64,
     "int8": torch.int8, "int16": torch.int16, "int32": torch.int32, "int64": torch.int64,
@@ -113,7 +106,8 @@ class _WarpGraphCallable:
                     raise ValueError(f"warp node '{name}': unsupported declared dtype '{base_dstr}'")
                 if t.dtype != expected:
                     raise TypeError(
-                        f"warp node input '{name}' expected dtype {base_dstr}, got {t.dtype}.")
+                        f"warp node input '{name}' expected dtype {base_dstr}, got {t.dtype}. "
+                        "No silent reinterpretation — pass the correct dtype to avoid corrupting results.")
                 count = wd.scalar_count(wdstr)
                 trailing = wd.trailing_shape(wdstr)
                 tt = t.to(self.device).contiguous()
@@ -125,8 +119,8 @@ class _WarpGraphCallable:
             for name, base_dstr, wdstr, shape in zip(
                     self.output_names, self.output_dtypes, self.output_warp_dtypes, self.output_shapes):
                 numel = int(math.prod(shape)) if shape else 1
-                buf = wp.empty(numel // max(wd.scalar_count(wdstr), 1),
-                               dtype=wd.str_to_warp_dtype(wdstr), device=self.device)
+                n_elements = numel // wd.scalar_count(wdstr)  # exact: shape includes trailing dims
+                buf = wp.empty(n_elements, dtype=wd.str_to_warp_dtype(wdstr), device=self.device)
                 self.graph.get_param(name, buf)  # raises on byte-size mismatch
                 outs.append(wp.to_torch(buf).reshape(tuple(shape)))
 

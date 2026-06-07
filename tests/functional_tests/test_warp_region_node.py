@@ -2,7 +2,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-import math
 import pytest
 torch = pytest.importorskip("torch")
 wp = pytest.importorskip("warp")
