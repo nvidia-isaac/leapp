@@ -71,3 +71,27 @@ def test_capture_core_replays(tmp_path):
     wp.capture_launch(graph)
     wp.synchronize_device(DEV)
     assert torch.allclose(wp.to_torch(out), torch.tensor([2.0, 4.0, 6.0, 8.0], device=DEV))
+
+
+from leapp.leapp_graph.warp_region_node import WarpRegionNode  # noqa: E402
+
+
+def test_region_node_compiles_and_validates(tmp_path):
+    wp.init()
+    n = 4
+    x = wp.array([1.0, 2.0, 3.0, 4.0], dtype=wp.float32, device=DEV)
+    out = wp.zeros(n, dtype=wp.float32, device=DEV)
+    records = [{"args": (_scale,), "kwargs": {"dim": n, "inputs": [x, 2.0],
+                                              "outputs": [out], "device": DEV}}]
+    node = WarpRegionNode("seg.02_warp", device=DEV)
+    src = torch.ones(n, dtype=torch.float32, device=DEV)
+    src.leapp_tag = "seg.01_torch/h/"
+    node.set_save_dir(str(tmp_path))
+    node.set_io(records, inputs={"in0": (x, src)}, outputs={"out0": out})
+    node.node_index = 1
+    node.compile_model()
+    node.save_model(str(tmp_path))
+    assert node.inputs[0].tag == "seg.01_torch/h/"
+    assert node.model_path is not None and node.sha256sum is not None
+    got = node.compiled_model(torch.tensor([1., 2., 3., 4.], device=DEV))
+    assert torch.allclose(got, torch.tensor([2., 4., 6., 8.], device=DEV))
