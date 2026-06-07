@@ -19,6 +19,7 @@
 v1 bridge = wp.from_torch / wp.to_torch ONLY. The segmenter turns each crossing into a node
 boundary. Linear chains only (ADR-0002): a forked tensor across a bridge fails loudly.
 """
+from leapp.leapp_graph.datatypes import is_traced_type
 from leapp.leapp_graph.warp_region_node import WarpRegionNode
 
 
@@ -115,8 +116,7 @@ class RegionSegmenter:
                   for n in warp_node._wp_inputs}
         # Unpack (warp_array, torch_tensor) pairs; set_io receives {name: warp_array}
         # and uses the torch_tensor for the output placeholder (validation reference).
-        raw_pending = dict(getattr(warp_node, "_pending_outputs", {}))
-        outputs = {n: pair for n, pair in raw_pending.items()}
+        outputs = dict(getattr(warp_node, "_pending_outputs", {}))
         warp_node.set_save_dir(self.mgr.get_save_path())
         warp_node.set_io(warp_node._records, inputs=inputs, outputs=outputs)
 
@@ -150,7 +150,6 @@ def install():
         seg = _ACTIVE["segmenter"]
         # A live TracedTensor (actively being traced) crossing into warp creates an edge/split.
         # A raw torch.Tensor (untraced) is a baked constant input to the .wrp (no split).
-        from leapp.leapp_graph.datatypes import is_traced_type
         if seg is not None and is_traced_type(t) and getattr(t, 'is_tracing', False):
             from leapp.backends import warp_dtypes as wd
             wdstr = wd.warp_dtype_to_str(dtype) if dtype is not None else "float32"
