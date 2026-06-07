@@ -67,6 +67,10 @@ class WarpApicRunner:
         self.input_dtypes: List[str] = self.meta["input_dtypes"]
         self.output_dtypes: List[str] = self.meta["output_dtypes"]
         self.output_shapes: List[list] = self.meta["output_shapes"]
+        # APIC binding names for set_param / get_param — may differ from the LEAPP port names
+        # when a prefixed naming scheme is used to avoid input/output name collisions.
+        self.apic_input_names: List[str] = self.meta.get("apic_input_names", self.input_names)
+        self.apic_output_names: List[str] = self.meta.get("apic_output_names", self.output_names)
 
         self._verify_modules(wrp_path, self.meta)
 
@@ -109,7 +113,7 @@ class WarpApicRunner:
 
         ctx = wp.ScopedStream(wp_stream) if wp_stream else nullcontext()
         with ctx:
-            for name, dstr in zip(self.input_names, self.input_dtypes):
+            for name, apic_name, dstr in zip(self.input_names, self.apic_input_names, self.input_dtypes):
                 if name not in inputs:
                     raise KeyError(f"warp node missing input '{name}'; got {list(inputs)}")
                 t = inputs[name]
@@ -118,21 +122,22 @@ class WarpApicRunner:
                         f"warp input '{name}' expected dtype {dstr}, got {t.dtype} "
                         "(no silent reinterpretation)")
                 # I1: reject a batched/wrong-size input loudly (region byte size is fixed at capture).
-                expected_numel = params[name]["size"] // _DTYPE_BYTES[dstr]
+                expected_numel = params[apic_name]["size"] // _DTYPE_BYTES[dstr]
                 if t.numel() != expected_numel:
                     raise ValueError(
                         f"warp input '{name}' expected {expected_numel} elements (this node is "
                         f"non-batching), got {t.numel()} (shape {tuple(t.shape)})")
                 tt = t.to(self.device).contiguous().reshape(-1)
-                self.graph.set_param(name, wp.from_torch(tt, dtype=_STR_TO_WARP_DTYPE[dstr]))
+                self.graph.set_param(apic_name, wp.from_torch(tt, dtype=_STR_TO_WARP_DTYPE[dstr]))
 
             wp.capture_launch(self.graph, stream=wp_stream)
 
             out = {}
-            for name, dstr, shape in zip(self.output_names, self.output_dtypes, self.output_shapes):
+            for name, apic_name, dstr, shape in zip(
+                    self.output_names, self.apic_output_names, self.output_dtypes, self.output_shapes):
                 numel = int(math.prod(shape)) if shape else 1
                 buf = wp.empty(numel, dtype=_STR_TO_WARP_DTYPE[_require_dtype(dstr)], device=self.device)
-                self.graph.get_param(name, buf)  # raises on byte-size mismatch
+                self.graph.get_param(apic_name, buf)  # raises on byte-size mismatch
                 out[name] = wp.to_torch(buf).reshape(tuple(shape))
 
         if wp_stream:

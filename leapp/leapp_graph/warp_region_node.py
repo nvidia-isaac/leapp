@@ -50,25 +50,43 @@ class WarpRegionNode(LeappNode):
             inputs: Mapping of port name -> (wp.array, source_torch_tensor).
                 The source torch tensor must carry a ``leapp_tag`` attribute so that the
                 cross-kind edge is formed by tag-matching in the LEAPP graph.
-            outputs: Mapping of port name -> wp.array. A placeholder torch tensor is created
-                and tagged ``"<node_name>/<port_name>/"`` so downstream nodes can connect.
+            outputs: Mapping of port name -> wp.array OR (wp.array, torch.Tensor). When a
+                torch.Tensor is supplied alongside the wp.array it is used as the output
+                placeholder value (so validate_compiled_model() has a correct reference);
+                otherwise a zeros placeholder is created. The placeholder is tagged
+                ``"<node_name>/<port_name>/"`` so downstream nodes can connect.
         """
         self._records = records
         if self.device is None:
             self.device = resolve_device(wp, records, None)
         self._wp_inputs = {n: arr for n, (arr, _src) in inputs.items()}
-        self._wp_outputs = dict(outputs)
+        # Normalise outputs: accept either wp.array or (wp.array, torch.Tensor).
+        self._wp_outputs = {}
+        _output_placeholders = {}
+        for n, val in outputs.items():
+            if isinstance(val, tuple):
+                arr, ref_tensor = val
+            else:
+                arr, ref_tensor = val, None
+            self._wp_outputs[n] = arr
+            _output_placeholders[n] = ref_tensor
         for n, (arr, src) in inputs.items():
             # add_input pulls src.leapp_tag into the input TensorDescription.tag
             self.add_input(n, n, src)
-        for n, arr in outputs.items():
+        for n, arr in self._wp_outputs.items():
             wdstr = wd.warp_dtype_to_str(arr.dtype)
             view_shape = tuple(arr.shape) + wd.trailing_shape(wdstr)
-            placeholder = torch.zeros(
-                view_shape,
-                dtype=getattr(torch, wd.scalar_base_str(wdstr)),
-                device=self.device,
-            )
+            ref = _output_placeholders.get(n)
+            if ref is not None:
+                # Use the actual torch tensor captured during tracing so that
+                # validate_compiled_model() has a correct (non-zero) reference.
+                placeholder = ref.detach().clone().reshape(view_shape)
+            else:
+                placeholder = torch.zeros(
+                    view_shape,
+                    dtype=getattr(torch, wd.scalar_base_str(wdstr)),
+                    device=self.device,
+                )
             # tag_data sets placeholder.leapp_tag = "<self.name>/<n>/"
             self.tag_data(placeholder, n)
             self.add_output(n, n, placeholder)

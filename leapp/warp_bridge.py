@@ -86,7 +86,9 @@ class RegionSegmenter:
         warp_node = self.open_node
         warp_node._pending_outputs = getattr(warp_node, "_pending_outputs", {})
         out_name = f"out{len(warp_node._pending_outputs)}"
-        warp_node._pending_outputs[out_name] = warp_array
+        # Store (warp_array, torch_tensor) so _finalize_warp_node has the real output values
+        # for validation without needing to call wp.to_torch() through the patched bridge again.
+        warp_node._pending_outputs[out_name] = (warp_array, result_tensor)
         result_tensor.leapp_tag = f"{warp_node.name}/{out_name}/"
         self._finalize_warp_node(warp_node)
         self.mgr._assign_index(warp_node)
@@ -105,10 +107,18 @@ class RegionSegmenter:
         self._pending_warp_inputs[name] = src_tensor
 
     def _finalize_warp_node(self, warp_node):
-        # Assemble bridged I/O onto the WarpRegionNode; the .wrp is built lazily at
-        # compile_model() (manager.compile_models()). Implemented fully in Task E1; here it is
-        # a hook so the state machine is testable in isolation.
-        pass
+        # Assemble bridged I/O onto the WarpRegionNode. `_wp_inputs` (the warp arrays) was filled
+        # by bind_warp_input; `_pending_warp_inputs` holds the producing torch tensors (their
+        # leapp_tag forms the incoming edge); `_pending_outputs` was filled in on_to_torch_output
+        # as (warp_array, torch_tensor) tuples.
+        inputs = {n: (warp_node._wp_inputs[n], self._pending_warp_inputs[n])
+                  for n in warp_node._wp_inputs}
+        # Unpack (warp_array, torch_tensor) pairs; set_io receives {name: warp_array}
+        # and uses the torch_tensor for the output placeholder (validation reference).
+        raw_pending = dict(getattr(warp_node, "_pending_outputs", {}))
+        outputs = {n: pair for n, pair in raw_pending.items()}
+        warp_node.set_save_dir(self.mgr.get_save_path())
+        warp_node.set_io(warp_node._records, inputs=inputs, outputs=outputs)
 
 
 # ---------------------------------------------------------------------------
@@ -138,9 +148,10 @@ def install():
     def patched_from_torch(t, dtype=None, *a, **k):
         arr = orig["from_torch"](t, dtype=dtype, **k)
         seg = _ACTIVE["segmenter"]
-        # Only a TRACED (leapp_tag'd) tensor crossing into warp creates an edge/split.
-        # An untagged tensor is a baked constant input to the .wrp (no split).
-        if seg is not None and getattr(t, "leapp_tag", None) is not None:
+        # A live TracedTensor (actively being traced) crossing into warp creates an edge/split.
+        # A raw torch.Tensor (untraced) is a baked constant input to the .wrp (no split).
+        from leapp.leapp_graph.datatypes import is_traced_type
+        if seg is not None and is_traced_type(t) and getattr(t, 'is_tracing', False):
             from leapp.backends import warp_dtypes as wd
             wdstr = wd.warp_dtype_to_str(dtype) if dtype is not None else "float32"
             name = f"out{seg._bridge_counter}"

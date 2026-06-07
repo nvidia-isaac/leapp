@@ -49,6 +49,8 @@ class FakeManager:
         self.indices.append(node.name)
     def _default_torch_backend(self):
         return "onnx-torchscript"
+    def get_save_path(self):
+        return None
 
 
 def test_from_torch_splits_segment():
@@ -95,6 +97,10 @@ def test_to_torch_opens_continuation(monkeypatch):
         node = FakeTorchNode(f"{region}.{idx:02d}_torch")
         return node
     monkeypatch.setattr(seg, "_make_torch_node", fake_open_torch)
+
+    # stub _finalize_warp_node: this unit test focuses on the state-machine transitions
+    # (continuation node creation + tagging); full finalization is tested in the integration test.
+    monkeypatch.setattr(seg, "_finalize_warp_node", lambda warp_node: None)
 
     out_arr = FakeWarpArray(ptr=123)
     d = torch.zeros(3)

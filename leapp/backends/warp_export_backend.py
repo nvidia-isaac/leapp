@@ -84,6 +84,12 @@ class _WarpGraphCallable:
         # Warp struct dtypes (e.g. "vec3f"); equal to the scalar base for plain scalars.
         self.input_warp_dtypes = meta.get("input_warp_dtypes", meta["input_dtypes"])
         self.output_warp_dtypes = meta.get("output_warp_dtypes", meta["output_dtypes"])
+        # APIC binding names used in set_param / get_param. These are prefixed to avoid
+        # collisions when a LEAPP input port and output port share the same name (e.g. both
+        # named "out0"). Falls back to the plain port names for older .wrp files without
+        # apic_input_names / apic_output_names in the meta.
+        self.apic_input_names = meta.get("apic_input_names", self.input_names)
+        self.apic_output_names = meta.get("apic_output_names", self.output_names)
 
     def __call__(self, *torch_inputs):
         if len(torch_inputs) != len(self.input_names):
@@ -99,29 +105,31 @@ class _WarpGraphCallable:
 
         outs = []
         with ctx:
-            for name, base_dstr, wdstr, t in zip(
-                    self.input_names, self.input_dtypes, self.input_warp_dtypes, torch_inputs):
+            for apic_name, leapp_name, base_dstr, wdstr, t in zip(
+                    self.apic_input_names, self.input_names,
+                    self.input_dtypes, self.input_warp_dtypes, torch_inputs):
                 expected = _STR_TO_TORCH.get(base_dstr)
                 if expected is None:
-                    raise ValueError(f"warp node '{name}': unsupported declared dtype '{base_dstr}'")
+                    raise ValueError(f"warp node '{leapp_name}': unsupported declared dtype '{base_dstr}'")
                 if t.dtype != expected:
                     raise TypeError(
-                        f"warp node input '{name}' expected dtype {base_dstr}, got {t.dtype}. "
+                        f"warp node input '{leapp_name}' expected dtype {base_dstr}, got {t.dtype}. "
                         "No silent reinterpretation — pass the correct dtype to avoid corrupting results.")
                 count = wd.scalar_count(wdstr)
                 trailing = wd.trailing_shape(wdstr)
                 tt = t.to(self.device).contiguous()
                 tt = tt.reshape(-1) if count == 1 else tt.reshape((-1,) + trailing)
-                self.graph.set_param(name, wp.from_torch(tt, dtype=wd.str_to_warp_dtype(wdstr)))
+                self.graph.set_param(apic_name, wp.from_torch(tt, dtype=wd.str_to_warp_dtype(wdstr)))
 
             wp.capture_launch(self.graph, stream=wp_stream)
 
-            for name, base_dstr, wdstr, shape in zip(
-                    self.output_names, self.output_dtypes, self.output_warp_dtypes, self.output_shapes):
+            for apic_name, base_dstr, wdstr, shape in zip(
+                    self.apic_output_names,
+                    self.output_dtypes, self.output_warp_dtypes, self.output_shapes):
                 numel = int(math.prod(shape)) if shape else 1
                 n_elements = numel // wd.scalar_count(wdstr)  # exact: shape includes trailing dims
                 buf = wp.empty(n_elements, dtype=wd.str_to_warp_dtype(wdstr), device=self.device)
-                self.graph.get_param(name, buf)  # raises on byte-size mismatch
+                self.graph.get_param(apic_name, buf)  # raises on byte-size mismatch
                 outs.append(wp.to_torch(buf).reshape(tuple(shape)))
 
         if wp_stream:
@@ -219,7 +227,13 @@ def save_warp_node(graph, save_dir: str, node_name: str,
     """
     os.makedirs(save_dir, exist_ok=True)
     base = os.path.join(save_dir, node_name)
-    wp.capture_save(graph, base, inputs=inputs, outputs=outputs)
+    # Use name-prefixed APIC binding names to avoid collisions when a LEAPP input port and
+    # output port share the same name (e.g. both "out0" in an auto-split warp segment). The
+    # APIC names are stored in the meta under apic_input_names / apic_output_names and used
+    # by _WarpGraphCallable for set_param / get_param.
+    apic_inputs = {f"_in_{n}": a for n, a in inputs.items()}
+    apic_outputs = {f"_out_{n}": a for n, a in outputs.items()}
+    wp.capture_save(graph, base, inputs=apic_inputs, outputs=apic_outputs)
     wrp_path = base + ".wrp"
 
     def _wstr(arr):
@@ -245,6 +259,9 @@ def save_warp_node(graph, save_dir: str, node_name: str,
     meta = {
         "inputs": list(inputs.keys()),
         "outputs": list(outputs.keys()),
+        # APIC binding names (prefixed) for set_param / get_param — distinct from LEAPP port names.
+        "apic_input_names": list(apic_inputs.keys()),
+        "apic_output_names": list(apic_outputs.keys()),
         "input_dtypes": [wd.scalar_base_str(_wstr(a)) for a in inputs.values()],
         "output_dtypes": [wd.scalar_base_str(_wstr(a)) for a in outputs.values()],
         "input_warp_dtypes": [_wstr(a) for a in inputs.values()],
