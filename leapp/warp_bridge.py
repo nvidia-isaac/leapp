@@ -100,8 +100,74 @@ class RegionSegmenter:
     def record_launch(self, args, kwargs):
         self.open_node._records.append({"args": args, "kwargs": kwargs})
 
+    def bind_warp_input(self, name, warp_array, src_tensor):
+        self.open_node._wp_inputs[name] = warp_array
+        self._pending_warp_inputs[name] = src_tensor
+
     def _finalize_warp_node(self, warp_node):
         # Assemble bridged I/O onto the WarpRegionNode; the .wrp is built lazily at
         # compile_model() (manager.compile_models()). Implemented fully in Task E1; here it is
         # a hook so the state machine is testable in isolation.
         pass
+
+
+# ---------------------------------------------------------------------------
+# Module-level bridge patches (Task C3)
+# ---------------------------------------------------------------------------
+
+_ACTIVE = {"segmenter": None}
+
+
+def _import_warp():
+    import warp as wp
+    return wp
+
+
+def set_active_segmenter(segmenter):
+    _ACTIVE["segmenter"] = segmenter
+
+
+def install():
+    """Patch wp.from_torch/to_torch/launch so the active RegionSegmenter sees every bridge
+    crossing and warp launch. Returns state to pass to uninstall(). Patches are pass-throughs
+    when no segmenter is active or the crossing tensor is untraced (an untraced tensor across
+    wp.from_torch is a baked constant, not a graph edge)."""
+    wp = _import_warp()
+    orig = {"from_torch": wp.from_torch, "to_torch": wp.to_torch, "launch": wp.launch}
+
+    def patched_from_torch(t, dtype=None, *a, **k):
+        arr = orig["from_torch"](t, dtype=dtype, **k)
+        seg = _ACTIVE["segmenter"]
+        # Only a TRACED (leapp_tag'd) tensor crossing into warp creates an edge/split.
+        # An untagged tensor is a baked constant input to the .wrp (no split).
+        if seg is not None and getattr(t, "leapp_tag", None) is not None:
+            from leapp.backends import warp_dtypes as wd
+            wdstr = wd.warp_dtype_to_str(dtype) if dtype is not None else "float32"
+            name = f"out{seg._bridge_counter}"
+            seg._bridge_counter += 1
+            seg.on_from_torch_input(t, out_name=name, warp_dtype=wdstr)
+            seg.bind_warp_input(name, arr, t)
+        return arr
+
+    def patched_to_torch(a, *args, **k):
+        out = orig["to_torch"](a, *args, **k)
+        seg = _ACTIVE["segmenter"]
+        if seg is not None and seg.open_kind == "warp":
+            seg.on_to_torch_output(a, result_tensor=out)
+        return out
+
+    def patched_launch(*a, **k):
+        seg = _ACTIVE["segmenter"]
+        if seg is not None and seg.open_kind == "warp":
+            seg.record_launch(a, k)
+        return orig["launch"](*a, **k)
+    patched_launch.__name__ = "patched_launch"
+
+    wp.from_torch, wp.to_torch, wp.launch = patched_from_torch, patched_to_torch, patched_launch
+    return {"wp": wp, "orig": orig}
+
+
+def uninstall(state):
+    wp, orig = state["wp"], state["orig"]
+    wp.from_torch, wp.to_torch, wp.launch = orig["from_torch"], orig["to_torch"], orig["launch"]
+    _ACTIVE["segmenter"] = None

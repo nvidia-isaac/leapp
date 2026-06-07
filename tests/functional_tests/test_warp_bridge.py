@@ -99,3 +99,29 @@ def test_to_torch_opens_continuation(monkeypatch):
     assert d.leapp_tag == "policy.02_warp/out0/"
     assert seg.open_kind == "torch"
     assert seg.open_node.name == "policy.03_torch"
+
+
+def test_install_patches_and_records(monkeypatch):
+    import types
+    fake_wp = types.SimpleNamespace(
+        from_torch=lambda t, dtype=None: ("warp_arr", t, dtype),
+        to_torch=lambda a: ("torch", a),
+        launch=lambda *a, **k: None,
+        array=object,
+    )
+    from leapp import warp_bridge
+    monkeypatch.setattr(warp_bridge, "_import_warp", lambda: fake_wp)
+
+    orig_from_torch = fake_wp.from_torch
+    orig_launch = fake_wp.launch
+    state = warp_bridge.install()
+    # symbols are now patched
+    assert fake_wp.from_torch is not orig_from_torch
+    assert fake_wp.launch.__name__ == "patched_launch"
+    # with no active segmenter, patched from_torch is a pass-through to the original
+    assert fake_wp.from_torch(("t",), dtype=None) == ("warp_arr", ("t",), None)
+
+    warp_bridge.uninstall(state)
+    # originals restored
+    assert fake_wp.from_torch is orig_from_torch
+    assert fake_wp.launch is orig_launch
