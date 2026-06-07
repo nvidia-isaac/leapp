@@ -33,6 +33,16 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
             shutil.rmtree(self.TEST_GRAPH_NAME)
         if ExportManager.is_interpret_graph_enabled():
             ExportManager.set_interpret_graph(False)
+        # Uninstall the warp bridge if it was installed (e.g. start() was called but stop() was
+        # not — test raised before stop()). This prevents patched wp.launch leaking into other tests.
+        state = getattr(annotate, "_warp_bridge_state", None)
+        if state is not None:
+            try:
+                from leapp import warp_bridge
+                warp_bridge.uninstall(state)
+            except Exception:
+                pass
+            annotate._warp_bridge_state = None
         annotate.reset_nodes()
         annotate.set_dry_run_and_non_traced(False, [])
     

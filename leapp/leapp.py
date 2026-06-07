@@ -85,6 +85,16 @@ def start(name, save_path=".", verbose=False, dry_run=False, non_traced=None, ma
         apply_traced_data_patches()
     manager.set_patches_applied(global_patching)
 
+    # Install the warp bridge if warp is importable (optional dependency). Patches are
+    # pass-throughs until a region opens a segmenter (see ExportManager.input_tensors).
+    manager._warp_bridge_state = None
+    try:
+        import warp  # noqa: F401
+        from leapp import warp_bridge
+        manager._warp_bridge_state = warp_bridge.install()
+    except ImportError:
+        pass
+
 
 def stop():
     """Stop LEAPP graph interpretation and disable tracing."""
@@ -96,6 +106,13 @@ def stop():
         raise Exception("leapp.stop() called with no active tracing session — did you call leapp.start()?")
 
     ExportManager.set_interpret_graph(False)
+
+    state = getattr(manager, "_warp_bridge_state", None)
+    if state is not None:
+        from leapp import warp_bridge
+        warp_bridge.uninstall(state)
+        manager._warp_bridge_state = None
+
     manager.restore_pending_buffer_trackers()
 
     # Remove patches to restore original torch function behavior
