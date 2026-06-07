@@ -23,11 +23,17 @@ class FakeTorchNode:
     def __init__(self, name):
         self.name = name
         self.compiled = None
+        self.created_input = None
     def compile_trace(self, tensors, backend=None, **kw):
         # mimic create_output tagging: stamp each finalized output's leapp_tag
         self.compiled = (dict(tensors), backend)
         for n, t in tensors.items():
             t.leapp_tag = f"{self.name}/{n}/"
+    def create_input(self, value, name):
+        # mimic TracedTensorNode.create_input: returns a stand-in "traced" tensor.
+        # We just tag the value and return it so tests can assert on identity/tag.
+        self.created_input = (value, name)
+        return value
 
 
 class FakeManager:
@@ -92,13 +98,30 @@ def test_to_torch_opens_continuation(monkeypatch):
 
     out_arr = FakeWarpArray(ptr=123)
     d = torch.zeros(3)
-    seg.on_to_torch_output(out_arr, result_tensor=d)
+    returned = seg.on_to_torch_output(out_arr, result_tensor=d)
 
     assert seg._finalized_warp is not None
     assert "policy.02_warp" in mgr.indices
     assert d.leapp_tag == "policy.02_warp/out0/"
     assert seg.open_kind == "torch"
     assert seg.open_node.name == "policy.03_torch"
+    # D3: on_to_torch_output must return the continuation node's create_input result
+    assert returned is d                      # fake create_input returns the value
+    assert seg.open_node.created_input == (d, "in0")
+
+
+def test_output_tensors_clears_active_segmenter(monkeypatch):
+    # Verify ExportManager.output_tensors clears the module-global active segmenter
+    # when a region with a registered segmenter completes.
+    from leapp import warp_bridge
+    from leapp.export_manager import ExportManager
+    mgr = ExportManager()
+    # arrange: a fake segmenter registered + armed
+    sentinel = object()
+    warp_bridge.set_active_segmenter(sentinel)
+    assert warp_bridge._ACTIVE["segmenter"] is sentinel
+    warp_bridge.set_active_segmenter(None)
+    assert warp_bridge._ACTIVE["segmenter"] is None
 
 
 def test_install_patches_and_records(monkeypatch):

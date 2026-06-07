@@ -395,6 +395,10 @@ class ExportManager:
                                           static_semantics_map=static_outputs_metadata)
         self._assign_completion_index(traced_tensors_node)
 
+        if node_name in self._region_segmenters:
+            from leapp.warp_bridge import set_active_segmenter
+            set_active_segmenter(None)
+
         return self._passthrough_dict_values(tensors)
 
     def register_buffer(self, node_name: str, tensors):

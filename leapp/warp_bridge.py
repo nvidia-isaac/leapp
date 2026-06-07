@@ -95,7 +95,7 @@ class RegionSegmenter:
         cont = self._make_torch_node(self.region, self._seg_idx)
         self.open_node = cont
         self.open_kind = "torch"
-        return result_tensor
+        return cont.create_input(result_tensor, "in0")
 
     def record_launch(self, args, kwargs):
         self.open_node._records.append({"args": args, "kwargs": kwargs})
@@ -153,7 +153,7 @@ def install():
         out = orig["to_torch"](a, *args, **k)
         seg = _ACTIVE["segmenter"]
         if seg is not None and seg.open_kind == "warp":
-            seg.on_to_torch_output(a, result_tensor=out)
+            return seg.on_to_torch_output(a, result_tensor=out)
         return out
 
     def patched_launch(*a, **k):
