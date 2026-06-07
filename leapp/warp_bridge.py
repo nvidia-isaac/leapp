@@ -1,0 +1,70 @@
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+"""Bridge interception + the per-region linear segmenter.
+
+v1 bridge = wp.from_torch / wp.to_torch ONLY. The segmenter turns each crossing into a node
+boundary. Linear chains only (ADR-0002): a forked tensor across a bridge fails loudly.
+"""
+from leapp.leapp_graph.warp_region_node import WarpRegionNode
+
+
+def _seg_name(region, idx, kind):
+    return f"{region}.{idx:02d}_{kind}"
+
+
+class RegionSegmenter:
+    """One per active marked region. Tracks the currently-open segment node and splits at
+    bridges. The first segment starts as the bare `region` node and is renamed to
+    `<region>.01_torch` the first time a split actually happens."""
+
+    def __init__(self, manager, region, first_node):
+        self.mgr = manager
+        self.region = region
+        self.open_node = first_node
+        self.open_kind = "torch"
+        self._seg_idx = 1
+        self._split_happened = False
+        self._bridge_counter = 0
+        self._pending_warp_inputs = {}
+        self._pending_warp_dtypes = {}
+
+    def _ensure_first_renamed(self):
+        if not self._split_happened:
+            new = _seg_name(self.region, 1, "torch")
+            self.mgr._rename_node(self.open_node.name, new)
+            self._split_happened = True
+            self._seg_idx = 1
+
+    def on_from_torch_input(self, torch_tensor, out_name, warp_dtype):
+        if self.open_kind != "torch":
+            raise RuntimeError(
+                f"warp_bridge: wp.from_torch reached while a warp segment is open in region "
+                f"'{self.region}'. v1 supports only linear torch<->warp chains (ADR-0002); "
+                "express this as explicit manual nodes.")
+        self._ensure_first_renamed()
+        torch_node = self.open_node
+        torch_node.compile_trace({out_name: torch_tensor},
+                                 backend=self.mgr._default_torch_backend())
+        self.mgr._assign_index(torch_node)
+        self._seg_idx += 1
+        warp_node = WarpRegionNode(_seg_name(self.region, self._seg_idx, "warp"))
+        self.mgr.nodes[warp_node.name] = warp_node
+        self.open_node = warp_node
+        self.open_kind = "warp"
+        self._pending_warp_inputs[out_name] = torch_tensor
+        self._pending_warp_dtypes[out_name] = warp_dtype
+        return torch_tensor

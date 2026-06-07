@@ -165,6 +165,19 @@ class ExportManager:
         node.node_index = self._next_completed_node_index
         self._next_completed_node_index += 1
 
+    def _rename_node(self, old, new):
+        if new in self.nodes:
+            raise Exception(f"cannot rename node '{old}' to existing '{new}'")
+        node = self.nodes.pop(old)
+        node.name = new
+        self.nodes[new] = node
+
+    def _assign_index(self, node):
+        self._assign_completion_index(node)
+
+    def _default_torch_backend(self):
+        return "onnx-torchscript"
+
     def validate_nodes_ready_for_compile(self):
         incomplete_nodes = [
             name for name, node in self.nodes.items()
