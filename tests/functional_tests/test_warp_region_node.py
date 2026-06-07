@@ -68,3 +68,6 @@ def test_capture_core_replays(tmp_path):
     graph = replay_into_apic_capture(wp, records, device=DEV)
     node = save_warp_node(graph, str(tmp_path), "scaler", inputs={"x": x}, outputs={"o": out})
     assert node["parameters"]["backend"] == "warp"
+    wp.capture_launch(graph)
+    wp.synchronize_device(DEV)
+    assert torch.allclose(wp.to_torch(out), torch.tensor([2.0, 4.0, 6.0, 8.0], device=DEV))

@@ -66,6 +66,9 @@ def replay_into_apic_capture(wp, records, device, orig_launch=None):
         The captured ``wp.Graph`` (``cap.graph``).
     """
     launch = orig_launch if orig_launch is not None else wp.launch
+    # force_module_load=True is Warp's native mechanism to load all compiled kernels before
+    # capture, so an explicit wp.load_module() call is unnecessary (and in fact raises
+    # "no kernels in this module" if called before any kernel is bound).
     with wp.ScopedCapture(device=device, force_module_load=True, apic=True) as cap:
         for r in records:
             launch(*r["args"], **r["kwargs"])
