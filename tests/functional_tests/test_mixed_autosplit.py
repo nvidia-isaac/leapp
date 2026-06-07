@@ -17,6 +17,7 @@
 import pytest
 torch = pytest.importorskip("torch")
 import leapp
+from leapp import annotate
 
 
 def test_start_installs_bridge_when_warp_available(tmp_path):
@@ -26,3 +27,19 @@ def test_start_installs_bridge_when_warp_available(tmp_path):
     assert wp.launch.__name__ == "patched_launch"
     leapp.stop()
     assert wp.launch.__name__ != "patched_launch"
+
+
+def test_torch_only_region_keeps_bare_name(tmp_path):
+    from leapp.export_manager import ExportManager
+    leapp.start("g", save_path=str(tmp_path))
+    x = torch.ones(4)
+    xt = annotate.input_tensors("policy", {"x": x})
+    y = xt * 2.0
+    annotate.output_tensors("policy", {"y": y}, export_with="onnx-torchscript")
+    leapp.stop()
+    leapp.compile_graph(visualize=False, validate=True)
+    nodes = ExportManager().get_nodes()
+    assert "policy" in nodes
+    assert not any(n.startswith("policy.") for n in nodes)
+    # reset singleton so the next test sees a clean state (no leapp.start() will be called before it)
+    ExportManager().reset_nodes()

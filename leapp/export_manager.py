@@ -77,6 +77,7 @@ class ExportManager:
             # tracetime variables
             self.nodes = {}
             self._next_completed_node_index = 0
+            self._region_segmenters = {}
 
             ExportManager._initialized = True
 
@@ -125,6 +126,7 @@ class ExportManager:
     def reset_nodes(self):
         self.nodes = {}
         self._next_completed_node_index = 0
+        self._region_segmenters = {}
 
     def get_nodes(self):
         return self.nodes
@@ -177,6 +179,12 @@ class ExportManager:
 
     def _default_torch_backend(self):
         return "onnx-torchscript"
+
+    def _resolve_open_node_name(self, node_name):
+        """Map a region base-name to its currently-open segment node (identity for
+        torch-only / non-segmented regions)."""
+        seg = self._region_segmenters.get(node_name)
+        return seg.open_node.name if seg is not None else node_name
 
     def validate_nodes_ready_for_compile(self):
         incomplete_nodes = [
@@ -303,6 +311,17 @@ class ExportManager:
 
         traced_tensors_node._caller_identities.add(_caller_identity)
 
+        # Register a warp segmenter for this region the first time it opens on the tracing
+        # path. For torch-only regions the segmenter is inert (open_node stays the original
+        # node, open_kind stays "torch", no rename happens). For regions with warp crossings
+        # the patched wp.from_torch will call into the segmenter to split the region.
+        if (node_name not in self._region_segmenters
+                and getattr(self, "_warp_bridge_state", None)):
+            from leapp.warp_bridge import RegionSegmenter, set_active_segmenter
+            seg = RegionSegmenter(self, region=node_name, first_node=self.nodes[node_name])
+            self._region_segmenters[node_name] = seg
+            set_active_segmenter(seg)
+
         # Warn if pre-compiled ScriptFunctions are visible in the caller's scope
         # this is only a best effort warning, catching the error and ignoring if fault
         try:
@@ -330,8 +349,9 @@ class ExportManager:
             return self._passthrough_dict_values(tensors)
  
 
-        if node_name in self.nodes:
-            traced_tensors_node = self.nodes[node_name]
+        resolved_name = self._resolve_open_node_name(node_name)
+        if resolved_name in self.nodes:
+            traced_tensors_node = self.nodes[resolved_name]
         else:
             raise Exception(
                 f"output_tensors() called for node '{node_name}' but input_tensors() was never called for it. "
