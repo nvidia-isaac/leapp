@@ -80,13 +80,15 @@ zip-safe = false
 [tool.setuptools.packages.find]
 # Automatically find packages in the current directory
 where = ["."]
-include = ["leapp*"]
+include = ["leapp*", "leapp_runtimes*"]
 exclude = ["tests*"]
 
 [tool.setuptools.package-data]
 # Include all files specified in MANIFEST.in
 "*" = ["*.md", "*.txt", "LICENSE"]
 "leapp" = ["*.py"]
+# Warp Triton node templates are copied verbatim into generated model repos at deploy time.
+"leapp_runtimes.triton.warp_node" = ["*.py"]
 
 [tool.pytest.ini_options]
 filterwarnings = [
