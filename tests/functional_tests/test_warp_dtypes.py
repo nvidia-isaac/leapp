@@ -25,12 +25,12 @@ def test_transform_and_matrix():
 
 
 def test_unknown_dtype_raises():
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError):
         wd.str_to_warp_dtype("not_a_dtype")
 
 
 def test_torch_dtype_to_warp_str():
     assert wd.torch_dtype_to_warp_str(torch.float32) == "float32"
     assert wd.torch_dtype_to_warp_str(torch.int32) == "int32"
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError):
         wd.torch_dtype_to_warp_str(torch.complex64)

@@ -61,7 +61,9 @@ class RegionSegmenter:
                                  backend=self.mgr._default_torch_backend())
         self.mgr._assign_index(torch_node)
         self._seg_idx += 1
-        warp_node = WarpRegionNode(_seg_name(self.region, self._seg_idx, "warp"))
+        seg_name = _seg_name(self.region, self._seg_idx, "warp")
+        is_dry = getattr(self.mgr, "is_dry_run", lambda n: False)(seg_name)
+        warp_node = WarpRegionNode(seg_name, dry_run=is_dry)
         self.mgr.nodes[warp_node.name] = warp_node
         warp_node._max_cached_io = getattr(self.mgr, "_max_cached_io", 0)
         self.open_node = warp_node
@@ -97,8 +99,8 @@ class RegionSegmenter:
         self.open_kind = "torch"
         return cont.create_input(result_tensor, "in0")
 
-    def record_launch(self, args, kwargs):
-        self.open_node._records.append({"args": args, "kwargs": kwargs})
+    def record_launch(self, args, kwargs, device=None):
+        self.open_node._records.append({"args": args, "kwargs": kwargs, "device": device})
 
     def bind_warp_input(self, name, warp_array, src_tensor):
         self.open_node._wp_inputs[name] = warp_array
@@ -108,14 +110,15 @@ class RegionSegmenter:
         # Assemble bridged I/O onto the WarpRegionNode. `_wp_inputs` (the warp arrays) was filled
         # by bind_warp_input; `_pending_warp_inputs` holds the producing torch tensors (their
         # leapp_tag forms the incoming edge); `_pending_outputs` was filled in on_to_torch_output
-        # as (warp_array, torch_tensor) tuples.
+        # as (warp_array, torch_tensor) tuples, which set_io unpacks.
         inputs = {n: (warp_node._wp_inputs[n], self._pending_warp_inputs[n])
                   for n in warp_node._wp_inputs}
-        # Unpack (warp_array, torch_tensor) pairs; set_io receives {name: warp_array}
-        # and uses the torch_tensor for the output placeholder (validation reference).
+        # set_io receives {name: (warp_array, torch_tensor)} tuples and unpacks them into
+        # warp arrays for capture and torch tensors for the output placeholder reference.
         outputs = dict(warp_node._pending_outputs)
         warp_node.set_save_dir(self.mgr.get_save_path())
         warp_node.set_io(warp_node._records, inputs=inputs, outputs=outputs)
+        self._pending_warp_inputs = {}
 
 
 # ---------------------------------------------------------------------------
@@ -140,10 +143,15 @@ def install():
     when no segmenter is active or the crossing tensor is untraced (an untraced tensor across
     wp.from_torch is a baked constant, not a graph edge)."""
     wp = _import_warp()
+    if getattr(wp.launch, "__name__", "") == "patched_launch":
+        raise RuntimeError("warp_bridge.install() called while patches are already installed; call uninstall() first")
     orig = {"from_torch": wp.from_torch, "to_torch": wp.to_torch, "launch": wp.launch}
 
+    import inspect
+    _launch_sig = inspect.signature(orig["launch"])
+
     def patched_from_torch(t, dtype=None, *a, **k):
-        arr = orig["from_torch"](t, dtype=dtype, **k)
+        arr = orig["from_torch"](t, dtype=dtype, *a, **k)
         seg = _ACTIVE["segmenter"]
         # A live TracedTensor (actively being traced) crossing into warp creates an edge/split.
         # A raw torch.Tensor (untraced) is a baked constant input to the .wrp (no split).
@@ -169,7 +177,12 @@ def install():
     def patched_launch(*a, **k):
         seg = _ACTIVE["segmenter"]
         if seg is not None and seg.open_kind == "warp":
-            seg.record_launch(a, k)
+            try:
+                bound = _launch_sig.bind(*a, **k); bound.apply_defaults()
+                device = bound.arguments.get("device")
+            except TypeError:
+                device = None
+            seg.record_launch(a, k, device=device)
         return orig["launch"](*a, **k)
     patched_launch.__name__ = "patched_launch"
 

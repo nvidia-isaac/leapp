@@ -25,24 +25,24 @@ def resolve_device(wp, records, explicit):
     """
     if explicit:
         return str(explicit)
-    # Pass 1: check top-level "device" key (standalone warp_capture.py shape)
+    # Check top-level "device" key (standalone warp_capture.py shape)
     for r in records:
         dev = r.get("device")
         if dev is not None:
             return str(dev)
-    # Pass 2: check kwargs["device"] (caller-built record shape)
+    # Check kwargs["device"] (caller-built record shape)
     for r in records:
         dev = r["kwargs"].get("device")
         if dev is not None:
             return str(dev)
-    # Pass 3: check top-level "inputs"/"outputs" for wp.array
+    # Check top-level "inputs"/"outputs" for wp.array
     for r in records:
         ins = r.get("inputs") or []
         outs = r.get("outputs") or []
         for a in list(ins) + list(outs):
             if isinstance(a, wp.array):
                 return str(a.device)
-    # Pass 4: check kwargs["inputs"]/"outputs" for wp.array
+    # Check kwargs["inputs"]/"outputs" for wp.array
     for r in records:
         ins = r["kwargs"].get("inputs") or []
         outs = r["kwargs"].get("outputs") or []

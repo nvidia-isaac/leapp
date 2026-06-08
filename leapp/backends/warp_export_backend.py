@@ -41,9 +41,9 @@ from leapp.backends import warp_dtypes as wd
 
 WARP_BACKEND = "warp"
 _STR_TO_TORCH = {
-    "float16": torch.float16, "float32": torch.float32, "float64": torch.float64,
-    "int8": torch.int8, "int16": torch.int16, "int32": torch.int32, "int64": torch.int64,
-    "uint8": torch.uint8, "bool": torch.bool,
+    name: getattr(torch, wd.scalar_base_str(name))
+    for name in wd._REGISTRY
+    if hasattr(torch, wd.scalar_base_str(name))
 }
 
 
@@ -97,7 +97,7 @@ class _WarpGraphCallable:
                 f"warp node expected {len(self.input_names)} inputs {self.input_names}, "
                 f"got {len(torch_inputs)}")
 
-        # H1: bind/launch/read-back on the producer's CUDA stream (torch's current stream) so the
+        # Bind/launch/read-back on the producer's CUDA stream (torch's current stream) so the
         # whole region is ordered on one stream; sync only that stream, not the whole device.
         torch_stream = torch.cuda.current_stream(self.device) if str(self.device).startswith("cuda") else None
         wp_stream = wp.Stream(self.device, cuda_stream=torch_stream.cuda_stream) if torch_stream else None

@@ -387,17 +387,18 @@ class ExportManager:
             flattened_static_outputs = flatten_io_structure(normalized_static_outputs, '')
 
         export_with = None if self.is_dry_run(node_name) else kwargs.get("export_with", None)
-        traced_tensors_node.compile_trace(flattened_tensors,
-                                          backend=export_with,
-                                          backend_params=kwargs.get("backend_params", {}),
-                                          static_tensors=flattened_static_outputs,
-                                          semantics_map=metadata,
-                                          static_semantics_map=static_outputs_metadata)
-        self._assign_completion_index(traced_tensors_node)
-
-        if node_name in self._region_segmenters:
-            from leapp.warp_bridge import set_active_segmenter
-            set_active_segmenter(None)
+        from leapp.warp_bridge import set_active_segmenter  # local import (warp optional)
+        try:
+            traced_tensors_node.compile_trace(flattened_tensors,
+                                              backend=export_with,
+                                              backend_params=kwargs.get("backend_params", {}),
+                                              static_tensors=flattened_static_outputs,
+                                              semantics_map=metadata,
+                                              static_semantics_map=static_outputs_metadata)
+            self._assign_completion_index(traced_tensors_node)
+        finally:
+            if node_name in self._region_segmenters:
+                set_active_segmenter(None)
 
         return self._passthrough_dict_values(tensors)
 

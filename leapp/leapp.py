@@ -87,6 +87,10 @@ def start(name, save_path=".", verbose=False, dry_run=False, non_traced=None, ma
 
     # Install the warp bridge if warp is importable (optional dependency). Patches are
     # pass-throughs until a region opens a segmenter (see ExportManager.input_tensors).
+    existing = getattr(manager, "_warp_bridge_state", None)
+    if existing is not None:
+        from leapp import warp_bridge as _wb
+        _wb.uninstall(existing)
     manager._warp_bridge_state = None
     try:
         import warp  # noqa: F401

@@ -29,6 +29,19 @@ _REGISTRY = {
 }
 _WARP_TO_NAME = {entry[0]: name for name, entry in _REGISTRY.items()}
 
+import math as _math
+for _n, (_d, _b, _c, _s) in _REGISTRY.items():
+    assert _c == (_math.prod(_s) if _s else 1), f"_REGISTRY[{_n!r}] scalar_count {_c} != prod({_s})"
+
+
+def _entry(name):
+    try:
+        return _REGISTRY[name]
+    except KeyError:
+        raise ValueError(
+            f"warp dtype '{name}' is not in warp_dtypes._REGISTRY "
+            "(unsupported, or a newer dtype than this leapp version supports)") from None
+
 
 def warp_dtype_to_str(dtype) -> str:
     name = _WARP_TO_NAME.get(dtype)
@@ -38,19 +51,19 @@ def warp_dtype_to_str(dtype) -> str:
 
 
 def str_to_warp_dtype(name: str):
-    return _REGISTRY[name][0]
+    return _entry(name)[0]
 
 
 def scalar_base_str(name: str) -> str:
-    return _REGISTRY[name][1]
+    return _entry(name)[1]
 
 
 def scalar_count(name: str) -> int:
-    return _REGISTRY[name][2]
+    return _entry(name)[2]
 
 
 def trailing_shape(name: str) -> tuple:
-    return _REGISTRY[name][3]
+    return _entry(name)[3]
 
 
 _TORCH_TO_WARP_NAME = {
@@ -65,5 +78,5 @@ def torch_dtype_to_warp_str(torch_dtype) -> str:
     called without an explicit warp dtype — warp then infers a scalar array of this dtype)."""
     name = _TORCH_TO_WARP_NAME.get(torch_dtype)
     if name is None:
-        raise KeyError(f"unsupported torch dtype {torch_dtype!r} for warp bridge")
+        raise ValueError(f"unsupported torch dtype {torch_dtype!r} for warp bridge")
     return name

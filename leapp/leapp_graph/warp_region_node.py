@@ -40,6 +40,7 @@ class WarpRegionNode(LeappNode):
         self._save_dir = None
 
     def set_save_dir(self, save_dir):
+        """Must be called before compile_model(); sets the directory where the .wrp + sidecar are written."""
         self._save_dir = save_dir
 
     def set_io(self, records, inputs, outputs):
@@ -91,6 +92,7 @@ class WarpRegionNode(LeappNode):
             # tag_data sets placeholder.leapp_tag = "<self.name>/<n>/"
             self.tag_data(placeholder, n)
             self.add_output(n, n, placeholder)
+        self._pending_outputs = {}
 
     def compile_model(self):
         """Replay the recorded warp launches inside an APIC capture and wire the backend.
@@ -99,6 +101,12 @@ class WarpRegionNode(LeappNode):
         The .wrp artifact is written to self._save_dir at this point; save_model() relocates
         it idempotently and records model_path / md5sum / sha256sum.
         """
+        if self.dry_run:
+            return
+        if not self._records:
+            raise RuntimeError(
+                f"WarpRegionNode '{self.name}': set_io() was never called or recorded no "
+                "wp.launch calls; nothing to capture.")
         if self._save_dir is None:
             raise RuntimeError(
                 f"WarpRegionNode '{self.name}': call set_save_dir() before compile_model()")
@@ -114,6 +122,8 @@ class WarpRegionNode(LeappNode):
         params["model_path"] = wrp_path
         self.setup_backend("warp", params)
         self.export_backend.load(params["model_path"], params["sha256sum"])
+        # Set directly because WarpRegionNode has no compile_trace(); the base-class metaclass
+        # that normally sets this (by wrapping compile_trace) never fires here.
         self._model_captured = True
         # release capture buffers now that the .wrp is built (frees GPU memory)
         self._records = []
