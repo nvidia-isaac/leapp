@@ -52,6 +52,12 @@ APIC `.wrp` ([ADR-0001](../adr/0001-warp-native-wrp-not-onnx.md)).
   `wp.array(ptr=...)`, `__cuda_array_interface__`) are not detected; v1 fails loudly rather
   than silently dropping a warp segment.
 
+- **Intermediate auto-split torch segments always export as `onnx-torchscript`.** The
+  `export_with=` you pass to `annotate.output_tensors` applies only to the FINAL torch segment
+  of a region; intermediate torch segments (before/between warp segments) use the default
+  `onnx-torchscript` backend. To control an intermediate segment's backend, split it into an
+  explicit manual node.
+
 - **Empty-segment pruning is deferred (fast-follow).** The warp→torch bridge returns a
   TracedTensor bound to the continuation node so post-warp torch ops trace correctly. A region
   with torch work on both sides of the warp segment therefore yields real (non-empty) nodes. A
