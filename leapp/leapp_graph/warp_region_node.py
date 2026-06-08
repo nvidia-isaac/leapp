@@ -34,8 +34,9 @@ class WarpRegionNode(LeappNode):
         super().__init__(name, dry_run=dry_run)
         self.device = str(device) if device else None
         self._records = []
-        self._wp_inputs = {}     # port name -> wp.array
-        self._wp_outputs = {}    # port name -> wp.array
+        self._wp_inputs = {}       # port name -> wp.array
+        self._wp_outputs = {}      # port name -> wp.array
+        self._pending_outputs = {} # port name -> (wp.array, torch.Tensor), filled by bridge
         self._save_dir = None
 
     def set_save_dir(self, save_dir):

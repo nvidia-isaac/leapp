@@ -83,7 +83,6 @@ class RegionSegmenter:
                 f"warp_bridge: wp.to_torch reached with no open warp segment in region "
                 f"'{self.region}'.")
         warp_node = self.open_node
-        warp_node._pending_outputs = getattr(warp_node, "_pending_outputs", {})
         out_name = f"out{len(warp_node._pending_outputs)}"
         # Store (warp_array, torch_tensor) so _finalize_warp_node has the real output values
         # for validation without needing to call wp.to_torch() through the patched bridge again.
@@ -114,7 +113,7 @@ class RegionSegmenter:
                   for n in warp_node._wp_inputs}
         # Unpack (warp_array, torch_tensor) pairs; set_io receives {name: warp_array}
         # and uses the torch_tensor for the output placeholder (validation reference).
-        outputs = dict(getattr(warp_node, "_pending_outputs", {}))
+        outputs = dict(warp_node._pending_outputs)
         warp_node.set_save_dir(self.mgr.get_save_path())
         warp_node.set_io(warp_node._records, inputs=inputs, outputs=outputs)
 

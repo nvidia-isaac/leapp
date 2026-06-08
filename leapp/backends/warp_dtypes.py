@@ -53,10 +53,6 @@ def trailing_shape(name: str) -> tuple:
     return _REGISTRY[name][3]
 
 
-def is_structured(name: str) -> bool:
-    return _REGISTRY[name][2] > 1
-
-
 _TORCH_TO_WARP_NAME = {
     torch.float16: "float16", torch.float32: "float32", torch.float64: "float64",
     torch.int8: "int8", torch.int16: "int16", torch.int32: "int32", torch.int64: "int64",
