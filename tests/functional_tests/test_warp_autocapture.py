@@ -23,7 +23,21 @@ _REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, _REPO)
 
 import leapp  # noqa: E402
-from leapp_runtimes.triton.warp_node.warp_apic_runtime import WarpApicRunner  # noqa: E402
+from leapp.backends.warp_export_backend import WarpExportBackend  # noqa: E402
+
+
+class _StubNode:
+    name = "autocapture"
+
+
+def _run_wrp(wn, **named_inputs):
+    """Load the captured .wrp via the export backend and run it (single-output helper)."""
+    be = WarpExportBackend(_StubNode(), wn.node["parameters"])
+    be.load(wn.wrp_path, wn.node["parameters"]["sha256sum"])
+    # inputs are positional in input_names order
+    ordered = [named_inputs[i["name"]] for i in wn.node["inputs"]]
+    out = be.compiled_model(*ordered)
+    return out  # single output -> tensor
 
 N = 8
 SCALE = 2.0
@@ -58,9 +72,8 @@ def test_warp_node_autocapture_noninvasive(tmp_path):
     assert os.path.exists(wn.wrp_path)
 
     # The emitted .wrp round-trips: reload and reproduce eager results.
-    runner = WarpApicRunner(wn.wrp_path)
     xt = torch.linspace(-1.0, 2.0, N, device="cuda", dtype=torch.float32)
-    out = runner.run_torch({"in0": xt})["out0"]
+    out = _run_wrp(wn, in0=xt)
     ref = torch.relu(xt * SCALE + BIAS)
     assert torch.allclose(out, ref, rtol=1e-4, atol=1e-5)
     assert int((out > 0).sum()) > 0 and int((out == 0).sum()) > 0  # non-trivial
@@ -77,9 +90,8 @@ def test_warp_node_chain_detects_single_boundary_io(tmp_path):
         wp.launch(_relu, dim=N, inputs=[c], outputs=[c], device="cuda:0")               # c -> c
     assert [i["name"] for i in wn.node["inputs"]] == ["in0"]    # only `a` (intermediate b not exposed)
     assert [o["name"] for o in wn.node["outputs"]] == ["out0"]  # only `c`
-    runner = WarpApicRunner(wn.wrp_path)
     at = torch.linspace(-1.0, 2.0, N, device="cuda", dtype=torch.float32)
-    out = runner.run_torch({"in0": at})["out0"]
+    out = _run_wrp(wn, in0=at)
     ref = torch.relu((at * 3.0 - 1.0) * 0.5)
     assert torch.allclose(out, ref, rtol=1e-4, atol=1e-5)
 

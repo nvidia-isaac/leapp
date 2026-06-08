@@ -121,8 +121,7 @@ def warp_node(name: str, save_path: str = ".", device: str = None) -> "WarpNodeC
         with leapp.warp_node("solver", save_path="out") as wn:
             wp.launch(kernel_a, dim=n, inputs=[a], outputs=[b], device="cuda")
             wp.launch(kernel_b, dim=n, inputs=[b], outputs=[c], device="cuda")
-        wn.node      # YAML ``models`` entry (backend: warp) for a LEAPP bundle / the
-                     # leapp_runtimes.triton generator
+        wn.node      # YAML ``models`` entry (backend: warp) for a LEAPP bundle
         wn.wrp_path  # path to the emitted <name>.wrp
 
     The kernels / launches / arrays are unchanged; only the surrounding ``with`` is added. The

@@ -1,7 +1,3 @@
 include README.md
 include LICENSE
 recursive-include leapp *.py
-# leapp_runtimes ships the Triton generator + warp node templates (model.py / warp_apic_runtime.py
-# are copied into generated model repos at deploy time). Include all files so future non-.py
-# templates (e.g. config.pbtxt) are not dropped from the sdist.
-recursive-include leapp_runtimes *
