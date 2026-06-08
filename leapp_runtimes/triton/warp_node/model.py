@@ -15,7 +15,7 @@ import os
 import sys
 
 # Make this model dir importable (for warp_apic_runtime). In a real deploy the python-backend's
-# env already has torch+warp; WARP_TRITON_SITE_PACKAGES is only set in dockerless prototype runs
+# env already has torch+warp; WARP_TRITON_SITE_PACKAGES is only set in dockerless dev/test runs
 # where torch/warp live in a separate venv the Triton stub's interpreter doesn't see by default.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 _extra_sp = os.environ.get("WARP_TRITON_SITE_PACKAGES")

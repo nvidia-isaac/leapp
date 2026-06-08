@@ -149,7 +149,7 @@ class WarpExportBackend(ExportBackend):
         return {}
 
     def compile(self, m: torch.nn.Module = None) -> Any:
-        # The APIC graph is captured at trace time (externally for this prototype); nothing to compile.
+        # The APIC graph is built and loaded by WarpRegionNode.compile_model() (or the standalone warp_node capture); there is nothing to compile here.
         return None
 
     def save(self, save_path: str) -> Tuple[str, str, str]:

@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-"""Functional tests for the prototype Warp (APIC) node-kind in LEAPP.
+"""Functional tests for the Warp (APIC) node-kind in LEAPP.
 
 Guarded: skipped unless ``warp-lang`` (with APIC) and a CUDA GPU are available.
 Validates that a warp ``.wrp`` node loads + runs inside the existing InferenceManager,
