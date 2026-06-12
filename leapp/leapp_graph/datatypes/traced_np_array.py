@@ -256,10 +256,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         """
         # Create a view of the input array as our subclass
         obj = np.asarray(array).view(cls)
-        # Set our custom attributes
-        obj._name = name
-        obj._context = context
-        obj._proxy = proxy
+        obj._init_tracing_state(name, context, proxy)
         return obj
 
     def __array_finalize__(self, obj):
@@ -272,10 +269,12 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         if obj is None:
             # Called from __new__, attributes already set
             return
-        # Copy attributes from the source array
-        self._name = getattr(obj, '_name', 'derived')
-        self._context = getattr(obj, '_context', None)
-        self._proxy = getattr(obj, '_proxy', None)
+        # Copy tracing state from the source array
+        self._init_tracing_state(
+            getattr(obj, '_name', 'derived'),
+            getattr(obj, '_context', None),
+            getattr(obj, '_proxy', None),
+        )
 
     # =========================================================================
     # Properties
@@ -290,35 +289,6 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
     def data(self) -> np.ndarray:
         """Get the underlying datatype."""
         return self.view(np.ndarray)
-
-    @property
-    def proxy(self) -> Proxy:
-        """Get the fx.Proxy for graph recording."""
-        return self._proxy
-
-    @property
-    def name(self) -> str:
-        """Get the name of the array."""
-        return self._name
-
-    @property
-    def context(self) -> str:
-        """Get the name of the context that owns this array."""
-        if self._context is None:
-            return "untraced"
-        return self._context.name
-
-    @property
-    def context_obj(self):
-        """Get the TraceContext that owns this array."""
-        return self._context
-
-    @property
-    def is_tracing(self) -> bool:
-        """Get the tracing status of the context."""
-        if self._context is None:
-            return False
-        return self._context.is_tracing
 
     # =========================================================================
     # TracedData abstract method implementations
@@ -341,10 +311,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
 
     def _new(self, array: np.ndarray, proxy: Proxy = None) -> "TracedNpArray":
         """Create a new TracedNpArray in the same context."""
-        if proxy is not None:
-            intermediate_name = str(proxy.node.name)
-        else:
-            intermediate_name = "untraced"
+        intermediate_name = self._name_from_proxy(proxy)
         return TracedNpArray(array, intermediate_name, self._context, proxy)
 
     @staticmethod

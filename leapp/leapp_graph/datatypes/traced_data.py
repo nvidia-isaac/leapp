@@ -38,13 +38,24 @@ class TracedData(ABC):
             proxy: The fx.Proxy for graph recording
         """
         self._value = value
-        self._name = name
-        self._context = context
-        self._proxy = proxy
+        self._init_tracing_state(name, context, proxy)
     
     # =========================================================================
     # Common Properties
     # =========================================================================
+
+    def _init_tracing_state(self, name: str, context, proxy: Proxy) -> None:
+        """Initialize common tracing metadata for TracedData subclasses."""
+        self._name = name
+        self._context = context
+        self._proxy = proxy
+
+    @staticmethod
+    def _name_from_proxy(proxy: Proxy) -> str:
+        """Return the conventional traced-data name for an operation result."""
+        if proxy is not None:
+            return str(proxy.node.name)
+        return "untraced"
     
     @property
     def proxy(self) -> Proxy:
@@ -59,6 +70,8 @@ class TracedData(ABC):
     @property
     def context(self) -> str:
         """Get the name of the context that owns this data."""
+        if self._context is None:
+            return "untraced"
         return self._context.name
     
     @property
@@ -69,6 +82,8 @@ class TracedData(ABC):
     @property
     def is_tracing(self) -> bool:
         """Get the tracing status of the context that owns this data."""
+        if self._context is None:
+            return False
         return self._context.is_tracing
     
     @property

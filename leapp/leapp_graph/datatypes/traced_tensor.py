@@ -72,9 +72,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             context: The TraceContext that owns this tensor
             proxy: The fx.Proxy for graph recording
         """
-        self._name = name
-        self._context = context
-        self._proxy = proxy
+        self._init_tracing_state(name, context, proxy)
 
     # =========================================================================
     # Properties
@@ -91,31 +89,6 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         return self.tensor
 
     @property
-    def proxy(self) -> Proxy:
-        """Get the fx.Proxy for graph recording."""
-        return self._proxy
-
-    @property
-    def name(self) -> str:
-        """Get the name of the tensor."""
-        return self._name
-
-    @property
-    def context(self) -> str:
-        """Get the name of the context that owns this tensor."""
-        return self._context.name
-
-    @property
-    def context_obj(self):
-        """Get the TraceContext that owns this tensor."""
-        return self._context
-
-    @property
-    def is_tracing(self) -> bool:
-        """Get the tracing status of the context that owns this tensor."""
-        return self._context.is_tracing
-
-    @property
     def T(self):
         """Transpose property (for 2D tensors)."""
         return torch.transpose(self, 0, 1)
@@ -130,12 +103,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         Intermediate tensors get auto-generated names based on the operation.
         When not tracing, proxy can be None.
         """
-        if proxy is not None:
-            # Generate a name based on the proxy node's name
-            intermediate_name = str(proxy.node.name)
-        else:
-            # When not tracing, use a placeholder name
-            intermediate_name = "untraced"
+        intermediate_name = self._name_from_proxy(proxy)
         return TracedTensor(tensor, intermediate_name, self._context, proxy)
 
     # =========================================================================
@@ -357,9 +325,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                 )
                 if is_full_copy:
                     target.__class__ = TracedTensor
-                    target._name = value._name
-                    target._context = value._context
-                    target._proxy = value._proxy
+                    target._init_tracing_state(value.name, value.context_obj, value.proxy)
                     return True, None
 
                 _get_logger().warning(
@@ -374,9 +340,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             target, source = args[0], args[1]
             if type(target) is torch.Tensor and isinstance(source, TracedTensor):
                 target.__class__ = TracedTensor
-                target._name = source._name
-                target._context = source._context
-                target._proxy = source._proxy
+                target._init_tracing_state(source.name, source.context_obj, source.proxy)
                 return True, target
 
         return False, None
