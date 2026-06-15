@@ -31,7 +31,7 @@ from .utils.enums import InputKindEnum, OutputKindEnum
 from .utils.tensor_description import GraphConfigs, TensorSemantics, TemporalPeriodMs
 
 __version__ = "0.5.2"
-__config_version__ = "1.1"
+__config_version__ = "1.2"
 __author__ = "Frank Lai"
 __email__ = "frlai@nvidia.com"
 

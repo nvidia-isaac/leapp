@@ -243,7 +243,7 @@ Output YAML structure
      python version: "3.12.9"
      torch version: "2.7.0+cu126"
      leapp version: "0.5.2"
-     leapp config version: "1.1"
+     leapp config version: "1.2"
      cuda version: "12.6"
      os: Linux
 
