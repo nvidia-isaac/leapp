@@ -126,6 +126,7 @@ Signature
        rtol: float = 1e-3,
        atol: float = 1e-5,
        strict: bool = True,
+       graph_configs: GraphConfigs | None = None,
    )
 
 Parameters
@@ -147,6 +148,8 @@ Parameters
   ``torch.allclose()``. Defaults to ``1e-5``.
 * ``strict`` (bool, optional): Raise on validation failure. Defaults
   to ``True``.
+* ``graph_configs`` (GraphConfigs, optional): Graph-level metadata to serialize
+  under the generated YAML ``pipeline.configs`` entry.
 
 Behavior
 ~~~~~~~~
@@ -160,6 +163,42 @@ The method performs the complete pipeline:
 #. Generate ``{name}.yaml`` with the complete graph description.
 #. Generate ``{name}.png`` if ``visualize=True``.
 #. Log graph statistics.
+
+``GraphConfigs``
+----------------
+
+Graph-level metadata passed to :func:`~leapp.compile_graph`.
+
+.. code-block:: python
+
+   from leapp import GraphConfigs
+
+   leapp.compile_graph(
+       graph_configs=GraphConfigs(
+           frequency=50,
+           extra={"runtime": "isaac_lab"},
+       ),
+   )
+
+This emits fields under the generated ``pipeline.configs`` entry:
+
+.. code-block:: yaml
+
+   pipeline:
+     data_flow: {}
+     feedback_flow: {}
+     inputs: {}
+     outputs: {}
+     configs:
+       frequency: 50
+       runtime: isaac_lab
+
+Parameters
+~~~~~~~~~~
+
+* ``frequency`` (float | int, optional): Graph-level execution frequency in Hz.
+* ``extra`` (dict, optional): Additional graph-level fields. Keys are flattened
+  into the ``pipeline.configs`` entry rather than serialized under an ``extra`` key.
 
 Generated artifacts
 ~~~~~~~~~~~~~~~~~~~
@@ -222,6 +261,34 @@ The method logs statistics including:
 Semantic metadata
 =================
 
+``TemporalPeriodMs``
+--------------------
+
+Mark one ``element_names`` axis as temporal and attach an absolute period in
+milliseconds to the tensor YAML entry.
+
+.. code-block:: python
+
+   from leapp import TensorSemantics, TemporalPeriodMs
+
+   TensorSemantics(
+       name="actions",
+       ref=actions,
+       element_names=[TemporalPeriodMs(100), ["hip", "knee", "ankle"]],
+   )
+
+This emits the reserved bare axis sentinel and the period metadata:
+
+.. code-block:: yaml
+
+   element_names:
+   - __temporal_axis__
+   - [hip, knee, ankle]
+   temporal_period_ms: 100
+
+``__temporal_axis__`` is reserved for LEAPP output; use
+``TemporalPeriodMs`` rather than writing the sentinel directly.
+
 ``TensorSemantics``
 -------------------
 
@@ -240,6 +307,7 @@ Signature
        ref = None,
        kind: InputKindEnum | OutputKindEnum | str | None = None,
        element_names: list | None = None,
+       temporal_period_ms: float | int | None = None,
        extra: dict | None = None,
    )
 
@@ -252,7 +320,12 @@ Parameters
   the tensor. Enum values are serialized to their string ``.value``.
 * ``element_names`` (list | str, optional): Human-readable element names. A
   string becomes ``[[name]]``; a flat list of strings becomes ``[[...]]``; a
-  per-dimension list is preserved with optional ``None`` entries.
+  per-dimension list is preserved with optional ``None`` entries. Include
+  ``TemporalPeriodMs(...)`` as a bare axis item to mark that axis temporal.
+* ``temporal_period_ms`` (float | int, optional): Temporal period in
+  milliseconds serialized to YAML. Prefer setting this with
+  ``TemporalPeriodMs(...)`` in ``element_names`` so the temporal axis is also
+  marked.
 * ``extra`` (dict, optional): Additional semantic fields. Keys are flattened
   into the tensor YAML entry rather than serialized under an ``extra`` key.
 

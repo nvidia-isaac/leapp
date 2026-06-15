@@ -19,7 +19,7 @@ import unittest
 import yaml
 import torch
 import leapp
-from leapp import TensorSemantics
+from leapp import GraphConfigs, TensorSemantics, TemporalPeriodMs
 from leapp.leapp import _MANAGER as annotate
 from leapp.utils.enums import InputKindEnum, OutputKindEnum
 from .base import LEAPPFunctionalTestBase
@@ -357,6 +357,60 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         self.assertEqual(entry["id"], "abc")
         self.assertEqual(entry["frame"], "base")
         self.assertNotIn("extra", entry)
+
+    def test_graph_configs_appear_in_pipeline_yaml(self):
+        """Test GraphConfigs fields and extras are emitted as graph-level metadata."""
+        tensor = torch.randn(1, 4)
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        traced = annotate.input_tensors("frequency_node", {"input": tensor})
+        annotate.output_tensors("frequency_node", {"output": traced + 1.0})
+        leapp.stop()
+        leapp.compile_graph(
+            visualize=False,
+            graph_configs=GraphConfigs(
+                frequency=50,
+                extra={"runtime": "isaac_lab"},
+            ),
+        )
+
+        config = self._load_yaml()
+
+        self.assertIn("pipeline", config)
+        self.assertEqual(config["pipeline"]["configs"]["frequency"], 50)
+        self.assertEqual(config["pipeline"]["configs"]["runtime"], "isaac_lab")
+        self.assertNotIn("frequency", config["pipeline"])
+        self.assertNotIn("runtime", config["pipeline"])
+
+    def test_temporal_period_marker_appears_in_output_yaml(self):
+        """Test TemporalPeriodMs emits temporal axis and period metadata."""
+        tensor = torch.randn(2, 3)
+        names = ["hip", "knee", "ankle"]
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        traced = annotate.input_tensors("chunk_node", {"input": tensor})
+
+        annotate.output_tensors("chunk_node", [
+            TensorSemantics(
+                name="actions",
+                ref=traced + 1.0,
+                element_names=[TemporalPeriodMs(100), names],
+            ),
+            TensorSemantics(name="plain_output", ref=traced - 1.0),
+        ])
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        config = self._load_yaml()
+        _, outputs = self._get_node_io_from_yaml(config, "chunk_node")
+
+        action_entry = self._find_io_by_name(outputs, "actions")
+        plain_entry = self._find_io_by_name(outputs, "plain_output")
+
+        self.assertEqual(action_entry["element_names"], ["__temporal_axis__", names])
+        self.assertEqual(action_entry["temporal_period_ms"], 100)
+        self.assertNotIn("temporal_period_ms", plain_entry)
+        self.assertNotIn("element_names", plain_entry)
 
     # =========================================================================
     # No metadata (baseline)

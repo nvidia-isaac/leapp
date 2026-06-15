@@ -28,7 +28,7 @@ from .export_manager import ExportManager
 from .inference_manager import InferenceManager
 from .leapp import annotate, start, stop, compile_graph
 from .utils.enums import InputKindEnum, OutputKindEnum
-from .utils.tensor_description import TensorSemantics
+from .utils.tensor_description import GraphConfigs, TensorSemantics, TemporalPeriodMs
 
 __version__ = "0.5.2"
 __config_version__ = "1.1"
@@ -46,4 +46,6 @@ __all__ = [
     "compile_graph",
     "__version__",
     "TensorSemantics",
+    "TemporalPeriodMs",
+    "GraphConfigs",
 ]

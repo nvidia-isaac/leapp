@@ -60,6 +60,45 @@ yaml.add_representer(
     lambda dumper, data: dumper.represent_mapping('tag:yaml.org,2002:map', data, flow_style=True))
 
 
+TEMPORAL_AXIS_SENTINEL = "__temporal_axis__"
+
+
+@dataclass(frozen=True)
+class TemporalPeriodMs:
+    """Marks an element_names axis as temporal with a fixed period in ms."""
+
+    period_ms: float
+
+    def __post_init__(self):
+        if self.period_ms <= 0:
+            raise ValueError("TemporalPeriodMs period_ms must be positive")
+
+
+@dataclass
+class GraphConfigs:
+    """User-facing graph-level metadata for YAML serialization."""
+
+    frequency: Optional[float] = None
+    extra: Optional[Dict[str, Any]] = None
+
+    def __post_init__(self):
+        if self.frequency is not None and self.frequency <= 0:
+            raise ValueError("GraphConfigs frequency must be positive when provided")
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return non-None graph config fields with extra flattened."""
+        result = {}
+        for f in fields(self):
+            if f.name == "extra":
+                continue
+            value = getattr(self, f.name)
+            if value is not None:
+                result[f.name] = value
+        if self.extra:
+            result.update(self.extra)
+        return result
+
+
 @dataclass
 class TensorSemantics:
     """User-facing semantic metadata for a tensor.
@@ -81,6 +120,7 @@ class TensorSemantics:
     # Semantic fields
     kind: Optional[InputKindEnum | OutputKindEnum | str] = None
     element_names: Optional[List] = None
+    temporal_period_ms: Optional[float] = None
     extra: Optional[Dict[str, Any]] = None
 
     def __post_init__(self):
@@ -91,7 +131,15 @@ class TensorSemantics:
                 f"accepted types are: {TRACABLE_BASE_TYPES}"
                 f"got {type(self.ref).__name__}")
         if self.element_names is not None:
-            self.element_names = self._normalize_element_names(self.element_names)
+            self.element_names, detected_period_ms = self._normalize_element_names(
+                self.element_names, allow_temporal_sentinel=self.temporal_period_ms is not None)
+            if detected_period_ms is not None:
+                if self.temporal_period_ms is not None and self.temporal_period_ms != detected_period_ms:
+                    raise ValueError(
+                        "temporal_period_ms conflicts with TemporalPeriodMs in element_names")
+                self.temporal_period_ms = detected_period_ms
+        if self.temporal_period_ms is not None and self.temporal_period_ms <= 0:
+            raise ValueError("temporal_period_ms must be positive when provided")
 
 
     def to_dict(self) -> Dict[str, Any]:
@@ -128,24 +176,61 @@ class TensorSemantics:
         self.__post_init__()
 
     @staticmethod
-    def _normalize_element_names(element_names):
-        """Normalize element_names to CompactYamlList[CompactYamlList[str] | None].
-        """
+    def _normalize_element_names(element_names, allow_temporal_sentinel=False):
+        """Normalize element_names and extract temporal axis metadata."""
         if isinstance(element_names, str):
-            return CompactYamlList([CompactYamlList([element_names])])
-        elif isinstance(element_names, list):
-            if all(isinstance(item, str) for item in element_names):
-                return CompactYamlList([CompactYamlList(element_names)])
-            elif all(isinstance(item, (list, type(None))) for item in element_names):
-                return CompactYamlList([
-                    CompactYamlList(item) if item is not None else None
-                    for item in element_names
-                ])
+            if element_names == TEMPORAL_AXIS_SENTINEL:
+                if allow_temporal_sentinel:
+                    return CompactYamlList([element_names]), None
+                raise ValueError(
+                    f"{TEMPORAL_AXIS_SENTINEL!r} is reserved for TemporalPeriodMs")
+            return CompactYamlList([CompactYamlList([element_names])]), None
+
+        if not isinstance(element_names, list):
+            return element_names, None
+
+        temporal_period_ms = None
+        normalized = CompactYamlList()
+        has_axis_descriptors = False
+        has_temporal_axis = False
+
+        for item in element_names:
+            if isinstance(item, TemporalPeriodMs):
+                if has_temporal_axis:
+                    raise ValueError("element_names can contain at most one TemporalPeriodMs")
+                has_axis_descriptors = True
+                has_temporal_axis = True
+                temporal_period_ms = item.period_ms
+                normalized.append(TEMPORAL_AXIS_SENTINEL)
+            elif isinstance(item, str):
+                if item == TEMPORAL_AXIS_SENTINEL:
+                    if not allow_temporal_sentinel:
+                        raise ValueError(
+                            f"{TEMPORAL_AXIS_SENTINEL!r} is reserved for TemporalPeriodMs")
+                    has_axis_descriptors = True
+                    normalized.append(TEMPORAL_AXIS_SENTINEL)
+                else:
+                    normalized.append(item)
+            elif isinstance(item, list):
+                if any(isinstance(child, TemporalPeriodMs) for child in item):
+                    raise ValueError("TemporalPeriodMs must be an axis item, not nested in a list")
+                if any(child == TEMPORAL_AXIS_SENTINEL for child in item):
+                    raise ValueError(
+                        f"{TEMPORAL_AXIS_SENTINEL!r} must be a bare axis item, not nested in a list")
+                has_axis_descriptors = True
+                normalized.append(CompactYamlList(item))
+            elif item is None:
+                has_axis_descriptors = True
+                normalized.append(None)
             else:
                 _get_logger().warning(
-                    "element_names has mixed types, expected List[List[str]]")
-                return element_names
-        return element_names
+                    "element_names has mixed types, expected names or axis descriptors")
+                return element_names, temporal_period_ms
+
+        if has_axis_descriptors:
+            return normalized, temporal_period_ms
+
+        return CompactYamlList([CompactYamlList(normalized)]), None
 
 
 class TensorDescription:
