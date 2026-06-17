@@ -43,7 +43,8 @@ from leapp.utils.utils import (get_relative_path,
                                mirror_all_tensor_tags,
                                extract_return_names,
                                frame_to_namespace)
-
+from leapp.leapp_graph.warp_op import WarpOp
+from contextlib import nullcontext
 
 class ExportManager:
     _instance = None
@@ -713,6 +714,21 @@ class ExportManager:
                 return result
             return wrapper
         return decorator
+
+    def warp_op(self, node_name: str, inputs: list[str] = None, outputs: list[str] = None, **params):
+        if not ExportManager._interpret_graph or self.is_dry_run(node_name):
+            return nullcontext()
+
+        if WarpOp is None:
+            raise ImportError("LEAPP: warp_op requires warp-lang (pip install warp-lang).")
+
+        if node_name not in self.nodes:
+            raise ValueError(f"LEAPP: node '{node_name}' not found. Call annotate.input_tensors() first to create the node.")
+
+        if node_name in self.nodes and not self.nodes[node_name].is_tracing:
+            return nullcontext()
+
+        return WarpOp(self.nodes[node_name])
 
     def _method(self, **params):
         """Legacy decorator for tracing functions via sys.settrace + ModuleBuilder.
