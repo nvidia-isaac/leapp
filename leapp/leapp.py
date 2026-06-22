@@ -24,6 +24,11 @@ import yaml
 
 from .utils.logging import _get_logger
 from .leapp_graph.datatypes import apply_traced_data_patches, remove_traced_data_patches
+
+try:
+    from .leapp_graph.datatypes.global_warp_patching import WarpLeappCallDetector
+except ImportError:
+    WarpLeappCallDetector = None
 from .leapp_graph.leapp_graph import LeappGraph
 from .utils.tracing_lock import TracingLock
 from .utils.utils import get_system_info
@@ -84,9 +89,11 @@ def start(name, save_path=".", verbose=False, dry_run=False, non_traced=None,
     manager.reset_nodes()
     ExportManager.set_interpret_graph(True)
 
-    # Apply patches for torch functions that bypass __torch_function__
+    # Apply patches for functions that bypass normal traced-type dispatch.
     if global_patching:
         apply_traced_data_patches()
+        if WarpLeappCallDetector is not None:
+            WarpLeappCallDetector.instance().install()
     manager.set_patches_applied(global_patching)
 
 
@@ -106,8 +113,10 @@ def stop():
     ExportManager.set_interpret_graph(False)
     manager.restore_pending_buffer_trackers()
 
-    # Remove patches to restore original torch function behavior
+    # Remove patches to restore original function behavior.
     if manager.is_numpy_patches_applied():
+        if WarpLeappCallDetector is not None:
+            WarpLeappCallDetector.instance().uninstall()
         remove_traced_data_patches()
         manager.set_patches_applied(False)
 

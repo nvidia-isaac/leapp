@@ -7,6 +7,10 @@ from leapp.leapp_graph.leapp_node import LeappNode
 import torch
 import torch.fx as fx
 from torch.fx.proxy import Proxy
+from dataclasses import dataclass, field
+from typing import Any, Literal
+import operator
+
 from leapp.utils.logging import _get_logger
 from leapp.leapp_graph.datatypes import (
     TracedData,
@@ -21,6 +25,308 @@ from leapp.utils.tensor_description import (
 import collections
 
 
+def warp_segment_marker(*inputs):
+    """FX marker for one finalized Warp/APIC segment."""
+    raise RuntimeError(
+        "leapp_warp_segment is an FX marker and should be lowered before execution"
+    )
+
+
+@dataclass
+class WarpTensorRef:
+    # Segment-local canonical name used for APIC params / FX output labels.
+    name: str
+    # Live trace-time object, usually a wp.array, kept for capture/replay work.
+    array: Any
+    # FX proxy that represents this value in the owning TracedTensorNode graph.
+    proxy: Proxy | None = None
+    # Owning LEAPP trace context, normally the TracedTensorNode instance.
+    context: Any | None = None
+    # Detector path showing where the value was found, e.g. args[0] or kwargs['out'].
+    path: str | None = None
+    # Runtime array shape observed during tracing, used for validation/export metadata.
+    shape: tuple | None = None
+    # Runtime dtype observed during tracing, stored as text for lightweight metadata.
+    dtype: str | None = None
+    # Runtime device observed during tracing, stored as text for lightweight metadata.
+    device: str | None = None
+    # Device/host pointer when available; helps dedupe view-like wp.array objects.
+    ptr: int | None = None
+    # True when this ref is a runtime input to the Warp segment.
+    is_input: bool = False
+    # True when this ref is a runtime output of the segment.
+    is_output: bool = False
+    # Index of the detector event that first produced/wrote this ref, when known.
+    produced_by_event_index: int | None = None
+    # Extra detector/export annotations that do not deserve first-class fields yet.
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_value(
+        cls,
+        name: str,
+        value: Any,
+        *,
+        path: str | None = None,
+        is_input: bool = False,
+        is_output: bool = False,
+        produced_by_event_index: int | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> "WarpTensorRef":
+        ptr = getattr(value, "ptr", None)
+        try:
+            ptr = int(ptr) if ptr else None
+        except Exception:
+            ptr = None
+
+        shape = getattr(value, "shape", None)
+        if shape is not None:
+            try:
+                shape = tuple(shape)
+            except TypeError:
+                pass
+
+        dtype = getattr(value, "dtype", None)
+        device = getattr(value, "device", None)
+
+        return cls(
+            name=name,
+            array=value,
+            proxy=getattr(value, "proxy", None),
+            context=getattr(value, "context_obj", None),
+            path=path,
+            shape=shape,
+            dtype=str(dtype) if dtype is not None else None,
+            device=str(device) if device is not None else None,
+            ptr=ptr,
+            is_input=is_input,
+            is_output=is_output,
+            produced_by_event_index=produced_by_event_index,
+            metadata=metadata or {},
+        )
+
+    def to_metadata(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "path": self.path,
+            "shape": self.shape,
+            "dtype": self.dtype,
+            "device": self.device,
+            "ptr": self.ptr,
+            "is_input": self.is_input,
+            "is_output": self.is_output,
+            "produced_by_event_index": self.produced_by_event_index,
+            "metadata": self.metadata,
+        }
+
+
+@dataclass
+class WarpSegment:
+    # Owning LEAPP node name. A segment should not span multiple node graphs.
+    node_name: str
+    # Lifecycle state; invalid segments fail closed instead of silently exporting.
+    status: Literal["open", "closed", "invalid"] = "open"
+    # Detector-recorded top-level Warp events/calls that make up the segment.
+    events: list[Any] = field(default_factory=list)
+    # Runtime APIC/FX inputs, keyed by segment-local canonical name.
+    input_refs: dict[str, WarpTensorRef] = field(default_factory=dict)
+    # Runtime APIC/FX outputs that will get marker-derived proxies.
+    output_refs: dict[str, WarpTensorRef] = field(default_factory=dict)
+    # Conservative possible outputs seen by the detector, not yet confirmed.
+    output_candidates: list[WarpTensorRef] = field(default_factory=list)
+    # FX proxy for the single segment marker node.
+    marker_proxy: Proxy | None = None
+    # Per-output FX proxies derived from marker_proxy.
+    output_proxies: dict[str, Proxy] = field(default_factory=dict)
+    # Per-output get_attr proxies that anchor concrete output objects in FX.
+    output_attr_proxies: dict[str, Proxy] = field(default_factory=dict)
+    # Extra segment annotations such as capture strategy or detector details.
+    metadata: dict[str, Any] = field(default_factory=dict)
+    # Warp device used for capture/replay when known.
+    device: str | None = None
+    # Saved .wrp path once export writes the APIC bundle.
+    wrp_path: str | None = None
+    # Live APIC graph object during trace/export; intentionally not serialized.
+    apic_graph: Any | None = None
+
+    @property
+    def is_open(self) -> bool:
+        return self.status == "open"
+
+    @property
+    def is_empty(self) -> bool:
+        return not (
+            self.events
+            or self.input_refs
+            or self.output_refs
+            or self.output_candidates
+        )
+
+    def add_event(self, event: Any) -> None:
+        self.events.append(event)
+
+    def add_input_ref(
+        self,
+        value: Any,
+        *,
+        path: str | None = None,
+        produced_by_event_index: int | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> WarpTensorRef:
+        ref = self._coerce_ref(
+            value,
+            name=self._default_ref_name("input", len(self.input_refs)),
+            path=path,
+            is_input=True,
+            produced_by_event_index=produced_by_event_index,
+            metadata=metadata,
+        )
+        existing = self._find_ref(ref, self.input_refs.values())
+        if existing is not None:
+            return self._merge_ref(existing, ref, is_input=True)
+
+        self.input_refs[ref.name] = ref
+        return ref
+
+    def add_output_ref(
+        self,
+        value: Any,
+        *,
+        path: str | None = None,
+        produced_by_event_index: int | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> WarpTensorRef:
+        ref = self._coerce_ref(
+            value,
+            name=self._default_ref_name("output", len(self.output_refs)),
+            path=path,
+            is_output=True,
+            produced_by_event_index=produced_by_event_index,
+            metadata=metadata,
+        )
+        existing = self._find_ref(ref, self.output_refs.values())
+        if existing is not None:
+            return self._merge_ref(existing, ref, is_output=True)
+
+        self.output_refs[ref.name] = ref
+        return ref
+
+    def add_output_candidate(
+        self,
+        value: Any,
+        *,
+        path: str | None = None,
+        produced_by_event_index: int | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> WarpTensorRef:
+        ref = self._coerce_ref(
+            value,
+            name=self._default_ref_name(
+                "output_candidate", len(self.output_candidates)
+            ),
+            path=path,
+            produced_by_event_index=produced_by_event_index,
+            metadata=metadata,
+        )
+        existing = self._find_ref(ref, self.output_candidates)
+        if existing is not None:
+            return self._merge_ref(existing, ref)
+
+        self.output_candidates.append(ref)
+        return ref
+
+    def _coerce_ref(
+        self,
+        value: Any,
+        *,
+        name: str,
+        path: str | None = None,
+        is_input: bool = False,
+        is_output: bool = False,
+        produced_by_event_index: int | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> WarpTensorRef:
+        if isinstance(value, WarpTensorRef):
+            ref = value
+            ref.name = name
+            if path is not None:
+                ref.path = path
+            if metadata:
+                ref.metadata.update(metadata)
+            ref.is_input = ref.is_input or is_input
+            ref.is_output = ref.is_output or is_output
+            if produced_by_event_index is not None:
+                ref.produced_by_event_index = produced_by_event_index
+            return ref
+
+        return WarpTensorRef.from_value(
+            name,
+            value,
+            path=path,
+            is_input=is_input,
+            is_output=is_output,
+            produced_by_event_index=produced_by_event_index,
+            metadata=metadata,
+        )
+
+    @staticmethod
+    def _default_ref_name(prefix: str, index: int) -> str:
+        return f"{prefix}_{index}"
+
+    @staticmethod
+    def _ref_key(ref: WarpTensorRef) -> tuple[int, int | None]:
+        return (id(ref.array), ref.ptr)
+
+    def _find_ref(
+        self, ref: WarpTensorRef, existing_refs: collections.abc.Iterable
+    ) -> WarpTensorRef | None:
+        ref_key = self._ref_key(ref)
+        for existing in existing_refs:
+            if self._ref_key(existing) == ref_key:
+                return existing
+        return None
+
+    @staticmethod
+    def _merge_ref(
+        existing: WarpTensorRef,
+        incoming: WarpTensorRef,
+        *,
+        is_input: bool = False,
+        is_output: bool = False,
+    ) -> WarpTensorRef:
+        existing.is_input = existing.is_input or is_input or incoming.is_input
+        existing.is_output = existing.is_output or is_output or incoming.is_output
+        if existing.path is None:
+            existing.path = incoming.path
+        if existing.proxy is None:
+            existing.proxy = incoming.proxy
+        if existing.context is None:
+            existing.context = incoming.context
+        if existing.produced_by_event_index is None:
+            existing.produced_by_event_index = incoming.produced_by_event_index
+        existing.metadata.update(incoming.metadata)
+        return existing
+
+    def invalidate(self) -> None:
+        self.status = "invalid"
+
+    def to_metadata(self) -> dict[str, Any]:
+        return {
+            "node_name": self.node_name,
+            "status": self.status,
+            "device": self.device,
+            "wrp_path": self.wrp_path,
+            "has_apic_graph": self.apic_graph is not None,
+            "inputs": [ref.to_metadata() for ref in self.input_refs.values()],
+            "outputs": [ref.to_metadata() for ref in self.output_refs.values()],
+            "output_candidates": [
+                ref.to_metadata() for ref in self.output_candidates
+            ],
+            "event_count": len(self.events),
+            "metadata": self.metadata,
+        }
+
+
 class TracedTensorNode(LeappNode):
     def __init__(self, name, *args, dry_run=False, **kwargs):
         if args or kwargs:
@@ -31,6 +337,7 @@ class TracedTensorNode(LeappNode):
         self.tracer.graph = self.graph
         self.tracer.root = torch.nn.Module()
         self.tracer.tensor_attrs = {}
+        self.warp_segments: list[WarpSegment] = []
 
         self.m = None
 
@@ -663,6 +970,163 @@ class TracedTensorNode(LeappNode):
         for name, state_info in self._state_tensors.items():
             result[name] = state_info["output"]
         return result
+
+    def add_warp_segment(
+        self,
+        *,
+        device: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> WarpSegment:
+        """Create a new open Warp segment for this node.
+
+        If the previous segment is still open, finalize it into an FX marker
+        before starting the next one. This keeps the FX graph at one marker per
+        Warp segment while leaving full model compilation to compile_trace().
+        """
+        if self.warp_segments and self.warp_segments[-1].is_open:
+            self.close_warp_segment(self.warp_segments[-1])
+
+        segment = WarpSegment(
+            node_name=self.name,
+            device=device,
+            metadata=metadata or {},
+        )
+        self.warp_segments.append(segment)
+        return segment
+
+    def get_warp_segment(
+        self,
+        *,
+        device: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> WarpSegment:
+        """Return the latest open Warp segment, creating one if needed."""
+        if not self.warp_segments or not self.warp_segments[-1].is_open:
+            return self.add_warp_segment(device=device, metadata=metadata)
+
+        segment = self.warp_segments[-1]
+        if device is not None:
+            segment.device = device
+        if metadata:
+            segment.metadata.update(metadata)
+        return segment
+
+    def close_warp_segment(self, segment: WarpSegment | None = None) -> WarpSegment:
+        """Finalize a Warp segment into a single FX marker.
+
+        The live ``WarpSegment`` remains the source of truth during tracing. The
+        FX nodes keep pointers back to the segment/ref objects, and a single
+        metadata snapshot is written after finalization for debugging/export.
+        """
+        if segment is None:
+            if not self.warp_segments:
+                raise RuntimeError(
+                    f"Node '{self.name}' has no Warp segment to close."
+                )
+            segment = self.warp_segments[-1]
+
+        if segment.status == "closed":
+            return segment
+        if segment.status == "invalid":
+            raise RuntimeError("Cannot close invalid Warp segment.")
+        if segment.node_name != self.name:
+            raise ValueError(
+                f"Warp segment belongs to node '{segment.node_name}', not "
+                f"'{self.name}'."
+            )
+
+        for segment_index, known_segment in enumerate(self.warp_segments):
+            if known_segment is segment:
+                break
+        else:
+            raise ValueError("Warp segment is not registered on this node.")
+
+        if segment.is_empty:
+            segment.status = "closed"
+            return segment
+
+        marker_name = f"warp_segment_{segment_index}"
+        input_proxies = tuple(
+            ref.proxy for ref in segment.input_refs.values() if ref.proxy is not None
+        )
+        output_refs = list(segment.output_refs.values())
+        output_attr_proxies = tuple(
+            self._create_warp_output_attr_proxy(segment, marker_name, ref)
+            for ref in output_refs
+        )
+
+        marker = self.tracer.create_proxy(
+            "call_function",
+            warp_segment_marker,
+            (*input_proxies, *output_attr_proxies),
+            {},
+            name=marker_name,
+        )
+        segment.marker_proxy = marker
+        marker.node.meta["leapp_warp_segment"] = segment
+
+        if len(output_refs) == 1:
+            output_proxies = {output_refs[0].name: marker}
+        else:
+            output_proxies = {}
+            for idx, ref in enumerate(output_refs):
+                output_proxies[ref.name] = self.tracer.create_proxy(
+                    "call_function",
+                    operator.getitem,
+                    (marker, idx),
+                    {},
+                    name=f"{marker_name}_{ref.name}",
+                )
+
+        for ref in output_refs:
+            proxy = output_proxies[ref.name]
+            ref.proxy = proxy
+            ref.context = self
+            segment.output_proxies[ref.name] = proxy
+            proxy.node.meta["leapp_warp_segment"] = segment
+            proxy.node.meta["leapp_warp_output_ref"] = ref
+            self._update_output_ref_proxy(ref, proxy)
+
+        segment.status = "closed"
+        marker.node.meta["leapp_warp_segment_metadata"] = segment.to_metadata()
+        return segment
+
+    def _create_warp_output_attr_proxy(
+        self, segment: WarpSegment, marker_name: str, ref: WarpTensorRef
+    ) -> Proxy:
+        attr_name = self._unique_warp_output_attr_name(marker_name, ref.name)
+        value = ref.array
+        if isinstance(value, torch.Tensor):
+            self.tracer.root.register_buffer(attr_name, value)
+        else:
+            setattr(self.tracer.root, attr_name, value)
+
+        proxy = self.tracer.create_proxy("get_attr", attr_name, (), {})
+        segment.output_attr_proxies[ref.name] = proxy
+        proxy.node.meta["leapp_warp_segment"] = segment
+        proxy.node.meta["leapp_warp_output_ref"] = ref
+        return proxy
+
+    def _unique_warp_output_attr_name(self, marker_name: str, output_name: str) -> str:
+        base = f"_{marker_name}_{output_name}_value"
+        base = "".join(ch if ch.isalnum() else "_" for ch in base)
+        candidate = base
+        suffix = 0
+        while hasattr(self.tracer.root, candidate):
+            suffix += 1
+            candidate = f"{base}_{suffix}"
+        return candidate
+
+    def _update_output_ref_proxy(self, ref: WarpTensorRef, proxy: Proxy) -> None:
+        if ref.array is None:
+            return
+
+        init_tracing_state = getattr(ref.array, "_init_tracing_state", None)
+        if init_tracing_state is None:
+            return
+
+        init_tracing_state(ref.name, self, proxy)
+
 
     @property
     def state_names(self) -> list[str]:
