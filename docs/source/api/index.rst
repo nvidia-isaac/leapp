@@ -175,7 +175,7 @@ Graph-level metadata passed to :func:`~leapp.compile_graph`.
 
    leapp.compile_graph(
        graph_configs=GraphConfigs(
-           frequency=50,
+           frequency_hz=50,
            extra={"runtime": "isaac_lab"},
        ),
    )
