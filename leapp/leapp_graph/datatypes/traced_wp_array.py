@@ -64,6 +64,45 @@ class TracedWpArray(wp.array):
         self._proxy = proxy
 
     @property
+    def warp_segment(self):
+        return getattr(self, "_leapp_warp_segment", None)
+
+    @warp_segment.setter
+    def warp_segment(self, segment) -> None:
+        self._leapp_warp_segment = segment
+
+    @property
+    def data(self) -> wp.array:
+        """Return an exact ``wp.array`` aliasing this array's memory.
+
+        Warp's launch-time checks compare ``type(value)`` against the concrete
+        array class (e.g. ``type(value) is concrete_array_type(arg_type)`` in
+        ``pack_arg``, ``type(arg) in array_types`` in ``infer_argument_types``),
+        so ``wp.array`` subclasses are rejected. This returns a non-owning raw
+        ``wp.array`` over the same pointer for Warp to consume, leaving this
+        traced object untouched. Mirrors Warp's own ``flatten``/``reshape``/
+        ``view`` aliasing, including the ``_ref`` back-pointer that keeps the
+        owning allocation alive.
+        """
+        raw = wp.array(
+            ptr=self.ptr,
+            dtype=self.dtype,
+            shape=self.shape,
+            strides=self.strides,
+            device=self.device,
+            pinned=self.pinned,
+            copy=False,
+            grad=self.grad,
+        )
+        raw._ref = self
+        return raw
+
+
+    @property
+    def tensor(self) -> torch.Tensor:
+        return wp.to_torch(self)
+
+    @property
     def proxy(self) -> Proxy:
         return self._proxy
 
@@ -83,18 +122,13 @@ class TracedWpArray(wp.array):
 
     @property
     def is_tracing(self) -> bool:
-        if self._context is None:
+        # ``_context`` may be missing while the object is still being built
+        # (``wp.array.__init__`` is patched and runs before tracing state is set).
+        context = getattr(self, "_context", None)
+        if context is None:
             return False
-        return self._context.is_tracing
-
-    @property
-    def tensor(self) -> torch.Tensor:
-        return torch.from_numpy(self.numpy())
-
-    @property
-    def data(self) -> wp.array:
-        return self
-
+        return context.is_tracing
+        
     def _new(self, value: Any, proxy: Proxy = None) -> "TracedWpArray":
         name = TracedData._name_from_proxy(proxy)
         return type(self)(value, name, self._context, proxy)

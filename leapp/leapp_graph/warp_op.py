@@ -1,23 +1,20 @@
+from typing import TYPE_CHECKING
 from leapp.utils.logging import _get_logger
-from leapp.leapp_graph.traced_node import TracedTensorNode
+
+if TYPE_CHECKING:
+    from leapp.leapp_graph.traced_node import TracedTensorNode
 
 try:
     import warp as wp
+    from leapp.leapp_graph.datatypes.global_warp_patching import WarpLeappCallDetector
 except ModuleNotFoundError as exc:
     if exc.name != "warp":
         raise
     wp = None
     WarpOp = None
 else:
-    # fx marker.
-    def warp_operation_id(segment_id, *inputs):
-        raise RuntimeError("leapp_warp_operation is an FX marker and should be lowered before execution")
-
     class WarpOp:
-        def __init__(self, node_ref: TracedTensorNode, device: str = "cuda:0"):
-            if not isinstance(node_ref, TracedTensorNode):
-                _get_logger().error(f"LEAPP: warp_op received a non-TracedTensorNode reference: {type(node_ref)}")
-                raise ValueError(f"LEAPP: warp_op received a non-TracedTensorNode reference: {type(node_ref)}")
+        def __init__(self, node_ref: "TracedTensorNode", device: str = "cuda:0"):
             self.node_ref = node_ref
             self.node_name = node_ref.name
             self.node_graph = node_ref.graph
@@ -25,9 +22,16 @@ else:
             # scoped capture variables
             self._scope = None
             self._capture = None
+            self._segment = None
+            self._detector = None
             self.device = device
 
         def __enter__(self):
+            self._segment = self.node_ref.add_warp_segment(
+                device=self.device,
+            )
+            self._detector = WarpLeappCallDetector.instance()
+            self._detector.push_segment(self._segment)
             self._scope = wp.ScopedCapture(
                 device=self.device,
                 force_module_load=True,
@@ -37,23 +41,22 @@ else:
             return self
 
         def __exit__(self, exc_type, exc_value, traceback):
-            if self._scope is not None:
-                self._scope.__exit__(exc_type, exc_value, traceback)
+            scope_result = False
+            scope_result = self._scope.__exit__(exc_type, exc_value, traceback)
+            if self.node_ref.get_warp_segment() is not self._segment:
+                raise ValueError(f"Warp segment {self._segment} is not the "
+                                 f"current segment for node {self.node_ref.name}")
+            try:
+                if exc_type is None:
+                    graph = self._capture.graph
+                    if self._segment is not None:
+                        self._segment.apic_graph = graph
+                        self._segment.add_event({"kind": "scoped_capture"})
+                        # later:
+                        # wp.capture_save(self.graph, path, inputs=..., outputs=...)
+                        self.node_ref.close_warp_segment(self._segment)
+            finally:
+                if self._detector is not None:
+                    self._detector.pop_segment(self._segment)
 
-            if exc_type is None:
-                self.graph = self._capture.graph
-                # later:
-                # wp.capture_save(self.graph, path, inputs=..., outputs=...)
-
-
-            proxy_out = self.node_ref.tracer.create_proxy(
-                "call_function",
-                warp_operation_id,
-                self.inputs,
-                {},
-                name="warp_operation",
-            )
-
-            proxy_out.node.meta["apic_graph"] = self.graph
-            
-            return False
+            return scope_result
