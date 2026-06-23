@@ -504,7 +504,7 @@ class ExportManager:
         if not (len(context_names) == 1 and next(iter(context_names)) == traced_tensors_node.name):
             msg = (
                 f"{api_name}() for node '{node_name}' received tensors that belong to a different node: "
-                f"{context_names}. Make sure you are passing tensors derived from "
+                f"{context_names}.\n Make sure you are passing tensors derived from "
                 f"annotate.input_tensors('{node_name}', ...) to annotate.{api_name}('{node_name}', ...).")
             _get_logger().fatal(msg, error_type=Exception)
 

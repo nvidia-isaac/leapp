@@ -221,6 +221,7 @@ class AnnotateAPI:
         "register_buffer",
         "module",
         "mirror_leapp_tags",
+        "warp_op",
     }
 
     def __getattr__(self, name):

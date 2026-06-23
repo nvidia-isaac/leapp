@@ -49,6 +49,15 @@ else:
             try:
                 if exc_type is None:
                     graph = self._capture.graph
+                    # ScopedCapture only records the kernels; replay the graph here
+                    # so the real buffers advance at trace time. Suppress detection
+                    # during replay so the patched ``wp.capture_launch`` /
+                    # ``wp.synchronize`` calls do not append spurious events to the
+                    # still-active segment.
+                    with self._detector.paused():
+                        # still need to execute the graph to get outputs
+                        wp.capture_launch(graph)
+                        wp.synchronize()
                     if self._segment is not None:
                         self._segment.apic_graph = graph
                         self._segment.add_event({"kind": "scoped_capture"})

@@ -138,8 +138,6 @@ class WarpSegment:
     marker_proxy: Proxy | None = None
     # Per-output FX proxies derived from marker_proxy.
     output_proxies: dict[str, Proxy] = field(default_factory=dict)
-    # Per-output get_attr proxies that anchor concrete output objects in FX.
-    output_attr_proxies: dict[str, Proxy] = field(default_factory=dict)
     # Extra segment annotations such as capture strategy or detector details.
     metadata: dict[str, Any] = field(default_factory=dict)
     # Warp device used for capture/replay when known.
@@ -1050,15 +1048,16 @@ class TracedTensorNode(LeappNode):
             ref.proxy for ref in segment.input_refs.values() if ref.proxy is not None
         )
         output_refs = list(segment.output_refs.values())
-        output_attr_proxies = tuple(
-            self._create_warp_output_attr_proxy(segment, marker_name, ref)
-            for ref in output_refs
-        )
 
+        # The marker consumes only the segment's traced inputs and *produces* its
+        # outputs (the marker node itself for a single output, or per-output
+        # ``operator.getitem`` proxies for several). Segment outputs must never be
+        # fed back in as marker inputs, otherwise the FX graph shows the results as
+        # get_attr constants flowing into the call instead of being derived from it.
         marker = self.tracer.create_proxy(
             "call_function",
             warp_segment_marker,
-            (*input_proxies, *output_attr_proxies),
+            (*input_proxies,),
             {},
             name=marker_name,
         )
@@ -1090,32 +1089,6 @@ class TracedTensorNode(LeappNode):
         segment.status = "closed"
         marker.node.meta["leapp_warp_segment_metadata"] = segment.to_metadata()
         return segment
-
-    def _create_warp_output_attr_proxy(
-        self, segment: WarpSegment, marker_name: str, ref: WarpTensorRef
-    ) -> Proxy:
-        attr_name = self._unique_warp_output_attr_name(marker_name, ref.name)
-        value = ref.array
-        if isinstance(value, torch.Tensor):
-            self.tracer.root.register_buffer(attr_name, value)
-        else:
-            setattr(self.tracer.root, attr_name, value)
-
-        proxy = self.tracer.create_proxy("get_attr", attr_name, (), {})
-        segment.output_attr_proxies[ref.name] = proxy
-        proxy.node.meta["leapp_warp_segment"] = segment
-        proxy.node.meta["leapp_warp_output_ref"] = ref
-        return proxy
-
-    def _unique_warp_output_attr_name(self, marker_name: str, output_name: str) -> str:
-        base = f"_{marker_name}_{output_name}_value"
-        base = "".join(ch if ch.isalnum() else "_" for ch in base)
-        candidate = base
-        suffix = 0
-        while hasattr(self.tracer.root, candidate):
-            suffix += 1
-            candidate = f"{base}_{suffix}"
-        return candidate
 
     def _update_output_ref_proxy(self, ref: WarpTensorRef, proxy: Proxy) -> None:
         if ref.array is None:

@@ -24,16 +24,16 @@ class TracedWpArray(wp.array):
     from raw Warp arrays.
     """
 
-    def __new__(cls, array: wp.array, name: str, context, proxy: Proxy):
+    def __new__(cls, array, name, context, proxy):
         obj = wp.array.__new__(cls)
-        wp.array.__init__(
-            obj,
-            dtype=array.dtype,
-            shape=array.shape,
-            ptr=array.ptr,
-            device=array.device,
-            copy=False,
-        )
+        from .global_warp_patching import WarpLeappCallDetector
+
+        # Warp's array initializers are patched in place by the global detector;
+        # pause detection so they populate ptr/shape/etc. on this half-built object
+        # instead of normalizing ``self`` into a ``.data`` view (which needs ptr).
+        with WarpLeappCallDetector.instance().paused():
+            wp.array.__init__(obj, dtype=array.dtype, shape=array.shape,
+                            ptr=array.ptr, device=array.device, copy=False)
         obj._init_tracing_state(name, context, proxy)
         return obj
 
@@ -128,7 +128,7 @@ class TracedWpArray(wp.array):
         if context is None:
             return False
         return context.is_tracing
-        
+
     def _new(self, value: Any, proxy: Proxy = None) -> "TracedWpArray":
         name = TracedData._name_from_proxy(proxy)
         return type(self)(value, name, self._context, proxy)

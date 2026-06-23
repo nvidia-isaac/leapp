@@ -28,6 +28,7 @@ from leapp.leapp_graph.datatypes import (
     TracedData,
     TracedTensor,
     is_tracable_tensor_type,
+    is_traced_type,
     TRACABLE_BASE_TYPES,
 )
 from leapp.utils.utils import safe_deepcopy
@@ -621,7 +622,7 @@ def flatten_io_structure(data, name_str):
         for key, value in data.items():
             child_name = f"{name_str}_{key}" if name_str else key
             flat_data.update(flatten_io_structure(value, child_name))
-    elif isinstance(data, torch.Tensor) or isinstance(data, TracedTensor):
+    elif isinstance(data, torch.Tensor) or is_traced_type(data):
         flat_data[name_str] = data
 
     return flat_data
