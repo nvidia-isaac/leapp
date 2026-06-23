@@ -1,5 +1,6 @@
 from typing import Any, Callable
 from types import ModuleType
+import contextlib
 import functools
 from dataclasses import dataclass
 import inspect
@@ -105,6 +106,21 @@ else:
             if not self._segment_stack:
                 return None
             return self._segment_stack[-1]
+
+        @contextlib.contextmanager
+        def paused(self):
+            """Suppress Warp call detection for the duration of the block.
+
+            Bumps a re-entrant depth counter so nested ``paused()`` blocks (and the
+            wrapper's own internal recording guard) compose correctly; the wrapper
+            runs the original Warp callable untouched whenever the depth is
+            non-zero. The decrement always runs, even if the block raises.
+            """
+            self._recording_depth += 1
+            try:
+                yield
+            finally:
+                self._recording_depth -= 1
 
         def uninstall(self) -> None:
             """Restore every attribute patched by this detector."""
@@ -317,11 +333,8 @@ else:
                 if segment is not None:
                     self._record_segment_inputs(segment, qualname, traced_inputs)
 
-                self._recording_depth += 1
-                try:
+                with self.paused():
                     result = original(*call_args, **call_kwargs)
-                finally:
-                    self._recording_depth -= 1
 
                 self._process_post_call_arrays(
                     segment, qualname, args, kwargs, result, trace_state
