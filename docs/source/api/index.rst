@@ -261,7 +261,7 @@ The method logs statistics including:
 Semantic metadata
 =================
 
-``TemporalPeriodMs``
+``TemporalAxis``
 --------------------
 
 Mark one ``element_names`` axis as temporal and attach an absolute period in
@@ -269,12 +269,12 @@ milliseconds to the tensor YAML entry.
 
 .. code-block:: python
 
-   from leapp import TensorSemantics, TemporalPeriodMs
+   from leapp import TensorSemantics, TemporalAxis
 
    TensorSemantics(
        name="actions",
        ref=actions,
-       element_names=[TemporalPeriodMs(100), ["hip", "knee", "ankle"]],
+       element_names=[TemporalAxis(period_ms=100), ["hip", "knee", "ankle"]],
    )
 
 This emits the reserved bare axis sentinel and the period metadata:
@@ -287,7 +287,7 @@ This emits the reserved bare axis sentinel and the period metadata:
    temporal_period_ms: 100
 
 ``__temporal_axis__`` is reserved for LEAPP output; use
-``TemporalPeriodMs`` rather than writing the sentinel directly.
+``TemporalAxis`` rather than writing the sentinel directly.
 
 ``TensorSemantics``
 -------------------
@@ -307,7 +307,6 @@ Signature
        ref = None,
        kind: InputKindEnum | OutputKindEnum | str | None = None,
        element_names: list | None = None,
-       temporal_period_ms: float | int | None = None,
        extra: dict | None = None,
    )
 
@@ -321,11 +320,7 @@ Parameters
 * ``element_names`` (list | str, optional): Human-readable element names. A
   string becomes ``[[name]]``; a flat list of strings becomes ``[[...]]``; a
   per-dimension list is preserved with optional ``None`` entries. Include
-  ``TemporalPeriodMs(...)`` as a bare axis item to mark that axis temporal.
-* ``temporal_period_ms`` (float | int, optional): Temporal period in
-  milliseconds serialized to YAML. Prefer setting this with
-  ``TemporalPeriodMs(...)`` in ``element_names`` so the temporal axis is also
-  marked.
+  ``TemporalAxis(...)`` as a bare axis item to mark that axis temporal.
 * ``extra`` (dict, optional): Additional semantic fields. Keys are flattened
   into the tensor YAML entry rather than serialized under an ``extra`` key.
 

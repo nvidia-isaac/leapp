@@ -107,6 +107,7 @@ TracedTensor
 TracedTensors
 TracedTensorNode
 TensorSemantics
+TemporalAxis
 InferenceManager
 InputKindEnum
 OutputKindEnum

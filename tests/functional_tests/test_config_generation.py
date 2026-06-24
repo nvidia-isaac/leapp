@@ -19,7 +19,7 @@ import unittest
 import yaml
 import torch
 import leapp
-from leapp import GraphConfigs, TensorSemantics, TemporalPeriodMs
+from leapp import GraphConfigs, TensorSemantics, TemporalAxis
 from leapp.leapp import _MANAGER as annotate
 from leapp.utils.enums import InputKindEnum, OutputKindEnum
 from .base import LEAPPFunctionalTestBase
@@ -383,7 +383,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         self.assertNotIn("runtime", config["pipeline"])
 
     def test_temporal_period_marker_appears_in_output_yaml(self):
-        """Test TemporalPeriodMs emits temporal axis and period metadata."""
+        """Test TemporalAxis emits temporal axis and period metadata."""
         tensor = torch.randn(2, 3)
         names = ["hip", "knee", "ankle"]
 
@@ -394,7 +394,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
             TensorSemantics(
                 name="actions",
                 ref=traced + 1.0,
-                element_names=[TemporalPeriodMs(100), names],
+                element_names=[TemporalAxis(period_ms=100), names],
             ),
             TensorSemantics(name="plain_output", ref=traced - 1.0),
         ])
@@ -440,6 +440,18 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         self.assertNotIn('kind', output_entry)
         self.assertNotIn('source', output_entry)
         self.assertNotIn('element_names', output_entry)
+
+    def test_tensor_semantics_rejects_temporal_period_ms_argument(self):
+        """Test temporal period is only set through TemporalAxis."""
+        tensor = torch.randn(2, 3)
+
+        with self.assertRaises(TypeError):
+            TensorSemantics(
+                name="actions",
+                ref=tensor,
+                element_names=[["hip", "knee", "ankle"]],
+                temporal_period_ms=100,
+            )
 
     # =========================================================================
     # Error cases

@@ -16,7 +16,7 @@
 #
 
 import collections.abc
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from typing import Optional, Any, Dict, Tuple, List
 
 import torch
@@ -64,14 +64,14 @@ TEMPORAL_AXIS_SENTINEL = "__temporal_axis__"
 
 
 @dataclass(frozen=True)
-class TemporalPeriodMs:
+class TemporalAxis:
     """Marks an element_names axis as temporal with a fixed period in ms."""
 
     period_ms: float
 
     def __post_init__(self):
         if self.period_ms <= 0:
-            raise ValueError("TemporalPeriodMs period_ms must be positive")
+            raise ValueError("TemporalAxis period_ms must be positive")
 
 
 @dataclass
@@ -120,11 +120,13 @@ class TensorSemantics:
     # Semantic fields
     kind: Optional[InputKindEnum | OutputKindEnum | str] = None
     element_names: Optional[List] = None
-    temporal_period_ms: Optional[float] = None
     extra: Optional[Dict[str, Any]] = None
+    temporal_period_ms: Optional[float] = field(default=None, init=False)
 
     def __post_init__(self):
         '''error checking, auto conditioning'''
+        existing_period_ms = self.temporal_period_ms
+        self.temporal_period_ms = None
         if not is_tracable_tensor_type(self.ref): # this checks for both base types and traced types
             raise TypeError(
                 f"TensorSemantics 'ref' must be a traceable tensor type "
@@ -132,14 +134,8 @@ class TensorSemantics:
                 f"got {type(self.ref).__name__}")
         if self.element_names is not None:
             self.element_names, detected_period_ms = self._normalize_element_names(
-                self.element_names, allow_temporal_sentinel=self.temporal_period_ms is not None)
-            if detected_period_ms is not None:
-                if self.temporal_period_ms is not None and self.temporal_period_ms != detected_period_ms:
-                    raise ValueError(
-                        "temporal_period_ms conflicts with TemporalPeriodMs in element_names")
-                self.temporal_period_ms = detected_period_ms
-        if self.temporal_period_ms is not None and self.temporal_period_ms <= 0:
-            raise ValueError("temporal_period_ms must be positive when provided")
+                self.element_names, allow_temporal_sentinel=existing_period_ms is not None)
+            self.temporal_period_ms = detected_period_ms or existing_period_ms
 
 
     def to_dict(self) -> Dict[str, Any]:
@@ -165,7 +161,7 @@ class TensorSemantics:
         Known dataclass fields are set directly. Unknown keys are stored
         in the ``extra`` dict so they still appear in the serialized YAML.
         """
-        valid_fields = {f.name for f in fields(self)} - self._INTERNAL_FIELDS
+        valid_fields = {f.name for f in fields(self) if f.init} - self._INTERNAL_FIELDS
         for key, value in values.items():
             if key in valid_fields:
                 setattr(self, key, value)
@@ -183,7 +179,7 @@ class TensorSemantics:
                 if allow_temporal_sentinel:
                     return CompactYamlList([element_names]), None
                 raise ValueError(
-                    f"{TEMPORAL_AXIS_SENTINEL!r} is reserved for TemporalPeriodMs")
+                    f"{TEMPORAL_AXIS_SENTINEL!r} is reserved for TemporalAxis")
             return CompactYamlList([CompactYamlList([element_names])]), None
 
         if not isinstance(element_names, list):
@@ -195,9 +191,9 @@ class TensorSemantics:
         has_temporal_axis = False
 
         for item in element_names:
-            if isinstance(item, TemporalPeriodMs):
+            if isinstance(item, TemporalAxis):
                 if has_temporal_axis:
-                    raise ValueError("element_names can contain at most one TemporalPeriodMs")
+                    raise ValueError("element_names can contain at most one TemporalAxis")
                 has_axis_descriptors = True
                 has_temporal_axis = True
                 temporal_period_ms = item.period_ms
@@ -206,14 +202,14 @@ class TensorSemantics:
                 if item == TEMPORAL_AXIS_SENTINEL:
                     if not allow_temporal_sentinel:
                         raise ValueError(
-                            f"{TEMPORAL_AXIS_SENTINEL!r} is reserved for TemporalPeriodMs")
+                            f"{TEMPORAL_AXIS_SENTINEL!r} is reserved for TemporalAxis")
                     has_axis_descriptors = True
                     normalized.append(TEMPORAL_AXIS_SENTINEL)
                 else:
                     normalized.append(item)
             elif isinstance(item, list):
-                if any(isinstance(child, TemporalPeriodMs) for child in item):
-                    raise ValueError("TemporalPeriodMs must be an axis item, not nested in a list")
+                if any(isinstance(child, TemporalAxis) for child in item):
+                    raise ValueError("TemporalAxis must be an axis item, not nested in a list")
                 if any(child == TEMPORAL_AXIS_SENTINEL for child in item):
                     raise ValueError(
                         f"{TEMPORAL_AXIS_SENTINEL!r} must be a bare axis item, not nested in a list")

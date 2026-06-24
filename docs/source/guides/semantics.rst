@@ -295,28 +295,28 @@ automatically:
    TensorSemantics("gravity", tensor, element_names="z")
 
 
-``TemporalPeriodMs``
+``TemporalAxis``
 --------------------
 
-Use ``TemporalPeriodMs`` inside ``element_names`` to mark one tensor axis as
+Use ``TemporalAxis`` inside ``element_names`` to mark one tensor axis as
 temporal and record the period between samples on that axis. This is useful for
 chunked outputs such as an action tensor shaped ``[num_chunks, num_joints]``.
 
-Place ``TemporalPeriodMs`` directly in the outer ``element_names`` list. Do not
+Place ``TemporalAxis`` directly in the outer ``element_names`` list. Do not
 wrap it in a list. LEAPP serializes the temporal axis as the reserved
 ``__temporal_axis__`` sentinel and emits ``temporal_period_ms`` as a sibling
 field on the tensor entry.
 
 .. code-block:: python
 
-   from leapp import TemporalPeriodMs
+   from leapp import TemporalAxis
 
    TensorSemantics(
        "actions",
        actions,
        kind=OutputKindEnum.JOINT_TORQUES,
        element_names=[
-           TemporalPeriodMs(100),
+           TemporalAxis(period_ms=100),
            ["hip", "knee", "ankle"],
        ],
    )
@@ -340,7 +340,7 @@ Downstream consumers can find the temporal axis by locating
 .. warning::
 
    ``__temporal_axis__`` is reserved for LEAPP output. Use
-   ``TemporalPeriodMs`` in Python annotations rather than writing the
+   ``TemporalAxis`` in Python annotations rather than writing the
    sentinel directly. A tensor may contain at most one temporal axis marker.
 
 
@@ -450,7 +450,7 @@ Limitations
    within the same node's inputs (or outputs). Duplicate names raise an
    error.
 #. **Semantic fields are optional** --- all semantic fields (``kind``,
-   ``element_names``, temporal metadata from ``TemporalPeriodMs``, and
+   ``element_names``, temporal metadata from ``TemporalAxis``, and
    ``extra``) are optional. A ``TensorSemantics`` with no semantic fields
    behaves identically to passing a raw tensor with the same name.
 #. **Extra fields are flattened** --- keys in ``extra`` become top-level YAML
@@ -493,5 +493,5 @@ key.
        skip-first-run: true
 
 Graph-level semantics are independent of tensor-level temporal metadata. LEAPP
-does not validate ``TemporalPeriodMs`` values against ``GraphConfigs.frequency``.
+does not validate ``TemporalAxis`` values against ``GraphConfigs.frequency``.
 
