@@ -11,6 +11,7 @@ from typing import Any, Set, Optional
 
 from torch.fx.proxy import Proxy
 from leapp.utils.logging import _get_logger
+from leapp.utils.dtype import dtype_to_name
 
 import torch
 
@@ -98,6 +99,14 @@ class TracedData(ABC):
     def data(self) -> Any:
         """Get the underlying data."""
         pass
+
+    def get_dtype_name(self) -> str:
+        """Common dtype name (e.g. "float32") of the underlying value.
+
+        Delegates to the backend dtype-codec registry, so each backend's
+        mapping lives with that backend rather than in leapp core.
+        """
+        return dtype_to_name(self.data.dtype)
     # =========================================================================
     # Abstract Methods - Must be implemented by child classes
     # =========================================================================

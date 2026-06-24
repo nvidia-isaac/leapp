@@ -21,7 +21,11 @@ from leapp.leapp_graph.datatypes import (
 from leapp.utils.tensor_description import (
     resolve_tensor_descriptions_to_names,
     flatten_io_structure,
+    warp_dtype_to_torch_name,
 )
+# Importing registers the ``leapp::warp_runner`` custom op (import side effect)
+# and exposes ``get_op``/``QUALIFIED_NAME`` used when emitting segment nodes.
+from leapp.leapp_graph.custom_operator_registry import warp_custom_op
 import collections
 
 
@@ -884,6 +888,10 @@ class TracedTensorNode(LeappNode):
             self.inputs = [
                 inp for inp in self.inputs if inp.name_str not in self.trimmed_inputs]
 
+        # After pruning, record which Warp-segment outputs survived (are actually
+        # used) as a binary mask on the segment marker node's metadata.
+        self._stamp_warp_used_output_masks()
+
         # Check if graph already has an output node
         has_output = any(node.op == "output" for node in self.graph.nodes)
 
@@ -893,6 +901,58 @@ class TracedTensorNode(LeappNode):
                 self.graph.output(output_nodes[0])
             else:
                 self.graph.output(tuple(output_nodes))
+
+    def _stamp_warp_used_output_masks(self) -> None:
+        """Patch each live ``warp_runner`` node with its used-output mask.
+
+        Runs after the prune pass in ``build_graph_module``. Surviving
+        output-accessor nodes (those carrying ``leapp_warp_output_ref``) are
+        exactly the segment outputs still consumed by the graph; everything else
+        was erased. For each such segment we build a boolean mask of length
+        ``len(output_refs)`` where ``True`` marks a used output and rewrite the
+        op node's args: ``output_mask`` becomes that mask and the shapes of
+        unused outputs are zeroed to ``[0]`` so the runtime allocates/copies
+        nothing for them, while all N outputs stay in place to keep the
+        surviving ``getitem`` indices valid. The mask is also mirrored onto
+        ``leapp_warp_used_output_mask`` metadata for convenience.
+
+        This runs before the ``GraphModule`` is (re)compiled, so the patched
+        constants are reflected in the generated forward.
+        """
+        used_by_segment: dict[int, tuple[WarpSegment, set[int]]] = {}
+        for node in self.graph.nodes:
+            ref = node.meta.get("leapp_warp_output_ref")
+            segment = node.meta.get("leapp_warp_segment")
+            # Only output-accessor (``getitem``) nodes carry both a segment and
+            # an output ref; the op node itself has the segment but no ref.
+            if segment is None or ref is None:
+                continue
+            index = node.args[1] if node.target is operator.getitem else 0
+            _, used_indices = used_by_segment.setdefault(id(segment), (segment, set()))
+            used_indices.add(index)
+
+        for segment, used_indices in used_by_segment.values():
+            op_node = (
+                segment.marker_proxy.node if segment.marker_proxy is not None else None
+            )
+            if op_node is None:
+                continue
+            width = len(segment.output_refs)
+            mask = [index in used_indices for index in range(width)]
+
+            shapes = [list(shape) for shape in op_node.args[1]]
+            if len(shapes) != width:
+                # Op args out of sync with the segment; skip rather than corrupt.
+                _get_logger().warning(
+                    f"[{self.name}] warp_runner output_shapes width "
+                    f"({len(shapes)}) != segment outputs ({width}); "
+                    "skipping mask patch."
+                )
+                continue
+            shapes = [shapes[i] if mask[i] else [0] for i in range(width)]
+
+            op_node.update_arg(1, shapes)  # output_shapes
+            op_node.update_arg(4, mask)    # output_mask
 
     def create_state_tensors(self, tensors: dict[str, torch.Tensor]) -> dict[str, TracedTensor]:
         """Create state tensors that are both inputs and outputs."""
@@ -1043,39 +1103,66 @@ class TracedTensorNode(LeappNode):
             segment.status = "closed"
             return segment
 
-        marker_name = f"warp_segment_{segment_index}"
-        input_proxies = tuple(
+        op_name = f"warp_segment_{segment_index}"
+        input_proxies = [
             ref.proxy for ref in segment.input_refs.values() if ref.proxy is not None
-        )
+        ]
         output_refs = list(segment.output_refs.values())
 
-        # The marker consumes only the segment's traced inputs and *produces* its
-        # outputs (the marker node itself for a single output, or per-output
-        # ``operator.getitem`` proxies for several). Segment outputs must never be
-        # fed back in as marker inputs, otherwise the FX graph shows the results as
-        # get_attr constants flowing into the call instead of being derived from it.
-        marker = self.tracer.create_proxy(
-            "call_function",
-            warp_segment_marker,
-            (*input_proxies,),
-            {},
-            name=marker_name,
-        )
-        segment.marker_proxy = marker
-        marker.node.meta["leapp_warp_segment"] = segment
-
-        if len(output_refs) == 1:
-            output_proxies = {output_refs[0].name: marker}
-        else:
-            output_proxies = {}
-            for idx, ref in enumerate(output_refs):
-                output_proxies[ref.name] = self.tracer.create_proxy(
-                    "call_function",
-                    operator.getitem,
-                    (marker, idx),
-                    {},
-                    name=f"{marker_name}_{ref.name}",
+        # Build the static output specification carried by the op. The fake
+        # impl uses ``output_shapes`` / ``output_dtypes`` to materialize outputs
+        # during fake/export tracing, so they must be concrete here. They come
+        # straight from the segment's observed output refs.
+        output_shapes: list[list[int]] = []
+        output_dtypes: list[str] = []
+        for ref in output_refs:
+            if ref.shape is None:
+                raise RuntimeError(
+                    f"Warp segment output '{ref.name}' has no observed shape; "
+                    f"cannot emit {warp_custom_op.QUALIFIED_NAME}."
                 )
+            output_shapes.append([int(dim) for dim in ref.shape])
+            output_dtypes.append(
+                warp_dtype_to_torch_name(
+                    getattr(ref.array, "dtype", None), text=ref.dtype
+                )
+            )
+
+        # ``output_mask`` starts all-True; the post-prune pass
+        # (``_stamp_warp_used_output_masks``) rewrites it to mark only the
+        # surviving outputs and zeroes the shapes of the rest. ``path`` is a
+        # placeholder: the payload path is not known until export, which fills
+        # the corresponding ONNX attribute during lowering.
+        output_mask = [True] * len(output_refs)
+        path = ""
+
+        # The op consumes only the segment's traced inputs (as a Tensor[]) and
+        # *produces* its outputs via per-output ``operator.getitem``. Segment
+        # outputs must never be fed back in as op inputs, otherwise the FX graph
+        # shows the results as get_attr constants flowing into the call instead
+        # of being derived from it.
+        warp_runner = self.tracer.create_proxy(
+            "call_function",
+            warp_custom_op.get_op().default,
+            ([*input_proxies], output_shapes, output_dtypes, path, output_mask),
+            {},
+            name=op_name,
+        )
+        segment.marker_proxy = warp_runner
+        warp_runner.node.meta["leapp_warp_segment"] = segment
+
+        # The op returns a Tensor[]; extract each output positionally so index i
+        # always refers to the segment's i-th output, regardless of which
+        # survive pruning. Only consumed outputs keep their getitem.
+        output_proxies = {}
+        for idx, ref in enumerate(output_refs):
+            output_proxies[ref.name] = self.tracer.create_proxy(
+                "call_function",
+                operator.getitem,
+                (warp_runner, idx),
+                {},
+                name=f"{op_name}_{ref.name}",
+            )
 
         for ref in output_refs:
             proxy = output_proxies[ref.name]
@@ -1087,7 +1174,7 @@ class TracedTensorNode(LeappNode):
             self._update_output_ref_proxy(ref, proxy)
 
         segment.status = "closed"
-        marker.node.meta["leapp_warp_segment_metadata"] = segment.to_metadata()
+        warp_runner.node.meta["leapp_warp_segment_metadata"] = segment.to_metadata()
         return segment
 
     def _update_output_ref_proxy(self, ref: WarpTensorRef, proxy: Proxy) -> None:

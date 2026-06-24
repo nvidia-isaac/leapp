@@ -19,7 +19,43 @@ import torch
 from torch.fx.proxy import Proxy
 
 from leapp.utils.logging import _get_logger
+from leapp.utils.dtype import DtypeCodec, register_dtype_codec
 from .traced_data import TracedData
+
+
+# numpy scalar *type* (e.g. ``np.float64``) -> common name string. Lives with
+# the numpy node library so the backend's dtype knowledge is unified with its
+# implementation.
+_NUMPY_SCALAR_TO_NAME = {
+    np.float64: "float64",
+    np.float32: "float32",
+    np.float16: "float16",
+    np.int16: "int16",
+    np.int32: "int32",
+    np.int64: "int64",
+    np.uint8: "uint8",
+    np.int8: "int8",
+    np.bool_: "bool",
+}
+
+
+def _numpy_dtype_to_name():
+    # ``ndarray.dtype`` is an ``np.dtype`` *instance* while the source map keys
+    # by the scalar *type* (e.g. ``np.float64``); those do not hash-equal, so
+    # register both forms to make value- and dtype-object lookups robust.
+    out = {}
+    for scalar_type, name in _NUMPY_SCALAR_TO_NAME.items():
+        out[scalar_type] = name
+        out[np.dtype(scalar_type)] = name
+    return out
+
+
+register_dtype_codec(DtypeCodec(
+    backend="numpy",
+    matches=lambda v: isinstance(v, np.ndarray),
+    value_dtype=lambda v: v.dtype,
+    dtype_to_name=_numpy_dtype_to_name(),
+))
 
 
 # =============================================================================

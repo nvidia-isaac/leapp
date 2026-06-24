@@ -26,6 +26,9 @@ various formats including PyTorch JIT, ONNX, and generate visualization and YAML
 
 from .export_manager import ExportManager
 from .inference_manager import InferenceManager
+# Importing this module registers the ``leapp::warp_runner`` custom op as a
+# side effect, so it is available to tracing/export without explicit setup.
+from .leapp_graph.custom_operator_registry import warp_custom_op  # noqa: F401
 from .leapp import annotate, start, stop, compile_graph
 from .utils.enums import InputKindEnum, OutputKindEnum
 from .utils.tensor_description import GraphConfigs, TensorSemantics, TemporalAxis
