@@ -20,7 +20,32 @@ import io as _io
 from torch._export.converter import TS2EPConverter
 
 from leapp.utils.logging import _get_logger
+from leapp.utils.dtype import DtypeCodec, register_dtype_codec
 from .traced_data import TracedData
+
+
+# torch dtype object -> common name string. Lives with the torch node library
+# so the backend's dtype knowledge is unified with its implementation; the
+# registry lets leapp core resolve dtypes without importing torch directly.
+_TORCH_DTYPE_TO_NAME = {
+    torch.float64: "float64",
+    torch.float32: "float32",
+    torch.float16: "float16",
+    torch.int16: "int16",
+    torch.int32: "int32",
+    torch.int64: "int64",
+    torch.uint8: "uint8",
+    torch.int8: "int8",
+    torch.bool: "bool",
+    torch.bfloat16: "bfloat16",
+}
+
+register_dtype_codec(DtypeCodec(
+    backend="torch",
+    matches=lambda v: isinstance(v, torch.Tensor),
+    value_dtype=lambda v: v.dtype,
+    dtype_to_name=_TORCH_DTYPE_TO_NAME,
+))
 
 
 

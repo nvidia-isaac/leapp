@@ -14,6 +14,31 @@ except ImportError as exc:
 
 
 from .traced_data import TracedData
+from leapp.utils.dtype import DtypeCodec, register_dtype_codec
+
+
+# Register the Warp dtype codec so leapp core can convert warp dtypes to common
+# name strings without importing warp itself. Mirrors the torch/numpy entries
+# and only runs when this (warp-gated) module is imported.
+register_dtype_codec(DtypeCodec(
+    backend="warp",
+    matches=lambda v: isinstance(v, wp.array),
+    value_dtype=lambda v: v.dtype,
+    dtype_to_name={
+        wp.float16: "float16",
+        wp.float32: "float32",
+        wp.float64: "float64",
+        wp.int8: "int8",
+        wp.int16: "int16",
+        wp.int32: "int32",
+        wp.int64: "int64",
+        wp.uint8: "uint8",
+        wp.uint16: "uint16",
+        wp.uint32: "uint32",
+        wp.uint64: "uint64",
+        wp.bool: "bool",
+    },
+))
 
 
 class TracedWpArray(wp.array):

@@ -20,8 +20,19 @@ from dataclasses import dataclass, field, fields
 from typing import Optional, Any, Dict, Tuple, List
 
 import torch
-import numpy as np
 import yaml
+
+# Dtype mapping lives in a dependency-free module; re-exported here (explicit
+# ``as`` form) for the existing import sites
+# (``from leapp.utils.tensor_description import ...``).
+from leapp.utils.dtype import (
+    map_to_torch_dtype as map_to_torch_dtype,
+    warp_dtype_to_torch_name as warp_dtype_to_torch_name,
+    dtype_to_name as dtype_to_name,
+    value_to_name_and_shape as value_to_name_and_shape,
+    DtypeCodec as DtypeCodec,
+    register_dtype_codec as register_dtype_codec,
+)
 
 from leapp.utils.logging import _get_logger
 from leapp.leapp_graph.datatypes import (
@@ -285,18 +296,8 @@ class TensorDescription:
 
     @staticmethod
     def get_shape_and_dtype(value) -> Tuple[str, tuple]:
-        """Extract dtype string and shape from a torch.Tensor or numpy ndarray."""
-        dtype_map = get_dtype_map()
-
-        data_type = type(value)
-        if data_type == torch.Tensor:
-            dtype = dtype_map['torch'][value.dtype]
-            shape = value.shape
-        elif data_type == np.ndarray:
-            dtype = dtype_map['numpy'][value.dtype]
-            shape = value.shape
-        else:
-            raise ValueError(f"Unsupported type: {data_type}")
+        """Extract dtype string and shape from a registered backend value."""
+        dtype, shape = value_to_name_and_shape(value)
 
         return dtype, shape
 
@@ -507,41 +508,6 @@ class ParameterFormat:
         assignments = []
         _generate_unpacking(self.formatting, self.name_str, assignments)
         return "\n".join(assignments)
-
-def get_dtype_map():
-    return {
-        "torch": {
-            torch.float64: "float64",
-            torch.float32: "float32",
-            torch.float16: "float16",
-            torch.int16: "int16",
-            torch.int32: "int32",
-            torch.int64: "int64",
-            torch.uint8: "uint8",
-            torch.int8: "int8",
-            torch.bool: "bool",
-            torch.bfloat16: "bfloat16",
-        },
-        "numpy": {
-            np.float64: "float64",
-            np.float32: "float32",
-            np.float16: "float16",
-            np.int16: "int16",
-            np.int32: "int32",
-            np.int64: "int64",
-            np.uint8: "uint8",
-            np.int8: "int8",
-            np.bool_: "bool",
-        },
-    }
-
-def map_to_torch_dtype(string):
-    torch_map = get_dtype_map()['torch']
-    reverse_map = {dtype_str: dtype for dtype, dtype_str in torch_map.items()}
-    if string in reverse_map:
-        return reverse_map[string]
-    raise ValueError(f"Unsupported string: {string}")
-
 
 def validate_connection_compatibility(source_name, source_shape, source_dtype,
                                       target_name, target_shape, target_dtype):
