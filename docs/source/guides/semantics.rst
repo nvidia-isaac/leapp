@@ -295,6 +295,55 @@ automatically:
    TensorSemantics("gravity", tensor, element_names="z")
 
 
+``TemporalAxis``
+--------------------
+
+Use ``TemporalAxis`` inside ``element_names`` to mark one tensor axis as
+temporal and record the period between samples on that axis. This is useful for
+chunked outputs such as an action tensor shaped ``[num_chunks, num_joints]``.
+
+Place ``TemporalAxis`` directly in the outer ``element_names`` list. Do not
+wrap it in a list. LEAPP serializes the temporal axis as the reserved
+``__temporal_axis__`` sentinel and emits ``temporal_period_ms`` as a sibling
+field on the tensor entry.
+
+.. code-block:: python
+
+   from leapp import TemporalAxis
+
+   TensorSemantics(
+       "actions",
+       actions,
+       kind=OutputKindEnum.JOINT_TORQUES,
+       element_names=[
+           TemporalAxis(period_ms=100),
+           ["hip", "knee", "ankle"],
+       ],
+   )
+
+.. code-block:: yaml
+
+   - name: actions
+     dtype: float32
+     shape: [4, 3]
+     type: tensor
+     kind: target/joint/torques
+     element_names:
+     - __temporal_axis__
+     - [hip, knee, ankle]
+     temporal_period_ms: 100
+
+Downstream consumers can find the temporal axis by locating
+``__temporal_axis__`` in ``element_names``. LEAPP does not validate
+``temporal_period_ms`` against ``GraphConfigs.frequency``.
+
+.. warning::
+
+   ``__temporal_axis__`` is reserved for LEAPP output. Use
+   ``TemporalAxis`` in Python annotations rather than writing the
+   sentinel directly. A tensor may contain at most one temporal axis marker.
+
+
 ``extra``
 ---------
 
@@ -401,10 +450,48 @@ Limitations
    within the same node's inputs (or outputs). Duplicate names raise an
    error.
 #. **Semantic fields are optional** --- all semantic fields (``kind``,
-   ``element_names``, and ``extra``) are optional. A ``TensorSemantics``
-   with no semantic fields behaves identically to passing a raw tensor with
-   the same name.
+   ``element_names``, temporal metadata from ``TemporalAxis``, and
+   ``extra``) are optional. A ``TensorSemantics`` with no semantic fields
+   behaves identically to passing a raw tensor with the same name.
 #. **Extra fields are flattened** --- keys in ``extra`` become top-level YAML
    fields on the tensor entry. Avoid keys that collide with built-in fields
-   such as ``name``, ``dtype``, ``shape``, ``type``, ``kind``, or
-   ``element_names``.
+   such as ``name``, ``dtype``, ``shape``, ``type``, ``kind``,
+   ``element_names``, ``temporal_period_ms``, or ``__temporal_axis__``.
+
+Graph-level semantics
+=====================
+
+Use ``GraphConfigs`` for metadata that applies to the whole exported LEAPP
+bundle rather than to a specific tensor. ``GraphConfigs`` is passed to
+:func:`~leapp.compile_graph`, after tracing has stopped.
+
+.. code-block:: python
+
+   from leapp import GraphConfigs
+
+   leapp.compile_graph(
+       graph_configs=GraphConfigs(
+           frequency=50,
+           extra={"skip-first-run": True},
+       ),
+   )
+
+``frequency`` describes the graph-level execution frequency in Hz. ``extra``
+works like ``TensorSemantics.extra`` within ``configs``: keys are flattened into
+the generated ``pipeline.configs`` entry rather than nested under an ``extra``
+key.
+
+.. code-block:: yaml
+
+   pipeline:
+     data_flow: {}
+     feedback_flow: {}
+     inputs: {}
+     outputs: {}
+     configs:
+       frequency: 50
+       skip-first-run: true
+
+Graph-level semantics are independent of tensor-level temporal metadata. LEAPP
+does not validate ``TemporalAxis`` values against ``GraphConfigs.frequency``.
+

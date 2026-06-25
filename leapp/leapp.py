@@ -28,12 +28,14 @@ from .leapp_graph.leapp_graph import LeappGraph
 from .utils.tracing_lock import TracingLock
 from .utils.utils import get_system_info
 from .export_manager import ExportManager
+from .utils.tensor_description import GraphConfigs
 
 
 _MANAGER = ExportManager()
 
 
-def start(name, save_path=".", verbose=False, dry_run=False, non_traced=None, max_cached_io=5, global_patching=True):
+def start(name, save_path=".", verbose=False, dry_run=False, non_traced=None,
+          max_cached_io=5, global_patching=True):
     """Initialize and start LEAPP graph interpretation.
 
     ``name`` may be a bare graph name (``"my_graph"``), a relative path
@@ -104,7 +106,8 @@ def stop():
         manager.set_patches_applied(False)
 
 
-def compile_graph(visualize=True, verbose=None, validate=True, dry_run=False, rtol=1e-3, atol=1e-5, strict=True):
+def compile_graph(visualize=True, verbose=None, validate=True, dry_run=False,
+                  rtol=1e-3, atol=1e-5, strict=True, graph_configs=None):
     """Compile and save the computational graph from traced nodes."""
     manager = _MANAGER
 
@@ -125,6 +128,12 @@ def compile_graph(visualize=True, verbose=None, validate=True, dry_run=False, rt
 
     graph = LeappGraph(manager.get_nodes(), manager.get_graph_name())
     pipeline = graph.get_full_pipeline_description()
+
+    if graph_configs is not None:
+        if not isinstance(graph_configs, GraphConfigs):
+            raise TypeError(
+                "compile_graph(graph_configs=...) expects a GraphConfigs instance")
+        pipeline["pipeline"]["configs"] = graph_configs.to_dict()
 
     initial_value_filename = None
     if not manager.is_dry_run():
