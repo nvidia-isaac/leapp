@@ -4,15 +4,19 @@
 #
 
 import torch
+from pathlib import Path
 from typing import Tuple
 from leapp.backends.export_backend import ExportBackend, prepare_tensors_for_export, SimplifiedONNXProgram
 from leapp.utils.logging import _get_logger
 import os
 import onnx
+from onnx import AttributeProto, TensorProto, helper
 from onnx import numpy_helper
 import tempfile
 
 from torch.onnx import _constants
+from leapp.leapp_graph.custom_operator_registry import warp_custom_op
+from leapp.leapp_graph.custom_operator_registry.warp_bundle import pack_bundle
 
 class ONNXExportBackend(ExportBackend):
     def get_backend_metadata(self):
@@ -155,6 +159,113 @@ class ONNXExportBackend(ExportBackend):
                 f"Fixed {num_fixed} scalar Slice initializer(s) "
                 f"(ONNX exporter bug: shared scalar initializers between Gather and Slice nodes)")
 
+    @staticmethod
+    def _get_onnx_string_attr(node: onnx.NodeProto, name: str) -> str | None:
+        for attr in node.attribute:
+            if attr.name == name and attr.type == AttributeProto.STRING:
+                return attr.s.decode("utf-8")
+        return None
+
+    @staticmethod
+    def _set_onnx_string_attr(node: onnx.NodeProto, name: str, value: str) -> None:
+        for attr in node.attribute:
+            if attr.name == name:
+                attr.s = value.encode("utf-8")
+                attr.type = AttributeProto.STRING
+                return
+        node.attribute.append(helper.make_attribute(name, value))
+
+    @staticmethod
+    def _remove_onnx_attr(node: onnx.NodeProto, name: str) -> None:
+        kept = [attr for attr in node.attribute if attr.name != name]
+        del node.attribute[:]
+        node.attribute.extend(kept)
+
+    def _embed_warp_bundles(self, model: onnx.ModelProto) -> int:
+        """Embed saved Warp APIC bundles as uint8 initializers on WrpRunner nodes."""
+        segments = getattr(self.node_context, "warp_segments", None) or []
+        by_storage = {
+            segment.save_plan.storage_path: segment
+            for segment in segments
+            if segment.save_plan is not None
+        }
+        if not by_storage:
+            return 0
+
+        embedded = 0
+        for node in model.graph.node:
+            if (
+                node.op_type != warp_custom_op.ONNX_WRP_OP_TYPE
+                or node.domain != warp_custom_op.ONNX_WRP_DOMAIN
+            ):
+                continue
+
+            storage_path = self._get_onnx_string_attr(node, "storage_path")
+            if not storage_path:
+                storage_path = self._get_onnx_string_attr(node, "wrp_path")
+            if not storage_path:
+                raise ValueError(
+                    f"[{self.node_context.name}] WrpRunner node '{node.name}' "
+                    "is missing storage_path."
+                )
+
+            segment = by_storage.get(storage_path)
+            if segment is None or segment.save_plan is None:
+                raise ValueError(
+                    f"[{self.node_context.name}] No saved Warp bundle for "
+                    f"storage_path '{storage_path}'."
+                )
+
+            plan = segment.save_plan
+            archive, wrp_name = pack_bundle(Path(plan.wrp_path))
+            bundle_name = f"{node.name}.bundle"
+            model.graph.initializer.append(
+                helper.make_tensor(
+                    name=bundle_name,
+                    data_type=TensorProto.UINT8,
+                    dims=[len(archive)],
+                    vals=archive,
+                    raw=True,
+                )
+            )
+            node.input.append(bundle_name)
+
+            self._set_onnx_string_attr(node, "storage_path", plan.storage_path)
+            self._set_onnx_string_attr(node, "wrp_name", wrp_name)
+            self._set_onnx_string_attr(
+                node, "input_names", ",".join(plan.input_names)
+            )
+            self._set_onnx_string_attr(
+                node, "output_names", ",".join(plan.output_names)
+            )
+            self._set_onnx_string_attr(
+                node,
+                "output_shape",
+                warp_custom_op._format_output_shape_attr(plan.output_shapes),
+            )
+            self._remove_onnx_attr(node, "wrp_path")
+
+            embedded += 1
+            _get_logger().debug(
+                f"[{self.node_context.name}] Embedded Warp bundle for "
+                f"'{storage_path}' ({len(archive)} bytes) on node '{node.name}'."
+            )
+
+        if embedded:
+            has_custom_opset = any(
+                opset.domain == warp_custom_op.ONNX_WRP_DOMAIN
+                for opset in model.opset_import
+            )
+            if not has_custom_opset:
+                model.opset_import.append(
+                    helper.make_opsetid(
+                        warp_custom_op.ONNX_WRP_DOMAIN,
+                        warp_custom_op.ONNX_WRP_OPSET,
+                    )
+                )
+
+        return embedded
+
     def save(self, save_path: str) -> Tuple[str, str, str]:
         onnx_path = os.path.join(save_path, f"{self.node_context.name}.onnx")
 
@@ -191,7 +302,7 @@ class ONNXTorchScriptExportBackend(ONNXExportBackend):
             m = self.module_builder()
         m = m.eval()
         self._handle_duplicate_io_names()
-        
+
         # Optionally pre-script the module before ONNX export
         # This is useful when using traced models as environment constants
         if self.backend_params.get('prescript', False):
@@ -275,6 +386,7 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
         # Fix scalar Slice initializers on the in-memory proto before saving
         # (ONNX exporter bug: shared scalar initializers between Gather and Slice nodes).
         self._fix_scalar_slice_inputs(model_proto)
+        self._embed_warp_bundles(model_proto)
 
         # Wrap in SimplifiedONNXProgram so validation uses controlled
         # ORT session options (ORT_ENABLE_BASIC avoids graph-opt corruption).

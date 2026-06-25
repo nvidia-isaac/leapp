@@ -15,20 +15,16 @@ The current implementation is enough to trace, export an ONNX graph containing
 ``com.nvidia.warp::WrpRunner``, and inspect the result. The following are still
 missing if the goal is a runnable exported pipeline:
 
-- **``.wrp`` payload** — segments are not serialized yet. The op's ``path``
-  argument and the ONNX ``wrp_path`` attribute are empty placeholders; export
-  should call ``wp.capture_save`` (or an embedded-bundle path) and fill them in.
-- **Real I/O names** — ONNX ``input_names`` / ``output_names`` are synthetic
-  (``input_0``, ``output_0``, …). They should come from the segment's Warp
-  kernel parameter names (``segment.input_refs`` / ``output_refs``).
-- **``output_mask`` in lowering** — the mask is stamped on FX nodes during
-  pruning but not yet applied when building WrpRunner attributes (unused outputs
-  should be dropped or zero-shaped consistently with the runtime contract).
-- **Embedded bundle mode** — alternative to path-based export: ``wrp_name`` plus
-  a uint8 tensor input carrying the serialized ``.wrp`` bytes (for self-contained
-  ONNX artifacts).
-- **Portable paths** — ``wrp_path`` is currently absolute; may need to be
-  relative to the ONNX file or replaced entirely by embedded mode.
+- **``.wrp`` payload** — deferred until after FX pruning in ``_save_warp_captures``;
+  embedded into ONNX via ``_embed_warp_bundles`` on the dynamo export path.
+- **Real I/O names** — ONNX ``input_names`` / ``output_names`` are filled from
+  the segment save plan at embed time (live inputs/outputs only).
+- **``output_mask`` in lowering** — unused outputs stay in the ONNX node with
+  zero shape; APIC ``capture_save`` only registers live outputs.
+- **Embedded bundle mode** — canonical: ``wrp_name`` plus a uint8 tensor input
+  carrying the WRPB archive (self-contained ONNX artifacts).
+- **Portable paths** — ``path`` is a logical storage namespace
+  (``leapp/<graph>/<node>/<proxy>``), not a filesystem path.
 - **ORT custom op** — vanilla ONNX Runtime does not register ``WrpRunner``; the
   prototype C++/CUDA kernel must be installed before inference or LEAPP
   validation can succeed.
@@ -49,6 +45,8 @@ from typing import Any
 import torch
 
 from leapp.utils.logging import _get_logger
+
+from .registry import register_export_hooks
 
 try:
     import warp as wp
@@ -75,8 +73,9 @@ QUALIFIED_NAME = f"{NAMESPACE}::{OP_NAME}"
 #                    ``ScalarType`` because PyTorch surfaces schema ScalarType
 #                    args to Python as opaque integer codes with no stable
 #                    public inverse.
-#   path           : path to the segment's ``.wrp`` payload; empty until export
-#                    materializes it (see module TODO).
+#   path           : runtime storage namespace for the segment bundle, e.g.
+#                    ``leapp/<graph_name>/<node_name>/<proxy_name>``; set when
+#                    the segment marker is emitted in ``close_warp_segment``.
 #   output_mask    : per-output flag for which outputs are live graph outputs;
 #                    rewritten by the post-prune pass in ``traced_node.py``.
 _SCHEMA = (
@@ -150,13 +149,13 @@ def _warp_runner_fake(inputs, output_shapes, output_dtypes, path, output_mask):
 
 
 def _warp_runner_eager(inputs, output_shapes, output_dtypes, path, output_mask):
-    """Eager kernel: allocate shape-correct outputs from the spec.
+    """Eager kernel: allocate shape-correct (zeros) outputs from the spec.
 
     This does **not** perform the Warp computation — real execution is the ORT/C++
-    ``WrpRunner`` kernel after ONNX export. It exists so the op survives
-    ``torch.jit.trace`` (which executes the forward on real inputs): trace records
-    a single ``leapp::warp_runner`` node and the TorchScript ONNX symbolic lowers
-    it to ``com.nvidia.warp::WrpRunner``. Values are zeros placeholders.
+    ``WrpRunner`` kernel after ONNX export. It exists so the op is callable in eager
+    mode (keeping the op valid during ``torch.export`` tracing). The placeholder
+    zeros are why eager validation reports a value mismatch until the real runtime
+    kernel exists.
     """
     if len(output_shapes) != len(output_dtypes):
         raise ValueError(
@@ -225,10 +224,9 @@ def lower_warp_runner_to_onnx(
     dtypes = [_resolve_dtype(name) for name in output_dtypes]
     shapes = [tuple(int(dim) for dim in shape) for shape in output_shapes]
 
-    # TODO: read real names from segment metadata; honor output_mask; fill wrp_path
-    # from a serialized .wrp bundle (see module docstring TODO list).
+    # Names and shapes are finalized at embed time from the segment save plan.
     attrs = {
-        "wrp_path": path or "",
+        "storage_path": path or "",
         "input_names": ",".join(f"input_{i}" for i in range(len(data_inputs))),
         "output_names": ",".join(f"output_{i}" for i in range(len(shapes))),
         "output_shape": _format_output_shape_attr(
@@ -293,108 +291,71 @@ def _register_onnx_lowering() -> None:
 
 
 # =============================================================================
-# ONNX EXPORT (TorchScript) — legacy symbolic registration
+# EXPORT BACKEND SUPPORT — which export paths can carry a Warp segment
 # =============================================================================
-# The TorchScript ONNX exporter (``torch.onnx.export(..., dynamo=False)``) uses a
-# different extension mechanism than dynamo: a "symbolic" registered globally via
-# ``register_custom_op_symbolic``. It builds the same ``com.nvidia.warp::WrpRunner``
-# node against the TorchScript graph builder ``g`` instead of ``onnxscript.ir``.
+# Supported:
+#   * onnx-dynamo  — ONNX via ``torch.onnx.export(dynamo=True)``
 #
-# This path requires the op to reach export without raising: under ``jit-trace``
-# the eager kernel above produces shape-correct outputs; under ``jit-script`` the
-# op is recorded without execution. The custom-domain opset import defaults to 1.
+# NOT supported (the export registry rejects these backends when a segment is
+# present): ``jit-script``, ``jit-trace``, ``onnx-torchscript``.
+#
+# Why only the dynamo ONNX path
+# -----------------------------
+# ``warp_runner`` is a *variadic, index-addressed* multi-output node:
+# ``(Tensor[] inputs, int[][] output_shapes, ...) -> Tensor[]`` whose downstream
+# consumers read ``operator.getitem(node, i)``. The dynamo exporter keeps it as a
+# real multi-output node and maps each ``getitem`` to the i-th output directly,
+# mixed dtypes included (see ``lower_warp_runner_to_onnx``), and the embedded
+# WRPB bundle is attached as a ``uint8`` initializer at export time.
+#
+# The legacy TorchScript tracer/ONNX exporter cannot represent this op
+# (``int[][]`` args break tracing, list-typed constants break the exporter, and
+# the ``Tensor[]`` return only fits a homogeneous ONNX sequence). ``jit-script``
+# could carry the op structurally but produces an *incomplete* artifact: it has
+# no mechanism to embed the APIC bundle, so the ``.pt`` would script and run the
+# placeholder eager kernel (zeros) with no Warp data. It is therefore rejected
+# rather than silently emitting a broken model. A future ``torch.export``/``.pt2``
+# backend is the intended non-ONNX path (lifted-constant bundle + unified C++ op).
 
-_TORCHSCRIPT_SYMBOLIC_REGISTERED = False
-
-
-def _ts_parse_int_list_list(value) -> list[list[int]]:
-    """Parse an ``int[][]`` schema arg (a nested ``prim::ListConstruct``)."""
-    from torch.onnx import symbolic_helper
-
-    return [
-        symbolic_helper._parse_arg(inner, "is") for inner in value.node().inputs()
-    ]
-
-
-def _ts_parse_str_list(value) -> list[str]:
-    """Parse a ``str[]`` schema arg (a ``prim::ListConstruct`` of strings)."""
-    from torch.onnx import symbolic_helper
-
-    return [
-        symbolic_helper._parse_arg(inner, "s") for inner in value.node().inputs()
-    ]
-
-
-def _ts_set_output_type(value, torch_dtype: torch.dtype, shape) -> None:
-    """Best-effort: stamp dtype/shape on a symbolic output so the ONNX graph is typed."""
-    try:
-        value.setType(value.type().with_dtype(torch_dtype).with_sizes(list(shape)))
-    except Exception:
-        try:
-            value.setType(
-                torch._C.TensorType.create_from_tensor(
-                    torch.zeros(list(shape), dtype=torch_dtype)
-                )
-            )
-        except Exception:
-            pass
+_SUPPORTED_EXPORT_BACKENDS = frozenset({"onnx-dynamo"})
 
 
-def warp_runner_symbolic(g, inputs, output_shapes, output_dtypes, path, output_mask):
-    """TorchScript ONNX symbolic: lower ``leapp::warp_runner`` to ``WrpRunner``.
+def _module_contains_warp_runner(module: "torch.nn.Module") -> bool:
+    """True if any GraphModule in ``module`` calls ``leapp::warp_runner``."""
+    op_packet = get_op()
+    for _, submodule in module.named_modules():
+        graph = getattr(submodule, "graph", None)
+        if graph is None:
+            continue
+        for node in graph.nodes:
+            if node.op != "call_function":
+                continue
+            target = node.target
+            if target is op_packet:
+                return True
+            if (
+                isinstance(target, torch._ops.OpOverload)
+                and target.overloadpacket is op_packet
+            ):
+                return True
+    return False
 
-    Mirrors :func:`lower_warp_runner_to_onnx` (the dynamo lowering) but builds the
-    node via the TorchScript graph builder ``g``. Variadic ``Tensor[]`` inputs are
-    unpacked from their ``prim::ListConstruct``; output count comes from the static
-    ``output_shapes`` so ``g.op(..., outputs=N)`` returns the right arity.
-    """
-    from torch.onnx import symbolic_helper
 
-    data_inputs = symbolic_helper._unpack_list(inputs)
-    shapes = _ts_parse_int_list_list(output_shapes)
-    dtype_names = _ts_parse_str_list(output_dtypes)
-    wrp_path = symbolic_helper._parse_arg(path, "s")
-    num_outputs = len(shapes)
-
-    # TODO: read real names from segment metadata; honor output_mask; fill wrp_path
-    # from a serialized .wrp bundle (see module docstring TODO list).
-    attrs = {
-        "wrp_path_s": wrp_path or "",
-        "input_names_s": ",".join(f"input_{i}" for i in range(len(data_inputs))),
-        "output_names_s": ",".join(f"output_{i}" for i in range(num_outputs)),
-        "output_shape_s": _format_output_shape_attr(shapes),
-    }
-
-    outputs = g.op(
-        f"{ONNX_WRP_DOMAIN}::{ONNX_WRP_OP_TYPE}",
-        *data_inputs,
-        outputs=num_outputs,
-        **attrs,
+def _warp_unsupported_message(backend: str) -> str:
+    return (
+        f"export_with='{backend}' is not supported for graphs containing a Warp "
+        f"segment ({QUALIFIED_NAME}). Only export_with='onnx-dynamo' can embed the "
+        "APIC bundle and represent the op's variadic, mixed-dtype, index-addressed "
+        "outputs. Use export_with='onnx-dynamo'."
     )
-    output_values = list(outputs) if num_outputs > 1 else [outputs]
-
-    torch_dtypes = [_resolve_dtype(name) for name in dtype_names]
-    for value, shape, dtype in zip(output_values, shapes, torch_dtypes):
-        _ts_set_output_type(value, dtype, shape)
-
-    return output_values[0] if num_outputs == 1 else output_values
 
 
-def _register_torchscript_symbolic() -> None:
-    """Register the TorchScript ONNX symbolic across the supported opset range."""
-    global _TORCHSCRIPT_SYMBOLIC_REGISTERED
-    if _TORCHSCRIPT_SYMBOLIC_REGISTERED:
-        return
-    # Custom-domain ops are opset-agnostic; register broadly so any export opset
-    # the backend chooses resolves the symbolic.
-    for opset in range(9, 24):
-        torch.onnx.register_custom_op_symbolic(
-            QUALIFIED_NAME, warp_runner_symbolic, opset
-        )
-    _TORCHSCRIPT_SYMBOLIC_REGISTERED = True
-    _get_logger().debug(
-        f"Registered TorchScript ONNX symbolic for {QUALIFIED_NAME} -> "
-        f"{ONNX_WRP_DOMAIN}::{ONNX_WRP_OP_TYPE}"
+def _register_export_hooks() -> None:
+    register_export_hooks(
+        op_name=QUALIFIED_NAME,
+        detect_in_module=_module_contains_warp_runner,
+        supported_backends=_SUPPORTED_EXPORT_BACKENDS,
+        unsupported_message=_warp_unsupported_message,
     )
 
 
@@ -411,8 +372,9 @@ def _register() -> None:
     ):
         _LIB.define(_SCHEMA)
         torch.library.register_fake(QUALIFIED_NAME, _warp_runner_fake, lib=_LIB)
-        # Shape-correct eager kernel so the op survives jit-trace; real execution
-        # is the ORT WrpRunner kernel after export.
+        # Shape-correct eager kernel so the op stays callable during
+        # ``torch.export`` tracing; real execution is the ORT WrpRunner kernel
+        # after export.
         _LIB.impl(OP_NAME, _warp_runner_eager, "CompositeExplicitAutograd")
 
         _get_logger().debug(
@@ -420,7 +382,7 @@ def _register() -> None:
         )
 
     _register_onnx_lowering()
-    _register_torchscript_symbolic()
+    _register_export_hooks()
 
 
 _register()

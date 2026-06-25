@@ -210,6 +210,12 @@ class LeappNode():
 
     def compile_model(self):
         try:
+            if self.backend not in (None, "None"):
+                from leapp.leapp_graph.custom_operator_registry import (
+                    prepare_and_validate,
+                )
+
+                prepare_and_validate(self.m, self.backend)
             self.export_backend.compile(self.m)
         except Exception as e:
             _get_logger().fatal(
