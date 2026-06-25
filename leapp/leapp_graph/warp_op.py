@@ -61,8 +61,6 @@ else:
                     if self._segment is not None:
                         self._segment.apic_graph = graph
                         self._segment.add_event({"kind": "scoped_capture"})
-                        # later:
-                        # wp.capture_save(self.graph, path, inputs=..., outputs=...)
                         self.node_ref.close_warp_segment(self._segment)
             finally:
                 if self._detector is not None:
