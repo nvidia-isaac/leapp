@@ -29,7 +29,7 @@ import torch
 from leapp.utils.logging import _get_logger
 
 # Re-export from datatypes for backwards compatibility
-from leapp.leapp_graph.datatypes import is_tracable_tensor_type  # noqa: F401
+from leapp.leapp_graph.datatypes import is_tracable_tensor_type, to_export_torch_tensor  # noqa: F401
 
 def find_with_block_end(filename, start_lineno):
     """Use AST to find the end line of the with block starting at start_lineno.
@@ -304,7 +304,8 @@ def extract_return_names(func):
 def safe_deepcopy(data):
     # this is used to deepcopy a complex data structure.
     # running safe deepcopy also unwraps the TracedTensor to the underlying tensor.
-    if isinstance(data, torch.Tensor):
+    if is_tracable_tensor_type(data):
+        data = to_export_torch_tensor(data)
         cloned_data = data.clone()
         if hasattr(data, 'leapp_tag'):
             tag_tensor(cloned_data, data.leapp_tag)

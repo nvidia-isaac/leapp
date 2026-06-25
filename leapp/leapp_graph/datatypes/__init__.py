@@ -172,6 +172,20 @@ def as_traced(data, name: str, context, proxy) -> TracedData:
     
     return traced_class(data, name, context, proxy)
 
+def to_export_torch_tensor(data) -> torch.Tensor:
+    """Convert a traceable LEAPP value to ``torch.Tensor`` for export metadata."""
+    if isinstance(data, TracedData):
+        return data.tensor
+    if isinstance(data, torch.Tensor):
+        return data
+    if np is not None and isinstance(data, np.ndarray):
+        return torch.from_numpy(data)
+    if wp is not None and isinstance(data, wp.array):
+        return wp.to_torch(data)
+    raise TypeError(
+        f"Cannot convert type {type(data).__name__} to torch.Tensor"
+    )
+
 # =============================================================================
 # Exports
 # =============================================================================
@@ -191,6 +205,7 @@ __all__ = [
     "is_tracable_tensor_type",
     "is_traced_type",
     "get_traced_class_for",
+    "to_export_torch_tensor",
     # Patch management
     "apply_traced_data_patches",
     "remove_traced_data_patches",
