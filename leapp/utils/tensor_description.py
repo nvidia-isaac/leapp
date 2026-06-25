@@ -674,7 +674,8 @@ def describe_io_helper(data, name_str):
             if child_format is not None:
                 io_format[k] = child_format
                 data_description.extend(child_description)
-    elif isinstance(data, torch.Tensor):
+    # elif isinstance(data, torch.Tensor):
+    elif is_tracable_tensor_type(data):
         tensor_desc = TensorDescription(name_str, data)
 
         # Return as a list containing the dataclass (for now, keep compatibility)
