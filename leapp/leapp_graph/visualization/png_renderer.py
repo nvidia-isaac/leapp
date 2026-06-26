@@ -202,23 +202,29 @@ def _edge_color_name(kind: str) -> str:
 
 
 def _load_fonts() -> dict[str, ImageFont.ImageFont | ImageFont.FreeTypeFont]:
-    default_font = ImageFont.load_default()
-    try:
-        regular = ImageFont.truetype(_FONT_REGULAR_PATH, size=_scaled_width(13))
-    except OSError:
-        regular = default_font
-    try:
-        bold = ImageFont.truetype(_FONT_BOLD_PATH, size=_scaled_width(13))
-    except OSError:
-        bold = default_font
-    try:
-        title = ImageFont.truetype(_FONT_BOLD_PATH, size=_scaled_width(14))
-    except OSError:
-        title = bold
-    try:
-        badge = ImageFont.truetype(_FONT_BOLD_PATH, size=_scaled_width(12))
-    except OSError:
-        badge = default_font
+    default_font: ImageFont.ImageFont | ImageFont.FreeTypeFont | None = None
+
+    def fallback() -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
+        nonlocal default_font
+        if default_font is None:
+            default_font = ImageFont.load_default()
+        return default_font
+
+    def try_truetype(path: str, size: int) -> ImageFont.FreeTypeFont | None:
+        try:
+            return ImageFont.truetype(path, size=size)
+        except OSError:
+            return None
+
+    regular = try_truetype(_FONT_REGULAR_PATH, _scaled_width(13))
+    bold = try_truetype(_FONT_BOLD_PATH, _scaled_width(13))
+    title = try_truetype(_FONT_BOLD_PATH, _scaled_width(14))
+    badge = try_truetype(_FONT_BOLD_PATH, _scaled_width(12))
+
+    regular = regular or fallback()
+    bold = bold or fallback()
+    title = title or bold
+    badge = badge or fallback()
     return {
         "label": regular,
         "label_bold": bold,
