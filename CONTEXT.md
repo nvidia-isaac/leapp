@@ -25,6 +25,13 @@ or the region's edges. Each non-empty segment becomes one auto-generated leapp n
 The kind of artifact a node compiles to — `torch` (ONNX / TorchScript) or `warp`
 (an APIC `.wrp`). At the code level this is the node's `backend`.
 
+**Visualization port**:
+A rendered input or output row inside a leapp node visualization. It represents an existing
+named tensor input or output, including metadata such as shape, dtype, and kind when
+available. A visualization port is not a deployable model artifact and is not a separate
+graph node.
+_Avoid_: treating ports as pipeline nodes
+
 **Warp node**:
 A leapp node whose artifact is a native Warp APIC `.wrp` — one captured CUDA graph holding
 a contiguous run of warp kernels. A warp node is never wrapped as an ONNX custom op.
