@@ -233,7 +233,8 @@ artifacts and the metadata needed to wire them together.
    .. grid-item-card:: Graph visualization
       :class-card: sd-rounded-3
 
-      Optional diagrams make the traced pipeline easier to inspect and discuss.
+      Optional SVG and PNG diagrams make the traced pipeline easier to inspect
+      and discuss.
 
 Try it yourself
 ===============
@@ -245,9 +246,10 @@ Try it yourself
 Graph visualization
 -------------------
 
-LEAPP writes a graph visualization showing exported nodes, graph inputs and
-outputs, and data-flow connections between nodes. Use it to verify that
-LEAPP detected the node boundaries and cross-node connections you intended.
+LEAPP writes a primary SVG graph visualization plus a companion PNG showing
+exported nodes, graph inputs and outputs, and data-flow connections between
+nodes. Use them to verify that LEAPP detected the node boundaries and
+cross-node connections you intended.
 
 .. image:: _static/images/getting_started_graph.png
    :alt: Getting started graph

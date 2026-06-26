@@ -37,6 +37,7 @@ class TestWBCPlain(BaseExampleTest):
         # Expected output files based on the sample_wbc_graph directory
         expected_files = [
             'wbc_plain.onnx',
+            'sample_wbc_graph.svg',
             'sample_wbc_graph.png',
             'sample_wbc_graph.yaml'
         ]

@@ -29,6 +29,7 @@ class TestFeedbackExample(BaseExampleTest):
         expected_files = [
             "policy_step.pt",
             "feedback_update.pt",
+            "sample_feedback_graph.svg",
             "sample_feedback_graph.png",
             "sample_feedback_graph.yaml",
             "sample_feedback_graph_initial_values.safetensors",

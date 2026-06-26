@@ -29,6 +29,7 @@ class TestGettingStarted(BaseExampleTest):
         expected_files = [
             "obs_processor.pt",
             "policy.pt",
+            "sample_pipeline.svg",
             "sample_pipeline.png",
             "sample_pipeline.yaml",
         ]
