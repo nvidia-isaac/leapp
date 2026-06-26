@@ -1,3 +1,4 @@
+from leapp.leapp_graph.visualization import geometry as geometry_module
 from leapp.leapp_graph.visualization.geometry import resolve_geometry
 from leapp.leapp_graph.visualization.layout import LayoutResult, Point
 from leapp.leapp_graph.visualization.model import VisualEdge, VisualGraph, VisualNode, VisualPort, VisualTerminal
@@ -60,3 +61,45 @@ def test_geometry_routes_forward_and_feedback_edges_differently():
     assert feedback.kind == "feedback"
     assert min(point.y for point in feedback.points) < geometry.content_bounds.y
     assert forward.points[0].x < forward.points[-1].x
+
+
+def test_geometry_budgets_output_row_width_for_long_inline_kind_labels():
+    separator_gap = 16.0
+    long_kind = "semantic_feedback_reference_signal"
+    node = VisualNode(
+        id="node:policy",
+        title="policy",
+        backend=None,
+        inputs=(),
+        outputs=(
+            VisualPort(
+                "port:policy:output:action",
+                "node:policy",
+                "output",
+                "action_output_label",
+                ("1", "4"),
+                "float32",
+                long_kind,
+            ),
+        ),
+    )
+    graph = VisualGraph(nodes=(node,), terminals=(), edges=())
+    layout = LayoutResult(centers={"node:policy": Point(0.0, 0.0)}, forward_edge_ids=())
+
+    geometry = resolve_geometry(graph, layout, graph_name="demo")
+
+    visible_name = geometry_module.truncate_text(node.outputs[0].name, geometry_module._PORT_NAME_MAX_CHARS)
+    visible_kind = geometry_module.truncate_text(long_kind, geometry_module._PORT_NAME_MAX_CHARS)
+    visible_detail = geometry_module.truncate_text("[1, 4] float32", geometry_module._PORT_DETAIL_MAX_CHARS)
+    required_primary_width = (
+        len(visible_name) * geometry_module._PORT_PRIMARY_CHAR_WIDTH
+        + separator_gap
+        + len(visible_kind) * geometry_module._PORT_PRIMARY_CHAR_WIDTH
+    )
+    required_port_width = max(
+        required_primary_width,
+        len(visible_detail) * geometry_module._PORT_DETAIL_CHAR_WIDTH,
+    )
+    expected_node_width = required_port_width + (geometry_module._NODE_PADDING * 2.0) + 36.0
+
+    assert geometry.nodes["node:policy"].rect.width >= expected_node_width

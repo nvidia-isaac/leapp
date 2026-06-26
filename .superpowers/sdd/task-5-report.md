@@ -132,3 +132,27 @@ Result:
 ........                                                                 [100%]
 8 passed in 1.51s
 ```
+
+## Re-review Fixes 2
+
+### Changes
+
+- Updated [geometry.py](/home/lgulich/Code/leapp/leapp/leapp_graph/visualization/geometry.py) so `_measure_node_width()` now budgets port rows using the same inline primary-row layout that the SVG renderer draws: truncated visible name width, truncated visible `kind` width when present, and a fixed `16.0` separator gap between them.
+- Added shared helpers in `geometry.py` for visible `kind` truncation and primary/detail width measurement, while keeping `_MAX_NODE_WIDTH` clamping intact.
+- Updated [svg_renderer.py](/home/lgulich/Code/leapp/leapp/leapp_graph/visualization/svg_renderer.py) to render the same truncated visible `kind` string that geometry budgets, keeping width measurement and SVG output aligned under max-width constraints.
+- Expanded [test_graph_visualization_geometry.py](/home/lgulich/Code/leapp/tests/unit_tests/test_graph_visualization_geometry.py) with a geometry-level regression that proves a realistic long output `kind` label gets enough horizontal budget for the separated `name + gap + kind` layout instead of only checking coordinate differences.
+
+### Test Output
+
+Command:
+
+```bash
+uv run pytest tests/unit_tests/test_graph_visualization_svg.py tests/unit_tests/test_graph_visualization_geometry.py -q
+```
+
+Result:
+
+```text
+.........                                                                [100%]
+9 passed in 1.59s
+```

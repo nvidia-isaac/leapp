@@ -21,6 +21,7 @@ _PORT_PRIMARY_CHAR_WIDTH = 7.0
 _PORT_DETAIL_CHAR_WIDTH = 6.2
 _PORT_NAME_MAX_CHARS = 24
 _PORT_DETAIL_MAX_CHARS = 32
+_PORT_KIND_GAP = 16.0
 _FEEDBACK_LANE_STEP = 34.0
 
 
@@ -341,15 +342,31 @@ def _measure_node_width(node: VisualNode) -> float:
     width = len(node.title) * _TITLE_CHAR_WIDTH + (_NODE_PADDING * 2.0)
 
     for port in (*node.inputs, *node.outputs):
-        name = truncate_text(port.name, _PORT_NAME_MAX_CHARS)
-        detail = truncate_text(_port_detail_text(port), _PORT_DETAIL_MAX_CHARS)
-        port_width = max(
-            len(name) * _PORT_PRIMARY_CHAR_WIDTH,
-            len(detail) * _PORT_DETAIL_CHAR_WIDTH,
-        )
+        port_width = _measure_port_content_width(port)
         width = max(width, port_width + (_NODE_PADDING * 2.0) + 36.0)
 
     return _clamp(width, _MIN_NODE_WIDTH, _MAX_NODE_WIDTH)
+
+
+def _measure_port_content_width(port: VisualPort) -> float:
+    return max(
+        _measure_port_primary_width(port),
+        len(truncate_text(_port_detail_text(port), _PORT_DETAIL_MAX_CHARS)) * _PORT_DETAIL_CHAR_WIDTH,
+    )
+
+
+def _measure_port_primary_width(port: VisualPort) -> float:
+    width = len(truncate_text(port.name, _PORT_NAME_MAX_CHARS)) * _PORT_PRIMARY_CHAR_WIDTH
+    visible_kind = _visible_port_kind(port)
+    if visible_kind:
+        width += _PORT_KIND_GAP + (len(visible_kind) * _PORT_PRIMARY_CHAR_WIDTH)
+    return width
+
+
+def _visible_port_kind(port: VisualPort | PortGeometry) -> str | None:
+    if not port.kind:
+        return None
+    return truncate_text(port.kind, _PORT_NAME_MAX_CHARS)
 
 
 def _port_detail_text(port: VisualPort) -> str:
