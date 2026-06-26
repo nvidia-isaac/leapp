@@ -37,9 +37,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
@@ -48,9 +45,11 @@ classifiers = [
 # dict in key insertion order is garunteeded in python 3.7+
 # getting the end_lineno for ast nodes is provided in 3.8+
 # __init__subclass__ is provided in 3.6+
-requires-python = ">=3.8"
+requires-python = ">=3.11"
 dependencies = [
     "torch>=2.6.0",
+    "fast-sugiyama>=0.5.3",
+    "Pillow>=10.0.0",
     "matplotlib>=3.5.0",
     "networkx>=2.6",
     "PyYAML>=6.0",
