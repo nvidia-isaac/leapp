@@ -1,17 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-import sys
 
-try:
-    from fast_sugiyama import from_edges
-except ModuleNotFoundError:
-    version_dir = f"python{sys.version_info.major}.{sys.version_info.minor}"
-    venv_site_packages = Path(__file__).resolve().parents[3] / ".venv" / "lib" / version_dir / "site-packages"
-    if venv_site_packages.exists():
-        sys.path.append(str(venv_site_packages))
-    from fast_sugiyama import from_edges
+from fast_sugiyama import from_edges
 
 from .model import VisualGraph
 
