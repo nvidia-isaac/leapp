@@ -10,7 +10,7 @@ Installation
    pip install leapp
 
 LEAPP requires Python 3.8+ and PyTorch 2.6.0+. The full dependency list is
-in the :doc:`/index`.
+available in LEAPP's `pyproject.toml <https://github.com/nvidia-isaac/leapp/blob/main/pyproject.toml>`_.
 
 Welcome to LEAPP! This guide walks you through the basics of using LEAPP
 to trace and export computational graphs from PyTorch code.
