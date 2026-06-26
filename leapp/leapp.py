@@ -166,10 +166,7 @@ def compile_graph(visualize=True, verbose=None, validate=True, dry_run=False, rt
     models = manager.get_io_descriptions()
 
     if visualize:
-        try:
-            graph.visualize(manager.get_save_path(), manager.get_graph_name())
-        except Exception as e:
-            _get_logger().error(f"Error visualizing graph: {e}")
+        graph.visualize(manager.get_save_path(), manager.get_graph_name())
 
     internal_connections, total_edges = graph.get_graph_statistics()
 

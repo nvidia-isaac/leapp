@@ -120,6 +120,7 @@ How LEAPP Fits In
                  <span>node1.pt</span>
                  <span>node1.onnx</span>
                  <span>pipeline.yaml</span>
+                 <span>visualization.svg</span>
                  <span>visualization.png</span>
                </div>
              </div>
