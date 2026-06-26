@@ -13,7 +13,9 @@ interactive Matplotlib window where users manually drag nodes before saving the 
 not a good default for export workflows, CI, docs generation, or headless runs.
 
 This design replaces the interactive Matplotlib visualization with a static, automatically
-laid-out graph rendering. The new renderer emits both SVG and PNG. It uses a layered layout
+laid-out graph rendering. The new renderer emits both SVG and PNG and lives in the reusable
+`leapp-visualization` sibling package. LEAPP keeps a small adapter that maps LEAPP nodes and
+tensor descriptors into the generic visualization model. The renderer uses a layered layout
 similar in spirit to rqt_graph and Netron, and it renders named tensor ports inside each
 leapp node so users can inspect tensor names, shapes, dtypes, and semantic kinds directly in
 the graph artifact.
@@ -91,16 +93,17 @@ References:
 
 ```mermaid
 flowchart LR
-    A[LeappGraph] --> B[Visualization model builder]
-    B --> C[Layered layout adapter]
-    C --> D[Geometry resolver]
-    D --> E[SVG renderer]
-    D --> F[PNG renderer]
+    A[LeappGraph] --> B[LEAPP visualization adapter]
+    B --> C[leapp-visualization model]
+    C --> D[Layered layout adapter]
+    D --> E[Geometry resolver]
+    E --> F[SVG renderer]
+    E --> G[PNG renderer]
 ```
 
-### Visualization model builder
+### Visualization model and LEAPP adapter
 
-Add a small internal visual model separate from `LeappGraph`:
+Add a small visual model separate from `LeappGraph` in the `leapp-visualization` package:
 
 ```python
 @dataclass
@@ -126,10 +129,11 @@ class VisualPort:
     kind: str | None
 ```
 
-The builder consumes the in-memory `nodes`, `connections`, `feedback_connections`,
+LEAPP's adapter consumes the in-memory `nodes`, `connections`, `feedback_connections`,
 `graph_inputs`, and `graph_outputs` already passed to `visualize_graph()`. It does not parse
 the generated YAML. It uses each node's `TensorDescription` data, including semantic fields
-from `TensorDescription.dict()` / `get_semantics()`.
+from `TensorDescription.dict()` / `get_semantics()`, and constructs a
+`leapp_visualization.VisualGraph`.
 
 ### Layered layout adapter
 
@@ -218,8 +222,9 @@ SVG rendering, but topology and placement should match.
 ## Dependency and packaging changes
 
 - Raise `requires-python` to `>=3.11`.
-- Add `fast-sugiyama>=0.5.3`.
-- Add `Pillow>=10` or current project-preferred Pillow lower bound.
+- Add a default LEAPP dependency on the sibling `leapp-visualization` package.
+- Put `fast-sugiyama>=0.5.3` in `leapp-visualization`.
+- Put `Pillow>=10` or current project-preferred Pillow lower bound in `leapp-visualization`.
 - Remove `matplotlib` if no other LEAPP runtime path needs it.
 - Keep `networkx` if still useful for graph construction/tests, or remove it if the new
   visual model no longer needs NetworkX.

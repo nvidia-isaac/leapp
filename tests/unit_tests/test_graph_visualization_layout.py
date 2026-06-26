@@ -1,5 +1,5 @@
-from leapp.leapp_graph.visualization.layout import compute_layered_layout
-from leapp.leapp_graph.visualization.model import VisualEdge, VisualGraph, VisualNode, VisualPort, VisualTerminal
+from leapp_visualization.layout import compute_layered_layout
+from leapp_visualization.model import VisualEdge, VisualGraph, VisualNode, VisualPort, VisualTerminal
 
 
 def _node(name):
@@ -58,7 +58,7 @@ def test_layered_layout_handles_edgeless_graph_with_stable_grid():
 
 
 def test_layered_layout_sorts_encoded_edges_and_places_missing_ids(monkeypatch):
-    import leapp.leapp_graph.visualization.layout as layout_module
+    import leapp_visualization.layout as layout_module
 
     captured: dict[str, object] = {}
 

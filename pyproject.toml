@@ -47,9 +47,8 @@ classifiers = [
 # __init__subclass__ is provided in 3.6+
 requires-python = ">=3.11"
 dependencies = [
+    "leapp-visualization==0.5.2",
     "torch>=2.6.0",
-    "fast-sugiyama>=0.5.3",
-    "Pillow>=10.0.0",
     "PyYAML>=6.0",
     "onnx>=1.19.0",
     "onnxruntime>=1.20.0",
@@ -69,6 +68,9 @@ dev = [
 Homepage = "https://github.com/nvidia-isaac/leapp"
 Repository = "https://github.com/nvidia-isaac/leapp"
 Issues = "https://github.com/nvidia-isaac/leapp/issues"
+
+[tool.uv.sources]
+leapp-visualization = { path = "packages/leapp-visualization" }
 
 [tool.setuptools]
 include-package-data = true

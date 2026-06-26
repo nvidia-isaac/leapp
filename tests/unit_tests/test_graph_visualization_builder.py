@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from leapp.leapp_graph.visualization.builder import build_visual_graph
+from leapp.leapp_graph.visualization_adapter import build_visual_graph
 
 
 @dataclass

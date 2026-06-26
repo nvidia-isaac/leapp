@@ -254,11 +254,10 @@ name = "leapp"
 version = "0.5.2"
 source = { editable = "." }
 dependencies = [
-    { name = "fast-sugiyama" },
+    { name = "leapp-visualization" },
     { name = "onnx" },
     { name = "onnxruntime" },
     { name = "onnxscript" },
-    { name = "pillow" },
     { name = "pyyaml" },
     { name = "safetensors" },
     { name = "torch" },
@@ -275,19 +274,33 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "black", marker = "extra == 'dev'" },
-    { name = "fast-sugiyama", specifier = ">=0.5.3" },
     { name = "flake8", marker = "extra == 'dev'" },
+    { name = "leapp-visualization", directory = "packages/leapp-visualization" },
     { name = "mypy", marker = "extra == 'dev'" },
     { name = "onnx", specifier = ">=1.19.0" },
     { name = "onnxruntime", specifier = ">=1.20.0" },
     { name = "onnxscript", specifier = ">=0.1.0" },
-    { name = "pillow", specifier = ">=10.0.0" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "safetensors", specifier = ">=0.5.0" },
     { name = "torch", specifier = ">=2.6.0" },
 ]
 provides-extras = ["dev"]
+
+[[package]]
+name = "leapp-visualization"
+version = "0.5.2"
+source = { directory = "packages/leapp-visualization" }
+dependencies = [
+    { name = "fast-sugiyama" },
+    { name = "pillow" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fast-sugiyama", specifier = ">=0.5.3" },
+    { name = "pillow", specifier = ">=10.0.0" },
+]
 
 [[package]]
 name = "librt"

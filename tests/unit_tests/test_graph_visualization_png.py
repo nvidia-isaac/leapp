@@ -2,7 +2,7 @@ from pathlib import Path
 
 from PIL import ImageFont
 
-from leapp.leapp_graph.visualization.geometry import (
+from leapp_visualization.geometry import (
     EdgeGeometry,
     GraphGeometry,
     NodeGeometry,
@@ -10,9 +10,9 @@ from leapp.leapp_graph.visualization.geometry import (
     Rect,
     TerminalGeometry,
 )
-from leapp.leapp_graph.visualization.layout import Point
-from leapp.leapp_graph.visualization import png_renderer
-from leapp.leapp_graph.visualization.png_renderer import sample_cubic, write_png
+from leapp_visualization.layout import Point
+from leapp_visualization import png_renderer
+from leapp_visualization.png_renderer import sample_cubic, write_png
 
 
 def _geometry() -> GraphGeometry:

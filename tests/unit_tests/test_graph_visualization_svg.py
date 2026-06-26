@@ -1,8 +1,8 @@
 import xml.etree.ElementTree as ET
 
-from leapp.leapp_graph.visualization.geometry import EdgeGeometry, GraphGeometry, NodeGeometry, PortGeometry, Rect, TerminalGeometry
-from leapp.leapp_graph.visualization.layout import Point
-from leapp.leapp_graph.visualization.svg_renderer import COLORS, render_svg, write_svg
+from leapp_visualization.geometry import EdgeGeometry, GraphGeometry, NodeGeometry, PortGeometry, Rect, TerminalGeometry
+from leapp_visualization.layout import Point
+from leapp_visualization.svg_renderer import COLORS, render_svg, write_svg
 
 
 def _geometry():

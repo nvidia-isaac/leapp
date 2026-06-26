@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from .model import VisualEdge, VisualGraph, VisualNode, VisualPort, VisualTerminal, visual_id
+from leapp_visualization.model import VisualEdge, VisualGraph, VisualNode, VisualPort, VisualTerminal, visual_id
 
 
 def build_visual_graph(

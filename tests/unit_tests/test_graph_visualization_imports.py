@@ -4,13 +4,13 @@
 #
 
 def test_visualization_package_exports_public_entrypoint():
-    from leapp.leapp_graph.visualization import visualize_graph
+    from leapp_visualization import render_graph
 
-    assert callable(visualize_graph)
+    assert callable(render_graph)
 
 
 def test_visual_model_types_are_importable():
-    from leapp.leapp_graph.visualization.model import (
+    from leapp_visualization import (
         VisualEdge,
         VisualGraph,
         VisualNode,

@@ -6,8 +6,10 @@ layered visualization that emits both SVG and PNG from `compile_graph(visualize=
 ## Decision
 
 Use `fast-sugiyama` as the layout engine for directed graph layer/order placement, then use
-LEAPP-owned rendering code to draw a static visualization. The SVG is the primary artifact.
-The PNG is generated from the same resolved geometry as a companion raster artifact.
+renderer code from a sibling `leapp-visualization` package to draw a static visualization.
+LEAPP owns the adapter that converts LEAPP graph objects into the generic visualization
+model. The SVG is the primary artifact. The PNG is generated from the same resolved geometry
+as a companion raster artifact.
 
 The visualization renders graph inputs, graph outputs, leapp nodes, and data-flow edges.
 Each leapp node renders visualization ports for its tensor inputs and outputs. Port labels
@@ -25,16 +27,18 @@ with Graphviz `dot`; Netron achieves a similar effect with a Dagre-style layout.
 use the same family of layout ideas while keeping installation simple for Python users.
 
 `fast-sugiyama` is uv/pip-installable, MIT licensed, and avoids a system Graphviz binary.
-LEAPP can own rendering because the project needs LEAPP-specific concepts such as graph
-inputs, graph outputs, feedback edges, node-kind/backend hints, and semantic tensor `kind`.
+The renderer can stay generic because graph inputs, graph outputs, feedback edges,
+node/backend hints, and semantic tensor `kind` can all be represented in a reusable visual
+graph model. LEAPP-specific extraction stays in LEAPP's adapter.
 
 SVG provides a modern, docs-friendly primary artifact. PNG remains useful for reports,
 README previews, and tools that do not embed SVG well.
 
 ## Consequences
 
-The package can require Python 3.11+ and add `fast-sugiyama` plus Pillow. Matplotlib can be
-removed if no other runtime path needs it.
+The LEAPP package can require Python 3.11+ and depend on `leapp-visualization` by default.
+The visualization package owns `fast-sugiyama` and Pillow. Matplotlib can be removed if no
+other runtime path needs it.
 
 Rendering becomes deterministic and headless. Users no longer need to manually position
 nodes or close a GUI window to save the graph image.

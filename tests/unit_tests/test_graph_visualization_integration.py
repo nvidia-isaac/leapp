@@ -7,8 +7,8 @@ from PIL import Image
 
 import leapp
 from leapp import annotate
-import leapp.leapp as leapp_api
-from leapp.leapp_graph.visualization.visualize import visualize_graph
+import leapp.leapp_graph.graph_gui as graph_gui
+from leapp.leapp_graph.graph_gui import visualize_graph
 
 
 @dataclass
@@ -60,10 +60,10 @@ def test_visualize_graph_writes_svg_and_png(tmp_path: Path):
 
 
 def test_compile_graph_raises_when_visualization_fails(tmp_path: Path, monkeypatch):
-    def fail_visualize(self, save_path, graph_name):
+    def fail_render(graph, save_path, graph_name):
         raise RuntimeError("visualization exploded")
 
-    monkeypatch.setattr(leapp_api.LeappGraph, "visualize", fail_visualize)
+    monkeypatch.setattr(graph_gui, "render_graph", fail_render)
 
     leapp.start(name="demo", save_path=str(tmp_path), dry_run=True)
     traced_obs = annotate.input_tensors("policy", {"obs": torch.randn(1, 2)})

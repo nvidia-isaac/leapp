@@ -1,7 +1,7 @@
-from leapp.leapp_graph.visualization import geometry as geometry_module
-from leapp.leapp_graph.visualization.geometry import resolve_geometry
-from leapp.leapp_graph.visualization.layout import LayoutResult, Point
-from leapp.leapp_graph.visualization.model import VisualEdge, VisualGraph, VisualNode, VisualPort, VisualTerminal
+from leapp_visualization import geometry as geometry_module
+from leapp_visualization.geometry import resolve_geometry
+from leapp_visualization.layout import LayoutResult, Point
+from leapp_visualization.model import VisualEdge, VisualGraph, VisualNode, VisualPort, VisualTerminal
 
 
 def test_geometry_places_input_and_output_ports_on_node_edges():
