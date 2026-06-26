@@ -33,6 +33,8 @@ import torch.nn.functional as F
 from leapp.leapp_graph.traced_node import TracedTensorNode
 from leapp.leapp_graph.datatypes import TracedTensor
 
+from tests.unit_tests.export_format_validation import verify_exported_program_on_random_inputs
+
 
 
 @pytest.mark.filterwarnings("ignore::torch.jit.TracerWarning")
@@ -44,6 +46,7 @@ class TestFunctional(unittest.TestCase):
 
     def _run_trace_and_compile(self, func, input_shape, test_name,
                                skip_torchscript=False, skip_onnx=False,
+                               skip_exported_program=False,
                                onnx_opset=17, atol=1e-5, **func_kwargs):
         """Helper to trace a function and verify compiled output matches.
         
@@ -56,6 +59,7 @@ class TestFunctional(unittest.TestCase):
             test_name: Name for the trace context
             skip_torchscript: Skip TorchScript testing (for known unsupported ops)
             skip_onnx: Skip ONNX testing (for known unsupported ops)
+            skip_exported_program: Skip torch.export testing (for known unsupported ops)
             **func_kwargs: Additional kwargs to pass to func
         """
         input_tensor = torch.randn(*input_shape)
@@ -124,6 +128,19 @@ class TestFunctional(unittest.TestCase):
                         )
             except Exception as e:
                 self.fail(f"{test_name}: ONNX export/execution failed: {e}")
+
+        # Test 4: ExportedProgram export and execution
+        if not skip_exported_program:
+            verify_exported_program_on_random_inputs(
+                self,
+                graph_module,
+                input_shape,
+                func,
+                test_name=test_name,
+                num_inputs=self.NUM_TEST_INPUTS,
+                atol=atol,
+                func_kwargs=func_kwargs,
+            )
 
     # =========================================================================
     # Linear

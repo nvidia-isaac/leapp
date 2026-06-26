@@ -18,6 +18,8 @@ import warnings
 from leapp.leapp_graph.traced_node import TracedTensorNode
 from leapp.leapp_graph.datatypes import TracedTensor
 
+from tests.unit_tests.export_format_validation import verify_exported_program
+
 Tensor = torch.Tensor | TracedTensor
 
 warnings.filterwarnings(
@@ -561,6 +563,10 @@ class TestTracedTensor(unittest.TestCase):
                 torch.allclose(torch.from_numpy(output_onnx), expected, atol=1e-5),
                 f"{test_name}: ONNX output doesn't match expected"
             )
+
+        # Test 4: ExportedProgram export
+        verify_exported_program(
+            self, graph_module, inputs, expected, test_name=test_name)
 
     def test_shape(self):
         """Test shape property."""
@@ -2014,7 +2020,22 @@ class TestTracedTensor(unittest.TestCase):
                         f"{func_name}: TorchScript result dtype doesn't match expected dtype",
                     )
 
-                # Test 4: ONNX export
+                # Test 4: ExportedProgram export
+                exported = torch.export.export(
+                    graph_module, (input_tensor.clone(),))
+                result_exported = exported.module()(input_tensor)
+                self.assertTrue(
+                    torch.allclose(result_exported, expected),
+                    f"{func_name}: ExportedProgram result doesn't match expected result",
+                )
+                if func_name.startswith("type_conversion_operator"):
+                    self.assertEqual(
+                        result_exported.dtype,
+                        expected.dtype,
+                        f"{func_name}: ExportedProgram result dtype doesn't match expected dtype",
+                    )
+
+                # Test 5: ONNX export
                 try:
                     with tempfile.TemporaryDirectory() as tmpdir:
                         onnx_path = pathlib.Path(tmpdir) / f"{func_name}.onnx"

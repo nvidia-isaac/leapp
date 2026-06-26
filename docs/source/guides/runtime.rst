@@ -204,10 +204,24 @@ ONNX runtime notes
   automatically for ONNX-backed nodes and can use the faster CUDA I/O
   binding path.
 
+ExportedProgram runtime notes
+-----------------------------
+
+* ``pt2`` artifacts are loaded with :func:`torch.export.load` and run
+  through the exported module's callable wrapper.
+* When CUDA is available, LEAPP loads ``pt2`` models onto the GPU.
+* ``run_policy()`` does not automatically move user-provided tensors to
+  the node device. Either pass inputs on the correct device or use
+  ``get_mock_input()`` for smoke tests.
+* Lifted constants captured during export may remain on CPU inside the
+  exported graph. Keep runtime inputs on the model device, and prefer
+  ``annotate.register_buffer`` for constants that must move with the
+  model.
+
 On construction, ``InferenceManager``:
 
 * loads the YAML description
-* loads all referenced JIT/ONNX models
+* loads all referenced JIT, ExportedProgram (``.pt2``), and ONNX models
 * validates pipeline connection shape/dtype compatibility
 * preallocates node input buffers
 * prepopulates feedback inputs from ``pipeline.initial_values`` when

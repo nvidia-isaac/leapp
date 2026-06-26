@@ -1202,6 +1202,41 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         self.verify_single_torchscript_model_expected_value(
             [input_tensor], [expected_output], funcA.__name__)
 
+    def test_exported_program_backend(self):
+        @annotate.method(export_with="exported-program")
+        def funcA(inputA: torch.Tensor):
+            return inputA * 2
+
+        input_tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+        expected_output = input_tensor * 2.0
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        funcA(input_tensor)
+        leapp.stop()
+        leapp.compile_graph(visualize=False, validate=True)
+        self.verify_single_exported_program_model_expected_value(
+            [input_tensor], [expected_output], funcA.__name__)
+
+    def test_pt2_alias_backend(self):
+        @annotate.method(export_with="pt2")
+        def funcA(inputA: torch.Tensor):
+            return inputA * 2
+
+        input_tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+        expected_output = input_tensor * 2.0
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        funcA(input_tensor)
+        leapp.stop()
+        leapp.compile_graph(visualize=False, validate=True)
+        self.verify_single_exported_program_model_expected_value(
+            [input_tensor], [expected_output], funcA.__name__)
+
+        with open(os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")) as f:
+            yaml_data = yaml.safe_load(f)
+        self.assertEqual(
+            yaml_data["models"][funcA.__name__]["parameters"]["backend"], "pt2")
+
     # -----------------------------------------------------------------
     # Complex math operations
     # -----------------------------------------------------------------

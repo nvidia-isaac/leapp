@@ -118,6 +118,7 @@ How LEAPP Fits In
              <div class="leapp-diagram-output">
                <div class="leapp-artifact-grid">
                  <span>node1.pt</span>
+                 <span>node1.pt2</span>
                  <span>node1.onnx</span>
                  <span>pipeline.yaml</span>
                  <span>visualization.png</span>

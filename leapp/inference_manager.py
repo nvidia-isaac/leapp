@@ -16,6 +16,7 @@ from leapp.utils.tensor_description import map_to_torch_dtype, validate_connecti
 
 from leapp.backends.torch_export_backend import TorchExportBackend
 from leapp.backends.onnx_export_backend import ONNXExportBackend
+from leapp.backends.exported_program_backend import ExportedProgramExportBackend
 
 
 class NodeManager:
@@ -91,6 +92,8 @@ class NodeManager:
             return TorchExportBackend(None)
         elif backend == "onnx":
             return ONNXExportBackend(None)
+        elif backend == "pt2":
+            return ExportedProgramExportBackend(None)
         else:
             raise ValueError(f"Unsupported backend: {backend}")
 

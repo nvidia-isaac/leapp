@@ -203,7 +203,7 @@ Parameters
 Generated artifacts
 ~~~~~~~~~~~~~~~~~~~
 
-* Compiled models --- one file per node (``.pt``, ``.onnx``).
+* Compiled models --- one file per node (``.pt``, ``.pt2``, ``.onnx``).
 * ``{name}.yaml`` --- model descriptions, pipeline connections
   (``data_flow`` and ``feedback_flow``), and system information.
 * ``{name}.png`` --- graph visualization (when ``visualize=True``).
@@ -466,8 +466,9 @@ Parameters
 * ``**kwargs``:
 
   * ``export_with`` (str | None): Export backend. Common values
-    ``"jit"`` and ``"onnx"``. Other variants are ``"jit-script"``,
-    ``"jit-trace"``, ``"onnx-dynamo"``, and ``"onnx-torchscript"``. See
+    ``"jit"``, ``"onnx"``, and ``"exported-program"`` (alias ``"pt2"``).
+    Other variants are ``"jit-script"``, ``"jit-trace"``,
+    ``"onnx-dynamo"``, and ``"onnx-torchscript"``. See
     :doc:`/guides/export`.
   * ``backend_params`` (dict): Backend-specific parameters.
 
@@ -501,7 +502,7 @@ Parameters
 * ``node_name`` (str, optional): Custom node name. Defaults to the
   function name.
 * ``export_with`` (str | None, optional): Export backend. Common values
-  ``"jit"`` and ``"onnx"``.
+  ``"jit"``, ``"onnx"``, and ``"exported-program"`` (alias ``"pt2"``).
 * ``backend_params`` (dict, optional): Backend-specific parameters.
 
 Behavior
@@ -767,8 +768,11 @@ Notes
 
 * Input dictionaries passed to ``run_policy()`` must use
   ``node_name/input_name`` keys.
-* ``InferenceManager`` currently runs exported or referenced ``jit`` and
-  ``onnx`` models.
+* ``InferenceManager`` currently runs exported or referenced ``jit``,
+  ``pt2``, and ``onnx`` models.
+* For ``pt2`` nodes, runtime inputs should be on the same device as the
+  loaded exported program. ``get_mock_input()`` already allocates on the
+  node device.
 * Feedback state persists across successive ``run_policy()`` calls
   unless you overwrite it manually.
 

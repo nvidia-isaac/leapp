@@ -87,6 +87,8 @@ prescript
 torchscript
 jit
 onnx
+pt2
+exported-program
 configs
 config
 yml

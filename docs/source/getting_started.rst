@@ -215,8 +215,8 @@ artifacts and the metadata needed to wire them together.
    .. grid-item-card:: Exported node models
       :class-card: sd-rounded-3
 
-      Per-node TorchScript or ONNX artifacts containing traced compute,
-      constants, and model weights.
+      Per-node TorchScript, ExportedProgram (``.pt2``), or ONNX artifacts
+      containing traced compute, constants, and model weights.
 
    .. grid-item-card:: Pipeline specification
       :class-card: sd-rounded-3

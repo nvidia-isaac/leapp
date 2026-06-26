@@ -524,7 +524,7 @@ class NoneExportBackend(ExportBackend):
         if suffix == 'pt':
             return "jit"
         elif suffix == 'pt2':
-            return "torchscript2"
+            return "pt2"
         elif suffix == 'onnx':
             return "onnx"
         elif suffix == 'cpp' or suffix == "cc":
