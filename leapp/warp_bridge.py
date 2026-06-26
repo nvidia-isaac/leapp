@@ -20,7 +20,6 @@ v1 bridge = wp.from_torch / wp.to_torch ONLY. The segmenter turns each crossing 
 boundary. Linear chains only (ADR-0002): a forked tensor across a bridge fails loudly.
 """
 from leapp.leapp_graph.datatypes import is_traced_type
-from leapp.leapp_graph.warp_region_node import WarpRegionNode
 
 
 def _seg_name(region, idx, kind):
@@ -63,6 +62,7 @@ class RegionSegmenter:
         self._seg_idx += 1
         seg_name = _seg_name(self.region, self._seg_idx, "warp")
         is_dry = getattr(self.mgr, "is_dry_run", lambda n: False)(seg_name)
+        from leapp.leapp_graph.warp_region_node import WarpRegionNode
         warp_node = WarpRegionNode(seg_name, dry_run=is_dry)
         self.mgr.nodes[warp_node.name] = warp_node
         warp_node._max_cached_io = getattr(self.mgr, "_max_cached_io", 0)
