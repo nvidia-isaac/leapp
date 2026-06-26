@@ -132,14 +132,16 @@ def _render_node(geometry: GraphGeometry, node_id: str) -> str:
 def _render_port(port: PortGeometry) -> str:
     accent = COLORS.get(port.kind or "", COLORS["node_border"])
     line_x = port.rect.x if port.side == "input" else port.rect.x + port.rect.width - 1.5
+    text_x = port.rect.x + 14.0 if port.side == "input" else port.rect.x + port.rect.width - 14.0
+    text_anchor = "start" if port.side == "input" else "end"
     return (
         f'<g id="{escape(port.id, quote=True)}">'
         f"<title>{escape(port.full_label)}</title>"
         f'<rect x="{_fmt(port.rect.x)}" y="{_fmt(port.rect.y)}" width="{_fmt(port.rect.width)}" height="{_fmt(port.rect.height)}" fill="transparent" />'
         f'<circle cx="{_fmt(port.anchor.x)}" cy="{_fmt(port.anchor.y)}" r="4" fill="{accent}" />'
         f'<line x1="{_fmt(line_x)}" y1="{_fmt(port.rect.y + 6.0)}" x2="{_fmt(line_x)}" y2="{_fmt(port.rect.y + port.rect.height - 6.0)}" stroke="{accent}" stroke-width="3" stroke-linecap="round" />'
-        f'<text x="{_fmt(port.rect.x + 14.0)}" y="{_fmt(port.rect.y + 18.0)}" fill="{COLORS["text"]}" font-family="{escape(_FONT_FAMILY, quote=True)}" font-size="13" font-weight="600">{escape(port.name)}</text>'
-        f'<text x="{_fmt(port.rect.x + 14.0)}" y="{_fmt(port.rect.y + 34.0)}" fill="{COLORS["secondary_text"]}" font-family="{escape(_FONT_FAMILY, quote=True)}" font-size="12">{escape(port.detail)}</text>'
+        f'<text x="{_fmt(text_x)}" y="{_fmt(port.rect.y + 18.0)}" fill="{COLORS["text"]}" font-family="{escape(_FONT_FAMILY, quote=True)}" font-size="13" font-weight="600" text-anchor="{text_anchor}">{escape(port.name)}</text>'
+        f'<text x="{_fmt(text_x)}" y="{_fmt(port.rect.y + 34.0)}" fill="{COLORS["secondary_text"]}" font-family="{escape(_FONT_FAMILY, quote=True)}" font-size="12" text-anchor="{text_anchor}">{escape(port.detail)}</text>'
         f'{_render_port_kind(port, accent)}'
         "</g>"
     )
