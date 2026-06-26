@@ -150,8 +150,14 @@ def _render_port(port: PortGeometry) -> str:
 def _render_port_kind(port: PortGeometry, accent: str) -> str:
     if not port.kind:
         return ""
+    if port.side == "output":
+        x = port.rect.x + 14.0
+        text_anchor = "start"
+    else:
+        x = port.rect.x + port.rect.width - 14.0
+        text_anchor = "end"
     return (
-        f'<text x="{_fmt(port.rect.x + port.rect.width - 14.0)}" y="{_fmt(port.rect.y + 18.0)}" fill="{accent}" font-family="{escape(_FONT_FAMILY, quote=True)}" font-size="12" font-weight="600" text-anchor="end">{escape(port.kind)}</text>'
+        f'<text x="{_fmt(x)}" y="{_fmt(port.rect.y + 18.0)}" fill="{accent}" font-family="{escape(_FONT_FAMILY, quote=True)}" font-size="12" font-weight="600" text-anchor="{text_anchor}">{escape(port.kind)}</text>'
     )
 
 

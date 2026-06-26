@@ -57,7 +57,24 @@ def test_render_svg_right_aligns_output_port_text_inside_output_row():
     assert 'id="port:policy:output:action"' in svg
     assert 'text-anchor="end">action</text>' in svg
     assert 'text-anchor="end">[1, 4] float32</text>' in svg
-    assert 'text-anchor="end">command</text>' in svg
+    assert 'text-anchor="start">command</text>' in svg
+
+
+def test_render_svg_places_output_port_kind_on_distinct_coordinates_from_output_name():
+    svg = render_svg(_geometry())
+    root = ET.fromstring(svg)
+    namespace = {"svg": "http://www.w3.org/2000/svg"}
+
+    output_port = root.find('.//svg:g[@id="port:policy:output:action"]', namespace)
+    assert output_port is not None
+
+    text_positions = {
+        element.text: (element.attrib["x"], element.attrib["y"])
+        for element in output_port.findall("svg:text", namespace)
+        if element.text in {"action", "command"}
+    }
+
+    assert text_positions["action"] != text_positions["command"]
 
 
 def test_render_svg_serializes_five_point_feedback_edges_and_graph_output_terminal():

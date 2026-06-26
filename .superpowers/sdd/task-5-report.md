@@ -109,3 +109,26 @@ Result:
 .......                                                                  [100%]
 7 passed in 1.51s
 ```
+
+## Re-review Fixes
+
+### Changes
+
+- Updated `leapp/leapp_graph/visualization/svg_renderer.py` so output-side semantic `kind` text is rendered on the left inset of the port row with `text-anchor="start"`, while output name and detail remain right-aligned. This removes the output-name/output-kind coordinate collision without changing PNG rendering or visualization wiring.
+- Expanded `tests/unit_tests/test_graph_visualization_svg.py` with a regression test that parses the output-port `<text>` nodes from the SVG and asserts the output name and output `kind` are emitted at different coordinates.
+- Updated the existing output-port alignment assertion to reflect the intended split layout: output name/detail right-aligned, output `kind` separately positioned.
+
+### Test Output
+
+Command:
+
+```bash
+uv run pytest tests/unit_tests/test_graph_visualization_svg.py tests/unit_tests/test_graph_visualization_geometry.py -q
+```
+
+Result:
+
+```text
+........                                                                 [100%]
+8 passed in 1.51s
+```
