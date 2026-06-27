@@ -16,15 +16,13 @@ The current implementation is enough to trace, export an ONNX graph containing
 missing if the goal is a runnable exported pipeline:
 
 - **``.wrp`` payload** — deferred until after FX pruning in ``_save_warp_captures``;
-  embedded into ONNX via ``_embed_warp_bundles`` on the dynamo export path.
+  embedded as a CPU ``uint8`` constant input via ``embed_warp_bundles_in_graph``.
 - **Real I/O names** — ONNX ``input_names`` / ``output_names`` are filled from
   the segment save plan at embed time (live inputs/outputs only).
 - **``output_mask`` in lowering** — unused outputs stay in the ONNX node with
   zero shape; APIC ``capture_save`` only registers live outputs.
-- **Embedded bundle mode** — canonical: ``wrp_name`` plus a uint8 tensor input
-  carrying the WRPB archive (self-contained ONNX artifacts).
-- **Portable paths** — ``path`` is a logical storage namespace
-  (``leapp/<graph>/<node>/<proxy>``), not a filesystem path.
+- **Embedded bundle mode** — canonical: ``wrp_name`` plus a CPU ``uint8`` tensor input
+  carrying the WRPB archive (self-contained ONNX / ``.pt2`` artifacts).
 - **ORT custom op** — vanilla ONNX Runtime does not register ``WrpRunner``; the
   prototype C++/CUDA kernel must be installed before inference or LEAPP
   validation can succeed.
@@ -67,20 +65,17 @@ QUALIFIED_NAME = f"{NAMESPACE}::{OP_NAME}"
 # Op schema — one finalized Warp/APIC segment.
 #
 #   inputs         : traced input tensors for the segment (variadic Tensor[]).
-#   output_shapes  : per-output shape; one inner list per segment output.
-#   output_dtypes  : per-output dtype name (e.g. "float32"), parallel to
-#                    ``output_shapes``. String names are used instead of
-#                    ``ScalarType`` because PyTorch surfaces schema ScalarType
-#                    args to Python as opaque integer codes with no stable
-#                    public inverse.
-#   path           : runtime storage namespace for the segment bundle, e.g.
-#                    ``leapp/<graph_name>/<node_name>/<proxy_name>``; set when
-#                    the segment marker is emitted in ``close_warp_segment``.
-#   output_mask    : per-output flag for which outputs are live graph outputs;
-#                    rewritten by the post-prune pass in ``traced_node.py``.
+#   output_shapes  : per-output shape encoded as ``"d0,d1;..."`` (empty shape as
+#                    ``"0"``), parallel to ``output_dtypes``.
+#   output_dtypes  : per-output dtype names joined by commas (e.g.
+#                    ``"float32,float32"``).
+#   output_mask    : per-output flags as ``"0,1,..."``; rewritten after pruning.
+#   bundle         : CPU ``uint8`` tensor carrying the WRPB archive. A zero-length
+#                    placeholder is emitted during trace; ``embed_warp_bundles_in_graph``
+#                    replaces it with the real bytes before export.
 _SCHEMA = (
-    f"{OP_NAME}(Tensor[] inputs, int[][] output_shapes, "
-    f"str[] output_dtypes, str path, bool[] output_mask) -> Tensor[]"
+    f"{OP_NAME}(Tensor[] inputs, str output_shapes, "
+    f"str output_dtypes, str output_mask, Tensor bundle) -> Tensor[]"
 )
 
 # ONNX export target — referenced by the eager guard impl and the lowering below.
@@ -122,50 +117,44 @@ def _resolve_dtype(name: str) -> torch.dtype:
 # ``node.meta["leapp_warp_segment"]`` for downstream export passes.
 
 
-def _warp_runner_fake(inputs, output_shapes, output_dtypes, path, output_mask):
-    """Abstract impl: produce correctly-shaped meta outputs from the spec.
+def _warp_runner_fake(inputs, output_shapes, output_dtypes, output_mask, bundle):
+    """Abstract impl: produce correctly-shaped meta outputs from the spec."""
+    shape_lists = decode_output_shapes(output_shapes)
+    dtype_lists = decode_output_dtypes(output_dtypes)
+    mask_lists = decode_output_mask(output_mask) if output_mask else []
 
-    A ``Tensor[] -> Tensor[]`` op cannot infer its output count/shapes from the
-    inputs alone, so the output specification is passed explicitly and used here
-    to build the fake outputs. The number, shapes and dtypes returned mirror
-    ``output_shapes`` / ``output_dtypes`` exactly.
-    """
-    if len(output_shapes) != len(output_dtypes):
+    if len(shape_lists) != len(dtype_lists):
         raise ValueError(
-            f"{QUALIFIED_NAME}: output_shapes ({len(output_shapes)}) and "
-            f"output_dtypes ({len(output_dtypes)}) must have equal length"
+            f"{QUALIFIED_NAME}: output_shapes ({len(shape_lists)}) and "
+            f"output_dtypes ({len(dtype_lists)}) must have equal length"
         )
-    if output_mask and len(output_mask) != len(output_shapes):
+    if mask_lists and len(mask_lists) != len(shape_lists):
         raise ValueError(
-            f"{QUALIFIED_NAME}: output_mask ({len(output_mask)}) must match the "
-            f"number of outputs ({len(output_shapes)}) when provided"
+            f"{QUALIFIED_NAME}: output_mask ({len(mask_lists)}) must match the "
+            f"number of outputs ({len(shape_lists)}) when provided"
         )
 
     device = inputs[0].device if len(inputs) > 0 else torch.device("cpu")
     return [
         torch.empty(list(shape), dtype=_resolve_dtype(name), device=device)
-        for shape, name in zip(output_shapes, output_dtypes)
+        for shape, name in zip(shape_lists, dtype_lists)
     ]
 
 
-def _warp_runner_eager(inputs, output_shapes, output_dtypes, path, output_mask):
-    """Eager kernel: allocate shape-correct (zeros) outputs from the spec.
+def _warp_runner_eager(inputs, output_shapes, output_dtypes, output_mask, bundle):
+    """Eager kernel: allocate shape-correct (zeros) outputs from the spec."""
+    shape_lists = decode_output_shapes(output_shapes)
+    dtype_lists = decode_output_dtypes(output_dtypes)
 
-    This does **not** perform the Warp computation — real execution is the ORT/C++
-    ``WrpRunner`` kernel after ONNX export. It exists so the op is callable in eager
-    mode (keeping the op valid during ``torch.export`` tracing). The placeholder
-    zeros are why eager validation reports a value mismatch until the real runtime
-    kernel exists.
-    """
-    if len(output_shapes) != len(output_dtypes):
+    if len(shape_lists) != len(dtype_lists):
         raise ValueError(
-            f"{QUALIFIED_NAME}: output_shapes ({len(output_shapes)}) and "
-            f"output_dtypes ({len(output_dtypes)}) must have equal length"
+            f"{QUALIFIED_NAME}: output_shapes ({len(shape_lists)}) and "
+            f"output_dtypes ({len(dtype_lists)}) must have equal length"
         )
     device = inputs[0].device if len(inputs) > 0 else torch.device("cpu")
     return [
         torch.zeros(list(shape), dtype=_resolve_dtype(name), device=device)
-        for shape, name in zip(output_shapes, output_dtypes)
+        for shape, name in zip(shape_lists, dtype_lists)
     ]
 
 
@@ -192,12 +181,49 @@ def _format_output_shape_attr(output_shapes: list[list[int]]) -> str:
     return ";".join(parts)
 
 
+def encode_output_shapes(output_shapes: list[list[int]]) -> str:
+    return _format_output_shape_attr(output_shapes)
+
+
+def decode_output_shapes(encoded: str) -> list[list[int]]:
+    if not encoded:
+        return []
+    shapes: list[list[int]] = []
+    for part in encoded.split(";"):
+        part = part.strip()
+        if not part or part == "0":
+            shapes.append([])
+            continue
+        shapes.append([int(dim) for dim in part.split(",") if dim.strip()])
+    return shapes
+
+
+def encode_output_dtypes(output_dtypes: list[str]) -> str:
+    return ",".join(output_dtypes)
+
+
+def decode_output_dtypes(encoded: str) -> list[str]:
+    if not encoded:
+        return []
+    return [part.strip() for part in encoded.split(",") if part.strip()]
+
+
+def encode_output_mask(output_mask: list[bool]) -> str:
+    return ",".join("1" if flag else "0" for flag in output_mask)
+
+
+def decode_output_mask(encoded: str) -> list[bool]:
+    if not encoded:
+        return []
+    return [part.strip() == "1" for part in encoded.split(",") if part.strip()]
+
+
 def lower_warp_runner_to_onnx(
     inputs,
     output_shapes,
     output_dtypes,
-    path,
     output_mask,
+    bundle,
 ):
     """Lower ``leapp.warp_runner`` to ``com.nvidia.warp::WrpRunner`` during ONNX export.
 
@@ -214,25 +240,27 @@ def lower_warp_runner_to_onnx(
             f"Cannot lower {QUALIFIED_NAME}: ONNX export tracer is not active."
         )
 
-    if len(output_shapes) != len(output_dtypes):
+    shape_lists = decode_output_shapes(output_shapes)
+    dtype_lists = decode_output_dtypes(output_dtypes)
+    if len(shape_lists) != len(dtype_lists):
         raise ValueError(
-            f"{QUALIFIED_NAME}: output_shapes ({len(output_shapes)}) and "
-            f"output_dtypes ({len(output_dtypes)}) must have equal length"
+            f"{QUALIFIED_NAME}: output_shapes ({len(shape_lists)}) and "
+            f"output_dtypes ({len(dtype_lists)}) must have equal length"
         )
 
     data_inputs = list(inputs)
-    dtypes = [_resolve_dtype(name) for name in output_dtypes]
-    shapes = [tuple(int(dim) for dim in shape) for shape in output_shapes]
+    dtypes = [_resolve_dtype(name) for name in dtype_lists]
+    shapes = [tuple(int(dim) for dim in shape) for shape in shape_lists]
 
-    # Names and shapes are finalized at embed time from the segment save plan.
+    # Names and shapes are finalized at embed time from the segment save plan
+    # (``_embed_warp_bundles``). The bundle is the last WrpRunner input.
     attrs = {
-        "storage_path": path or "",
         "input_names": ",".join(f"input_{i}" for i in range(len(data_inputs))),
         "output_names": ",".join(f"output_{i}" for i in range(len(shapes))),
-        "output_shape": _format_output_shape_attr(
-            [list(shape) for shape in output_shapes]
-        ),
+        "output_shape": output_shapes,
     }
+
+    wrp_inputs = [*data_inputs, bundle]
 
     outputs = [_tensors.SymbolicTensor(tracer.opset) for _ in range(len(shapes))]
     for output, shape, dtype in zip(outputs, shapes, dtypes):
@@ -242,7 +270,7 @@ def lower_warp_runner_to_onnx(
     node = ir.Node(
         ONNX_WRP_DOMAIN,
         ONNX_WRP_OP_TYPE,
-        inputs=data_inputs,
+        inputs=wrp_inputs,
         attributes=ir.convenience.convert_attributes(attrs),
         outputs=outputs,
         version=ONNX_WRP_OPSET,
@@ -294,30 +322,25 @@ def _register_onnx_lowering() -> None:
 # EXPORT BACKEND SUPPORT — which export paths can carry a Warp segment
 # =============================================================================
 # Supported:
-#   * onnx-dynamo  — ONNX via ``torch.onnx.export(dynamo=True)``
+#   * onnx-dynamo       — ONNX via ``torch.onnx.export(dynamo=True)``
+#   * exported-program  — ``torch.export`` ``.pt2`` (alias ``pt2``)
 #
 # NOT supported (the export registry rejects these backends when a segment is
 # present): ``jit-script``, ``jit-trace``, ``onnx-torchscript``.
 #
-# Why only the dynamo ONNX path
-# -----------------------------
-# ``warp_runner`` is a *variadic, index-addressed* multi-output node:
-# ``(Tensor[] inputs, int[][] output_shapes, ...) -> Tensor[]`` whose downstream
-# consumers read ``operator.getitem(node, i)``. The dynamo exporter keeps it as a
-# real multi-output node and maps each ``getitem`` to the i-th output directly,
-# mixed dtypes included (see ``lower_warp_runner_to_onnx``), and the embedded
-# WRPB bundle is attached as a ``uint8`` initializer at export time.
-#
-# The legacy TorchScript tracer/ONNX exporter cannot represent this op
-# (``int[][]`` args break tracing, list-typed constants break the exporter, and
-# the ``Tensor[]`` return only fits a homogeneous ONNX sequence). ``jit-script``
-# could carry the op structurally but produces an *incomplete* artifact: it has
-# no mechanism to embed the APIC bundle, so the ``.pt`` would script and run the
-# placeholder eager kernel (zeros) with no Warp data. It is therefore rejected
-# rather than silently emitting a broken model. A future ``torch.export``/``.pt2``
-# backend is the intended non-ONNX path (lifted-constant bundle + unified C++ op).
+# Both supported paths embed the WRPB archive as a CPU ``uint8`` constant input
+# on each ``warp_runner`` / ``WrpRunner`` node (see ``embed_warp_bundles_in_graph``
+# and ``_embed_warp_bundles``).
 
-_SUPPORTED_EXPORT_BACKENDS = frozenset({"onnx-dynamo"})
+_SUPPORTED_EXPORT_BACKENDS = frozenset({"onnx-dynamo", "exported-program"})
+
+
+def _warp_pre_compile(module: "torch.nn.Module", backend: str) -> None:
+    from leapp.leapp_graph.custom_operator_registry.warp_bundle import (
+        embed_warp_bundles_in_graph,
+    )
+
+    embed_warp_bundles_in_graph(module)
 
 
 def _module_contains_warp_runner(module: "torch.nn.Module") -> bool:
@@ -344,9 +367,9 @@ def _module_contains_warp_runner(module: "torch.nn.Module") -> bool:
 def _warp_unsupported_message(backend: str) -> str:
     return (
         f"export_with='{backend}' is not supported for graphs containing a Warp "
-        f"segment ({QUALIFIED_NAME}). Only export_with='onnx-dynamo' can embed the "
-        "APIC bundle and represent the op's variadic, mixed-dtype, index-addressed "
-        "outputs. Use export_with='onnx-dynamo'."
+        f"segment ({QUALIFIED_NAME}). Use export_with='onnx-dynamo' or "
+        "export_with='exported-program' (alias 'pt2') to embed the APIC bundle "
+        "as a constant input."
     )
 
 
@@ -356,6 +379,7 @@ def _register_export_hooks() -> None:
         detect_in_module=_module_contains_warp_runner,
         supported_backends=_SUPPORTED_EXPORT_BACKENDS,
         unsupported_message=_warp_unsupported_message,
+        pre_compile=_warp_pre_compile,
     )
 
 

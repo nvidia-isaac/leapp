@@ -4,7 +4,6 @@
 #
 
 import torch
-from pathlib import Path
 from typing import Tuple
 from leapp.backends.export_backend import ExportBackend, prepare_tensors_for_export, SimplifiedONNXProgram
 from leapp.utils.logging import _get_logger
@@ -16,7 +15,6 @@ import tempfile
 
 from torch.onnx import _constants
 from leapp.leapp_graph.custom_operator_registry import warp_custom_op
-from leapp.leapp_graph.custom_operator_registry.warp_bundle import pack_bundle
 
 class ONNXExportBackend(ExportBackend):
     def get_backend_metadata(self):
@@ -160,13 +158,6 @@ class ONNXExportBackend(ExportBackend):
                 f"(ONNX exporter bug: shared scalar initializers between Gather and Slice nodes)")
 
     @staticmethod
-    def _get_onnx_string_attr(node: onnx.NodeProto, name: str) -> str | None:
-        for attr in node.attribute:
-            if attr.name == name and attr.type == AttributeProto.STRING:
-                return attr.s.decode("utf-8")
-        return None
-
-    @staticmethod
     def _set_onnx_string_attr(node: onnx.NodeProto, name: str, value: str) -> None:
         for attr in node.attribute:
             if attr.name == name:
@@ -175,63 +166,36 @@ class ONNXExportBackend(ExportBackend):
                 return
         node.attribute.append(helper.make_attribute(name, value))
 
-    @staticmethod
-    def _remove_onnx_attr(node: onnx.NodeProto, name: str) -> None:
-        kept = [attr for attr in node.attribute if attr.name != name]
-        del node.attribute[:]
-        node.attribute.extend(kept)
-
     def _embed_warp_bundles(self, model: onnx.ModelProto) -> int:
-        """Embed saved Warp APIC bundles as uint8 initializers on WrpRunner nodes."""
+        """Finalize ``WrpRunner`` ONNX nodes with live I/O metadata from save plans.
+
+        The WRPB bytes are already wired in as the last input by
+        ``embed_warp_bundles_in_graph`` (via dynamo lowering). This pass only
+        patches ``wrp_name``, ``input_names``, ``output_names``, and
+        ``output_shape`` from each segment's save plan.
+        """
         segments = getattr(self.node_context, "warp_segments", None) or []
-        by_storage = {
-            segment.save_plan.storage_path: segment
-            for segment in segments
-            if segment.save_plan is not None
-        }
-        if not by_storage:
+        plans = [seg.save_plan for seg in segments if seg.save_plan is not None]
+        if not plans:
             return 0
 
-        embedded = 0
-        for node in model.graph.node:
-            if (
-                node.op_type != warp_custom_op.ONNX_WRP_OP_TYPE
-                or node.domain != warp_custom_op.ONNX_WRP_DOMAIN
-            ):
-                continue
+        wrp_nodes = [
+            node
+            for node in model.graph.node
+            if node.op_type == warp_custom_op.ONNX_WRP_OP_TYPE
+            and node.domain == warp_custom_op.ONNX_WRP_DOMAIN
+        ]
 
-            storage_path = self._get_onnx_string_attr(node, "storage_path")
-            if not storage_path:
-                storage_path = self._get_onnx_string_attr(node, "wrp_path")
-            if not storage_path:
-                raise ValueError(
-                    f"[{self.node_context.name}] WrpRunner node '{node.name}' "
-                    "is missing storage_path."
-                )
-
-            segment = by_storage.get(storage_path)
-            if segment is None or segment.save_plan is None:
-                raise ValueError(
-                    f"[{self.node_context.name}] No saved Warp bundle for "
-                    f"storage_path '{storage_path}'."
-                )
-
-            plan = segment.save_plan
-            archive, wrp_name = pack_bundle(Path(plan.wrp_path))
-            bundle_name = f"{node.name}.bundle"
-            model.graph.initializer.append(
-                helper.make_tensor(
-                    name=bundle_name,
-                    data_type=TensorProto.UINT8,
-                    dims=[len(archive)],
-                    vals=archive,
-                    raw=True,
-                )
+        if len(wrp_nodes) != len(plans):
+            raise ValueError(
+                f"[{self.node_context.name}] WrpRunner node count "
+                f"({len(wrp_nodes)}) does not match saved Warp segments "
+                f"({len(plans)}); cannot correlate bundles."
             )
-            node.input.append(bundle_name)
 
-            self._set_onnx_string_attr(node, "storage_path", plan.storage_path)
-            self._set_onnx_string_attr(node, "wrp_name", wrp_name)
+        embedded = 0
+        for node, plan in zip(wrp_nodes, plans):
+            self._set_onnx_string_attr(node, "wrp_name", plan.wrp_name)
             self._set_onnx_string_attr(
                 node, "input_names", ",".join(plan.input_names)
             )
@@ -243,12 +207,11 @@ class ONNXExportBackend(ExportBackend):
                 "output_shape",
                 warp_custom_op._format_output_shape_attr(plan.output_shapes),
             )
-            self._remove_onnx_attr(node, "wrp_path")
 
             embedded += 1
             _get_logger().debug(
-                f"[{self.node_context.name}] Embedded Warp bundle for "
-                f"'{storage_path}' ({len(archive)} bytes) on node '{node.name}'."
+                f"[{self.node_context.name}] Finalized Warp runner metadata "
+                f"on node '{node.name}'."
             )
 
         if embedded:
