@@ -13,6 +13,9 @@ from __future__ import annotations
 import struct
 from pathlib import Path
 
+import torch
+import torch.fx as fx
+
 MAGIC = b"WRPB"
 VERSION = 1
 
@@ -55,3 +58,78 @@ def pack_bundle(wrp_path: Path) -> tuple[bytes, str]:
     files = _collect_bundle_files(wrp_path)
     archive = build_archive(files)
     return archive, wrp_path.name
+
+
+def _is_warp_runner_node(node: fx.Node, warp_op) -> bool:
+    if node.op != "call_function":
+        return False
+    target = node.target
+    if target is warp_op:
+        return True
+    if (
+        isinstance(target, torch._ops.OpOverload)
+        and target.overloadpacket is warp_op.overloadpacket
+    ):
+        return True
+    return False
+
+
+def embed_warp_bundles_in_graph(graph_module: fx.GraphModule) -> int:
+    """Wire saved WRPB archives into ``warp_runner`` nodes as CPU ``uint8`` inputs.
+
+    Each ``leapp::warp_runner`` call receives the bundle as its last argument
+    (a ``get_attr`` to a registered buffer). Segments are correlated via
+    ``node.meta['leapp_warp_segment']`` in graph order. Called from the Warp
+    ``pre_compile`` hook before ``onnx-dynamo`` or ``exported-program`` export.
+    """
+    from leapp.leapp_graph.custom_operator_registry import warp_custom_op
+    from leapp.utils.logging import _get_logger
+
+    warp_op = warp_custom_op.get_op().default
+    warp_nodes = [
+        node for node in graph_module.graph.nodes if _is_warp_runner_node(node, warp_op)
+    ]
+    if not warp_nodes:
+        return 0
+
+    embedded = 0
+    for index, node in enumerate(warp_nodes):
+        segment = node.meta.get("leapp_warp_segment")
+        plan = getattr(segment, "save_plan", None) if segment is not None else None
+        if plan is None:
+            raise ValueError(
+                f"Warp runner node '{node.name}' has no saved APIC bundle "
+                "(segment.save_plan is missing)."
+            )
+
+        archive, _wrp_name = pack_bundle(Path(plan.wrp_path))
+        buffer_name = f"_warp_bundle_{index}"
+        bundle_tensor = torch.frombuffer(bytearray(archive), dtype=torch.uint8).clone()
+        graph_module.register_buffer(buffer_name, bundle_tensor, persistent=True)
+
+        with graph_module.graph.inserting_before(node):
+            bundle_node = graph_module.graph.create_node(
+                "get_attr",
+                buffer_name,
+                (),
+                {},
+                name=f"{node.name}_bundle",
+            )
+
+        args = list(node.args)
+        if len(args) < 4:
+            raise ValueError(
+                f"Warp runner node '{node.name}' expected at least 4 args, got {len(args)}."
+            )
+        if len(args) == 4:
+            args.append(bundle_node)
+        else:
+            args[4] = bundle_node
+        node.args = tuple(args)
+        embedded += 1
+        _get_logger().debug(
+            f"Embedded Warp bundle ({len(archive)} bytes) on FX node '{node.name}'."
+        )
+
+    graph_module.recompile()
+    return embedded

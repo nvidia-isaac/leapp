@@ -135,8 +135,6 @@ class WarpTensorRef:
 class WarpSavePlan:
     """Serialized APIC bundle metadata produced after FX pruning."""
 
-    # Runtime storage namespace, e.g. ``leapp/<graph>/<node>/<proxy>``.
-    storage_path: str
     # Filesystem path to the saved ``.wrp`` file (build-time only).
     wrp_path: str
     # Basename of the ``.wrp`` inside the WRPB archive.
@@ -170,8 +168,6 @@ class WarpSegment:
     device: str | None = None
     # FX marker name, e.g. ``warp_segment_0``.
     proxy_name: str | None = None
-    # Runtime storage namespace, e.g. ``leapp/<graph>/<node>/<proxy>``.
-    storage_path: str | None = None
     # Saved .wrp path once export writes the APIC bundle.
     wrp_path: str | None = None
     # Populated by ``_save_warp_captures`` after pruning.
@@ -346,7 +342,6 @@ class WarpSegment:
             "status": self.status,
             "device": self.device,
             "proxy_name": self.proxy_name,
-            "storage_path": self.storage_path,
             "wrp_path": self.wrp_path,
             "has_apic_graph": self.apic_graph is not None,
             "inputs": [ref.to_metadata() for ref in self.input_refs.values()],
@@ -972,7 +967,7 @@ class TracedTensorNode(LeappNode):
             width = len(segment.output_refs)
             mask = [index in used_indices for index in range(width)]
 
-            shapes = [list(shape) for shape in op_node.args[1]]
+            shapes = warp_custom_op.decode_output_shapes(op_node.args[1])
             if len(shapes) != width:
                 # Op args out of sync with the segment; skip rather than corrupt.
                 _get_logger().warning(
@@ -983,22 +978,9 @@ class TracedTensorNode(LeappNode):
                 continue
             shapes = [shapes[i] if mask[i] else [0] for i in range(width)]
 
-            op_node.update_arg(1, shapes)  # output_shapes
-            op_node.update_arg(4, mask)    # output_mask
+            op_node.update_arg(1, warp_custom_op.encode_output_shapes(shapes))
+            op_node.update_arg(3, warp_custom_op.encode_output_mask(mask))
             segment.metadata["used_output_mask"] = mask
-
-    @staticmethod
-    def _warp_storage_path(graph_name: str, node_name: str, proxy_name: str) -> str:
-        return f"leapp/{graph_name}/{node_name}/{proxy_name}"
-
-    @staticmethod
-    def _get_leapp_graph_name() -> str:
-        try:
-            from leapp.export_manager import ExportManager
-
-            return ExportManager().get_graph_name()
-        except Exception:
-            return "graph"
 
     def _resolve_segment_live_io(
         self, segment: WarpSegment
@@ -1047,13 +1029,6 @@ class TracedTensorNode(LeappNode):
             if not proxy_name:
                 proxy_name = op_node.name
 
-            storage_path = segment.storage_path
-            if not storage_path:
-                storage_path = self._warp_storage_path(
-                    self._get_leapp_graph_name(), self.name, proxy_name
-                )
-                segment.storage_path = storage_path
-
             live_inputs, live_outputs = self._resolve_segment_live_io(segment)
             if not live_outputs:
                 _get_logger().debug(
@@ -1090,7 +1065,6 @@ class TracedTensorNode(LeappNode):
 
             segment.wrp_path = wrp_path
             segment.save_plan = WarpSavePlan(
-                storage_path=storage_path,
                 wrp_path=wrp_path,
                 wrp_name=wrp_name,
                 input_names=input_names,
@@ -1100,8 +1074,7 @@ class TracedTensorNode(LeappNode):
 
             _get_logger().debug(
                 f"[{self.name}] Saved Warp APIC bundle for '{proxy_name}' at "
-                f"{wrp_path} (storage_path={storage_path}, "
-                f"inputs={input_names}, outputs={output_names})"
+                f"{wrp_path} (inputs={input_names}, outputs={output_names})"
             )
 
     def create_state_tensors(self, tensors: dict[str, torch.Tensor]) -> dict[str, TracedTensor]:
@@ -1283,10 +1256,10 @@ class TracedTensorNode(LeappNode):
         # (``_stamp_warp_used_output_masks``) rewrites it to mark only the
         # surviving outputs and zeroes the shapes of the rest.
         output_mask = [True] * len(output_refs)
-        path = self._warp_storage_path(
-            self._get_leapp_graph_name(), self.name, op_name
-        )
-        segment.storage_path = path
+        bundle_placeholder = torch.empty(0, dtype=torch.uint8)
+        encoded_shapes = warp_custom_op.encode_output_shapes(output_shapes)
+        encoded_dtypes = warp_custom_op.encode_output_dtypes(output_dtypes)
+        encoded_mask = warp_custom_op.encode_output_mask(output_mask)
 
         # The op consumes only the segment's traced inputs (as a Tensor[]) and
         # *produces* its outputs via per-output ``operator.getitem``. Segment
@@ -1294,15 +1267,12 @@ class TracedTensorNode(LeappNode):
         # shows the results as get_attr constants flowing into the call instead
         # of being derived from it.
         #
-        # Emit the ``.default`` OpOverload: the JIT ONNX tracer (onnx-torchscript)
-        # records the op's ``int[][]``/``str[]`` constants as node attributes, and
-        # ``torch.export`` (dynamo) consumes the overload directly. The jit-script
-        # backend retargets these nodes to the OpOverloadPacket before scripting,
-        # since ``torch.jit.script`` cannot resolve the ``.default`` attribute.
+        # Emit the ``.default`` OpOverload: ``torch.export`` (dynamo) consumes the
+        # overload directly and the dynamo ONNX path lowers it to WrpRunner.
         warp_runner = self.tracer.create_proxy(
             "call_function",
             warp_custom_op.get_op().default,
-            ([*input_proxies], output_shapes, output_dtypes, path, output_mask),
+            ([*input_proxies], encoded_shapes, encoded_dtypes, encoded_mask, bundle_placeholder),
             {},
             name=op_name,
         )
