@@ -74,6 +74,21 @@ def _is_warp_runner_node(node: fx.Node, warp_op) -> bool:
     return False
 
 
+def iter_warp_segments_from_graph(graph: fx.Graph) -> list:
+    """Return warp segment objects in ``warp_runner`` node order."""
+    from leapp.leapp_graph.custom_operator_registry import warp_custom_op
+
+    warp_op = warp_custom_op.get_op().default
+    segments = []
+    for node in graph.nodes:
+        if not _is_warp_runner_node(node, warp_op):
+            continue
+        segment = node.meta.get("leapp_warp_segment")
+        if segment is not None:
+            segments.append(segment)
+    return segments
+
+
 def embed_warp_bundles_in_graph(graph_module: fx.GraphModule) -> int:
     """Wire saved WRPB archives into ``warp_runner`` nodes as CPU ``uint8`` inputs.
 
@@ -95,14 +110,13 @@ def embed_warp_bundles_in_graph(graph_module: fx.GraphModule) -> int:
     embedded = 0
     for index, node in enumerate(warp_nodes):
         segment = node.meta.get("leapp_warp_segment")
-        plan = getattr(segment, "save_plan", None) if segment is not None else None
-        if plan is None:
+        if segment is None or segment.wrp_path is None:
             raise ValueError(
                 f"Warp runner node '{node.name}' has no saved APIC bundle "
-                "(segment.save_plan is missing)."
+                "(segment.wrp_path is missing)."
             )
 
-        archive, _wrp_name = pack_bundle(Path(plan.wrp_path))
+        archive, _wrp_name = pack_bundle(Path(segment.wrp_path))
         buffer_name = f"_warp_bundle_{index}"
         bundle_tensor = torch.frombuffer(bytearray(archive), dtype=torch.uint8).clone()
         graph_module.register_buffer(buffer_name, bundle_tensor, persistent=True)

@@ -112,7 +112,7 @@ def _resolve_dtype(name: str) -> torch.dtype:
 # tracing and ``torch.export``. They do not execute real Warp work; execution is
 # delegated to the ORT ``WrpRunner`` kernel after ONNX export.
 #
-# FX emission lives in ``traced_node.py`` (``_close_warp_segment``): it builds
+# FX emission lives in ``traced_node.py`` (``insert_warp_marker``): it builds
 # ``(inputs, output_shapes, output_dtypes, path, output_mask)`` and attaches
 # ``node.meta["leapp_warp_segment"]`` for downstream export passes.
 

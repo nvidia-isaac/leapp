@@ -62,7 +62,7 @@ else:
             self._patches: list[_Patch] = []
             self._wrappers_by_original_id: dict[int, Any] = {}
             self._recording_depth = 0
-            self._segment_stack: list[Any] = []
+            self._active_segment: Any | None = None
             self._installed = False
             self._initialized = True
         #########################################################
@@ -89,23 +89,27 @@ else:
 
         def push_segment(self, segment: Any) -> None:
             """Make ``segment`` the active destination for detected Warp calls."""
-            self._segment_stack.append(segment)
+            if self._active_segment is not None:
+                raise RuntimeError(
+                    "A Warp segment is already active; only one segment may be "
+                    "open globally at a time."
+                )
+            self._active_segment = segment
 
         def pop_segment(self, segment: Any | None = None) -> Any | None:
             """Remove and return the active Warp segment."""
-            if not self._segment_stack:
+            if self._active_segment is None:
                 return None
 
-            active = self._segment_stack[-1]
+            active = self._active_segment
             if segment is not None and active is not segment:
-                raise ValueError("Warp segment stack is not balanced.")
-            return self._segment_stack.pop()
+                raise ValueError("Warp segment is not the active segment.")
+            self._active_segment = None
+            return active
 
         @property
         def active_segment(self) -> Any | None:
-            if not self._segment_stack:
-                return None
-            return self._segment_stack[-1]
+            return self._active_segment
 
         @contextlib.contextmanager
         def paused(self):
@@ -125,7 +129,7 @@ else:
         def uninstall(self) -> None:
             """Restore every attribute patched by this detector."""
 
-            self._segment_stack.clear()
+            self._active_segment = None
 
             for patch in reversed(self._patches):
                 try:

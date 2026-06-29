@@ -167,16 +167,23 @@ class ONNXExportBackend(ExportBackend):
         node.attribute.append(helper.make_attribute(name, value))
 
     def _embed_warp_bundles(self, model: onnx.ModelProto) -> int:
-        """Finalize ``WrpRunner`` ONNX nodes with live I/O metadata from save plans.
+        """Finalize ``WrpRunner`` ONNX nodes with live I/O metadata from segments.
 
         The WRPB bytes are already wired in as the last input by
         ``embed_warp_bundles_in_graph`` (via dynamo lowering). This pass only
         patches ``wrp_name``, ``input_names``, ``output_names``, and
-        ``output_shape`` from each segment's save plan.
+        ``output_shape`` from each segment's saved bundle metadata.
         """
-        segments = getattr(self.node_context, "warp_segments", None) or []
-        plans = [seg.save_plan for seg in segments if seg.save_plan is not None]
-        if not plans:
+        from leapp.leapp_graph.custom_operator_registry.warp_bundle import (
+            iter_warp_segments_from_graph,
+        )
+
+        segments = [
+            seg
+            for seg in iter_warp_segments_from_graph(self.node_context.graph)
+            if seg.wrp_path is not None
+        ]
+        if not segments:
             return 0
 
         wrp_nodes = [
@@ -186,26 +193,26 @@ class ONNXExportBackend(ExportBackend):
             and node.domain == warp_custom_op.ONNX_WRP_DOMAIN
         ]
 
-        if len(wrp_nodes) != len(plans):
+        if len(wrp_nodes) != len(segments):
             raise ValueError(
                 f"[{self.node_context.name}] WrpRunner node count "
                 f"({len(wrp_nodes)}) does not match saved Warp segments "
-                f"({len(plans)}); cannot correlate bundles."
+                f"({len(segments)}); cannot correlate bundles."
             )
 
         embedded = 0
-        for node, plan in zip(wrp_nodes, plans):
-            self._set_onnx_string_attr(node, "wrp_name", plan.wrp_name)
+        for node, segment in zip(wrp_nodes, segments):
+            self._set_onnx_string_attr(node, "wrp_name", segment.wrp_name)
             self._set_onnx_string_attr(
-                node, "input_names", ",".join(plan.input_names)
+                node, "input_names", ",".join(segment.input_names)
             )
             self._set_onnx_string_attr(
-                node, "output_names", ",".join(plan.output_names)
+                node, "output_names", ",".join(segment.output_names)
             )
             self._set_onnx_string_attr(
                 node,
                 "output_shape",
-                warp_custom_op._format_output_shape_attr(plan.output_shapes),
+                warp_custom_op._format_output_shape_attr(segment.output_shapes),
             )
 
             embedded += 1
