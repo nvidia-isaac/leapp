@@ -1,3 +1,20 @@
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
 from typing import TYPE_CHECKING
 from leapp.utils.logging import _get_logger
 
@@ -7,6 +24,7 @@ if TYPE_CHECKING:
 try:
     import warp as wp
     from leapp.leapp_graph.datatypes.global_warp_patching import WarpLeappCallDetector
+    from leapp.leapp_graph.warp_segment import WarpSegment
 except ModuleNotFoundError as exc:
     if exc.name != "warp":
         raise
@@ -27,7 +45,8 @@ else:
             self.device = device
 
         def __enter__(self):
-            self._segment = self.node_ref.add_warp_segment(
+            self._segment = WarpSegment(
+                node_name=self.node_name,
                 device=self.device,
             )
             self._detector = WarpLeappCallDetector.instance()
@@ -43,9 +62,6 @@ else:
         def __exit__(self, exc_type, exc_value, traceback):
             scope_result = False
             scope_result = self._scope.__exit__(exc_type, exc_value, traceback)
-            if self.node_ref.get_warp_segment() is not self._segment:
-                raise ValueError(f"Warp segment {self._segment} is not the "
-                                 f"current segment for node {self.node_ref.name}")
             try:
                 if exc_type is None:
                     graph = self._capture.graph
@@ -61,7 +77,7 @@ else:
                     if self._segment is not None:
                         self._segment.apic_graph = graph
                         self._segment.add_event({"kind": "scoped_capture"})
-                        self.node_ref.close_warp_segment(self._segment)
+                        self.node_ref.insert_warp_marker(self._segment)
             finally:
                 if self._detector is not None:
                     self._detector.pop_segment(self._segment)
