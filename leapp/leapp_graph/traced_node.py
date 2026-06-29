@@ -18,6 +18,7 @@ from leapp.leapp_graph.datatypes import (
     TracedTensor,
     as_traced,
     is_tracable_tensor_type,
+    wp,
 )
 from leapp.utils.tensor_description import (
     resolve_tensor_descriptions_to_names,
@@ -26,18 +27,13 @@ from leapp.utils.tensor_description import (
 )
 # Importing registers the ``leapp::warp_runner`` custom op (import side effect)
 # and exposes ``get_op``/``QUALIFIED_NAME`` used when emitting segment nodes.
-from leapp.leapp_graph.custom_operator_registry import warp_custom_op
+from leapp.leapp_graph.custom_operator_registry import warp_operator
 import collections
 import os
 import tempfile
 
-try:
-    import warp as wp
-except ImportError:
-    wp = None
-
 if TYPE_CHECKING:
-    from leapp.leapp_graph.warp_segment import WarpSegment, WarpTensorRef
+    from leapp.leapp_graph.datatypes.warp import WarpSegment, WarpTensorRef
 
 
 class TracedTensorNode(LeappNode):
@@ -653,7 +649,7 @@ class TracedTensorNode(LeappNode):
             width = len(segment.output_refs)
             mask = [index in used_indices for index in range(width)]
 
-            shapes = warp_custom_op.decode_output_shapes(op_node.args[1])
+            shapes = warp_operator.decode_output_shapes(op_node.args[1])
             if len(shapes) != width:
                 # Op args out of sync with the segment; skip rather than corrupt.
                 _get_logger().warning(
@@ -664,8 +660,8 @@ class TracedTensorNode(LeappNode):
                 continue
             shapes = [shapes[i] if mask[i] else [0] for i in range(width)]
 
-            op_node.update_arg(1, warp_custom_op.encode_output_shapes(shapes))
-            op_node.update_arg(3, warp_custom_op.encode_output_mask(mask))
+            op_node.update_arg(1, warp_operator.encode_output_shapes(shapes))
+            op_node.update_arg(3, warp_operator.encode_output_mask(mask))
             segment.metadata["used_output_mask"] = mask
 
     def _resolve_segment_live_io(
@@ -699,7 +695,7 @@ class TracedTensorNode(LeappNode):
         if wp is None:
             return
 
-        from leapp.leapp_graph.custom_operator_registry.warp_bundle import (
+        from leapp.leapp_graph.custom_operator_registry.warp_operator.bundle import (
             iter_warp_segments_from_graph,
         )
 
@@ -873,7 +869,7 @@ class TracedTensorNode(LeappNode):
             if ref.shape is None:
                 raise RuntimeError(
                     f"Warp segment output '{ref.name}' has no observed shape; "
-                    f"cannot emit {warp_custom_op.QUALIFIED_NAME}."
+                    f"cannot emit {warp_operator.QUALIFIED_NAME}."
                 )
             output_shapes.append([int(dim) for dim in ref.shape])
             output_dtypes.append(
@@ -887,9 +883,9 @@ class TracedTensorNode(LeappNode):
         # surviving outputs and zeroes the shapes of the rest.
         output_mask = [True] * len(output_refs)
         bundle_placeholder = torch.empty(0, dtype=torch.uint8)
-        encoded_shapes = warp_custom_op.encode_output_shapes(output_shapes)
-        encoded_dtypes = warp_custom_op.encode_output_dtypes(output_dtypes)
-        encoded_mask = warp_custom_op.encode_output_mask(output_mask)
+        encoded_shapes = warp_operator.encode_output_shapes(output_shapes)
+        encoded_dtypes = warp_operator.encode_output_dtypes(output_dtypes)
+        encoded_mask = warp_operator.encode_output_mask(output_mask)
 
         # The op consumes only the segment's traced inputs (as a Tensor[]) and
         # *produces* its outputs via per-output ``operator.getitem``. Segment
@@ -901,7 +897,7 @@ class TracedTensorNode(LeappNode):
         # overload directly and the dynamo ONNX path lowers it to WrpRunner.
         warp_runner = self.tracer.create_proxy(
             "call_function",
-            warp_custom_op.get_op().default,
+            warp_operator.get_op().default,
             ([*input_proxies], encoded_shapes, encoded_dtypes, encoded_mask, bundle_placeholder),
             {},
             name=op_name,

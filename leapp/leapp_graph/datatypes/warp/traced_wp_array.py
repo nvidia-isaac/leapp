@@ -5,15 +5,9 @@ from typing import Any
 import torch
 from torch.fx.proxy import Proxy
 
-try:
-    import warp as wp
-except ImportError as exc:
-    raise ImportError(
-        "traced_wp_array requires warp-lang (pip install warp-lang)."
-    ) from exc
+import warp as wp
 
-
-from .traced_data import TracedData
+from ..traced_data import TracedData
 from leapp.utils.dtype import DtypeCodec, register_dtype_codec
 
 
@@ -51,7 +45,7 @@ class TracedWpArray(wp.array):
 
     def __new__(cls, array, name, context, proxy):
         obj = wp.array.__new__(cls)
-        from .global_warp_patching import WarpLeappCallDetector
+        from .patching import WarpLeappCallDetector
 
         # Warp's array initializers are patched in place by the global detector;
         # pause detection so they populate ptr/shape/etc. on this half-built object

@@ -14,7 +14,7 @@ from onnx import numpy_helper
 import tempfile
 
 from torch.onnx import _constants
-from leapp.leapp_graph.custom_operator_registry import warp_custom_op
+from leapp.leapp_graph.custom_operator_registry import warp_operator
 
 class ONNXExportBackend(ExportBackend):
     def get_backend_metadata(self):
@@ -174,7 +174,7 @@ class ONNXExportBackend(ExportBackend):
         patches ``wrp_name``, ``input_names``, ``output_names``, and
         ``output_shape`` from each segment's saved bundle metadata.
         """
-        from leapp.leapp_graph.custom_operator_registry.warp_bundle import (
+        from leapp.leapp_graph.custom_operator_registry.warp_operator.bundle import (
             iter_warp_segments_from_graph,
         )
 
@@ -189,8 +189,8 @@ class ONNXExportBackend(ExportBackend):
         wrp_nodes = [
             node
             for node in model.graph.node
-            if node.op_type == warp_custom_op.ONNX_WRP_OP_TYPE
-            and node.domain == warp_custom_op.ONNX_WRP_DOMAIN
+            if node.op_type == warp_operator.ONNX_WRP_OP_TYPE
+            and node.domain == warp_operator.ONNX_WRP_DOMAIN
         ]
 
         if len(wrp_nodes) != len(segments):
@@ -212,7 +212,7 @@ class ONNXExportBackend(ExportBackend):
             self._set_onnx_string_attr(
                 node,
                 "output_shape",
-                warp_custom_op._format_output_shape_attr(segment.output_shapes),
+                warp_operator._format_output_shape_attr(segment.output_shapes),
             )
 
             embedded += 1
@@ -223,14 +223,14 @@ class ONNXExportBackend(ExportBackend):
 
         if embedded:
             has_custom_opset = any(
-                opset.domain == warp_custom_op.ONNX_WRP_DOMAIN
+                opset.domain == warp_operator.ONNX_WRP_DOMAIN
                 for opset in model.opset_import
             )
             if not has_custom_opset:
                 model.opset_import.append(
                     helper.make_opsetid(
-                        warp_custom_op.ONNX_WRP_DOMAIN,
-                        warp_custom_op.ONNX_WRP_OPSET,
+                        warp_operator.ONNX_WRP_DOMAIN,
+                        warp_operator.ONNX_WRP_OPSET,
                     )
                 )
 

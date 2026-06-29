@@ -5,7 +5,7 @@
 
 """Generic export hooks for LEAPP custom operators.
 
-Each custom op module (e.g. ``warp_custom_op``) registers callbacks here at import
+Each custom op package (e.g. ``warp_operator``) registers callbacks here at import
 time. ``leapp_node.compile_model`` calls :func:`prepare_and_validate` before any
 export backend compiles, so backends stay unaware of individual ops.
 """

@@ -20,7 +20,7 @@ from torch.fx.proxy import Proxy
 
 from leapp.utils.logging import _get_logger
 from leapp.utils.dtype import DtypeCodec, register_dtype_codec
-from .traced_data import TracedData
+from ..traced_data import TracedData
 
 
 # numpy scalar *type* (e.g. ``np.float64``) -> common name string. Lives with
