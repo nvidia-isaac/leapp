@@ -21,14 +21,10 @@ from leapp.utils.logging import _get_logger
 if TYPE_CHECKING:
     from leapp.leapp_graph.traced_node import TracedTensorNode
 
-try:
-    import warp as wp
-    from leapp.leapp_graph.datatypes.global_warp_patching import WarpLeappCallDetector
-    from leapp.leapp_graph.warp_segment import WarpSegment
-except ModuleNotFoundError as exc:
-    if exc.name != "warp":
-        raise
-    wp = None
+from leapp.leapp_graph.datatypes import WarpLeappCallDetector, wp
+from leapp.leapp_graph.datatypes.warp import WarpSegment
+
+if wp is None or WarpLeappCallDetector is None:
     WarpOp = None
 else:
     class WarpOp:

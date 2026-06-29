@@ -1,14 +1,13 @@
 from leapp.backends.export_backend import ExportBackend
 from typing import Any
-try:
-    import warp as wp
-    import warp.Graph
-except ModuleNotFoundError as exc:
-    if exc.name != "warp":
-        raise
-    wp = None
+
+from leapp.leapp_graph.datatypes.warp import wp
+
+if wp is None:
     APICExportBackend = None
 else:
+    import warp.Graph  # noqa: F401
+
     class APICExportBackend(ExportBackend):
         _default_sm_version = 76
         def compile(self, m: Any):

@@ -14,21 +14,14 @@ This module provides:
 from typing import Type, Union, Optional
 
 import numpy as np
-import torch
+import torch as _torch
 
 from .traced_data import TracedData
-from .traced_tensor import TracedTensor
-from .traced_np_array import TracedNpArray
+from .torch.traced_tensor import TracedTensor
+from .numpy.traced_np_array import TracedNpArray
+from .warp import TracedWpArray, WarpLeappCallDetector, wp
 
-try:
-    import warp as wp
-
-    from .traced_wp_array import TracedWpArray
-except ImportError:
-    wp = None
-    TracedWpArray = None
-
-from .global_patching import (
+from .patching import (
     apply_traced_data_patches,
     remove_traced_data_patches,
     is_numpy_patching_enabled,
@@ -42,7 +35,7 @@ from .global_patching import (
 # Mapping from base tensor types to their traced counterparts
 # Order matters: more specific types should come first
 TRACED_TYPE_REGISTRY: dict[type, Type[TracedData]] = {
-    torch.Tensor: TracedTensor,
+    _torch.Tensor: TracedTensor,
     np.ndarray: TracedNpArray,
 }
 if wp is not None and TracedWpArray is not None:
@@ -172,14 +165,14 @@ def as_traced(data, name: str, context, proxy) -> TracedData:
     
     return traced_class(data, name, context, proxy)
 
-def to_export_torch_tensor(data) -> torch.Tensor:
+def to_export_torch_tensor(data) -> _torch.Tensor:
     """Convert a traceable LEAPP value to ``torch.Tensor`` for export metadata."""
     if isinstance(data, TracedData):
         return data.tensor
-    if isinstance(data, torch.Tensor):
+    if isinstance(data, _torch.Tensor):
         return data
     if np is not None and isinstance(data, np.ndarray):
-        return torch.from_numpy(data)
+        return _torch.from_numpy(data)
     if wp is not None and isinstance(data, wp.array):
         return wp.to_torch(data)
     raise TypeError(
@@ -196,6 +189,7 @@ __all__ = [
     "TracedTensor",
     "TracedNpArray",
     "TracedWpArray",
+    "WarpLeappCallDetector",
     # Type registry
     "TRACED_TYPE_REGISTRY",
     "TRACABLE_BASE_TYPES",

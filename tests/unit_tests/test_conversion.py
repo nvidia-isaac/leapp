@@ -17,7 +17,7 @@ import torch
 
 from leapp.leapp_graph.traced_node import TracedTensorNode
 from leapp.leapp_graph.datatypes import TracedTensor, TracedNpArray
-from leapp.leapp_graph.datatypes.global_patching import (
+from leapp.leapp_graph.datatypes.patching import (
     apply_traced_data_patches,
     remove_traced_data_patches,
 )
@@ -362,7 +362,7 @@ class TestPatchingBehavior(unittest.TestCase):
 
     def test_patches_can_be_toggled(self):
         """Test that patches can be applied and removed."""
-        from leapp.leapp_graph.datatypes.global_patching import is_patching_enabled
+        from leapp.leapp_graph.datatypes.patching import is_patching_enabled
         
         # Start clean
         remove_traced_data_patches()

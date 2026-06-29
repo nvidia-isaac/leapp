@@ -9,7 +9,7 @@ Importing this package registers the custom ops it owns (currently
 ``leapp::warp_runner``) as an import side effect.
 """
 
-from . import warp_custom_op as warp_custom_op
+from . import warp_operator
 from .registry import prepare_and_validate, register_export_hooks
 
-__all__ = ["warp_custom_op", "prepare_and_validate", "register_export_hooks"]
+__all__ = ["warp_operator", "prepare_and_validate", "register_export_hooks"]

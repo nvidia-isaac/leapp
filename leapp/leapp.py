@@ -26,7 +26,7 @@ from .utils.logging import _get_logger
 from .leapp_graph.datatypes import apply_traced_data_patches, remove_traced_data_patches
 
 try:
-    from .leapp_graph.datatypes.global_warp_patching import WarpLeappCallDetector
+    from .leapp_graph.datatypes import WarpLeappCallDetector
 except ImportError:
     WarpLeappCallDetector = None
 from .leapp_graph.leapp_graph import LeappGraph

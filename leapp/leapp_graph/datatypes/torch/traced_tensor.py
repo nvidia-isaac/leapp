@@ -20,7 +20,7 @@ from torch._export.converter import TS2EPConverter
 
 from leapp.utils.logging import _get_logger
 from leapp.utils.dtype import DtypeCodec, register_dtype_codec
-from .traced_data import TracedData
+from ..traced_data import TracedData
 
 
 # torch dtype object -> common name string. Lives with the torch node library
@@ -1152,7 +1152,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             return np_data
         
         # Return TracedNpArray with inherited proxy/context
-        from . import as_traced #lazy import to avoid circular dependency
+        from leapp.leapp_graph.datatypes import as_traced  # lazy import to avoid circular dependency
         return as_traced(np_data, self.name, self.context_obj, self.proxy)
 
     def __array__(self, dtype=None, copy=None):
