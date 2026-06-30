@@ -23,6 +23,14 @@ from leapp.utils.logging import _get_logger
 from ..registry import register_export_hooks
 from . import fx as fx_impl
 from . import onnx as onnx_impl
+from .metadata import (
+    build_runtime_metadata,
+    decode_runtime_metadata,
+    encode_runtime_metadata,
+    output_dtypes as runtime_output_dtypes,
+    output_mask as runtime_output_mask,
+    output_shapes as runtime_output_shapes,
+)
 from .schema import (
     NAMESPACE,
     OP_NAME,
@@ -129,6 +137,12 @@ __all__ = [
     "ONNX_WRP_OPSET",
     "ONNX_WRP_OP_TYPE",
     "get_op",
+    "build_runtime_metadata",
+    "encode_runtime_metadata",
+    "decode_runtime_metadata",
+    "runtime_output_shapes",
+    "runtime_output_dtypes",
+    "runtime_output_mask",
     "encode_output_shapes",
     "decode_output_shapes",
     "encode_output_dtypes",

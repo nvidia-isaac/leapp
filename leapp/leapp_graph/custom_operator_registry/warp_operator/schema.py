@@ -13,10 +13,7 @@ NAMESPACE = "leapp"
 OP_NAME = "warp_runner"
 QUALIFIED_NAME = f"{NAMESPACE}::{OP_NAME}"
 
-_SCHEMA = (
-    f"{OP_NAME}(Tensor[] inputs, str output_shapes, "
-    f"str output_dtypes, str output_mask, Tensor bundle) -> Tensor[]"
-)
+_SCHEMA = f"{OP_NAME}(Tensor[] inputs, str runtime_metadata, Tensor bundle) -> Tensor[]"
 
 ONNX_WRP_DOMAIN = "com.nvidia.warp"
 ONNX_WRP_OPSET = 1

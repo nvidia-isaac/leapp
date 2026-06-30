@@ -276,12 +276,15 @@ class TracedTensorNode(LeappNode):
 
         rewritten = []
         nodes_to_erase = []
+        warp_op = warp_operator.get_op()
 
         for node in graph.nodes:
             if node.op != "call_function":
                 continue
             target = node.target
             if not isinstance(target, torch._ops.OpOverload):
+                continue
+            if target.overloadpacket is warp_op:
                 continue
             op_name = target.overloadpacket.__name__
 
@@ -649,7 +652,9 @@ class TracedTensorNode(LeappNode):
             width = len(segment.output_refs)
             mask = [index in used_indices for index in range(width)]
 
-            shapes = warp_operator.decode_output_shapes(op_node.args[1])
+            runtime_metadata = warp_operator.decode_runtime_metadata(op_node.args[1])
+            shapes = warp_operator.runtime_output_shapes(runtime_metadata)
+            dtypes = warp_operator.runtime_output_dtypes(runtime_metadata)
             if len(shapes) != width:
                 # Op args out of sync with the segment; skip rather than corrupt.
                 _get_logger().warning(
@@ -659,9 +664,20 @@ class TracedTensorNode(LeappNode):
                 )
                 continue
             shapes = [shapes[i] if mask[i] else [0] for i in range(width)]
+            input_refs = [
+                ref for ref in segment.input_refs.values() if ref.proxy is not None
+            ]
+            output_refs = list(segment.output_refs.values())
+            runtime_metadata = warp_operator.build_runtime_metadata(
+                segment=segment,
+                input_refs=input_refs,
+                output_refs=output_refs,
+                output_shapes=shapes,
+                output_dtypes=dtypes,
+                output_mask=mask,
+            )
 
-            op_node.update_arg(1, warp_operator.encode_output_shapes(shapes))
-            op_node.update_arg(3, warp_operator.encode_output_mask(mask))
+            op_node.update_arg(1, warp_operator.encode_runtime_metadata(runtime_metadata))
             segment.metadata["used_output_mask"] = mask
 
     def _resolve_segment_live_io(
@@ -754,6 +770,22 @@ class TracedTensorNode(LeappNode):
             segment.input_names = input_names
             segment.output_names = output_names
             segment.output_shapes = output_shapes
+
+            runtime_metadata = warp_operator.decode_runtime_metadata(op_node.args[1])
+            full_output_shapes = warp_operator.runtime_output_shapes(runtime_metadata)
+            full_output_dtypes = warp_operator.runtime_output_dtypes(runtime_metadata)
+            full_output_mask = warp_operator.runtime_output_mask(runtime_metadata)
+            final_metadata = warp_operator.build_runtime_metadata(
+                segment=segment,
+                input_refs=live_inputs,
+                output_refs=list(segment.output_refs.values()),
+                output_shapes=full_output_shapes,
+                output_dtypes=full_output_dtypes,
+                output_mask=full_output_mask,
+                wrp_name=wrp_name,
+            )
+            op_node.update_arg(1, warp_operator.encode_runtime_metadata(final_metadata))
+            op_node.meta["leapp_warp_runtime_metadata"] = final_metadata
 
             _get_logger().debug(
                 f"[{self.name}] Saved Warp APIC bundle for '{proxy_name}' at "
@@ -883,9 +915,17 @@ class TracedTensorNode(LeappNode):
         # surviving outputs and zeroes the shapes of the rest.
         output_mask = [True] * len(output_refs)
         bundle_placeholder = torch.empty(0, dtype=torch.uint8)
-        encoded_shapes = warp_operator.encode_output_shapes(output_shapes)
-        encoded_dtypes = warp_operator.encode_output_dtypes(output_dtypes)
-        encoded_mask = warp_operator.encode_output_mask(output_mask)
+        runtime_metadata = warp_operator.build_runtime_metadata(
+            segment=segment,
+            input_refs=[
+                ref for ref in segment.input_refs.values() if ref.proxy is not None
+            ],
+            output_refs=output_refs,
+            output_shapes=output_shapes,
+            output_dtypes=output_dtypes,
+            output_mask=output_mask,
+        )
+        encoded_metadata = warp_operator.encode_runtime_metadata(runtime_metadata)
 
         # The op consumes only the segment's traced inputs (as a Tensor[]) and
         # *produces* its outputs via per-output ``operator.getitem``. Segment
@@ -898,7 +938,7 @@ class TracedTensorNode(LeappNode):
         warp_runner = self.tracer.create_proxy(
             "call_function",
             warp_operator.get_op().default,
-            ([*input_proxies], encoded_shapes, encoded_dtypes, encoded_mask, bundle_placeholder),
+            ([*input_proxies], encoded_metadata, bundle_placeholder),
             {},
             name=op_name,
         )

@@ -283,6 +283,13 @@ class SimplifiedONNXProgram:
             model_path = os.path.join(self._source_dir, self._source_filename)
             providers = self._get_providers()
             sess_options = ort.SessionOptions()
+            custom_op_library = os.environ.get("LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY")
+            if custom_op_library:
+                if not os.path.exists(custom_op_library):
+                    raise FileNotFoundError(
+                        f"LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY does not exist: {custom_op_library}"
+                    )
+                sess_options.register_custom_ops_library(custom_op_library)
             # ORT_ENABLE_ALL can silently corrupt results for certain graph
             # patterns (e.g. Gemm chains produced by FX make_fx decomposition).
             # ORT_ENABLE_BASIC is safe and still applies constant folding.

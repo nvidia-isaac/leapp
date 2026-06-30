@@ -9,32 +9,25 @@ from __future__ import annotations
 
 import torch
 
-from .schema import (
-    QUALIFIED_NAME,
-    decode_output_dtypes,
-    decode_output_mask,
-    decode_output_shapes,
-    _resolve_dtype,
-)
+from .metadata import decode_runtime_metadata, output_dtypes, output_shapes
+from .schema import QUALIFIED_NAME, _resolve_dtype
 
 
-def warp_runner_fake(inputs, output_shapes, output_dtypes, output_mask, bundle):
-    """Abstract impl: produce correctly-shaped meta outputs from the spec."""
-    shape_lists = decode_output_shapes(output_shapes)
-    dtype_lists = decode_output_dtypes(output_dtypes)
-    mask_lists = decode_output_mask(output_mask) if output_mask else []
-
+def _decode_output_spec(runtime_metadata: str) -> tuple[list[list[int]], list[str]]:
+    metadata = decode_runtime_metadata(runtime_metadata)
+    shape_lists = output_shapes(metadata)
+    dtype_lists = output_dtypes(metadata)
     if len(shape_lists) != len(dtype_lists):
         raise ValueError(
-            f"{QUALIFIED_NAME}: output_shapes ({len(shape_lists)}) and "
-            f"output_dtypes ({len(dtype_lists)}) must have equal length"
+            f"{QUALIFIED_NAME}: runtime_metadata output shapes ({len(shape_lists)}) "
+            f"and dtypes ({len(dtype_lists)}) must have equal length"
         )
-    if mask_lists and len(mask_lists) != len(shape_lists):
-        raise ValueError(
-            f"{QUALIFIED_NAME}: output_mask ({len(mask_lists)}) must match the "
-            f"number of outputs ({len(shape_lists)}) when provided"
-        )
+    return shape_lists, dtype_lists
 
+
+def warp_runner_fake(inputs, runtime_metadata, bundle):
+    """Abstract impl: produce correctly-shaped meta outputs from runtime metadata."""
+    shape_lists, dtype_lists = _decode_output_spec(runtime_metadata)
     device = inputs[0].device if len(inputs) > 0 else torch.device("cpu")
     return [
         torch.empty(list(shape), dtype=_resolve_dtype(name), device=device)
@@ -42,16 +35,9 @@ def warp_runner_fake(inputs, output_shapes, output_dtypes, output_mask, bundle):
     ]
 
 
-def warp_runner_eager(inputs, output_shapes, output_dtypes, output_mask, bundle):
-    """Eager kernel: allocate shape-correct (zeros) outputs from the spec."""
-    shape_lists = decode_output_shapes(output_shapes)
-    dtype_lists = decode_output_dtypes(output_dtypes)
-
-    if len(shape_lists) != len(dtype_lists):
-        raise ValueError(
-            f"{QUALIFIED_NAME}: output_shapes ({len(shape_lists)}) and "
-            f"output_dtypes ({len(dtype_lists)}) must have equal length"
-        )
+def warp_runner_eager(inputs, runtime_metadata, bundle):
+    """Eager kernel: allocate shape-correct zero outputs from runtime metadata."""
+    shape_lists, dtype_lists = _decode_output_spec(runtime_metadata)
     device = inputs[0].device if len(inputs) > 0 else torch.device("cpu")
     return [
         torch.zeros(list(shape), dtype=_resolve_dtype(name), device=device)

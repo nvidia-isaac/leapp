@@ -202,6 +202,22 @@ class ONNXExportBackend(ExportBackend):
 
         embedded = 0
         for node, segment in zip(wrp_nodes, segments):
+            op_node = (
+                segment.marker_proxy.node if segment.marker_proxy is not None else None
+            )
+            if op_node is None:
+                raise ValueError(
+                    f"[{self.node_context.name}] Saved Warp segment has no marker node; "
+                    "cannot patch runtime metadata."
+                )
+            runtime_metadata = op_node.args[1]
+            metadata = warp_operator.decode_runtime_metadata(runtime_metadata)
+            full_output_shapes = warp_operator.runtime_output_shapes(metadata)
+            full_output_mask = warp_operator.runtime_output_mask(metadata)
+
+            self._set_onnx_string_attr(node, "runtime_metadata", runtime_metadata)
+            # Legacy attrs are kept for compatibility with the existing POC-style
+            # C++ op while the runtime migrates to runtime_metadata.
             self._set_onnx_string_attr(node, "wrp_name", segment.wrp_name)
             self._set_onnx_string_attr(
                 node, "input_names", ",".join(segment.input_names)
@@ -212,7 +228,10 @@ class ONNXExportBackend(ExportBackend):
             self._set_onnx_string_attr(
                 node,
                 "output_shape",
-                warp_operator._format_output_shape_attr(segment.output_shapes),
+                warp_operator._format_output_shape_attr(full_output_shapes),
+            )
+            self._set_onnx_string_attr(
+                node, "output_mask", warp_operator.encode_output_mask(full_output_mask)
             )
 
             embedded += 1

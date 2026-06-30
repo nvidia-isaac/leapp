@@ -15,14 +15,15 @@ import torch
 
 from leapp.utils.logging import _get_logger
 
+from .metadata import decode_runtime_metadata, output_dtypes, output_shapes
 from .schema import (
     QUALIFIED_NAME,
     ONNX_WRP_DOMAIN,
     ONNX_WRP_OPSET,
     ONNX_WRP_OP_TYPE,
-    decode_output_dtypes,
-    decode_output_shapes,
+    encode_output_mask,
     get_op,
+    _format_output_shape_attr,
     _resolve_dtype,
 )
 
@@ -30,11 +31,19 @@ _GLOBAL_ONNX_TRANSLATIONS: dict[Any, Callable[..., Any]] = {}
 _ONNX_EXPORT_PATCHED = False
 
 
+def _masked_output_names(metadata: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    for spec in metadata.get("outputs", []):
+        if spec.get("mask", True):
+            name = spec.get("param_name")
+            if name:
+                names.append(str(name))
+    return names
+
+
 def lower_warp_runner_to_onnx(
     inputs,
-    output_shapes,
-    output_dtypes,
-    output_mask,
+    runtime_metadata,
     bundle,
 ):
     """Lower ``leapp.warp_runner`` to ``com.nvidia.warp::WrpRunner`` during ONNX export."""
@@ -47,22 +56,33 @@ def lower_warp_runner_to_onnx(
             f"Cannot lower {QUALIFIED_NAME}: ONNX export tracer is not active."
         )
 
-    shape_lists = decode_output_shapes(output_shapes)
-    dtype_lists = decode_output_dtypes(output_dtypes)
+    metadata = decode_runtime_metadata(runtime_metadata)
+    shape_lists = output_shapes(metadata)
+    dtype_lists = output_dtypes(metadata)
     if len(shape_lists) != len(dtype_lists):
         raise ValueError(
-            f"{QUALIFIED_NAME}: output_shapes ({len(shape_lists)}) and "
-            f"output_dtypes ({len(dtype_lists)}) must have equal length"
+            f"{QUALIFIED_NAME}: runtime_metadata output shapes ({len(shape_lists)}) "
+            f"and dtypes ({len(dtype_lists)}) must have equal length"
         )
 
     data_inputs = list(inputs)
     dtypes = [_resolve_dtype(name) for name in dtype_lists]
     shapes = [tuple(int(dim) for dim in shape) for shape in shape_lists]
+    output_names = _masked_output_names(metadata)
 
     attrs = {
-        "input_names": ",".join(f"input_{i}" for i in range(len(data_inputs))),
-        "output_names": ",".join(f"output_{i}" for i in range(len(shapes))),
-        "output_shape": output_shapes,
+        "runtime_metadata": runtime_metadata,
+        # Legacy attrs are kept while the C++ runtime migrates to runtime_metadata.
+        "wrp_name": str(metadata.get("wrp_name", "")),
+        "input_names": ",".join(
+            str(spec.get("param_name", f"input_{i}"))
+            for i, spec in enumerate(metadata.get("inputs", []))
+        ),
+        "output_names": ",".join(output_names),
+        "output_shape": _format_output_shape_attr(shape_lists),
+        "output_mask": encode_output_mask(
+            [bool(spec.get("mask", True)) for spec in metadata.get("outputs", [])]
+        ),
     }
 
     wrp_inputs = [*data_inputs, bundle]
