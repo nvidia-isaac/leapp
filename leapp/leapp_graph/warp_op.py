@@ -16,6 +16,7 @@
 #
 
 from typing import TYPE_CHECKING
+import inspect
 
 if TYPE_CHECKING:
     from leapp.leapp_graph.traced_node import TracedTensorNode
@@ -48,6 +49,13 @@ else:
             self.device = device
 
         def __enter__(self):
+            scoped_capture_params = inspect.signature(wp.ScopedCapture).parameters
+            if "apic" not in scoped_capture_params or not hasattr(wp, "capture_save"):
+                raise RuntimeError(
+                    "annotate.warp_op requires Warp APIC support "
+                    "(ScopedCapture(..., apic=True) and wp.capture_save). "
+                    f"Installed Warp version: {getattr(wp, '__version__', 'unknown')}."
+                )
             self._segment = WarpSegment(
                 node_name=self.node_name,
                 device=self.device,

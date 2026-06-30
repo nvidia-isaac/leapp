@@ -49,6 +49,7 @@ segment *payload* embedding at export time.
 
 from __future__ import annotations
 
+import hashlib
 import struct
 from pathlib import Path
 
@@ -156,6 +157,25 @@ def embed_warp_bundles_in_graph(graph_module: fx.GraphModule) -> int:
             )
 
         archive, _wrp_name = pack_bundle(Path(segment.wrp_path))
+        try:
+            from .metadata import decode_runtime_metadata, encode_runtime_metadata
+
+            metadata = decode_runtime_metadata(node.args[1])
+            metadata.setdefault("bundle", {})
+            metadata["bundle"].update(
+                {
+                    "format": "WRPB",
+                    "version": VERSION,
+                    "num_bytes": len(archive),
+                    "sha256": hashlib.sha256(archive).hexdigest(),
+                }
+            )
+            node.update_arg(1, encode_runtime_metadata(metadata))
+        except Exception as exc:
+            raise ValueError(
+                f"Warp runner node '{node.name}' has invalid runtime metadata: {exc}"
+            ) from exc
+
         buffer_name = f"_warp_bundle_{index}"
         bundle_tensor = torch.frombuffer(bytearray(archive), dtype=torch.uint8).clone()
         graph_module.register_buffer(buffer_name, bundle_tensor, persistent=True)
@@ -170,14 +190,14 @@ def embed_warp_bundles_in_graph(graph_module: fx.GraphModule) -> int:
             )
 
         args = list(node.args)
-        if len(args) < 4:
+        if len(args) < 2:
             raise ValueError(
-                f"Warp runner node '{node.name}' expected at least 4 args, got {len(args)}."
+                f"Warp runner node '{node.name}' expected at least 2 args, got {len(args)}."
             )
-        if len(args) == 4:
+        if len(args) == 2:
             args.append(bundle_node)
         else:
-            args[4] = bundle_node
+            args[2] = bundle_node
         node.args = tuple(args)
         embedded += 1
         _get_logger().debug(
