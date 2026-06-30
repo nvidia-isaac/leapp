@@ -61,13 +61,15 @@ def register_export_hooks(
     )
 
 
-def prepare_and_validate(module: "torch.nn.Module", backend: str) -> None:
+def prepare_and_validate(module: "torch.nn.Module | None", backend: str) -> None:
     """Validate backend support, then run any registered ``pre_compile`` hooks.
 
     Called from ``leapp_node.compile_model`` before ``export_backend.compile``.
     Raises ``NotImplementedError`` when the module contains a registered custom op
     that does not support the chosen ``export_with`` backend.
     """
+    if module is None:
+        return
     active = [hooks for hooks in _HOOKS if hooks.detect_in_module(module)]
     for hooks in active:
         if backend not in hooks.supported_backends:

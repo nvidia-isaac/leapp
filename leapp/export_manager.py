@@ -31,7 +31,7 @@ from leapp.leapp_graph.datatypes import (
     is_traced_type,
     is_tracable_tensor_type,
 )
-from leapp.leapp_graph.datatypes.patching import warn_if_script_functions_in_scope
+from leapp.leapp_graph.datatypes.patching import TracingPatcher, warn_if_script_functions_in_scope
 from leapp.utils.tensor_description import TensorSemantics
 from leapp.utils.tensor_description import (verify_data_exact_match,
                                              flatten_io_structure,
@@ -73,7 +73,7 @@ class ExportManager:
             self.SAVE_PATH = None
             self.dry_run = False
             self.non_traced = set()
-            self._patches_applied = False
+            self.patcher = TracingPatcher()
 
             # tracetime variables
             self.nodes = {}
@@ -137,12 +137,6 @@ class ExportManager:
     @classmethod
     def is_interpret_graph_enabled(cls):
         return cls._interpret_graph
-
-    def set_patches_applied(self, is_applied: bool):
-        self._patches_applied = is_applied
-
-    def is_numpy_patches_applied(self):
-        return self._patches_applied
 
     def reset_tracing_lock(self):
         TracingLock().reset()
@@ -718,9 +712,11 @@ class ExportManager:
     def warp_op(self, node_name: str, inputs: list[str] = None, outputs: list[str] = None, **params):
         if not ExportManager._interpret_graph or self.is_dry_run(node_name):
             return nullcontext()
-
         if WarpOp is None:
             raise ImportError("LEAPP: warp_op requires warp-lang (pip install warp-lang).")
+        warp_backend = self.patcher.warp
+        if warp_backend is None:
+            raise ImportError("LEAPP: the warp backend is not installed. Please call leapp.start(..., global_patching=True).")
 
         if node_name not in self.nodes:
             raise ValueError(f"LEAPP: node '{node_name}' not found. Call annotate.input_tensors() first to create the node.")
@@ -728,7 +724,13 @@ class ExportManager:
         if node_name in self.nodes and not self.nodes[node_name].is_tracing:
             return nullcontext()
 
-        return WarpOp(self.nodes[node_name])
+
+        if not self.patcher.installed:
+            raise RuntimeError(
+                "LEAPP: warp_op requires global patching (call leapp.start(..., global_patching=True))."
+            )
+
+        return WarpOp(self.nodes[node_name], warp_backend=warp_backend)
 
     def _method(self, **params):
         """Legacy decorator for tracing functions via sys.settrace + ModuleBuilder.

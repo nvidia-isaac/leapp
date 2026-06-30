@@ -9,38 +9,58 @@ import functools
 
 import numpy as np
 
-_NUMPY_FUNCTIONS = [
-    (np, "array"),
-    (np, "asarray"),
-]
 
+class NumpyPatchBackend:
+    """Apply and restore numpy conversion patches for a tracing session."""
 
-def _create_numpy_patch(original_func):
-    """Create a patched numpy array function that preserves tracing."""
+    _FUNCTIONS = [
+        (np, "array"),
+        (np, "asarray"),
+    ]
 
-    @functools.wraps(original_func)
-    def patched(data, *args, **kwargs):
-        from leapp.leapp_graph.datatypes import is_traced_type
+    def __init__(self) -> None:
+        self._originals: dict[tuple[object, str], object] = {}
+        self._patches: dict[tuple[object, str], object] = {}
+        self._installed = False
+        for module, name in self._FUNCTIONS:
+            original = getattr(module, name)
+            key = (module, name)
+            self._originals[key] = original
+            self._patches[key] = self._create_patch(original)
 
-        is_traced_and_tracing = is_traced_type(data) and data.is_tracing
+    @property
+    def installed(self) -> bool:
+        return self._installed
 
-        if is_traced_and_tracing:
-            dtype = kwargs.get("dtype")
-            copy = kwargs.get("copy")
-            return data.__array__(dtype=dtype, copy=copy)
+    def install(self) -> None:
+        if self._installed:
+            return
+        for (module, name), patched in self._patches.items():
+            setattr(module, name, patched)
+        self._installed = True
 
-        return original_func(data, *args, **kwargs)
+    def uninstall(self) -> None:
+        if not self._installed:
+            return
+        for (module, name), original in self._originals.items():
+            setattr(module, name, original)
+        self._installed = False
 
-    return patched
+    @staticmethod
+    def _create_patch(original_func):
+        """Create a patched numpy array function that preserves tracing."""
 
+        @functools.wraps(original_func)
+        def patched(data, *args, **kwargs):
+            from leapp.leapp_graph.datatypes import is_traced_type
 
-def build_numpy_patches() -> tuple[dict, dict]:
-    """Return ``(originals, patches)`` keyed by ``(module, name)``."""
-    originals = {}
-    patches = {}
-    for module, name in _NUMPY_FUNCTIONS:
-        original = getattr(module, name)
-        key = (module, name)
-        originals[key] = original
-        patches[key] = _create_numpy_patch(original)
-    return originals, patches
+            is_traced_and_tracing = is_traced_type(data) and data.is_tracing
+
+            if is_traced_and_tracing:
+                dtype = kwargs.get("dtype")
+                copy = kwargs.get("copy")
+                return data.__array__(dtype=dtype, copy=copy)
+
+            return original_func(data, *args, **kwargs)
+
+        return patched

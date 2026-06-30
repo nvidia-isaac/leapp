@@ -16,28 +16,35 @@
 #
 
 from typing import TYPE_CHECKING
-from leapp.utils.logging import _get_logger
 
 if TYPE_CHECKING:
     from leapp.leapp_graph.traced_node import TracedTensorNode
+    from leapp.leapp_graph.datatypes.warp.patching import WarpPatchBackend
 
-from leapp.leapp_graph.datatypes import WarpLeappCallDetector, wp
-from leapp.leapp_graph.datatypes.warp import WarpSegment
-
-if wp is None or WarpLeappCallDetector is None:
+try:
+    import warp as wp
+    from leapp.leapp_graph.datatypes.warp import WarpSegment
+except ImportError:
+    wp = None
     WarpOp = None
 else:
     class WarpOp:
-        def __init__(self, node_ref: "TracedTensorNode", device: str = "cuda:0"):
+        def __init__(
+            self,
+            node_ref: "TracedTensorNode",
+            *,
+            warp_backend: "WarpPatchBackend",
+            device: str = "cuda:0",
+        ):
             self.node_ref = node_ref
             self.node_name = node_ref.name
             self.node_graph = node_ref.graph
+            self._warp_backend = warp_backend
 
             # scoped capture variables
             self._scope = None
             self._capture = None
             self._segment = None
-            self._detector = None
             self.device = device
 
         def __enter__(self):
@@ -45,8 +52,7 @@ else:
                 node_name=self.node_name,
                 device=self.device,
             )
-            self._detector = WarpLeappCallDetector.instance()
-            self._detector.push_segment(self._segment)
+            self._warp_backend.push_segment(self._segment)
             self._scope = wp.ScopedCapture(
                 device=self.device,
                 force_module_load=True,
@@ -66,7 +72,7 @@ else:
                     # during replay so the patched ``wp.capture_launch`` /
                     # ``wp.synchronize`` calls do not append spurious events to the
                     # still-active segment.
-                    with self._detector.paused():
+                    with self._warp_backend.paused():
                         # still need to execute the graph to get outputs
                         wp.capture_launch(graph)
                         wp.synchronize()
@@ -75,7 +81,6 @@ else:
                         self._segment.add_event({"kind": "scoped_capture"})
                         self.node_ref.insert_warp_marker(self._segment)
             finally:
-                if self._detector is not None:
-                    self._detector.pop_segment(self._segment)
+                self._warp_backend.pop_segment(self._segment)
 
             return scope_result

@@ -32,34 +32,20 @@ class _WarpTraceState:
 
 
 
-class WarpLeappCallDetector:
-    """Process-wide singleton: ``WarpLeappCallDetector()`` always returns the
-    same instance so there is only ever one set of Warp patches in flight."""
+class WarpPatchBackend:
+    """Warp monkeypatch backend and per-session trace routing.
 
-    _instance: "WarpLeappCallDetector | None" = None
-
-    def __new__(cls) -> "WarpLeappCallDetector":
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
-    @classmethod
-    def instance(cls) -> "WarpLeappCallDetector":
-        """Return the shared detector instance (constructing it if needed)."""
-        return cls()
+    Patches loaded ``warp`` callables during :meth:`install` and records calls
+    into the active :class:`~leapp.leapp_graph.datatypes.warp.warp_segment.WarpSegment`
+    while a :class:`~leapp.leapp_graph.warp_op.WarpOp` block is open.
+    """
 
     def __init__(self) -> None:
-        # ``__new__`` returns the shared instance on every call; guard so state
-        # is initialized once and repeated ``WarpLeappCallDetector()`` calls do
-        # not reset an active (installed) detector.
-        if getattr(self, "_initialized", False):
-            return
         self._patches: list[_Patch] = []
         self._wrappers_by_original_id: dict[int, Any] = {}
         self._recording_depth = 0
         self._active_segment: Any | None = None
         self._installed = False
-        self._initialized = True
     #########################################################
     # Properties
     #########################################################
@@ -69,7 +55,11 @@ class WarpLeappCallDetector:
     #########################################################
     # Public methods
     #########################################################
-    def install(self) -> "WarpLeappCallDetector":
+    @property
+    def installed(self) -> bool:
+        return self._installed
+
+    def install(self) -> "WarpPatchBackend":
         """Patch currently loaded Warp module functions and class methods."""
 
         if self._installed:
@@ -148,13 +138,20 @@ class WarpLeappCallDetector:
     # Module patching
     #########################################################
     def _patch_loaded_aliases(self) -> None:
-        """Patch already-imported aliases such as ``from warp import launch``."""
+        """Patch already-imported aliases such as ``from warp import launch``.
+
+        Only updates bindings outside public ``warp`` modules. Phase 1 already
+        patched those namespaces; this pass catches imports that still reference
+        the original callables by identity.
+        """
 
         if not self._wrappers_by_original_id:
             return
 
-        for module in list(sys.modules.values()):
+        for module_name, module in list(sys.modules.items()):
             if not isinstance(module, ModuleType):
+                continue
+            if self._is_warp_module(module_name, module):
                 continue
 
             try:
@@ -163,12 +160,20 @@ class WarpLeappCallDetector:
                 continue
 
             for attr_name, value in attrs:
+                if not self._is_warp_owned_callable(value):
+                    continue
                 wrapper = self._wrappers_by_original_id.get(id(value))
                 if wrapper is None:
                     continue
                 if getattr(value, _WRAPPER_MARKER, False):
                     continue
-                self._patch_attr(module, attr_name, value, value, f"{module.__name__}.{attr_name}")
+                self._patch_attr(
+                    module,
+                    attr_name,
+                    value,
+                    value,
+                    f"{module.__name__}.{attr_name}",
+                )
 
     def _patch_warp_modules(self) -> None:
         modules = [
@@ -221,8 +226,10 @@ class WarpLeappCallDetector:
             return False
         if not inspect.isclass(cls):
             return False
+        if not isinstance(owner_module_name, str):
+            return False
 
-        class_module = getattr(cls, "__module__", "")
+        class_module = self._definition_module_name(cls)
         if class_module != "warp" and not class_module.startswith("warp."):
             return False
 
@@ -263,6 +270,8 @@ class WarpLeappCallDetector:
             """
             return
         if not callable(callable_original):
+            return
+        if not self._is_warp_owned_callable(callable_original):
             return
 
         self._patch_attr(
@@ -525,35 +534,24 @@ class WarpLeappCallDetector:
     def _is_warp_module(module_name: str, module: Any) -> bool:
         if not isinstance(module, ModuleType):
             return False
+        if not isinstance(module_name, str):
+            return False
         if module_name == "warp":
             return True
         if not module_name.startswith("warp."):
             return False
         return not module_name.startswith("warp._")
 
+    @staticmethod
+    def _definition_module_name(obj: Any) -> str:
+        """Return ``obj.__module__`` when it is a real string (not a descriptor)."""
+        module = getattr(obj, "__module__", None)
+        return module if isinstance(module, str) else ""
 
-
-
-## REMOVE THIS BEFORE MERGING
-if __name__ == "__main__":
-    import warp as wp
-    import numpy as np
-    @wp.kernel
-    def add_one_kernel(src: wp.array(dtype=wp.float32), dst: wp.array(dtype=wp.float32)):
-        i = wp.tid()
-        dst[i] = src[i] + 1.0
-
-    src = wp.array(np.ones(10), dtype=wp.float32)
-    dst = wp.array(np.zeros(10), dtype=wp.float32)
-    wp.launch(add_one_kernel, dim=src.size, inputs=[src], outputs=[dst])
-    print(dst)
-    detector = WarpLeappCallDetector()
-    detector.install()
-    print("launch after instasll")
-    wp.launch(add_one_kernel, dim=src.size, inputs=[src], outputs=[dst])
-    tmp = wp.zeros(src.size, dtype=wp.float32)
-    ones = wp.ones(src.size, dtype=wp.float32)
-    wp.copy(tmp, ones)
-    print(detector.patched_count)
-    detector.uninstall()
-    print(detector.patched_count)
+    @staticmethod
+    def _is_warp_owned_callable(obj: Any) -> bool:
+        """True when ``obj`` is a callable defined by warp-lang, not a re-export."""
+        if not callable(obj):
+            return False
+        owner_module = WarpPatchBackend._definition_module_name(obj)
+        return owner_module == "warp" or owner_module.startswith("warp.")
