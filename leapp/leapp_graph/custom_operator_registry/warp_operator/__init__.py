@@ -57,7 +57,9 @@ def _warp_pre_compile(module: "torch.nn.Module", backend: str) -> None:
     embed_warp_bundles_in_graph(module)
 
 
-def _module_contains_warp_runner(module: "torch.nn.Module") -> bool:
+def _module_contains_warp_runner(module: "torch.nn.Module | None") -> bool:
+    if module is None:
+        return False
     op_packet = get_op()
     for _, submodule in module.named_modules():
         graph = getattr(submodule, "graph", None)

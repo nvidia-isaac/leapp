@@ -21,6 +21,7 @@ from leapp.utils.tensor_description import describe_io, TensorSemantics
 from leapp.utils.utils import tag_tensor
 from leapp.leapp_graph.datatypes import is_tracable_tensor_type
 from leapp.backends.export_backend import NoneExportBackend
+from leapp.leapp_graph.custom_operator_registry import prepare_and_validate
 from leapp.utils.logging import _get_logger
 
 
@@ -211,10 +212,6 @@ class LeappNode():
     def compile_model(self):
         try:
             if self.backend not in (None, "None"):
-                from leapp.leapp_graph.custom_operator_registry import (
-                    prepare_and_validate,
-                )
-
                 prepare_and_validate(self.m, self.backend)
             self.export_backend.compile(self.m)
         except Exception as e:

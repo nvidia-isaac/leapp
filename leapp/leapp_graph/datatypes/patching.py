@@ -3,50 +3,97 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-"""Orchestrate deferred patching for torch and numpy during LEAPP tracing."""
+"""Coordinate tracing-session patches across torch, numpy, and warp backends."""
+
+from __future__ import annotations
 
 import sys
+from typing import TYPE_CHECKING, Protocol
 
 import torch
 
 from leapp.utils.logging import _get_logger
 
-from .numpy.patching import build_numpy_patches
-from .torch.patching import build_torch_patches
+from .numpy.patching import NumpyPatchBackend
+from .torch.patching import TorchPatchBackend
 
-_torch_originals, _torch_patches = build_torch_patches()
-_numpy_originals, _numpy_patches = build_numpy_patches()
-_originals = {**_torch_originals, **_numpy_originals}
-_patches = {**_torch_patches, **_numpy_patches}
-
-_patches_applied = False
+if TYPE_CHECKING:
+    from .warp.patching import WarpPatchBackend
 
 
-def apply_traced_data_patches():
-    """Apply patches for torch and numpy functions when tracing starts."""
-    global _patches_applied
-    if not _patches_applied:
-        for (module, name), patched in _patches.items():
-            setattr(module, name, patched)
-        torch.jit._state.disable()
-        _patches_applied = True
+class _PatchBackend(Protocol):
+    @property
+    def installed(self) -> bool: ...
+
+    def install(self) -> None: ...
+
+    def uninstall(self) -> None: ...
 
 
-def remove_traced_data_patches():
-    """Restore original torch and numpy functions when tracing stops."""
-    global _patches_applied
-    if _patches_applied:
-        for (module, name), original in _originals.items():
-            setattr(module, name, original)
-        torch.jit._state.enable()
-        _patches_applied = False
+def _try_create_warp_backend() -> WarpPatchBackend | None:
+    try:
+        from .warp.patching import WarpPatchBackend
+
+        return WarpPatchBackend()
+    except ImportError:
+        return None
 
 
-def is_patching_enabled():
-    return _patches_applied
+class TracingPatcher:
+    """Install and restore all tracing-session monkeypatches."""
+
+    def __init__(self) -> None:
+        self.torch = TorchPatchBackend()
+        self.numpy = NumpyPatchBackend()
+
+        self.warp = _try_create_warp_backend()
+        self._installed = False
+
+    @property
+    def installed(self) -> bool:
+        return self._installed
+
+    def install(self) -> None:
+        """Apply all available backends."""
+        if self._installed:
+            return
+
+        installed: list[_PatchBackend] = []
+        try:
+            if self.torch is not None: # install torch patches
+                self.torch.install()
+                installed.append(self.torch)
+            if self.numpy is not None: # install numpy patches
+                self.numpy.install()
+                installed.append(self.numpy)
+            if self.warp is not None: # install warp patches
+                self.warp.install()
+                installed.append(self.warp)
+            self._installed = True
+        except Exception:
+            for backend in reversed(installed):
+                backend.uninstall()
+            raise
+
+    def uninstall(self) -> None:
+        """Restore every backend that is still installed."""
+        if not self._installed:
+            return
+
+        if self.warp is not None and self.warp.installed:
+            self.warp.uninstall()
+        if self.numpy.installed:
+            self.numpy.uninstall()
+        if self.torch.installed:
+            self.torch.uninstall()
+        self._installed = False
 
 
-is_numpy_patching_enabled = is_patching_enabled
+def get_warp_backend() -> WarpPatchBackend | None:
+    """Return the active session's warp backend, if warp-lang is available."""
+    from leapp.export_manager import ExportManager
+
+    return ExportManager().patcher.warp
 
 
 def warn_if_script_functions_in_scope():

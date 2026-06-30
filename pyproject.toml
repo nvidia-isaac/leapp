@@ -101,4 +101,5 @@ filterwarnings = [
     "ignore:`torch.jit.load` is deprecated:DeprecationWarning",
     "ignore:`isinstance\\(treespec, LeafSpec\\)` is deprecated:FutureWarning",
     "ignore:`torch.jit.save` is deprecated:DeprecationWarning",
+    "ignore:`torch.jit.freeze` is deprecated:DeprecationWarning",
 ]

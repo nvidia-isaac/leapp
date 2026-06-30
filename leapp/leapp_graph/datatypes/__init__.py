@@ -19,13 +19,7 @@ import torch as _torch
 from .traced_data import TracedData
 from .torch.traced_tensor import TracedTensor
 from .numpy.traced_np_array import TracedNpArray
-from .warp import TracedWpArray, WarpLeappCallDetector, wp
-
-from .patching import (
-    apply_traced_data_patches,
-    remove_traced_data_patches,
-    is_numpy_patching_enabled,
-)
+from .warp import TracedWpArray, WarpPatchBackend, wp
 
 
 # =============================================================================
@@ -189,7 +183,7 @@ __all__ = [
     "TracedTensor",
     "TracedNpArray",
     "TracedWpArray",
-    "WarpLeappCallDetector",
+    "WarpPatchBackend",
     # Type registry
     "TRACED_TYPE_REGISTRY",
     "TRACABLE_BASE_TYPES",
@@ -200,8 +194,4 @@ __all__ = [
     "is_traced_type",
     "get_traced_class_for",
     "to_export_torch_tensor",
-    # Patch management
-    "apply_traced_data_patches",
-    "remove_traced_data_patches",
-    "is_numpy_patching_enabled",
 ]

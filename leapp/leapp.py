@@ -23,17 +23,12 @@ import os
 import yaml
 
 from .utils.logging import _get_logger
-from .leapp_graph.datatypes import apply_traced_data_patches, remove_traced_data_patches
-
-try:
-    from .leapp_graph.datatypes import WarpLeappCallDetector
-except ImportError:
-    WarpLeappCallDetector = None
-from .leapp_graph.leapp_graph import LeappGraph
+from .export_manager import ExportManager
 from .utils.tracing_lock import TracingLock
 from .utils.utils import get_system_info
-from .export_manager import ExportManager
 from .utils.tensor_description import GraphConfigs
+
+from .leapp_graph.leapp_graph import LeappGraph
 
 
 _MANAGER = ExportManager()
@@ -91,10 +86,7 @@ def start(name, save_path=".", verbose=False, dry_run=False, non_traced=None,
 
     # Apply patches for functions that bypass normal traced-type dispatch.
     if global_patching:
-        apply_traced_data_patches()
-        if WarpLeappCallDetector is not None:
-            WarpLeappCallDetector.instance().install()
-    manager.set_patches_applied(global_patching)
+        manager.patcher.install()
 
 
 def stop():
@@ -114,11 +106,8 @@ def stop():
     manager.restore_pending_buffer_trackers()
 
     # Remove patches to restore original function behavior.
-    if manager.is_numpy_patches_applied():
-        if WarpLeappCallDetector is not None:
-            WarpLeappCallDetector.instance().uninstall()
-        remove_traced_data_patches()
-        manager.set_patches_applied(False)
+    if manager.patcher.installed:
+        manager.patcher.uninstall()
 
 
 def compile_graph(visualize=True, verbose=None, validate=True, dry_run=False,
