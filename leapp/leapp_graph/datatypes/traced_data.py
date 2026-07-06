@@ -232,22 +232,15 @@ class TracedData(ABC):
         
         if len(contexts) > 1:
             cls_name = self.__class__.__name__
-            _get_logger().error(
+            _get_logger().fatal(
                 f"Error: detected multiple {cls_name} contexts: {contexts} inside of a traced function.\n"
                 "\n"
                 f"This happens when you mix multiple active {cls_name}s from different contexts "
-                "inside of a traced function/block.\n"
+                "inside of a traced function/block. solutions:\n"
                 "\n"
-                "Mixing active contexts is not allowed. You can: \n"
                 "1. call output_tensors() to finalize one of the nodes first\n"
-                "2. combine both nodes into a single node by calling input_tensors() with the same node name"
-            )
-            raise Exception(
-                f"Cannot mix multiple active {cls_name}s from different contexts inside of a traced function/block. "
-                "Mixing active contexts is not allowed. You can: \n"
-                "1. call output_tensors() to finalize one of the nodes first\n"
-                "2. combine both nodes into a single node by calling input_tensors() with the same node name"
-            )
+                "2. combine both nodes into a single node by calling input_tensors() with the same node name",
+                error_type=Exception)
         return True
     
     # =========================================================================

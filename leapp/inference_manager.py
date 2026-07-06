@@ -13,6 +13,7 @@ from safetensors.torch import load_file
 
 
 from leapp.utils.tensor_description import map_to_torch_dtype, validate_connection_compatibility
+from leapp.utils.logging import _get_logger
 
 from leapp.backends.torch_export_backend import TorchExportBackend
 from leapp.backends.onnx_export_backend import ONNXExportBackend
@@ -95,12 +96,13 @@ class NodeManager:
         elif backend == "pt2":
             return ExportedProgramExportBackend(None)
         else:
-            raise ValueError(f"Unsupported backend: {backend}")
+            _get_logger().fatal(f"Unsupported backend: {backend}", error_type=ValueError)
 
     def __call__(self, *inputs):
         if len(inputs) != len(self.input_descriptions):
-            raise ValueError(
-                f"Expected {len(self.input_descriptions)} inputs, got {len(inputs)}")
+            _get_logger().fatal(
+                f"Expected {len(self.input_descriptions)} inputs, got {len(inputs)}",
+                error_type=ValueError)
 
         outputs = self.model(*inputs)
 
@@ -113,8 +115,9 @@ class NodeManager:
         elif len(outputs) == len(self.output_descriptions):
             return outputs
         else:
-            raise ValueError(
-                f"Expected {len(self.output_descriptions)} outputs, got {len(outputs)}")
+            _get_logger().fatal(
+                f"Expected {len(self.output_descriptions)} outputs, got {len(outputs)}",
+                error_type=ValueError)
 
 
 class InferenceManager:
@@ -127,12 +130,14 @@ class InferenceManager:
         # runtime variables
 
         if not os.path.exists(model_path):
-            raise FileNotFoundError(
-                f"Leapp description file not found at {model_path}")
+            _get_logger().fatal(
+                f"Leapp description file not found at {model_path}",
+                error_type=FileNotFoundError)
 
         if not model_path.endswith(".yaml"):
-            raise ValueError(
-                f"Leapp description file must end with .yaml, got {model_path}")
+            _get_logger().fatal(
+                f"Leapp description file must end with .yaml, got {model_path}",
+                error_type=ValueError)
 
         self.model_path = model_path
 
@@ -149,8 +154,9 @@ class InferenceManager:
             self.leapp_description = yaml.safe_load(f)
 
         if any(key not in self.leapp_description for key in ["models", "pipeline", "system information"]):
-            raise ValueError(
-                f"Leapp description file must contain models, pipeline, and system_info, got {self.leapp_description.keys()}")
+            _get_logger().fatal(
+                f"Leapp description file must contain models, pipeline, and system_info, got {self.leapp_description.keys()}",
+                error_type=ValueError)
 
         self.models = self.leapp_description["models"]
         self.pipeline = self.leapp_description["pipeline"]
@@ -160,13 +166,15 @@ class InferenceManager:
         nodes = {}
         for name, description in self.models.items():
             if any(key not in description for key in ["inputs", "outputs", "parameters"]):
-                raise ValueError(
-                    f"Model description must contain inputs, outputs, and parameters, got {description.keys()}")
+                _get_logger().fatal(
+                    f"Model description must contain inputs, outputs, and parameters, got {description.keys()}",
+                    error_type=ValueError)
             # load the model
             parameters = description['parameters']
             if any(key not in parameters for key in ["model_path", "md5sum", "sha256sum", "backend"]):
-                raise ValueError(
-                    f"Model description must contain model_path, md5sum, sha256sum, and backend, got {parameters.keys()}")
+                _get_logger().fatal(
+                    f"Model description must contain model_path, md5sum, sha256sum, and backend, got {parameters.keys()}",
+                    error_type=ValueError)
 
             model_path = parameters['model_path']
             base_path = os.path.dirname(self.model_path)
@@ -252,12 +260,12 @@ class InferenceManager:
                 if output_name not in pipeline_map
             ]
             if missing_outputs:
-                raise ValueError(
+                _get_logger().fatal(
                     f"Node '{node_name}' has unroutable outputs: {missing_outputs}. "
                     "Every model output must appear in pipeline data_flow, "
                     "feedback_flow, or pipeline outputs. This may indicate the "
-                    "YAML was edited manually and is inconsistent with the exported model."
-                )
+                    "YAML was edited manually and is inconsistent with the exported model.",
+                    error_type=ValueError)
 
     def _validate_connection_compatibility(self):
         all_flows = {}
@@ -273,8 +281,9 @@ class InferenceManager:
 
             # Validate source node exists
             if source_node_name not in self.nodes:
-                raise ValueError(
-                    f"Source node '{source_node_name}' not found in models")
+                _get_logger().fatal(
+                    f"Source node '{source_node_name}' not found in models",
+                    error_type=ValueError)
 
             source_node = self.nodes[source_node_name]
 
@@ -282,10 +291,10 @@ class InferenceManager:
             source_output_names = [desc['name']
                                    for desc in source_node.output_descriptions]
             if source_output_name not in source_output_names:
-                raise ValueError(
+                _get_logger().fatal(
                     f"Source output '{source_output_name}' not found in node '{source_node_name}'. "
-                    f"Available outputs: {source_output_names}"
-                )
+                    f"Available outputs: {source_output_names}",
+                    error_type=ValueError)
 
             # Get source output description
             source_desc = next(
@@ -301,17 +310,18 @@ class InferenceManager:
 
                 # Validate target node exists
                 if target_node_name not in self.nodes:
-                    raise ValueError(
-                        f"Target node '{target_node_name}' not found in models")
+                    _get_logger().fatal(
+                        f"Target node '{target_node_name}' not found in models",
+                        error_type=ValueError)
 
                 # Validate target input exists
                 if target_input_name not in self.value_dict[target_node_name]:
                     available_inputs = list(
                         self.value_dict[target_node_name].keys())
-                    raise ValueError(
+                    _get_logger().fatal(
                         f"Target input '{target_input_name}' not found in node '{target_node_name}'. "
-                        f"Available inputs: {available_inputs}"
-                    )
+                        f"Available inputs: {available_inputs}",
+                        error_type=ValueError)
 
                 target_tensor = self.value_dict[target_node_name][target_input_name]
 
@@ -339,8 +349,9 @@ class InferenceManager:
         safetensors_path = os.path.join(base_path, initial_values_file)
 
         if not os.path.exists(safetensors_path):
-            raise FileNotFoundError(
-                f"Feedback initial values file not found at {safetensors_path}")
+            _get_logger().fatal(
+                f"Feedback initial values file not found at {safetensors_path}",
+                error_type=FileNotFoundError)
 
         initial_values = load_file(safetensors_path)
 
@@ -350,18 +361,21 @@ class InferenceManager:
                 device = self.value_dict[node_name][input_name].device
                 self.value_dict[node_name][input_name] = tensor.to(device)
             else:
-                raise ValueError(
+                _get_logger().fatal(
                     f"Feedback initial value key '{key}' does not match any node input. "
-                    f"Available nodes: {list(self.value_dict.keys())}")
+                    f"Available nodes: {list(self.value_dict.keys())}",
+                    error_type=ValueError)
 
     def run_policy(self, inputs: dict[str, torch.Tensor]):
         # Update input tensors with provided values (keys are "node_name/input_name")
         for key, input_value in inputs.items():
             try:
                 node_name, input_name = key.split('/')
-            except ValueError:
-                raise ValueError(
-                    f"Invalid input key: {key}\n Expected format: node_name/input_name")
+            except ValueError as e:
+                _get_logger().fatal(
+                    f"Invalid input key: {key}\n Expected format: node_name/input_name",
+                    error_type=ValueError,
+                    cause=e)
             self.value_dict[node_name][input_name] = input_value
 
         for node_name, node in self.nodes.items():

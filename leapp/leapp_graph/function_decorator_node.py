@@ -105,16 +105,12 @@ class FunctionDecoratorNode(LeappNode):
         try:
             func_lines, start_line = inspect.getsourcelines(unwrapped_func)
         except OSError as e:
-            _get_logger().error(
-                f"Cannot inspect source of '{func.__name__}': it appears to be wrapped by a decorator "
-                f"that doesn't preserve source info. Try putting @annotate._method() as the innermost "
-                f"decorator (closest to the function definition)."
-            )
-            raise OSError(
+            _get_logger().fatal(
                 f"Cannot get source lines for function '{func.__name__}'. "
                 f"If this function is wrapped by another decorator, try reordering so @annotate._method() "
-                f"is the innermost decorator."
-            ) from e
+                f"is the innermost decorator.",
+                error_type=OSError,
+                cause=e)
 
         self.executed_lines['min_line'] = start_line
         self.executed_lines['max_line'] = start_line + len(func_lines) - 1
@@ -198,14 +194,11 @@ class FunctionDecoratorNode(LeappNode):
             if self.executed_lines.get(key) != new_boundaries[key]:
                 original_data = {k: self.executed_lines.get(k) for k in (
                     'filename', 'function_name', 'min_line', 'max_line')}
-                _get_logger().error(
+                _get_logger().fatal(
                     f"Error: {self.name} seen twice but function boundaries do not match\n"
                     f"Original: {original_data}\n"
-                    f"New: {new_boundaries}")
-                raise Exception(
-                    f"Error: {self.name} seen twice but function boundaries do not match\n"
-                    f"Original: {original_data}\n"
-                    f"New: {new_boundaries}")
+                    f"New: {new_boundaries}",
+                    error_type=Exception)
 
         self.executed_lines['lines'] = set(
             range(start_line, start_line + len(func_lines)))
@@ -266,8 +259,10 @@ class FunctionDecoratorNode(LeappNode):
                 self.add_input(final_input_name, input_name,
                                final_input_value)
         except Exception as e:
-            _get_logger().error(f"Error capturing inputs from namespace: {e}")
-            raise e
+            _get_logger().fatal(
+                f"Error capturing inputs from namespace: {e}",
+                error_type=type(e),
+                cause=e)
         self.input_namespace = namespace
 
     def capture_outputs_from_namespace(self, namespace):
@@ -282,8 +277,10 @@ class FunctionDecoratorNode(LeappNode):
                 self.add_output(final_output_name,
                                 output_name, final_output_value)
         except Exception as e:
-            _get_logger().error(f"Error capturing outputs from namespace: {e}")
-            raise e
+            _get_logger().fatal(
+                f"Error capturing outputs from namespace: {e}",
+                error_type=type(e),
+                cause=e)
         self.output_namespace = namespace
 
     def validate_inputs_from_namespace(self, namespace):
@@ -295,8 +292,10 @@ class FunctionDecoratorNode(LeappNode):
                 self.validate_input_and_update_tags(
                     final_input_name, input_name, final_input_value)
         except Exception as e:
-            _get_logger().error(f"Error validating inputs from namespace: {e}")
-            raise e
+            _get_logger().fatal(
+                f"Error validating inputs from namespace: {e}",
+                error_type=type(e),
+                cause=e)
         self.input_namespace = namespace
 
     def validate_outputs_from_namespace(self, namespace):
@@ -310,8 +309,10 @@ class FunctionDecoratorNode(LeappNode):
                 self.validate_output_and_update_tags(
                     final_output_name, output_name, final_output_value)
         except Exception as e:
-            _get_logger().error(f"Error validating outputs from namespace: {e}")
-            raise e
+            _get_logger().fatal(
+                f"Error validating outputs from namespace: {e}",
+                error_type=type(e),
+                cause=e)
         self.output_namespace = namespace
 
     # ── buffer / constant snapshot ───────────────────────────────────────
@@ -342,20 +343,15 @@ class FunctionDecoratorNode(LeappNode):
         if not path:
             path = variable_name
         if isinstance(data, TracedTensor) and data.is_tracing:
-            _get_logger().error(
-                f"Cannot use TracedTensor as input to _method() '{self.name}'.\n"
-                f"Variable '{variable_name}' (at {path}) contains an active TracedTensor "
-                f"from node '{data.context}'.\n"
+            _get_logger().fatal(
+                f"Error: Cannot use TracedTensor '{path}' as input to _method() '{self.name}'.\n"
+                f"Variable '{variable_name}' is an active TracedTensor from node '{data.context}'.\n"
                 f"\n"
-                f"This happens when you try to use a TracedTensor created by input_tensors() "
-                f"as input to code inside _method().\n"
+                f"This happens when you pass a TracedTensor created by input_tensors() "
+                f"into code traced by _method().\n"
                 f"\n"
-                f"You must call output_tensors() to finalize the TracedTensor node first"
-            )
-            raise Exception(
-                f"Cannot use TracedTensor '{path}' as input to _method() '{self.name}'. "
-                f"Call output_tensors() first or use .tensor to get the underlying tensor."
-            )
+                f"Call output_tensors() on the source node first, or use .tensor to get the underlying tensor.",
+                error_type=Exception)
         elif isinstance(data, (list, tuple)):
             for i, item in enumerate(data):
                 self._check_for_active_traced_tensors(

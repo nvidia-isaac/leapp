@@ -49,10 +49,9 @@ class ExportedProgramExportBackend(ExportBackend):
 
     def save(self, save_path: str) -> Tuple[str, str, str]:
         if self.exported_program is None:
-            _get_logger().error(
-                f"No exported program found for {self.node_context.name}")
-            raise RuntimeError(
-                f"No exported program found for {self.node_context.name}")
+            _get_logger().fatal(
+                f"No exported program found for {self.node_context.name}",
+                error_type=RuntimeError)
 
         path = os.path.join(save_path, f"{self.node_context.name}.pt2")
         torch.export.save(self.exported_program, path)
@@ -62,10 +61,10 @@ class ExportedProgramExportBackend(ExportBackend):
     def load(self, model_path: str, sha256sum: str):
         _, actual_sha256sum = self._verify_model_location_and_get_hash(model_path)
         if actual_sha256sum != sha256sum:
-            raise ValueError(
+            _get_logger().fatal(
                 f"SHA256 checksum mismatch for {model_path}: "
-                f"expected {sha256sum}, got {actual_sha256sum}"
-            )
+                f"expected {sha256sum}, got {actual_sha256sum}",
+                error_type=ValueError)
 
         self.exported_program = torch.export.load(model_path)
         device = self._select_runtime_device()

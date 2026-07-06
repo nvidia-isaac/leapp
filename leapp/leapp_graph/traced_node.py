@@ -413,18 +413,12 @@ class TracedTensorNode(LeappNode):
                 # Check if the traced tensor is from the same context (node)
                 if data.context_obj is not self:
                     # Different context: error - cannot use traced tensor from another node
-                    _get_logger().error(
+                    _get_logger().fatal(
                         f"Error: when creating inputs for '{self.name}', "
                         f"detected data '{name}' is an active {data.__class__.__name__} from a different node '{data.context}'. \n"
                         f"Mixing active contexts is not allowed. "
-                        f"Call output_tensors() on the source node first."
-                    )
-                    raise Exception(
-                        f"Error: when creating inputs for '{self.name}', "
-                        f"detected data '{name}' is an active {data.__class__.__name__} from a different node '{data.context}'. \n"
-                        f"Mixing active contexts is not allowed. "
-                        f"Call output_tensors() on the source node first."
-                    )
+                        f"Call output_tensors() on the source node first.",
+                        error_type=Exception)
 
             if to=="traced":
                 if self.dry_run:
@@ -451,9 +445,10 @@ class TracedTensorNode(LeappNode):
             
             elif to=="static":
                 if is_traced:
-                    _get_logger().error(f"Cannot create static output from TracedTensor '{name}'. "
-                    "Static outputs must be raw tensors.")
-                    raise Exception("Error in TracedTensorNode")
+                    _get_logger().fatal(
+                        f"Cannot create static output from TracedTensor '{name}'. "
+                        "Static outputs must be raw tensors.",
+                        error_type=Exception)
 
                 # Create unique attribute name and store on root module
                 attr_name = f"_static_{name}".replace(".", "_")
@@ -498,17 +493,17 @@ class TracedTensorNode(LeappNode):
 
     def _validate_static_tensor(self, tensor, name: str):
         if not isinstance(tensor, torch.Tensor):
-            _get_logger().error(
+            _get_logger().fatal(
                 f"Error: static output '{name}' has type {type(tensor).__name__} "
                 "but expected torch.Tensor.\n"
                 "**Static outputs must be raw tensors, not derived from input tensors.**\n"
-                "If this value depends on inputs, use it as a regular output tensor instead.")
-            raise Exception("Error: exception detected in output_tensors declaration")
+                "If this value depends on inputs, use it as a regular output tensor instead.",
+                error_type=Exception)
         if isinstance(tensor, TracedTensor):
-            _get_logger().error(
+            _get_logger().fatal(
                 f"Error: static output '{name}' is a TracedTensor. "
-                "Static outputs should be constant tensors, not traced computations.")
-            raise Exception("Error: exception detected in output_tensors declaration")
+                "Static outputs should be constant tensors, not traced computations.",
+                error_type=Exception)
 
     def create_static_tensors(self, static_outputs):
         """Wrap raw tensors as static graph nodes (for register_buffer).
@@ -624,25 +619,25 @@ class TracedTensorNode(LeappNode):
         """Set output values for state tensors."""
         for name, value in tensors.items():
             if name not in self._state_tensors:
-                _get_logger().error(
+                _get_logger().fatal(
                     f"Error: update_state called for '{name}' but it was not registered "
-                    f"as a state tensor. Call state_tensors() first.")
-                raise Exception("Error: exception detected in update_state_tensors")
+                    f"as a state tensor. Call state_tensors() first.",
+                    error_type=Exception)
 
             # Validate shape and dtype match the input state
             input_tensor = self._state_tensors[name]["input"]
             input_underlying = input_tensor.tensor if isinstance(input_tensor, TracedTensor) else input_tensor
             value_underlying = value.tensor if isinstance(value, TracedTensor) else value
             if input_underlying.shape != value_underlying.shape:
-                _get_logger().error(
+                _get_logger().fatal(
                     f"Error: update_state for '{name}' has shape {value_underlying.shape} "
-                    f"but expected {input_underlying.shape} (must match input state shape).")
-                raise Exception("Error: exception detected in update_state_tensors")
+                    f"but expected {input_underlying.shape} (must match input state shape).",
+                    error_type=Exception)
             if input_underlying.dtype != value_underlying.dtype:
-                _get_logger().error(
+                _get_logger().fatal(
                     f"Error: update_state for '{name}' has dtype {value_underlying.dtype} "
-                    f"but expected {input_underlying.dtype} (must match input state dtype).")
-                raise Exception("Error: exception detected in update_state_tensors")
+                    f"but expected {input_underlying.dtype} (must match input state dtype).",
+                    error_type=Exception)
 
             self._state_tensors[name]["output"] = value
 

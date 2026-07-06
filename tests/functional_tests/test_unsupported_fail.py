@@ -202,7 +202,8 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
                 leapp.stop()
             except Exception:
                 pass
-            self.assertIn("Validation error when reentering node", str(e))
+            self.assertIn("Reentering shape_node", str(e))
+            self.assertIn("description has changed", str(e))
 
     def test_reentry_output_tag_change_fails(self):
         """Corrupting cached output tags before re-entry should be rejected."""
@@ -226,9 +227,8 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
                 leapp.stop()
             except Exception:
                 pass
-            self.assertIn("Validation error when reentering node", str(e))
-
-    def test_same_variable_used_twice(self):
+            self.assertIn("Reentering tag_node", str(e))
+            self.assertIn("tag has changed", str(e))
 
         @annotate.method()
         def funcA(inputA: torch.Tensor):
@@ -246,8 +246,11 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         try:
             leapp.compile_graph()
         except Exception as e:
-            self.assertEqual(
-                str(e), "Error: unsupported use of sending the same tensor multiple times to the same node")
+            self.assertIn(
+                "unsupported use of sending the same tensor multiple times to the same node",
+                str(e),
+            )
+            self.assertIn("funcB", str(e))
             return
         self.fail("Expected an exception")
 
@@ -402,7 +405,8 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             leapp.stop()
             self.fail("Expected an exception")
         except Exception as e:
-            self.assertIn("Mixing active contexts is not allowed", str(e))
+            self.assertIn("detected multiple TracedTensor contexts", str(e))
+            self.assertIn("output_tensors() to finalize", str(e))
     
     def test_passing_traced_tensor_to_method(self):
         try:
@@ -430,7 +434,8 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             leapp.stop()
             self.fail("Expected an exception")
         except Exception as e:
-            self.assertIn("Mixing active contexts is not allowed", str(e))
+            self.assertIn("detected multiple TracedTensor contexts", str(e))
+            self.assertIn("output_tensors() to finalize", str(e))
 
     def test_cross_context_torch_cat_list(self):
         """Test torch.cat with a list containing TracedTensors from different contexts."""
@@ -443,7 +448,8 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             leapp.stop()
             self.fail("Expected an exception for cross-context torch.cat")
         except Exception as e:
-            self.assertIn("Cannot mix multiple active TracedTensors from different contexts", str(e))
+            self.assertIn("detected multiple TracedTensor contexts", str(e))
+            self.assertIn("output_tensors() to finalize", str(e))
 
     def test_cross_context_torch_stack(self):
         """Test torch.stack with tensors from different contexts."""
@@ -456,7 +462,8 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             leapp.stop()
             self.fail("Expected an exception for cross-context torch.stack")
         except Exception as e:
-            self.assertIn("Cannot mix multiple active TracedTensors from different contexts", str(e))
+            self.assertIn("detected multiple TracedTensor contexts", str(e))
+            self.assertIn("output_tensors() to finalize", str(e))
 
     def test_cross_context_matmul(self):
         """Test matrix multiplication with TracedTensors from different contexts."""
@@ -469,7 +476,8 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             leapp.stop()
             self.fail("Expected an exception for cross-context torch.matmul")
         except Exception as e:
-            self.assertIn("Cannot mix multiple active TracedTensors from different contexts", str(e))
+            self.assertIn("detected multiple TracedTensor contexts", str(e))
+            self.assertIn("output_tensors() to finalize", str(e))
 
     def test_cross_context_torch_add_with_alpha(self):
         """Test torch.add with alpha kwarg - mixing contexts in positional args."""
@@ -482,7 +490,8 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             leapp.stop()
             self.fail("Expected an exception for cross-context torch.add with alpha")
         except Exception as e:
-            self.assertIn("Cannot mix multiple active TracedTensors from different contexts", str(e))
+            self.assertIn("detected multiple TracedTensor contexts", str(e))
+            self.assertIn("output_tensors() to finalize", str(e))
 
     def test_cross_context_three_contexts(self):
         """Test detection with three different contexts mixed together."""
@@ -496,7 +505,8 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             leapp.stop()
             self.fail("Expected an exception for three cross-contexts")
         except Exception as e:
-            self.assertIn("Cannot mix multiple active TracedTensors from different contexts", str(e))
+            self.assertIn("detected multiple TracedTensor contexts", str(e))
+            self.assertIn("output_tensors() to finalize", str(e))
 
     def test_cross_context_torch_where(self):
         """Test torch.where with condition, x, y from different contexts."""
@@ -513,7 +523,8 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             leapp.stop()
             self.fail("Expected an exception for cross-context torch.where")
         except Exception as e:
-            self.assertIn("Cannot mix multiple active TracedTensors from different contexts", str(e))
+            self.assertIn("detected multiple TracedTensor contexts", str(e))
+            self.assertIn("output_tensors() to finalize", str(e))
     
     def test_annotate_multiple_parallel_inputs_with_same_name(self):
         try:
@@ -531,8 +542,8 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             self.fail("Expected an exception")
 
         except Exception as e:
-            self.assertIn("Duplicate name ", str(e))
-            self.assertIn("Each input/output must have a unique name", str(e))
+            self.assertIn("Duplicate i/o name", str(e))
+            self.assertIn("Each input/output in the same node must have a unique name", str(e))
 
     def test_output_tensors_with_non_traced_tensor(self):
         """Test that passing non-TracedTensors to output_tensors raises the correct error.
@@ -592,11 +603,8 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             
         except Exception as e:
             error_msg = str(e)
-            # Should mention that static outputs cannot be TracedTensors
-            self.assertTrue(
-                "output_tensors" in error_msg,
-                f"Expected error about output_tensors, got: {error_msg}"
-            )
+            self.assertIn("static output 'bad_static'", error_msg)
+            self.assertIn("TracedTensor", error_msg)
 
     def test_input_tensors_after_output_tensors_same_node(self):
         """Test that calling input_tensors after output_tensors for the same node fails."""

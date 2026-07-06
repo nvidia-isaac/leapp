@@ -442,10 +442,10 @@ class ExportBackend(abc.ABC):
         _, actual_sha256sum = self._verify_model_location_and_get_hash(
             model_path)
         if actual_sha256sum != sha256sum:
-            raise ValueError(
+            _get_logger().fatal(
                 f"SHA256 checksum mismatch for {model_path}: "
-                f"expected {sha256sum}, got {actual_sha256sum}"
-            )
+                f"expected {sha256sum}, got {actual_sha256sum}",
+                error_type=ValueError)
         model = SimplifiedONNXProgram(model_path)
         self.compiled_model = model
         has_ort_cuda = 'CUDAExecutionProvider' in ort.get_available_providers()
@@ -458,10 +458,10 @@ class ExportBackend(abc.ABC):
         _, actual_sha256sum = self._verify_model_location_and_get_hash(
             model_path)
         if actual_sha256sum != sha256sum:
-            raise ValueError(
+            _get_logger().fatal(
                 f"SHA256 checksum mismatch for {model_path}: "
-                f"expected {sha256sum}, got {actual_sha256sum}"
-            )
+                f"expected {sha256sum}, got {actual_sha256sum}",
+                error_type=ValueError)
         device = self._select_runtime_device()
         model = torch.jit.load(model_path, map_location=device)
         model = model.to(device)
@@ -513,7 +513,9 @@ class NoneExportBackend(ExportBackend):
         elif model_type == "jit":
             self._load_torchscript(model_path, sha256sum)
         else:
-            raise ValueError(f"Unsupported model type: {model_type}")
+            _get_logger().fatal(
+                f"Unsupported model type: {model_type}",
+                error_type=ValueError)
 
     def get_backend_model_type(self):
         if "model_path" not in self.backend_params:
@@ -534,5 +536,6 @@ class NoneExportBackend(ExportBackend):
         elif suffix == 'engine' or suffix == 'plan':
             return 'trt'
         else:
-            raise ValueError(
-                f"Unsupported model file suffix: {suffix}")
+            _get_logger().fatal(
+                f"Unsupported model file suffix: {suffix}",
+                error_type=ValueError)

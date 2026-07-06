@@ -76,8 +76,9 @@ class ModuleBuilder:
     def __call__(self):
         # validation
         if self.node_context.input_namespace is None or self.node_context.output_namespace is None:
-            raise Exception(
-                f"Input or output namespace not found for {self.node_context.name}")
+            _get_logger().fatal(
+                f"Input or output namespace not found for {self.node_context.name}",
+                error_type=Exception)
 
         # if the function or snippet is a class method, we need to create a module that inherits
         # from the class to preserve class functions
@@ -239,8 +240,9 @@ class ModuleBuilder:
         if source_code:
             _get_logger().info(message)
         else:
-            _get_logger().error(message)
-            raise Exception(f"No source code found for {self.node_context.name}")
+            _get_logger().fatal(
+                message,
+                error_type=Exception)
 
         return source_code
 
@@ -378,9 +380,10 @@ class ModuleBuilder:
 
             exec(code, namespace)
         except Exception as e:
-            _get_logger().error(f"Error compiling function: {e}")
-            _get_logger().error(function_string)
-            raise e
+            _get_logger().fatal(
+                f"Error compiling function: {e}\n{function_string}",
+                error_type=type(e),
+                cause=e)
 
         _core = namespace['_core']
         forward = namespace['forward']

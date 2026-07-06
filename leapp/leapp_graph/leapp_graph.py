@@ -127,11 +127,11 @@ class LeappGraph:
             tag_counts = Counter(tags)
             duplicates = {tag for tag, count in tag_counts.items() if count > 1}
             if duplicates:
-                for duplicate in duplicates:
-                    _get_logger().error(
-                        f"Found duplicate input with the tag {duplicate} in node {node.name}")
-                raise Exception(
-                    "Error: unsupported use of sending the same tensor multiple times to the same node")
+                duplicate_list = ", ".join(sorted(duplicates))
+                _get_logger().fatal(
+                    f"Error: unsupported use of sending the same tensor multiple times to the same node. "
+                    f"Duplicate input tags in node {node.name}: {duplicate_list}",
+                    error_type=Exception)
 
             for in_idx, input in enumerate(node.inputs):
                 if input.tag is None:  # case where the input is dangling
@@ -143,8 +143,9 @@ class LeappGraph:
                     source_node_output_ports = [
                         output.tag for output in source_node.outputs]
                     if input.tag not in source_node_output_ports:
-                        raise Exception(
-                            f"Error: {source_node.name} does not produce tag {input.tag}")
+                        _get_logger().fatal(
+                            f"Error: {source_node.name} does not produce tag {input.tag}",
+                            error_type=Exception)
 
                     out_idx = source_node_output_ports.index(input.tag)
 
