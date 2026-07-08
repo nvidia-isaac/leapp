@@ -17,6 +17,7 @@ namespace {
 
 constexpr int kCudaSuccess = 0;
 constexpr int kCudaMemcpyDeviceToDevice = 3;
+constexpr const char* kWrpFilename = "segment.wrp";
 
 std::string WarpErrorString() {
     const char* error = wp_get_error_string();
@@ -77,11 +78,11 @@ void WarpApicRunner::LoadOnce(const std::uint8_t* bundle_data, std::size_t bundl
         EnsureCudaInitialized();
         temp_dir_ = std::make_unique<TempBundleDir>();
         ExtractWRPBToDirectory(bundle_data, bundle_size, temp_dir_->path());
-        const std::filesystem::path wrp_path = temp_dir_->path() / metadata_.wrp_name;
+        const std::filesystem::path wrp_path = temp_dir_->path() / kWrpFilename;
         wp_cuda_context_set_current(cuda_context_);
         graph_ = wp_apic_load_graph(cuda_context_, wrp_path.string().c_str(), APIC_DEVICE_CUDA);
         if (graph_ == nullptr) {
-            throw std::runtime_error("Failed to load embedded APIC graph '" + metadata_.wrp_name +
+            throw std::runtime_error("Failed to load embedded APIC graph '" + std::string(kWrpFilename) +
                                      "': " + WarpErrorString());
         }
         for (const auto& spec : metadata_.inputs) {

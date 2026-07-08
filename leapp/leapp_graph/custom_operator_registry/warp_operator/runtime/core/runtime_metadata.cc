@@ -105,7 +105,6 @@ RuntimeMetadata ParseRuntimeMetadata(const std::string& json) {
     if (metadata.schema_version != 1) {
         throw std::runtime_error("Unsupported runtime_metadata schema_version: " + std::to_string(metadata.schema_version));
     }
-    metadata.wrp_name = ExtractString(json, "wrp_name");
     metadata.device_kind = ExtractString(json, "device_kind", false);
     metadata.device_index = static_cast<int>(ExtractInt(json, "device_index", 0, false));
     metadata.bundle_num_bytes = static_cast<std::size_t>(ExtractInt(json, "num_bytes", 0, false));
@@ -141,9 +140,6 @@ RuntimeMetadata ParseRuntimeMetadata(const std::string& json) {
         metadata.outputs.push_back(std::move(spec));
     }
 
-    if (metadata.wrp_name.empty()) {
-        throw std::runtime_error("runtime_metadata.wrp_name is empty");
-    }
     return metadata;
 }
 

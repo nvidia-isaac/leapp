@@ -13,7 +13,6 @@ tensor input so ONNX external-data handling still applies to large bundles.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Iterable
 from typing import Any
@@ -94,21 +93,6 @@ def _num_bytes(shape: list[int], dtype: str) -> int:
     return _numel(shape) * itemsize
 
 
-def _ref_device(ref: Any) -> dict[str, Any]:
-    device = ref.device
-    text = str(device) if device is not None else ""
-    if text.startswith("cuda"):
-        parts = text.split(":", 1)
-        return {
-            "device_kind": "cuda",
-            "device_index": int(parts[1]) if len(parts) == 2 and parts[1] else 0,
-            "capture_device": text,
-        }
-    if text:
-        return {"device_kind": text, "device_index": 0, "capture_device": text}
-    return {"device_kind": "unknown", "device_index": 0, "capture_device": ""}
-
-
 def _output_spec(
     index: int,
     ref: Any,
@@ -123,7 +107,6 @@ def _output_spec(
         "dtype": dtype,
         "shape": shape,
         "num_bytes": _num_bytes(shape, dtype),
-        "constant_fill": None if mask else 0,
     }
 
 
@@ -135,8 +118,6 @@ def build_runtime_metadata(
     output_shapes: list[list[int]],
     output_dtypes: list[str],
     output_mask: list[bool],
-    wrp_name: str | None = None,
-    bundle_bytes: bytes | None = None,
 ) -> dict[str, Any]:
     """Build the metadata payload consumed by all runtime adapters."""
     if len(output_refs) != len(output_shapes):
@@ -166,7 +147,6 @@ def build_runtime_metadata(
                 "dtype": dtype,
                 "shape": shape,
                 "num_bytes": _num_bytes(shape, dtype),
-                "layout": "contiguous",
             }
         )
 
@@ -177,44 +157,10 @@ def build_runtime_metadata(
         )
     ]
 
-    runtime_target = {"device_kind": "unknown", "device_index": 0, "capture_device": ""}
-    for ref in [*input_refs, *output_refs]:
-        runtime_target = _ref_device(ref)
-        if runtime_target["device_kind"] != "unknown":
-            break
-
-    bundle = {"format": "WRPB", "version": 1}
-    if bundle_bytes is not None:
-        bundle["num_bytes"] = len(bundle_bytes)
-        bundle["sha256"] = hashlib.sha256(bundle_bytes).hexdigest()
-
     return {
         "schema_version": RUNTIME_METADATA_VERSION,
-        "op_type": "leapp.warp_runner",
-        "wrp_name": wrp_name or getattr(segment, "wrp_name", None) or "",
-        "runtime_target": runtime_target,
         "inputs": inputs,
         "outputs": outputs,
-        "apic_params": [
-            {
-                "name": spec["param_name"],
-                "direction": "input",
-                "num_bytes": spec["num_bytes"],
-                "alias_group": None,
-            }
-            for spec in inputs
-        ]
-        + [
-            {
-                "name": spec["param_name"],
-                "direction": "output",
-                "num_bytes": spec["num_bytes"],
-                "alias_group": None,
-            }
-            for spec in outputs
-            if spec["mask"] and spec["param_name"]
-        ],
-        "bundle": bundle,
     }
 
 

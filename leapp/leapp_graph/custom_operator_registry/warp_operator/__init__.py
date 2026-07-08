@@ -9,7 +9,7 @@ Implementation is split by backend:
 - ``schema.py`` — op identity and encode/decode contract
 - ``fx.py`` — fake/eager PyTorch kernels for tracing and ``torch.export``
 - ``onnx.py`` — dynamo ONNX lowering to ``com.nvidia.warp::WrpRunner``
-- ``bundle.py`` — WRPB archive packing and FX graph embedding
+- ``bundle.py`` — WRPB archive packing (embedded at trace time)
 """
 
 from __future__ import annotations
@@ -59,12 +59,6 @@ _LIB = torch.library.Library(NAMESPACE, "FRAGMENT")
 _SUPPORTED_EXPORT_BACKENDS = frozenset({"onnx-dynamo", "exported-program"})
 
 
-def _warp_pre_compile(module: "torch.nn.Module", backend: str) -> None:
-    from .bundle import embed_warp_bundles_in_graph
-
-    embed_warp_bundles_in_graph(module)
-
-
 def _module_contains_warp_runner(module: "torch.nn.Module | None") -> bool:
     if module is None:
         return False
@@ -102,7 +96,6 @@ def _register_export_hooks() -> None:
         detect_in_module=_module_contains_warp_runner,
         supported_backends=_SUPPORTED_EXPORT_BACKENDS,
         unsupported_message=_warp_unsupported_message,
-        pre_compile=_warp_pre_compile,
     )
 
 

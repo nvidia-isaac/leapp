@@ -15,6 +15,7 @@ import torch
 
 from leapp.utils.logging import _get_logger
 
+from .bundle import WRP_FILENAME
 from .metadata import decode_runtime_metadata, output_dtypes, output_shapes
 from .schema import (
     QUALIFIED_NAME,
@@ -72,8 +73,8 @@ def lower_warp_runner_to_onnx(
 
     attrs = {
         "runtime_metadata": runtime_metadata,
-        # Legacy attrs are kept while the C++ runtime migrates to runtime_metadata.
-        "wrp_name": str(metadata.get("wrp_name", "")),
+        # Legacy attrs are kept for compatibility with older POC-style runtimes.
+        "wrp_name": WRP_FILENAME,
         "input_names": ",".join(
             str(spec.get("param_name", f"input_{i}"))
             for i, spec in enumerate(metadata.get("inputs", []))

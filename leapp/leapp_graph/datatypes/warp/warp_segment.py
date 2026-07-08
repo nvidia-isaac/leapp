@@ -97,20 +97,6 @@ class WarpTensorRef:
             metadata=metadata or {},
         )
 
-    def to_metadata(self) -> dict[str, Any]:
-        return {
-            "name": self.name,
-            "path": self.path,
-            "shape": self.shape,
-            "dtype": self.dtype,
-            "device": self.device,
-            "ptr": self.ptr,
-            "is_input": self.is_input,
-            "is_output": self.is_output,
-            "produced_by_event_index": self.produced_by_event_index,
-            "metadata": self.metadata,
-        }
-
 
 @dataclass
 class WarpSegment:
@@ -136,14 +122,6 @@ class WarpSegment:
     device: str | None = None
     # FX marker name, e.g. ``warp_segment_0``.
     proxy_name: str | None = None
-    # Saved .wrp path once export writes the APIC bundle (build-time only).
-    wrp_path: str | None = None
-    # Basename of the ``.wrp`` inside the WRPB archive.
-    wrp_name: str | None = None
-    # Populated by ``_save_warp_captures`` after pruning.
-    input_names: list[str] = field(default_factory=list)
-    output_names: list[str] = field(default_factory=list)
-    output_shapes: list[list[int]] = field(default_factory=list)
     # Live APIC graph object during trace/export; intentionally not serialized.
     apic_graph: Any | None = None
 
@@ -307,20 +285,3 @@ class WarpSegment:
 
     def invalidate(self) -> None:
         self.status = "invalid"
-
-    def to_metadata(self) -> dict[str, Any]:
-        return {
-            "node_name": self.node_name,
-            "status": self.status,
-            "device": self.device,
-            "proxy_name": self.proxy_name,
-            "wrp_path": self.wrp_path,
-            "has_apic_graph": self.apic_graph is not None,
-            "inputs": [ref.to_metadata() for ref in self.input_refs.values()],
-            "outputs": [ref.to_metadata() for ref in self.output_refs.values()],
-            "output_candidates": [
-                ref.to_metadata() for ref in self.output_candidates
-            ],
-            "event_count": len(self.events),
-            "metadata": self.metadata,
-        }

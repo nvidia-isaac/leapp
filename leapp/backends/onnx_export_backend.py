@@ -169,20 +169,16 @@ class ONNXExportBackend(ExportBackend):
     def _embed_warp_bundles(self, model: onnx.ModelProto) -> int:
         """Finalize ``WrpRunner`` ONNX nodes with live I/O metadata from segments.
 
-        The WRPB bytes are already wired in as the last input by
-        ``embed_warp_bundles_in_graph`` (via dynamo lowering). This pass only
-        patches ``wrp_name``, ``input_names``, ``output_names``, and
-        ``output_shape`` from each segment's saved bundle metadata.
+        WRPB bytes are embedded at trace time as ``get_attr`` bundle inputs.
+        This pass patches legacy compatibility attrs plus live I/O metadata from
+        each segment's runtime metadata.
         """
         from leapp.leapp_graph.custom_operator_registry.warp_operator.bundle import (
+            WRP_FILENAME,
             iter_warp_segments_from_graph,
         )
 
-        segments = [
-            seg
-            for seg in iter_warp_segments_from_graph(self.node_context.graph)
-            if seg.wrp_path is not None
-        ]
+        segments = iter_warp_segments_from_graph(self.node_context.graph)
         if not segments:
             return 0
 
@@ -214,16 +210,25 @@ class ONNXExportBackend(ExportBackend):
             metadata = warp_operator.decode_runtime_metadata(runtime_metadata)
             full_output_shapes = warp_operator.runtime_output_shapes(metadata)
             full_output_mask = warp_operator.runtime_output_mask(metadata)
+            input_names = [
+                str(spec.get("param_name", f"input_{i}"))
+                for i, spec in enumerate(metadata.get("inputs", []))
+            ]
+            output_names = [
+                str(spec.get("param_name"))
+                for spec in metadata.get("outputs", [])
+                if spec.get("mask", True) and spec.get("param_name")
+            ]
 
             self._set_onnx_string_attr(node, "runtime_metadata", runtime_metadata)
             # Legacy attrs are kept for compatibility with the existing POC-style
             # C++ op while the runtime migrates to runtime_metadata.
-            self._set_onnx_string_attr(node, "wrp_name", segment.wrp_name)
+            self._set_onnx_string_attr(node, "wrp_name", WRP_FILENAME)
             self._set_onnx_string_attr(
-                node, "input_names", ",".join(segment.input_names)
+                node, "input_names", ",".join(input_names)
             )
             self._set_onnx_string_attr(
-                node, "output_names", ",".join(segment.output_names)
+                node, "output_names", ",".join(output_names)
             )
             self._set_onnx_string_attr(
                 node,
