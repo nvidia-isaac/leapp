@@ -721,16 +721,19 @@ class ExportManager:
         if node_name not in self.nodes:
             raise ValueError(f"LEAPP: node '{node_name}' not found. Call annotate.input_tensors() first to create the node.")
 
-        if node_name in self.nodes and not self.nodes[node_name].is_tracing:
+        node = self.nodes[node_name]
+        if not node.is_tracing:
             return nullcontext()
-
 
         if not self.patcher.installed:
             raise RuntimeError(
                 "LEAPP: warp_op requires global patching (call leapp.start(..., global_patching=True))."
             )
 
-        return WarpOp(self.nodes[node_name], warp_backend=warp_backend)
+        return WarpOp(
+            node,
+            warp_backend=warp_backend,
+        )
 
     def _method(self, **params):
         """Legacy decorator for tracing functions via sys.settrace + ModuleBuilder.

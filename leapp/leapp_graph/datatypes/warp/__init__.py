@@ -10,6 +10,12 @@ from .warp_segment import WarpSegment, WarpTensorRef
 try:
     import warp as wp  # noqa: F401
 
+    # APIC export bundles embed compiled module binaries. Force PTX at sm75 so
+    # saved .wrp segments are portable across CUDA-capable GPUs (PTX is JIT'd
+    # at load time). Must be set before kernel compilation / wp.init().
+    wp.config.cuda_output = "ptx"
+    wp.config.ptx_target_arch = 75
+
     from .patching import WarpPatchBackend
     from .traced_wp_array import TracedWpArray
 except ImportError:

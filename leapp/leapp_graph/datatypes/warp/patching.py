@@ -478,6 +478,7 @@ class WarpPatchBackend:
             return
         seen.add(obj_id)
 
+        # needs to lazy import to avoid circular import
         from leapp.leapp_graph.datatypes import is_tracable_tensor_type
 
         if is_tracable_tensor_type(obj):

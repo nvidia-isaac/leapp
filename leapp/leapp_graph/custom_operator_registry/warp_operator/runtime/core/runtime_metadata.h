@@ -29,7 +29,6 @@ struct OutputSpec {
 
 struct RuntimeMetadata {
     int schema_version = 0;
-    std::string wrp_name;
     std::string device_kind = "cuda";
     int device_index = 0;
     std::vector<InputSpec> inputs;

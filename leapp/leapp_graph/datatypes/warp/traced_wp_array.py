@@ -92,6 +92,10 @@ class TracedWpArray(wp.array):
         self._context = context
         self._proxy = proxy
 
+    def rebind_tracing_proxy(self, name: str, context, proxy: Proxy) -> None:
+        """Rebind this traced array to the canonical FX proxy for its value."""
+        self._init_tracing_state(name, context, proxy)
+
     @property
     def warp_segment(self):
         return getattr(self, "_leapp_warp_segment", None)
