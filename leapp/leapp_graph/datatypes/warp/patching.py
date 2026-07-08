@@ -46,6 +46,8 @@ class WarpPatchBackend:
         self._recording_depth = 0
         self._active_segment: Any | None = None
         self._installed = False
+        self._boundary_function_ids: set[int] = set()
+        self._boundary_array_init_id: int | None = None
     #########################################################
     # Properties
     #########################################################
@@ -65,6 +67,7 @@ class WarpPatchBackend:
         if self._installed:
             return self
 
+        self._register_boundary_functions()
         self._patch_warp_modules()
 
         self._patch_loaded_aliases()
@@ -132,6 +135,8 @@ class WarpPatchBackend:
 
         self._patches.clear()
         self._wrappers_by_original_id.clear()
+        self._boundary_function_ids.clear()
+        self._boundary_array_init_id = None
         self._installed = False
 
     #########################################################
@@ -330,6 +335,11 @@ class WarpPatchBackend:
             if self._recording_depth:
                 return original(*args, **kwargs)
 
+            if id(original) in self._boundary_function_ids:
+                handled, result = self._handle_boundary_call(original, args, kwargs)
+                if handled:
+                    return result
+
             # Single pass: swap active traced arrays for raw ``.data`` views (so
             # Warp sees exact wp.array objects) and collect them so we can derive
             # the shared trace state. The original traced objects are left
@@ -352,6 +362,95 @@ class WarpPatchBackend:
 
         setattr(wrapped, _WRAPPER_MARKER, True)
         return wrapped
+
+    #########################################################
+    # Boundary tracing (torch/numpy <-> warp)
+    #########################################################
+
+    def _register_boundary_functions(self) -> None:
+        """Record original boundary callables before patching replaces them."""
+        self._boundary_function_ids = set()
+        self._boundary_array_init_id = None
+
+        array_init = getattr(wp.array, "__init__", None)
+        candidates = [
+            array_init,
+            getattr(wp, "from_torch", None),
+            getattr(wp, "to_torch", None),
+            getattr(wp, "from_numpy", None),
+            getattr(wp.array, "numpy", None),
+        ]
+        for fn in candidates:
+            if fn is None or not callable(fn):
+                continue
+            fn_id = id(fn)
+            self._boundary_function_ids.add(fn_id)
+            if fn is array_init:
+                self._boundary_array_init_id = fn_id
+
+    def _handle_boundary_call(
+        self, original: Callable, args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> tuple[bool, Any]:
+        from leapp.leapp_graph.datatypes import as_traced, is_tracable_tensor_type
+
+        is_init = id(original) == self._boundary_array_init_id
+        if is_init and not args:
+            return False, None
+
+        search_args = args[1:] if is_init else args
+        src = self._find_single_active_traced_data(search_args, kwargs)
+        if src is None or not src.is_tracing:
+            return False, None
+
+        self._validate_boundary_dtype(kwargs)
+        from leapp.leapp_graph.datatypes.traced_data import TracedData
+
+        call_args = TracedData.unwrap_traced_data(args)
+        call_kwargs = TracedData.unwrap_traced_data(kwargs)
+
+        with self.paused():
+            raw = original(*call_args, **call_kwargs)
+
+        if is_init:
+            TracedWpArray.make_traced_in_place(
+                args[0], src.name, src.context_obj, src.proxy
+            )
+            return True, None
+        if raw is src.data:
+            return True, src
+        if is_tracable_tensor_type(raw):
+            return True, as_traced(raw, src.name, src.context_obj, src.proxy)
+        return True, raw
+
+    def _find_single_active_traced_data(
+        self, args: tuple[Any, ...], kwargs: dict[str, Any] | None = None
+    ):
+        # lazy to avoid circular imports
+        from leapp.leapp_graph.datatypes.traced_data import TracedData
+
+        contexts = TracedData.find_all_contexts([args, kwargs or {}])
+
+        if not contexts:
+            return None
+        if len(contexts) > 1:
+            raise ValueError(
+                "Warp boundary call received traced data from different LEAPP "
+                "trace contexts. Mixing active contexts is not supported."
+            )
+
+        src = TracedData.find_traced_data([args, kwargs or {}])
+        if src is None or not src.is_tracing:
+            return None
+        return src
+
+    def _validate_boundary_dtype(self, kwargs: dict[str, Any]) -> None:
+        dtype = kwargs.get("dtype")
+        if dtype is not None and getattr(dtype, "_shape_", None):
+            raise NotImplementedError(
+                "LEAPP warp boundary tracing does not yet support vector/matrix "
+                f"warp dtypes (got {dtype}). Reshape in torch/numpy first or use a "
+                "scalar warp dtype."
+            )
 
     def _normalize_and_collect(
         self, args: tuple[Any, ...], kwargs: dict[str, Any]

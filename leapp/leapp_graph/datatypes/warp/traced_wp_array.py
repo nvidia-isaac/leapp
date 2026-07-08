@@ -133,7 +133,13 @@ class TracedWpArray(wp.array):
 
     @property
     def tensor(self) -> torch.Tensor:
-        return wp.to_torch(self)
+        from leapp.leapp_graph.datatypes.patching import get_warp_backend
+
+        warp_backend = get_warp_backend()
+        if warp_backend is not None:
+            with warp_backend.paused():
+                return wp.to_torch(self.data)
+        return wp.to_torch(self.data)
 
     @property
     def proxy(self) -> Proxy:

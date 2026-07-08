@@ -133,7 +133,7 @@ class TracedData(ABC):
         """Find the first TracedData in a supported nested structure.
         
         Args:
-            obj: Object to search (can be TracedData, list, tuple, or other)
+            obj: Object to search (can be TracedData, list, tuple, dict, or other)
             
         Returns:
             The first TracedData found, or None if not found
