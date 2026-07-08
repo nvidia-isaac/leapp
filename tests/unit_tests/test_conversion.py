@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-"""Tests for conversion between TracedTensor and TracedNpArray.
+"""Tests for conversion between TracedTensor, TracedNpArray, and TracedWpArray.
 
 These tests verify that:
 1. Conversions produce the correct traced type
@@ -16,7 +16,7 @@ import numpy as np
 import torch
 
 from leapp.leapp_graph.traced_node import TracedTensorNode
-from leapp.leapp_graph.datatypes import TracedTensor, TracedNpArray
+from leapp.leapp_graph.datatypes import TracedTensor, TracedNpArray, TracedWpArray, wp
 from leapp.export_manager import ExportManager
 
 
@@ -356,6 +356,120 @@ class TestTracedTensorIdentityPreservation(unittest.TestCase):
         self.assertIsNot(result, traced)  # Different object (copy semantics)
         self.assertIs(result.proxy, traced.proxy)  # Same proxy (tracing preserved)
         self.assertTrue(torch.allclose(result.tensor, traced.tensor))
+
+
+@unittest.skipIf(wp is None, "warp-lang is not installed")
+@unittest.skipIf(not torch.cuda.is_available(), "CUDA is required for warp conversion tests")
+class TestTracedTensorToWarp(unittest.TestCase):
+    """Test conversions from TracedTensor to TracedWpArray."""
+
+    def setUp(self):
+        """Apply patches before each test."""
+        _install_patches()
+
+    def tearDown(self):
+        """Remove patches after each test."""
+        _uninstall_patches()
+
+    def test_wp_from_torch_returns_traced_wp_array(self):
+        """Test wp.from_torch(TracedTensor) returns TracedWpArray when tracing."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0], device="cuda"), name="x")
+
+        y = wp.from_torch(x)
+
+        self.assertIsInstance(y, TracedWpArray)
+        self.assertIs(y.proxy, x.proxy)
+        self.assertTrue(torch.allclose(wp.to_torch(y), x.tensor))
+
+    def test_wp_array_returns_traced_wp_array(self):
+        """Test wp.array(TracedTensor, dtype=...) returns TracedWpArray when patched."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0], device="cuda"), name="x")
+
+        y = wp.array(x, dtype=wp.float32)
+
+        self.assertIsInstance(y, TracedWpArray)
+        self.assertIs(y.proxy, x.proxy)
+        self.assertTrue(torch.allclose(wp.to_torch(y), x.tensor))
+
+
+@unittest.skipIf(wp is None, "warp-lang is not installed")
+@unittest.skipIf(not torch.cuda.is_available(), "CUDA is required for warp conversion tests")
+class TestWarpToTracedTensor(unittest.TestCase):
+    """Test conversions from TracedWpArray to TracedTensor."""
+
+    def setUp(self):
+        """Apply patches before each test."""
+        _install_patches()
+
+    def tearDown(self):
+        """Remove patches after each test."""
+        _uninstall_patches()
+
+    def test_wp_to_torch_returns_traced_tensor(self):
+        """Test wp.to_torch(TracedWpArray) returns TracedTensor when tracing."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x_torch = ctx.create_input(torch.tensor([1.0, 2.0, 3.0], device="cuda"), name="x")
+        x = wp.from_torch(x_torch)
+
+        y = wp.to_torch(x)
+
+        self.assertIsInstance(y, TracedTensor)
+        self.assertIs(y.proxy, x.proxy)
+        self.assertTrue(torch.allclose(y.tensor, x_torch.tensor))
+
+
+@unittest.skipIf(wp is None, "warp-lang is not installed")
+@unittest.skipIf(not torch.cuda.is_available(), "CUDA is required for warp conversion tests")
+class TestTracedNumpyToWarp(unittest.TestCase):
+    """Test conversions from TracedNpArray to TracedWpArray."""
+
+    def setUp(self):
+        """Apply patches before each test."""
+        _install_patches()
+
+    def tearDown(self):
+        """Remove patches after each test."""
+        _uninstall_patches()
+
+    def test_wp_from_numpy_returns_traced_wp_array(self):
+        """Test wp.from_numpy(TracedNpArray) returns TracedWpArray when tracing."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(np.array([1.0, 2.0, 3.0], dtype=np.float32), name="x")
+
+        y = wp.from_numpy(x)
+
+        self.assertIsInstance(y, TracedWpArray)
+        self.assertIs(y.proxy, x.proxy)
+        self.assertEqual(y.shape, x.shape)
+        self.assertEqual(y.dtype, wp.float32)
+
+
+@unittest.skipIf(wp is None, "warp-lang is not installed")
+@unittest.skipIf(not torch.cuda.is_available(), "CUDA is required for warp conversion tests")
+class TestWarpToTracedNumpy(unittest.TestCase):
+    """Test conversions from TracedWpArray to TracedNpArray."""
+
+    def setUp(self):
+        """Apply patches before each test."""
+        _install_patches()
+
+    def tearDown(self):
+        """Remove patches after each test."""
+        _uninstall_patches()
+
+    def test_wp_array_numpy_returns_traced_np_array(self):
+        """Test TracedWpArray.numpy() returns TracedNpArray when tracing."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x_torch = ctx.create_input(torch.tensor([1.0, 2.0, 3.0], device="cuda"), name="x")
+        x = wp.from_torch(x_torch)
+
+        y = x.numpy()
+
+        self.assertIsInstance(y, TracedNpArray)
+        self.assertIs(y.proxy, x.proxy)
+        np.testing.assert_array_almost_equal(y, np.array([1.0, 2.0, 3.0], dtype=np.float32))
 
 
 class TestPatchingBehavior(unittest.TestCase):

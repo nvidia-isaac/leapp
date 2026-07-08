@@ -129,19 +129,24 @@ class TracedData(ABC):
     
     @staticmethod
     def find_traced_data(obj):
-        """Find the first TracedData in obj (including nested in lists/tuples).
+        """Find the first TracedData in obj (including nested containers).
         
         Args:
-            obj: Object to search (can be TracedData, list, tuple, or other)
+            obj: Object to search (can be TracedData, list, tuple, dict, or other)
             
         Returns:
             The first TracedData found, or None if not found
         """
         if isinstance(obj, TracedData):
             return obj
-        elif isinstance(obj, (list, tuple)):
+        if isinstance(obj, (list, tuple)):
             for item in obj:
                 result = TracedData.find_traced_data(item)
+                if result is not None:
+                    return result
+        elif isinstance(obj, dict):
+            for value in obj.values():
+                result = TracedData.find_traced_data(value)
                 if result is not None:
                     return result
         return None
