@@ -42,7 +42,7 @@ The root `leapp` package will depend on `leapp-visualization` by default. This p
 
 - converting LEAPP graph nodes, tensor descriptors, graph inputs, graph outputs, and feedback connections into `leapp_visualization.VisualGraph`
 - logging the generated artifact paths through LEAPP logging
-- exposing the existing `leapp.leapp_graph.graph_gui.visualize_graph(...)` compatibility entrypoint used by graph compilation
+- invoking the adapter and renderer directly from `LeappGraph.visualize(...)`
 
 ## Public API
 
@@ -119,7 +119,7 @@ Keep LEAPP integration tests in the root package:
 Verification should include:
 
 ```bash
-uv run pytest tests/unit_tests/test_graph_visualization_*.py \
+uv run pytest tests/visualization_tests/ \
   tests/functional_tests/test_annotate.py::TestAnnotateTensor::test_annotate_traced_tensors_diamond_with_feedback \
   tests/test_examples/test_getting_started.py::TestGettingStarted::test_getting_started_execution \
   tests/test_examples/test_feedback_example.py::TestFeedbackExample::test_feedback_example_execution -q
@@ -138,4 +138,3 @@ uv build packages/leapp-visualization
 - No interactive graph editing.
 - No new layout dependency beyond the existing `fast-sugiyama`.
 - No change to the LEAPP visualization artifact contract: `compile_graph(visualize=True)` still emits both SVG and PNG.
-

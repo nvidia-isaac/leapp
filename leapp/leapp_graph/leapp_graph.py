@@ -17,10 +17,11 @@
 import os
 from safetensors.torch import save_file
 from collections import Counter
+from leapp_visualization import render_graph
 
 from leapp.utils.tensor_description import CompactYamlList, validate_connection_compatibility
 from leapp.utils.logging import _get_logger
-from .graph_gui import visualize_graph
+from .visualization_adapter import build_visual_graph
 
 
 class LeappGraph:
@@ -89,8 +90,16 @@ class LeappGraph:
         return pipeline
 
     def visualize(self, save_path, graph_name):
-        visualize_graph(self.nodes, self.connections, self.feedback_connections,
-                        self.graph_inputs, self.graph_outputs, save_path, graph_name)
+        graph = build_visual_graph(
+            self.nodes,
+            self.connections,
+            self.feedback_connections,
+            self.graph_inputs,
+            self.graph_outputs,
+        )
+        svg_path, png_path = render_graph(graph, save_path, graph_name)
+        _get_logger().info(f"Graph visualization saved as: {svg_path}")
+        _get_logger().info(f"Graph visualization saved as: {png_path}")
 
     def get_graph_statistics(self):
         internal_connections = 0

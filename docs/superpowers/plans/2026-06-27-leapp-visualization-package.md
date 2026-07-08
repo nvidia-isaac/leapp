@@ -120,13 +120,14 @@ Expected: command exits with code 0 and prints the class/function objects.
 
 **Files:**
 - Create: `leapp/leapp_graph/visualization_adapter.py`
-- Modify: `leapp/leapp_graph/graph_gui.py`
+- Modify: `leapp/leapp_graph/leapp_graph.py`
+- Delete: `leapp/leapp_graph/graph_gui.py`
 - Modify: `pyproject.toml`
-- Modify: `uv.lock`
+- Delete: `uv.lock`
 
 **Interfaces:**
 - Consumes: `leapp_visualization.render_graph(graph, save_path, graph_name) -> tuple[str, str]`
-- Produces: `leapp.leapp_graph.graph_gui.visualize_graph(nodes, connections, feedback_connections, inputs, outputs, save_path, graph_name) -> None`
+- Produces: `LeappGraph.visualize(save_path, graph_name) -> None`
 
 - [ ] **Step 1: Move LEAPP-specific builder logic into the adapter**
 
@@ -138,23 +139,28 @@ from leapp_visualization import VisualEdge, VisualGraph, VisualNode, VisualPort,
 
 Keep helper behavior for `_shape_to_tuple`, `_kind_to_string`, `_find_port_id`, and `_node_sort_key`.
 
-- [ ] **Step 2: Keep graph_gui as LEAPP's compatibility entrypoint**
+- [ ] **Step 2: Invoke visualization directly from LeappGraph**
 
-Update `leapp/leapp_graph/graph_gui.py` to:
+Update `leapp/leapp_graph/leapp_graph.py` so `LeappGraph.visualize(...)` builds and renders the visual graph directly:
 
 ```python
-from leapp.utils.logging import _get_logger
 from leapp_visualization import render_graph
-
 from .visualization_adapter import build_visual_graph
 
-
-def visualize_graph(nodes, connections, feedback_connections, inputs, outputs, save_path, graph_name):
-    graph = build_visual_graph(nodes, connections, feedback_connections, inputs, outputs)
+def visualize(self, save_path, graph_name):
+    graph = build_visual_graph(
+        self.nodes,
+        self.connections,
+        self.feedback_connections,
+        self.graph_inputs,
+        self.graph_outputs,
+    )
     svg_path, png_path = render_graph(graph, save_path, graph_name)
     _get_logger().info(f"Graph visualization saved as: {svg_path}")
     _get_logger().info(f"Graph visualization saved as: {png_path}")
 ```
+
+Delete `leapp/leapp_graph/graph_gui.py` after all imports are removed.
 
 - [ ] **Step 3: Make LEAPP depend on the sibling package by default**
 
@@ -177,22 +183,22 @@ leapp-visualization = { path = "packages/leapp-visualization" }
 
 Remove `fast-sugiyama` and `Pillow` from root dependencies because they belong to `leapp-visualization`.
 
-- [ ] **Step 4: Refresh the lockfile**
+- [ ] **Step 4: Remove the lockfile**
 
-Run: `uv lock`
+Run: `rm uv.lock`
 
-Expected: lockfile includes a local source entry for `leapp-visualization`.
+Expected: the repository no longer tracks a uv lockfile for the library package.
 
 ### Task 3: Update tests to use package boundaries
 
 **Files:**
-- Modify: `tests/unit_tests/test_graph_visualization_imports.py`
-- Modify: `tests/unit_tests/test_graph_visualization_layout.py`
-- Modify: `tests/unit_tests/test_graph_visualization_geometry.py`
-- Modify: `tests/unit_tests/test_graph_visualization_svg.py`
-- Modify: `tests/unit_tests/test_graph_visualization_png.py`
-- Modify: `tests/unit_tests/test_graph_visualization_builder.py`
-- Modify: `tests/unit_tests/test_graph_visualization_integration.py`
+- Move to: `tests/visualization_tests/test_graph_visualization_imports.py`
+- Move to: `tests/visualization_tests/test_graph_visualization_layout.py`
+- Move to: `tests/visualization_tests/test_graph_visualization_geometry.py`
+- Move to: `tests/visualization_tests/test_graph_visualization_svg.py`
+- Move to: `tests/visualization_tests/test_graph_visualization_png.py`
+- Move to: `tests/visualization_tests/test_graph_visualization_builder.py`
+- Move to: `tests/visualization_tests/test_graph_visualization_integration.py`
 
 **Interfaces:**
 - Consumes: `leapp_visualization` public and module-level APIs
@@ -231,15 +237,15 @@ from leapp.leapp_graph.visualization_adapter import build_visual_graph
 In the integration failure test, monkeypatch:
 
 ```python
-import leapp.leapp_graph.graph_gui as graph_gui
-monkeypatch.setattr(graph_gui, "render_graph", explode)
+import leapp.leapp_graph.leapp_graph as leapp_graph_module
+monkeypatch.setattr(leapp_graph_module, "render_graph", explode)
 ```
 
 where `explode(graph, save_path, graph_name)` raises `RuntimeError("visualization exploded")`.
 
 - [ ] **Step 4: Run focused visualization tests**
 
-Run: `uv run pytest tests/unit_tests/test_graph_visualization_*.py -q`
+Run: `uv run pytest tests/visualization_tests/ -q`
 
 Expected: all graph visualization unit tests pass.
 
@@ -273,7 +279,7 @@ Update docs to say the static renderer lives in the sibling `leapp-visualization
 Run:
 
 ```bash
-uv run pytest tests/unit_tests/test_graph_visualization_*.py \
+uv run pytest tests/visualization_tests/ \
   tests/functional_tests/test_annotate.py::TestAnnotateTensor::test_annotate_traced_tensors_diamond_with_feedback \
   tests/test_examples/test_getting_started.py::TestGettingStarted::test_getting_started_execution \
   tests/test_examples/test_feedback_example.py::TestFeedbackExample::test_feedback_example_execution -q
@@ -297,7 +303,6 @@ Expected: both builds exit with code 0 and produce wheels/sdists under their `di
 Run:
 
 ```bash
-git add pyproject.toml uv.lock packages/leapp-visualization leapp/leapp_graph tests docs
+git add -A pyproject.toml uv.lock packages/leapp-visualization leapp/leapp_graph tests docs
 git commit --no-gpg-sign -m "Split graph visualization into leapp-visualization package"
 ```
-

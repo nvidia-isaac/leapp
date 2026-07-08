@@ -7,8 +7,8 @@ from PIL import Image
 
 import leapp
 from leapp import annotate
-import leapp.leapp_graph.graph_gui as graph_gui
-from leapp.leapp_graph.graph_gui import visualize_graph
+import leapp.leapp_graph.leapp_graph as leapp_graph_module
+from leapp.leapp_graph.leapp_graph import LeappGraph
 
 
 @dataclass
@@ -32,7 +32,7 @@ class FakeNode:
     node_index: int = 0
 
 
-def test_visualize_graph_writes_svg_and_png(tmp_path: Path):
+def test_leapp_graph_visualize_writes_svg_and_png(tmp_path: Path):
     node = FakeNode(
         name="policy",
         inputs=[FakeTensorDescription("obs", "float32", (1, 12))],
@@ -40,15 +40,8 @@ def test_visualize_graph_writes_svg_and_png(tmp_path: Path):
         backend="jit-script",
     )
 
-    visualize_graph(
-        nodes={"policy": node},
-        connections=[],
-        feedback_connections=[],
-        inputs=["policy/obs"],
-        outputs=["policy/action"],
-        save_path=str(tmp_path),
-        graph_name="demo",
-    )
+    graph = LeappGraph(nodes={"policy": node})
+    graph.visualize(save_path=str(tmp_path), graph_name="demo")
 
     svg_path = tmp_path / "demo.svg"
     png_path = tmp_path / "demo.png"
@@ -63,7 +56,7 @@ def test_compile_graph_raises_when_visualization_fails(tmp_path: Path, monkeypat
     def fail_render(graph, save_path, graph_name):
         raise RuntimeError("visualization exploded")
 
-    monkeypatch.setattr(graph_gui, "render_graph", fail_render)
+    monkeypatch.setattr(leapp_graph_module, "render_graph", fail_render)
 
     leapp.start(name="demo", save_path=str(tmp_path), dry_run=True)
     traced_obs = annotate.input_tensors("policy", {"obs": torch.randn(1, 2)})
