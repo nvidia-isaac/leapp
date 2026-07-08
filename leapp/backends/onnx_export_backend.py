@@ -170,11 +170,9 @@ class ONNXExportBackend(ExportBackend):
         """Finalize ``WrpRunner`` ONNX nodes with live I/O metadata from segments.
 
         WRPB bytes are embedded at trace time as ``get_attr`` bundle inputs.
-        This pass patches legacy compatibility attrs plus live I/O metadata from
-        each segment's runtime metadata.
+        This pass patches each node's post-prune ``runtime_metadata``.
         """
         from leapp.leapp_graph.custom_operator_registry.warp_operator.bundle import (
-            WRP_FILENAME,
             iter_warp_segments_from_graph,
         )
 
@@ -207,37 +205,8 @@ class ONNXExportBackend(ExportBackend):
                     "cannot patch runtime metadata."
                 )
             runtime_metadata = op_node.args[1]
-            metadata = warp_operator.decode_runtime_metadata(runtime_metadata)
-            full_output_shapes = warp_operator.runtime_output_shapes(metadata)
-            full_output_mask = warp_operator.runtime_output_mask(metadata)
-            input_names = [
-                str(spec.get("param_name", f"input_{i}"))
-                for i, spec in enumerate(metadata.get("inputs", []))
-            ]
-            output_names = [
-                str(spec.get("param_name"))
-                for spec in metadata.get("outputs", [])
-                if spec.get("mask", True) and spec.get("param_name")
-            ]
 
             self._set_onnx_string_attr(node, "runtime_metadata", runtime_metadata)
-            # Legacy attrs are kept for compatibility with the existing POC-style
-            # C++ op while the runtime migrates to runtime_metadata.
-            self._set_onnx_string_attr(node, "wrp_name", WRP_FILENAME)
-            self._set_onnx_string_attr(
-                node, "input_names", ",".join(input_names)
-            )
-            self._set_onnx_string_attr(
-                node, "output_names", ",".join(output_names)
-            )
-            self._set_onnx_string_attr(
-                node,
-                "output_shape",
-                warp_operator._format_output_shape_attr(full_output_shapes),
-            )
-            self._set_onnx_string_attr(
-                node, "output_mask", warp_operator.encode_output_mask(full_output_mask)
-            )
 
             embedded += 1
             _get_logger().debug(
