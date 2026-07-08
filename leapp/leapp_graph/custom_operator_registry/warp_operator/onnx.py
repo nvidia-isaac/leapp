@@ -15,31 +15,18 @@ import torch
 
 from leapp.utils.logging import _get_logger
 
-from .bundle import WRP_FILENAME
 from .metadata import decode_runtime_metadata, output_dtypes, output_shapes
 from .schema import (
     QUALIFIED_NAME,
     ONNX_WRP_DOMAIN,
     ONNX_WRP_OPSET,
     ONNX_WRP_OP_TYPE,
-    encode_output_mask,
     get_op,
-    _format_output_shape_attr,
     _resolve_dtype,
 )
 
 _GLOBAL_ONNX_TRANSLATIONS: dict[Any, Callable[..., Any]] = {}
 _ONNX_EXPORT_PATCHED = False
-
-
-def _masked_output_names(metadata: dict[str, Any]) -> list[str]:
-    names: list[str] = []
-    for spec in metadata.get("outputs", []):
-        if spec.get("mask", True):
-            name = spec.get("param_name")
-            if name:
-                names.append(str(name))
-    return names
 
 
 def lower_warp_runner_to_onnx(
@@ -69,21 +56,9 @@ def lower_warp_runner_to_onnx(
     data_inputs = list(inputs)
     dtypes = [_resolve_dtype(name) for name in dtype_lists]
     shapes = [tuple(int(dim) for dim in shape) for shape in shape_lists]
-    output_names = _masked_output_names(metadata)
 
     attrs = {
         "runtime_metadata": runtime_metadata,
-        # Legacy attrs are kept for compatibility with older POC-style runtimes.
-        "wrp_name": WRP_FILENAME,
-        "input_names": ",".join(
-            str(spec.get("param_name", f"input_{i}"))
-            for i, spec in enumerate(metadata.get("inputs", []))
-        ),
-        "output_names": ",".join(output_names),
-        "output_shape": _format_output_shape_attr(shape_lists),
-        "output_mask": encode_output_mask(
-            [bool(spec.get("mask", True)) for spec in metadata.get("outputs", [])]
-        ),
     }
 
     wrp_inputs = [*data_inputs, bundle]

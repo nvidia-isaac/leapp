@@ -39,14 +39,7 @@ from .schema import (
     ONNX_WRP_OPSET,
     ONNX_WRP_OP_TYPE,
     _SCHEMA,
-    decode_output_dtypes,
-    decode_output_mask,
-    decode_output_shapes,
-    encode_output_dtypes,
-    encode_output_mask,
-    encode_output_shapes,
     get_op,
-    _format_output_shape_attr,
 )
 
 if TYPE_CHECKING:
@@ -136,11 +129,4 @@ __all__ = [
     "runtime_output_shapes",
     "runtime_output_dtypes",
     "runtime_output_mask",
-    "encode_output_shapes",
-    "decode_output_shapes",
-    "encode_output_dtypes",
-    "decode_output_dtypes",
-    "encode_output_mask",
-    "decode_output_mask",
-    "_format_output_shape_attr",
 ]
