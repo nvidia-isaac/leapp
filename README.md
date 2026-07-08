@@ -36,7 +36,7 @@ leapp.stop()
 leapp.compile_graph()
 ```
 
-Running this produces a `my_pipeline/` directory containing the exported models, a YAML pipeline spec, and SVG plus PNG graph visualizations.
+Running this produces a `my_pipeline/` directory containing the exported models, a YAML pipeline spec, and, on Python 3.11 or later, SVG plus PNG graph visualizations. On Python 3.10, LEAPP warns and skips visualization while completing the rest of the export.
 
 ## Documentation
 

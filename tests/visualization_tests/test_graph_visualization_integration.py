@@ -53,10 +53,15 @@ def test_leapp_graph_visualize_writes_svg_and_png(tmp_path: Path):
 
 
 def test_compile_graph_raises_when_visualization_fails(tmp_path: Path, monkeypatch):
-    def fail_render(graph, save_path, graph_name):
+    def fail_render(*args, **kwargs):
         raise RuntimeError("visualization exploded")
 
-    monkeypatch.setattr(leapp_graph_module, "render_graph", fail_render)
+    monkeypatch.setattr(
+        leapp_graph_module,
+        "_render_visual_graph",
+        fail_render,
+        raising=False,
+    )
 
     leapp.start(name="demo", save_path=str(tmp_path), dry_run=True)
     traced_obs = annotate.input_tensors("policy", {"obs": torch.randn(1, 2)})

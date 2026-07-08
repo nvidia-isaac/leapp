@@ -9,7 +9,9 @@ Installation
 
    pip install leapp
 
-LEAPP requires Python 3.8+ and PyTorch 2.6.0+. The full dependency list is
+LEAPP requires Python 3.10+ and PyTorch 2.6.0+. Graph visualization requires
+Python 3.11+; on Python 3.10, LEAPP warns and skips SVG/PNG generation while
+completing the rest of the export. The full dependency list is
 available in LEAPP's `pyproject.toml <https://github.com/nvidia-isaac/leapp/blob/main/pyproject.toml>`_.
 
 Welcome to LEAPP! This guide walks you through the basics of using LEAPP
@@ -246,9 +248,10 @@ Try it yourself
 Graph visualization
 -------------------
 
-LEAPP writes a primary SVG graph visualization plus a companion PNG showing
-exported nodes, graph inputs and outputs, and data-flow connections between
-nodes. Use them to verify that LEAPP detected the node boundaries and
+On Python 3.11+, LEAPP writes a primary SVG graph visualization plus a
+companion PNG showing exported nodes, graph inputs and outputs, and data-flow
+connections between nodes. Python 3.10 warns and skips these artifacts. Use
+them to verify that LEAPP detected the node boundaries and
 cross-node connections you intended.
 
 .. image:: _static/images/getting_started_graph.png

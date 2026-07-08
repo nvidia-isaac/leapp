@@ -1,7 +1,8 @@
 # LEAPP graph visualization uses static layered SVG and PNG artifacts
 
 LEAPP will replace the current interactive Matplotlib graph visualizer with a static
-layered visualization that emits both SVG and PNG from `compile_graph(visualize=True)`.
+layered visualization that emits both SVG and PNG from `compile_graph(visualize=True)` on
+Python 3.11 or later.
 
 ## Decision
 
@@ -36,9 +37,10 @@ README previews, and tools that do not embed SVG well.
 
 ## Consequences
 
-The LEAPP package can require Python 3.11+ and depend on `leapp-visualization` by default.
-The visualization package owns `fast-sugiyama` and Pillow. Matplotlib can be removed if no
-other runtime path needs it.
+The LEAPP package supports Python 3.10+, while `leapp-visualization` remains Python 3.11+
+because it owns `fast-sugiyama` and Pillow. LEAPP declares the visualization package as a
+conditional dependency, imports it only when rendering, and warns then skips visualization
+on Python versions below 3.11. Matplotlib can be removed if no other runtime path needs it.
 
 Rendering becomes deterministic and headless. Users no longer need to manually position
 nodes or close a GUI window to save the graph image.

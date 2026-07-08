@@ -108,8 +108,9 @@ def stop():
 def compile_graph(visualize=True, verbose=None, validate=True, dry_run=False, rtol=1e-3, atol=1e-5, strict=True):
     """Compile and save the computational graph from traced nodes.
 
-    When ``visualize`` is ``True``, LEAPP writes static ``.svg`` and ``.png``
-    graph artifacts to the graph output directory.
+    When ``visualize`` is ``True`` on Python 3.11 or later, LEAPP writes
+    static ``.svg`` and ``.png`` graph artifacts to the graph output
+    directory. Earlier Python versions emit a warning and skip visualization.
     """
     manager = _MANAGER
 

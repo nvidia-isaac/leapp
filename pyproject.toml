@@ -37,6 +37,7 @@ classifiers = [
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
@@ -45,9 +46,9 @@ classifiers = [
 # dict in key insertion order is garunteeded in python 3.7+
 # getting the end_lineno for ast nodes is provided in 3.8+
 # __init__subclass__ is provided in 3.6+
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
-    "leapp-visualization==0.5.2",
+    "leapp-visualization==0.5.2; python_version >= '3.11'",
     "torch>=2.6.0",
     "PyYAML>=6.0",
     "onnx>=1.19.0",

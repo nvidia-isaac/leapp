@@ -49,7 +49,7 @@ References:
 
 ### Functional requirements
 
-- `leapp.compile_graph(visualize=True)` emits:
+- On Python 3.11+, `leapp.compile_graph(visualize=True)` emits:
   - `<graph_name>.svg`
   - `<graph_name>.png`
 - The SVG is the primary artifact. The PNG is a raster companion generated from the same
@@ -74,7 +74,8 @@ References:
 
 - Dependencies must be installable by uv/pip and not require system Graphviz, Node, Java,
   Qt, or a browser.
-- The feature may require Python 3.11+.
+- Core LEAPP supports Python 3.10+. Visualization requires Python 3.11+ and is skipped with
+  a warning on earlier Python versions.
 - Rendering must work in headless CI.
 - Layout should be deterministic for stable docs and regression tests.
 - The SVG should be readable in docs and browsers without external CSS/assets.
@@ -91,9 +92,16 @@ References:
 
 ## Architecture
 
+`LeappGraph` checks the interpreter version before importing any visualization modules.
+Python 3.11+ continues into the adapter and renderer; earlier versions warn and return
+without creating graph images. This keeps core LEAPP importable without the conditional
+visualization dependency.
+
 ```mermaid
 flowchart LR
-    A[LeappGraph] --> B[LEAPP visualization adapter]
+    A[LeappGraph] --> H{Python 3.11+?}
+    H -->|No| I[Warn and skip]
+    H -->|Yes| B[LEAPP visualization adapter]
     B --> C[leapp-visualization model]
     C --> D[Layered layout adapter]
     D --> E[Geometry resolver]
@@ -221,8 +229,9 @@ SVG rendering, but topology and placement should match.
 
 ## Dependency and packaging changes
 
-- Raise `requires-python` to `>=3.11`.
-- Add a default LEAPP dependency on the sibling `leapp-visualization` package.
+- Set LEAPP's `requires-python` to `>=3.10`.
+- Add `leapp-visualization` as a conditional LEAPP dependency for Python 3.11+.
+- Import the visualization package lazily and warn then skip rendering below Python 3.11.
 - Put `fast-sugiyama>=0.5.3` in `leapp-visualization`.
 - Put `Pillow>=10` or current project-preferred Pillow lower bound in `leapp-visualization`.
 - Remove `matplotlib` if no other LEAPP runtime path needs it.
@@ -297,7 +306,7 @@ Deferred. It remains a fallback option if `fast-sugiyama` is unsuitable.
 | Feedback edges disturb forward flow | High | Medium | Exclude feedback edges from ranking and route them separately. |
 | PNG output diverges from SVG | Medium | Medium | Render from one geometry model and add image smoke tests. |
 | Long labels make nodes unreadable | Medium | High | Truncate visible text, keep full text in SVG `<title>`, use deterministic max widths. |
-| Python 3.11 requirement affects users | Medium | Medium | Make the requirement explicit in package metadata and release notes. |
+| Python 3.10 cannot install `fast-sugiyama` | Medium | High | Keep core LEAPP installable and warning-and-skip visualization below Python 3.11. |
 | Large graphs become visually dense | Medium | Medium | Keep compact terminals, deterministic spacing, and future room for subgraph collapsing. |
 
 ## Testing strategy
@@ -323,12 +332,14 @@ Deferred. It remains a fallback option if `fast-sugiyama` is unsuitable.
   - image opens with Pillow
   - dimensions are non-zero
   - selected non-background pixels exist
-- Functional test `leapp.compile_graph(visualize=True)` emits both files.
+- Functional test `leapp.compile_graph(visualize=True)` emits both files on Python 3.11+.
+- Compatibility test verifies Python 3.10 warns, skips visualization, and still completes
+  graph compilation.
 
 ## V1 decisions
 
 - Docs should refer to SVG as the primary graph visualization artifact and PNG as the
   companion raster artifact.
-- `compile_graph(visualize=True)` always emits both SVG and PNG in v1. No visualization
-  format option is added yet.
+- `compile_graph(visualize=True)` emits both SVG and PNG on Python 3.11+. On Python 3.10 it
+  warns and skips both artifacts. No visualization format option is added yet.
 - The visual style ships with the token set above. Future theming is out of scope.
