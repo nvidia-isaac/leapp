@@ -37,8 +37,8 @@ from leapp.utils.dtype import (
 from leapp.utils.logging import _get_logger
 from leapp.leapp_graph.datatypes import (
     TracedData,
-    TracedTensor,
     is_tracable_tensor_type,
+    to_export_torch_tensor,
     TRACABLE_BASE_TYPES,
 )
 from leapp.utils.utils import safe_deepcopy
@@ -528,16 +528,18 @@ def validate_connection_compatibility(source_name, source_shape, source_dtype,
 
 def verify_data_exact_match(source_data, target_data):
     # Check if both are the same type (allow dict-like and list-like substitutions)
-    source_is_list_like = isinstance(source_data, collections.abc.Sequence) and not isinstance(
-        source_data, (str, bytes, torch.Tensor))
-    target_is_list_like = isinstance(target_data, collections.abc.Sequence) and not isinstance(
-        target_data, (str, bytes, torch.Tensor))
+    source_is_list_like = (
+        isinstance(source_data, collections.abc.Sequence)
+        and not isinstance(source_data, (str, bytes, torch.Tensor))
+        and not is_tracable_tensor_type(source_data)
+    )
+    target_is_list_like = (
+        isinstance(target_data, collections.abc.Sequence)
+        and not isinstance(target_data, (str, bytes, torch.Tensor))
+        and not is_tracable_tensor_type(target_data)
+    )
     source_is_dict_like = isinstance(source_data, collections.abc.Mapping)
     target_is_dict_like = isinstance(target_data, collections.abc.Mapping)
-    if isinstance(source_data, TracedTensor):
-        source_data = source_data.tensor
-    if isinstance(target_data, TracedTensor):
-        target_data = target_data.tensor
 
     # If one is list-like and the other is not, they don't match
     if source_is_list_like != target_is_list_like:
@@ -546,9 +548,14 @@ def verify_data_exact_match(source_data, target_data):
     if source_is_dict_like != target_is_dict_like:
         return False
 
-    if isinstance(source_data, torch.Tensor):
-        if not isinstance(target_data, torch.Tensor):
+    if is_tracable_tensor_type(source_data):
+        # conversion to torch tensor to utilize torch equality
+        if not is_tracable_tensor_type(target_data):
             return False
+        source_data = to_export_torch_tensor(source_data)
+        target_data = to_export_torch_tensor(target_data)
+        
+        # identity comparison
         if source_data.shape != target_data.shape:
             return False
         if source_data.dtype != target_data.dtype:
