@@ -14,9 +14,10 @@ These tests verify that:
 import unittest
 import numpy as np
 import torch
+import warp as wp
 
 from leapp.leapp_graph.traced_node import TracedTensorNode
-from leapp.leapp_graph.datatypes import TracedTensor, TracedNpArray, TracedWpArray, wp
+from leapp.leapp_graph.datatypes import TracedTensor, TracedNpArray, TracedWpArray
 from leapp.export_manager import ExportManager
 
 
@@ -358,8 +359,6 @@ class TestTracedTensorIdentityPreservation(unittest.TestCase):
         self.assertTrue(torch.allclose(result.tensor, traced.tensor))
 
 
-@unittest.skipIf(wp is None, "warp-lang is not installed")
-@unittest.skipIf(not torch.cuda.is_available(), "CUDA is required for warp conversion tests")
 class TestTracedTensorToWarp(unittest.TestCase):
     """Test conversions from TracedTensor to TracedWpArray."""
 
@@ -394,8 +393,6 @@ class TestTracedTensorToWarp(unittest.TestCase):
         self.assertTrue(torch.allclose(wp.to_torch(y), x.tensor))
 
 
-@unittest.skipIf(wp is None, "warp-lang is not installed")
-@unittest.skipIf(not torch.cuda.is_available(), "CUDA is required for warp conversion tests")
 class TestWarpToTracedTensor(unittest.TestCase):
     """Test conversions from TracedWpArray to TracedTensor."""
 
@@ -420,8 +417,6 @@ class TestWarpToTracedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(y.tensor, x_torch.tensor))
 
 
-@unittest.skipIf(wp is None, "warp-lang is not installed")
-@unittest.skipIf(not torch.cuda.is_available(), "CUDA is required for warp conversion tests")
 class TestTracedNumpyToWarp(unittest.TestCase):
     """Test conversions from TracedNpArray to TracedWpArray."""
 
@@ -446,8 +441,6 @@ class TestTracedNumpyToWarp(unittest.TestCase):
         self.assertEqual(y.dtype, wp.float32)
 
 
-@unittest.skipIf(wp is None, "warp-lang is not installed")
-@unittest.skipIf(not torch.cuda.is_available(), "CUDA is required for warp conversion tests")
 class TestWarpToTracedNumpy(unittest.TestCase):
     """Test conversions from TracedWpArray to TracedNpArray."""
 

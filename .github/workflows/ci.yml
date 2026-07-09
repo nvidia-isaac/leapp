@@ -33,7 +33,7 @@ jobs:
 
       # Visualization modules ship with leapp; gated deps install on 3.11+.
       - name: Install package and test dependencies
-        run: python -m pip install -e ".[dev]"
+        run: python -m pip install -e ".[dev,test]"
 
       - name: Run pytest
         run: pytest tests/ packages/leapp-visualization/tests/ -v

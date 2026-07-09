@@ -67,6 +67,9 @@ dev = [
     "flake8",
     "mypy",
 ]
+test = [
+    "warp-lang>=1.15",
+]
 
 [project.urls]
 Homepage = "https://nvidia-isaac.github.io/leapp/"

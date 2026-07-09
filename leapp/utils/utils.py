@@ -424,7 +424,7 @@ def tag_data(data, tag):
     Recursively expand data to tag underlying tensors in the data structure.
     if the data is already tagged, it will overwrite the tag.
     '''
-    if isinstance(data, torch.Tensor):
+    if is_tracable_tensor_type(data):
         tag_tensor(data, tag)
     elif isinstance(data, collections.abc.Mapping):
         for key, value in data.items():
@@ -442,7 +442,7 @@ def mirror_all_tensor_tags(source, target):
     '''
     Mirror all tensor tags from source to target.
     '''
-    if isinstance(source, torch.Tensor) and isinstance(target, torch.Tensor):
+    if is_tracable_tensor_type(source) and is_tracable_tensor_type(target):
         if hasattr(source, 'leapp_tag'):
             tag_tensor(target, source.leapp_tag)
     elif isinstance(source, collections.abc.Mapping):

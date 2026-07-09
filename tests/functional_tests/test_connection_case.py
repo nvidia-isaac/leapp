@@ -16,9 +16,31 @@
 #
 import unittest
 import torch
+import warp as wp
 import leapp
 from leapp.leapp import _MANAGER as annotate
 from .base import LEAPPFunctionalTestBase
+from tests.warp_support import WarpTestCase
+
+
+@wp.kernel
+def _warp_add_scalar_kernel(
+    src: wp.array(dtype=wp.float32),
+    value: wp.float32,
+    dst: wp.array(dtype=wp.float32),
+):
+    i = wp.tid()
+    dst[i] = src[i] + value
+
+
+@wp.kernel
+def _warp_add_arrays_kernel(
+    src1: wp.array(dtype=wp.float32),
+    src2: wp.array(dtype=wp.float32),
+    dst: wp.array(dtype=wp.float32),
+):
+    i = wp.tid()
+    dst[i] = src1[i] + src2[i]
 
 
 class TestConnectionCase(LEAPPFunctionalTestBase):
@@ -336,6 +358,373 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
         
         # Verify data is still correct
         self.assertTrue(torch.allclose(source, target))
+
+
+class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
+    """Warp equivalents of the torch connection/tag tests in TestConnectionCase."""
+
+    DEVICE = "cuda"
+
+    def _make_array(self, values):
+        return wp.array(values, dtype=wp.float32, device=self.DEVICE)
+
+    def _warp_copy(self, src):
+        dst = wp.empty_like(src)
+        wp.copy(dst, src)
+        return dst
+
+    def _warp_add_scalar(self, src, value):
+        dst = wp.empty_like(src)
+        wp.launch(
+            _warp_add_scalar_kernel,
+            dim=src.size,
+            inputs=[src, wp.float32(value)],
+            outputs=[dst],
+        )
+        return dst
+
+    def _warp_add_arrays(self, src1, src2):
+        dst = wp.empty_like(src1)
+        wp.launch(
+            _warp_add_arrays_kernel,
+            dim=src1.size,
+            inputs=[src1, src2],
+            outputs=[dst],
+        )
+        return dst
+
+    def _run_copy_node(self, node_name, input_name, output_name, src):
+        src = annotate.input_tensors(node_name, {input_name: src})
+        with annotate.warp_op(node_name):
+            dst = self._warp_copy(src)
+        return annotate.output_tensors(node_name, {output_name: dst}, export_with="onnx")
+
+    def _pipeline_views(self):
+        return (
+            {
+                source: list(targets)
+                for source, targets in annotate.detected_pipeline["data_flow"].items()
+            },
+            {
+                source: list(targets)
+                for source, targets in annotate.detected_pipeline["feedback_flow"].items()
+            },
+        )
+
+    def test_warp_nodes_chain_via_output_tags(self):
+        """Two warp nodes connected by a tagged wp.array output -> input edge."""
+        leapp.start(name=self.TEST_GRAPH_NAME)
+
+        arr1 = self._make_array([1.0, 2.0, 3.0])
+        arr2 = self._run_copy_node("node_a", "arr1", "arr2", arr1)
+
+        self.assertTrue(hasattr(arr2, "leapp_tag"))
+        self.assertEqual(arr2.leapp_tag, "node_a/arr2/")
+
+        arr3 = self._run_copy_node("node_b", "arr2", "arr3", arr2)
+
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        data_flow, feedback_flow = self._pipeline_views()
+        self.assertEqual({"node_a/arr2": ["node_b/arr2"]}, data_flow)
+        self.assertEqual({}, feedback_flow)
+        self.verify_num_connections(
+            annotate,
+            nodes=2,
+            inputs=1,
+            outputs=1,
+            internal_connections=1,
+        )
+        self.verify_all_models_exist("node_a", "node_b")
+
+    def test_multiple_runs_of_same_graph(self):
+        """Same warp graph traced repeatedly across iterations."""
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        for _ in range(10):
+            arr = self._run_copy_node(
+                "warp_a", "arr", "out", self._make_array([1.0, 2.0, 3.0])
+            )
+            arr = self._run_copy_node("warp_b", "arr", "out", arr)
+            arr = self._run_copy_node("warp_c", "arr", "out", arr)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+        self.verify_num_connections(
+            annotate,
+            nodes=3,
+            inputs=1,
+            outputs=1,
+            internal_connections=2,
+        )
+
+    def test_feedback_connections(self):
+        """Warp nodes with a feedback edge across trace iterations."""
+        leapp.start(name=self.TEST_GRAPH_NAME, verbose=False)
+        loop_back = self._make_array([0.0, 0.0, 0.0])
+        external = self._make_array([1.0, 2.0, 3.0])
+        for _ in range(2):
+            in_a, loop = annotate.input_tensors(
+                "node_a", {"inputA": external, "loop_back": loop_back}
+            )
+            with annotate.warp_op("node_a"):
+                out_a = self._warp_add_arrays(in_a, loop)
+            out_a = annotate.output_tensors("node_a", {"out_a": out_a}, export_with="onnx")
+
+            out_b = self._run_copy_node("node_b", "in_b", "out_b", out_a)
+
+            in_c, loop = annotate.input_tensors(
+                "node_c", {"inputC": out_b, "loop_back": loop_back}
+            )
+            with annotate.warp_op("node_c"):
+                out_c = self._warp_add_arrays(in_c, loop)
+            out_c = annotate.output_tensors("node_c", {"out_c": out_c}, export_with="onnx")
+
+            out_d = self._run_copy_node("node_d", "in_d", "out_d", out_c)
+            loop_back = out_c
+
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+        self.verify_num_connections(
+            annotate,
+            nodes=4,
+            inputs=1,
+            outputs=1,
+            internal_connections=3,
+            feedback_connections=1,
+        )
+
+    def test_interleaved_traced_nodes_keep_forward_execution_order(self):
+        """Completed warp node output consumed by a later node is forward flow."""
+        seed = self._make_array([1.0, 2.0, 3.0])
+        external = self._make_array([10.0, 20.0, 30.0])
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+
+        seed = annotate.input_tensors("node_a", {"seed": seed})
+
+        external = annotate.input_tensors("node_b", {"external_input": external})
+        with annotate.warp_op("node_b"):
+            from_b = self._warp_add_scalar(external, 5.0)
+        annotate.output_tensors("node_b", {"b_out": from_b}, export_with="onnx")
+
+        from_b = annotate.input_tensors("node_a", {"from_b": from_b})
+        final_output = wp.to_torch(seed) + wp.to_torch(from_b)
+        annotate.output_tensors(
+            "node_a", {"final_output": final_output}, export_with="onnx"
+        )
+
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        data_flow, feedback_flow = self._pipeline_views()
+        self.assertEqual({"node_b/b_out": ["node_a/from_b"]}, data_flow)
+        self.assertEqual({}, feedback_flow)
+        self.verify_num_connections(
+            annotate,
+            nodes=2,
+            inputs=2,
+            outputs=1,
+            internal_connections=1,
+            feedback_connections=0,
+        )
+        self.verify_all_models_exist("node_a", "node_b")
+        self.verify_safetensors_matches_feedback(annotate)
+
+        runtime_seed = torch.tensor([3.0, 4.0, 5.0], device=self.DEVICE)
+        runtime_external = torch.tensor([7.0, 8.0, 9.0], device=self.DEVICE)
+        expected_output = runtime_seed + (runtime_external + 5.0)
+        self.verify_inference_manager(
+            source_inputs={
+                "node_a/seed": runtime_seed,
+                "node_b/external_input": runtime_external,
+            },
+            source_outputs={"node_a/final_output": expected_output},
+        )
+
+    def test_warp_tag_persistence_through_operations(self):
+        """Tags survive chained warp nodes and buffer hand-offs."""
+        leapp.start(name=self.TEST_GRAPH_NAME)
+
+        arr = self._make_array([1.0, 2.0, 3.0])
+        in_a = annotate.input_tensors("node_a", {"in_a": arr})
+        with annotate.warp_op("node_a"):
+            out_a1 = self._warp_copy(in_a)
+            out_a2 = self._warp_add_scalar(in_a, 1.0)
+        out_a1, out_a2 = annotate.output_tensors(
+            "node_a", {"out_a1": out_a1, "out_a2": out_a2}, export_with="onnx"
+        )
+
+        buffer_b = wp.empty_like(out_a1)
+        wp.copy(buffer_b, out_a1)
+        annotate.mirror_leapp_tags(out_a1, buffer_b)
+        out_b = self._run_copy_node("node_b", "in_b", "out_b", buffer_b)
+
+        buffer_c = wp.empty_like(out_a2)
+        wp.copy(buffer_c, out_a2)
+        annotate.mirror_leapp_tags(out_a2, buffer_c)
+        out_c = self._run_copy_node("node_c", "in_c", "out_c", buffer_c)
+
+        out_d = self._run_copy_node("node_d", "in_d", "out_d", out_c)
+        in_e1, in_e2 = annotate.input_tensors(
+            "node_e", {"in_e1": out_d, "in_e2": out_b}
+        )
+        with annotate.warp_op("node_e"):
+            final = self._warp_copy(in_e1)
+        annotate.output_tensors("node_e", {"final": final}, export_with="onnx")
+
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+        self.verify_num_connections(
+            annotate,
+            nodes=5,
+            inputs=1,
+            outputs=2,
+            internal_connections=4,
+            feedback_connections=0,
+        )
+
+    def test_mirror_leapp_tags_with_inplace_assignment(self):
+        """mirror_leapp_tags with in-place wp.copy between warp nodes."""
+        leapp.start(name=self.TEST_GRAPH_NAME)
+
+        out_a = self._run_copy_node("node_a", "in_a", "out_a", self._make_array([1.0, 2.0, 3.0]))
+        buffer = wp.empty_like(out_a)
+        wp.copy(buffer, out_a)
+        annotate.mirror_leapp_tags(out_a, buffer)
+
+        out_b = self._run_copy_node("node_b", "in_b", "out_b", buffer)
+        out_c = self._run_copy_node("node_c", "in_c", "out_c", out_b)
+
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+        self.verify_num_connections(
+            annotate,
+            nodes=3,
+            inputs=1,
+            outputs=1,
+            internal_connections=2,
+        )
+
+    def test_mirror_leapp_tags_with_preallocated_buffer(self):
+        """mirror_leapp_tags with a reusable buffer object between warp nodes."""
+
+        class WarpBuffer:
+            def __init__(self):
+                self._buffer = wp.zeros(3, dtype=wp.float32, device=TestWarpConnectionCase.DEVICE)
+
+            def copy_to_buffer(self, data):
+                wp.copy(self._buffer, data)
+                annotate.mirror_leapp_tags(data, self._buffer)
+                return self._buffer
+
+        processor = WarpBuffer()
+        leapp.start(name=self.TEST_GRAPH_NAME)
+
+        upstream = self._run_copy_node(
+            "upstream", "in_a", "out_a", self._make_array([1.0, 2.0, 3.0])
+        )
+        buffered = processor.copy_to_buffer(upstream)
+        processed = self._run_copy_node("process", "in_b", "out_b", buffered)
+        self._run_copy_node("downstream", "in_c", "out_c", processed)
+
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+        self.verify_num_connections(
+            annotate,
+            nodes=3,
+            inputs=1,
+            outputs=1,
+            internal_connections=2,
+        )
+
+    def test_mirror_leapp_tags_multiple_buffers(self):
+        """mirror_leapp_tags with multiple wp.array buffers between warp nodes."""
+        leapp.start(name=self.TEST_GRAPH_NAME)
+
+        arr = self._make_array([1.0, 2.0, 3.0])
+        in_a = annotate.input_tensors("node_a", {"in_a": arr})
+        with annotate.warp_op("node_a"):
+            out_a1 = self._warp_copy(in_a)
+            out_a2 = self._warp_add_scalar(in_a, 1.0)
+        out_a1, out_a2 = annotate.output_tensors(
+            "node_a", {"out_a1": out_a1, "out_a2": out_a2}, export_with="onnx"
+        )
+
+        buffer1 = wp.empty_like(out_a1)
+        buffer2 = wp.empty_like(out_a2)
+        wp.copy(buffer1, out_a1)
+        wp.copy(buffer2, out_a2)
+        annotate.mirror_leapp_tags(out_a1, buffer1)
+        annotate.mirror_leapp_tags(out_a2, buffer2)
+
+        in_b1, in_b2 = annotate.input_tensors(
+            "node_b", {"in_b1": buffer1, "in_b2": buffer2}
+        )
+        with annotate.warp_op("node_b"):
+            out_b1 = self._warp_copy(in_b1)
+            out_b2 = self._warp_copy(in_b2)
+        out_b1, out_b2 = annotate.output_tensors(
+            "node_b", {"out_b1": out_b1, "out_b2": out_b2}, export_with="onnx"
+        )
+
+        in_c1, in_c2 = annotate.input_tensors(
+            "node_c", {"in_c1": out_b1, "in_c2": out_b2}
+        )
+        with annotate.warp_op("node_c"):
+            final = self._warp_add_arrays(in_c1, in_c2)
+        annotate.output_tensors("node_c", {"final": final}, export_with="onnx")
+
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+        self.verify_num_connections(
+            annotate,
+            nodes=3,
+            inputs=1,
+            outputs=1,
+            internal_connections=4,
+        )
+
+    def test_mirror_leapp_tags_preserves_tag_through_chain(self):
+        """mirror_leapp_tags preserves tags through a long warp node chain."""
+        leapp.start(name=self.TEST_GRAPH_NAME)
+
+        out1 = self._run_copy_node(
+            "source", "in_a", "out_a", self._make_array([1.0, 2.0, 3.0])
+        )
+
+        buffer1 = wp.empty_like(out1)
+        wp.copy(buffer1, out1)
+        annotate.mirror_leapp_tags(out1, buffer1)
+        out2 = self._run_copy_node("process1", "in_b", "out_b", buffer1)
+
+        buffer2 = wp.empty_like(out2)
+        wp.copy(buffer2, out2)
+        annotate.mirror_leapp_tags(out2, buffer2)
+        out3 = self._run_copy_node("process2", "in_c", "out_c", buffer2)
+
+        self._run_copy_node("sink", "in_d", "out_d", out3)
+
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+        self.verify_num_connections(
+            annotate,
+            nodes=4,
+            inputs=1,
+            outputs=1,
+            internal_connections=3,
+        )
+
+    def test_mirror_leapp_tags_noop_outside_tracing(self):
+        """mirror_leapp_tags safely no-ops outside of tracing."""
+        source = self._make_array([1.0, 2.0, 3.0])
+        target = wp.zeros(3, dtype=wp.float32, device=self.DEVICE)
+        wp.copy(target, source)
+
+        annotate.mirror_leapp_tags(source, target)
+
+        self.assertTrue(
+            torch.allclose(wp.to_torch(source), wp.to_torch(target))
+        )
 
 
 if __name__ == '__main__':
