@@ -16,11 +16,13 @@
 #
 import os
 import unittest
+from unittest import mock
 import yaml
 import torch
 import leapp
 from leapp import GraphConfigs, TensorSemantics, TemporalAxis
 from leapp.leapp import _MANAGER as annotate
+from leapp.utils import utils
 from leapp.utils.enums import InputKindEnum, OutputKindEnum
 from .base import LEAPPFunctionalTestBase
 
@@ -381,6 +383,49 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         self.assertEqual(config["pipeline"]["configs"]["runtime"], "isaac_lab")
         self.assertNotIn("frequency", config["pipeline"])
         self.assertNotIn("runtime", config["pipeline"])
+
+    def test_generated_yaml_includes_warp_metadata(self):
+        """Test node parameters and system info include warp segment/version metadata."""
+        tensor = torch.randn(1, 4)
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        traced = annotate.input_tensors("frequency_node", {"input": tensor})
+        annotate.output_tensors("frequency_node", {"output": traced + 1.0})
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        config = self._load_yaml()
+
+        parameters = config["models"]["frequency_node"]["parameters"]
+        self.assertIn("warp_segments", parameters)
+        self.assertIsInstance(parameters["warp_segments"], int)
+        self.assertEqual(parameters["warp_segments"], 0)
+
+        system_info = config["system information"]
+        self.assertIn("warp version", system_info)
+        self.assertEqual(system_info["warp version"], utils._get_warp_version())
+        warp_version = system_info["warp version"]
+        self.assertTrue(warp_version is None or isinstance(warp_version, str))
+        if warp_version is not None:
+            self.assertTrue(warp_version)
+
+    def test_system_info_reports_null_warp_version_when_unavailable(self):
+        """Warp version should be null in YAML when warp cannot be imported."""
+        real_import = __import__
+
+        def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "warp":
+                raise ImportError("warp not installed")
+            return real_import(name, globals, locals, fromlist, level)
+
+        with mock.patch("builtins.__import__", side_effect=fake_import):
+            self.assertIsNone(utils._get_warp_version())
+            system_info = utils.get_system_info()["system information"]
+            self.assertIn("warp version", system_info)
+            self.assertIsNone(system_info["warp version"])
+
+        dumped = yaml.safe_load(yaml.dump(system_info))
+        self.assertIsNone(dumped["warp version"])
 
     def test_temporal_period_marker_appears_in_output_yaml(self):
         """Test TemporalAxis emits temporal axis and period metadata."""

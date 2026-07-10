@@ -1,3 +1,71 @@
+"""Warp call detection and Torch/NumPy boundary propagation.
+
+Tracing model
+-------------
+LEAPP does not decompose Warp kernels into Torch operations.  During
+``annotate.warp_op(node_name)`` this module intercepts public ``warp.*`` calls,
+propagates the active LEAPP trace through ``wp.array`` values, and records the
+arrays read or written by the segment.  ``WarpOp.__exit__`` then saves the APIC
+capture and inserts one ``leapp::warp_runner`` FX node whose ``getitem`` nodes
+represent the segment outputs.
+
+Torch-facing custom autograd wrappers are not inherently opaque to this
+mechanism.  ``torch.autograd.Function.forward`` still executes eagerly with a
+``TracedTensor``, so calls such as ``wp.from_torch``, ``wp.launch``, and
+``wp.to_torch`` reach these wrappers.  They must still execute inside an
+explicit Warp segment; patched calls outside ``annotate.warp_op`` run normally
+but do not create an APIC-backed FX node.
+
+Important lifecycle limitation: ``wp.to_torch`` inside an open segment
+-----------------------------------------------------------------------
+The boundary overload below correctly preserves the *current* proxy of its
+source ``TracedWpArray``.  For an output array, however, the final Warp output
+proxy does not exist until ``WarpOp.__exit__`` inserts the runner node.  This
+creates the following sequence for a Torch-style Warp autograd function:
+
+1. A traced Torch input is converted to Warp and gives the segment trace state.
+2. A kernel writes a preallocated Warp output.  Until segment close, that
+   output temporarily carries the input-derived proxy.
+3. ``wp.to_torch(output_wp)`` runs inside ``forward`` and creates a
+   ``TracedTensor`` alias using that temporary proxy.
+4. Segment close rebinds the ``TracedWpArray`` to the new runner-output proxy,
+   but currently does not rebind Torch aliases that were already returned.
+5. ``annotate.output_tensors`` therefore sees the result as the original input.
+   The runner has no live FX consumers and normal dead-code pruning removes it.
+
+The eager numerical result is still correct, which makes this a particularly
+dangerous silent tracing failure.  Conversion after the segment closes works:
+the source Warp array has already been rebound, so the existing ``to_torch``
+overload propagates the runner-output proxy.  A complete fix should register
+Torch/NumPy aliases created from segment outputs while the segment is open and
+rebind those aliases when ``_insert_warp_marker`` assigns output proxies.
+Fail-closed validation should also reject a Warp-derived declared output that
+still points at a pre-segment input proxy.
+
+Shaped Warp dtype limitation
+----------------------------
+``_validate_boundary_dtype`` currently rejects vector and matrix dtypes such
+as ``wp.vec3``.  Scalar-only examples do not need shaped-dtype support, and the
+proxy lifecycle bug above reproduces with ``wp.float32`` alone.  Existing
+fabrics-sim collision code does need ``wp.vec3`` because it reinterprets a
+Torch ``(..., 3)`` tensor as a logical Warp vector array.  Kinematics also
+returns ``wp.transform``/``wp.vec3`` arrays.  Supporting those boundaries
+requires recording both the scalar Torch dtype and the expanded Torch storage
+shape (for example, logical Warp shape ``(B, N)`` becomes Torch shape
+``(B, N, 3)`` for ``wp.vec3``).  Alternatively, callers must change their
+kernels to scalar arrays and construct vectors explicitly.
+
+Standalone regression reproducer
+---------------------------------
+From ``leapp_repo`` run:
+
+``.venv/bin/python reproduce_autograd_warp_segment.py all``
+
+It demonstrates the stale-proxy pruning failure, the successful conversion
+after segment close, and the current ``wp.vec3`` boundary rejection.  Keep
+those three cases when changing boundary propagation or segment finalization.
+"""
+
 from typing import Any, Callable
 from types import ModuleType
 import contextlib

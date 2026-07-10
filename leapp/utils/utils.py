@@ -492,7 +492,17 @@ def _get_os_description():
     return os_release.get("PRETTY_NAME") or platform.platform()
 
 
+def _get_warp_version():
+    try:
+        import warp
+    except ImportError:
+        return None
+
+    return str(warp.__version__)
+
+
 def get_system_info():
+    # lazy import to avoid circular import
     import leapp
     metadata = {'system information': {}}
     metadata['system information']['leapp version'] = leapp.__version__
@@ -500,6 +510,7 @@ def get_system_info():
     metadata['system information']['torch version'] = str(torch.__version__)
     metadata['system information']['python version'] = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     metadata['system information']['cuda version'] = str(torch.version.cuda)
+    metadata['system information']['warp version'] = _get_warp_version()
     metadata['system information']['os'] = _get_os_description()
 
     return metadata
