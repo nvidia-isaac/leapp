@@ -22,6 +22,9 @@ from leapp.utils.utils import tag_tensor
 from leapp.leapp_graph.datatypes import is_tracable_tensor_type
 from leapp.backends.export_backend import NoneExportBackend
 from leapp.leapp_graph.custom_operator_registry import prepare_and_validate
+from leapp.leapp_graph.custom_operator_registry.warp_operator.bundle import (
+    iter_warp_segments_from_graph,
+)
 from leapp.utils.logging import _get_logger
 
 
@@ -146,6 +149,8 @@ class LeappNode():
             'md5sum': self.md5sum,
             'sha256sum': self.sha256sum,
             'backend': self.get_backend(),
+            'warp_segments': len(iter_warp_segments_from_graph(self.graph))
+            if hasattr(self, 'graph') else 0,
         }
 
         backend_metadata = self.export_backend.get_backend_metadata()
