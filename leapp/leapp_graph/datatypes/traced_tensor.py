@@ -586,12 +586,20 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     # Special Methods: reshape and permute need custom handling
     # =========================================================================
 
+    @staticmethod
+    def _normalize_shape_args(args):
+        """Normalize Tensor method shape/dim args for torch function calls."""
+        if len(args) == 1 and isinstance(args[0], (tuple, list)):
+            return tuple(args[0])
+        return args
+
     def reshape(self, *shape):
         """Reshape the tensor.
 
         Note: torch.reshape expects (tensor, shape) but tensor.reshape
         allows both reshape(shape) and reshape(*shape), so we handle both.
         """
+        shape = self._normalize_shape_args(shape)
         return torch.reshape(self, shape)
 
     def permute(self, *dims):
@@ -600,9 +608,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         Note: torch.permute expects (tensor, dims) but tensor.permute
         allows both permute(dims) and permute(*dims), so we handle both.
         """
-        # Handle both permute(2, 0, 1) and permute((2, 0, 1))
-        if len(dims) == 1 and isinstance(dims[0], (tuple, list)):
-            dims = dims[0]
+        dims = self._normalize_shape_args(dims)
         return torch.permute(self, dims)
 
     # =========================================================================

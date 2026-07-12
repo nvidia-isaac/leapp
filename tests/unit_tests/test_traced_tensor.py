@@ -574,6 +574,20 @@ class TestTracedTensor(unittest.TestCase):
         x = ctx.create_input(torch.randn(3, 4, 5), name="x")
         self.assertEqual(x.shape, torch.Size([3, 4, 5]))
 
+    def test_reshape_accepts_list_shape(self):
+        """Match Tensor.reshape semantics used by libraries such as einops."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.randn(3, 4), name="x")
+        reshaped = x.reshape([2, 6])
+        self.assertEqual(reshaped.shape, torch.Size([2, 6]))
+
+    def test_reshape_accepts_tuple_shape(self):
+        """Match Tensor.reshape when the shape is passed as one tuple."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.randn(3, 4), name="x")
+        reshaped = x.reshape((2, 6))
+        self.assertEqual(reshaped.shape, torch.Size([2, 6]))
+
     def test_dim(self):
         """Test dim property."""
         ctx = TracedTensorNode(name="test", node_index=0)
