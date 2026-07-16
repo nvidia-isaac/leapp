@@ -77,6 +77,7 @@ import sys
 import warp as wp
 from warp._src.context import Function as WarpKernelLanguageFunction
 
+from .cupti_oracle import WarpCudaOracle
 from .traced_wp_array import TracedWpArray
 
 _WRAPPER_MARKER = "__leapp_warp_detector_wrapper__"
@@ -111,11 +112,12 @@ class WarpPatchBackend:
     def __init__(self) -> None:
         self._patches: list[_Patch] = []
         self._wrappers_by_original_id: dict[int, Any] = {}
-        self._recording_depth = 0
+        self._recording_paused = False
         self._active_segment: Any | None = None
         self._installed = False
         self._boundary_function_ids: set[int] = set()
         self._boundary_array_init_id: int | None = None
+        self._cuda_oracle = WarpCudaOracle()
     #########################################################
     # Properties
     #########################################################
@@ -139,6 +141,7 @@ class WarpPatchBackend:
         self._patch_warp_modules()
 
         self._patch_loaded_aliases()
+        self._cuda_oracle.start()
 
         self._installed = True
         return self
@@ -151,6 +154,7 @@ class WarpPatchBackend:
                 "open globally at a time."
             )
         self._active_segment = segment
+        self._cuda_oracle.set_segment(segment)
 
     def pop_segment(self, segment: Any | None = None) -> Any | None:
         """Remove and return the active Warp segment."""
@@ -161,6 +165,7 @@ class WarpPatchBackend:
         if segment is not None and active is not segment:
             raise ValueError("Warp segment is not the active segment.")
         self._active_segment = None
+        self._cuda_oracle.set_segment(None)
         return active
 
     @property
@@ -171,21 +176,25 @@ class WarpPatchBackend:
     def paused(self):
         """Suppress Warp call detection for the duration of the block.
 
-        Bumps a re-entrant depth counter so nested ``paused()`` blocks (and the
-        wrapper's own internal recording guard) compose correctly; the wrapper
-        runs the original Warp callable untouched whenever the depth is
-        non-zero. The decrement always runs, even if the block raises.
+        Temporarily routes patched Warp functions straight to their original
+        implementations and allows soft-banned CUDA callbacks as Warp-owned.
+        Previous state is restored so nested pauses compose correctly.
         """
-        self._recording_depth += 1
+        previous_recording_paused = self._recording_paused
+        previous_cuda_allowed = self._cuda_oracle.set_warp_cuda_allowed(True)
+        self._recording_paused = True
         try:
             yield
         finally:
-            self._recording_depth -= 1
+            self._recording_paused = previous_recording_paused
+            self._cuda_oracle.set_warp_cuda_allowed(previous_cuda_allowed)
 
     def uninstall(self) -> None:
         """Restore every attribute patched by this detector."""
 
         self._active_segment = None
+        self._cuda_oracle.set_segment(None)
+        self._cuda_oracle.stop()
 
         for patch in reversed(self._patches):
             try:
@@ -400,7 +409,7 @@ class WarpPatchBackend:
     def _make_wrapper(self, qualname: str, original: Callable) -> Callable:
         @functools.wraps(original)
         def wrapped(*args, **kwargs):
-            if self._recording_depth:
+            if self._recording_paused:
                 return original(*args, **kwargs)
 
             if id(original) in self._boundary_function_ids:
