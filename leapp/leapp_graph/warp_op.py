@@ -212,13 +212,19 @@ else:
 
         def __exit__(self, exc_type, exc_value, traceback):
             scope_result = False
-            if self._scope is not None:
-                scope_result = self._scope.__exit__(exc_type, exc_value, traceback)
+            segment_popped = False
             try:
+                if self._scope is not None:
+                    scope_result = self._scope.__exit__(exc_type, exc_value, traceback)
                 if exc_type is None and self._segment is not None:
                     graph = self._capture.graph
                     self._segment.apic_graph = graph
                     self._segment.add_event({"kind": "scoped_capture"})
+                    # The Warp capture is closed at this point. Deactivate the
+                    # LEAPP segment before internal save/replay work so CUPTI
+                    # warnings only cover user CUDA work inside the segment.
+                    self._warp_backend.pop_segment(self._segment)
+                    segment_popped = True
                     # Save before replay so formal inputs and closure buffers
                     # are snapshotted at the capture boundary, not after execution.
                     with self._warp_backend.paused():
@@ -231,6 +237,7 @@ else:
                         wp.capture_launch(graph)
                         wp.synchronize()
             finally:
-                self._warp_backend.pop_segment(self._segment)
+                if self._segment is not None and not segment_popped:
+                    self._warp_backend.pop_segment(self._segment)
 
             return scope_result
