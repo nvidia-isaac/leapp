@@ -394,10 +394,26 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
         return dst
 
     def _run_copy_node(self, node_name, input_name, output_name, src):
-        src = annotate.input_tensors(node_name, {input_name: src})
-        with annotate.warp_op(node_name):
-            dst = self._warp_copy(src)
-        return annotate.output_tensors(node_name, {output_name: dst}, export_with="onnx")
+        dst = None
+        for _ in range(2):
+            src_traced = annotate.input_tensors(node_name, {input_name: src})
+            with annotate.warp_op(node_name):
+                dst = self._warp_copy(src_traced)
+            dst = annotate.output_tensors(
+                node_name, {output_name: dst}, export_with="onnx"
+            )
+        return dst
+
+    def _run_add_scalar_node(self, node_name, input_name, output_name, src, value):
+        dst = None
+        for _ in range(2):
+            src_traced = annotate.input_tensors(node_name, {input_name: src})
+            with annotate.warp_op(node_name):
+                dst = self._warp_add_scalar(src_traced, value)
+            dst = annotate.output_tensors(
+                node_name, {output_name: dst}, export_with="onnx"
+            )
+        return dst
 
     def _pipeline_views(self):
         return (
@@ -437,6 +453,34 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
             internal_connections=1,
         )
         self.verify_all_models_exist("node_a", "node_b")
+
+    def test_warp_node_requires_second_execution_before_compile(self):
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        arr = annotate.input_tensors("node_a", {"in_a": self._make_array([1.0, 2.0, 3.0])})
+        with annotate.warp_op("node_a"):
+            out = self._warp_copy(arr)
+        annotate.output_tensors("node_a", {"out_a": out}, export_with="onnx")
+        leapp.stop()
+
+        with self.assertRaisesRegex(Exception, "executed a second time"):
+            leapp.compile_graph(visualize=False)
+
+    def test_multiple_explicit_warp_segments_in_one_node(self):
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        source = self._make_array([1.0, 2.0, 3.0])
+
+        for _ in range(2):
+            arr = annotate.input_tensors("node_a", {"in_a": source})
+            with annotate.warp_op("node_a"):
+                copied = self._warp_copy(arr)
+            with annotate.warp_op("node_a"):
+                out = self._warp_add_scalar(copied, 2.0)
+            annotate.output_tensors("node_a", {"out_a": out}, export_with="onnx")
+
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+        self.verify_num_connections(annotate, nodes=1, inputs=1, outputs=1)
+        self.verify_all_models_exist("node_a")
 
     def test_multiple_runs_of_same_graph(self):
         """Same warp graph traced repeatedly across iterations."""
@@ -502,10 +546,9 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
 
         seed = annotate.input_tensors("node_a", {"seed": seed})
 
-        external = annotate.input_tensors("node_b", {"external_input": external})
-        with annotate.warp_op("node_b"):
-            from_b = self._warp_add_scalar(external, 5.0)
-        annotate.output_tensors("node_b", {"b_out": from_b}, export_with="onnx")
+        from_b = self._run_add_scalar_node(
+            "node_b", "external_input", "b_out", external, 5.0
+        )
 
         from_b = annotate.input_tensors("node_a", {"from_b": from_b})
         final_output = wp.to_torch(seed) + wp.to_torch(from_b)
@@ -546,13 +589,15 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
         leapp.start(name=self.TEST_GRAPH_NAME)
 
         arr = self._make_array([1.0, 2.0, 3.0])
-        in_a = annotate.input_tensors("node_a", {"in_a": arr})
-        with annotate.warp_op("node_a"):
-            out_a1 = self._warp_copy(in_a)
-            out_a2 = self._warp_add_scalar(in_a, 1.0)
-        out_a1, out_a2 = annotate.output_tensors(
-            "node_a", {"out_a1": out_a1, "out_a2": out_a2}, export_with="onnx"
-        )
+        out_a1 = out_a2 = None
+        for _ in range(2):
+            in_a = annotate.input_tensors("node_a", {"in_a": arr})
+            with annotate.warp_op("node_a"):
+                out_a1 = self._warp_copy(in_a)
+                out_a2 = self._warp_add_scalar(in_a, 1.0)
+            out_a1, out_a2 = annotate.output_tensors(
+                "node_a", {"out_a1": out_a1, "out_a2": out_a2}, export_with="onnx"
+            )
 
         buffer_b = wp.empty_like(out_a1)
         wp.copy(buffer_b, out_a1)
@@ -565,12 +610,13 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
         out_c = self._run_copy_node("node_c", "in_c", "out_c", buffer_c)
 
         out_d = self._run_copy_node("node_d", "in_d", "out_d", out_c)
-        in_e1, in_e2 = annotate.input_tensors(
-            "node_e", {"in_e1": out_d, "in_e2": out_b}
-        )
-        with annotate.warp_op("node_e"):
-            final = self._warp_copy(in_e1)
-        annotate.output_tensors("node_e", {"final": final}, export_with="onnx")
+        for _ in range(2):
+            in_e1, in_e2 = annotate.input_tensors(
+                "node_e", {"in_e1": out_d, "in_e2": out_b}
+            )
+            with annotate.warp_op("node_e"):
+                final = self._warp_copy(in_e1)
+            annotate.output_tensors("node_e", {"final": final}, export_with="onnx")
 
         leapp.stop()
         leapp.compile_graph(visualize=False)
@@ -642,13 +688,15 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
         leapp.start(name=self.TEST_GRAPH_NAME)
 
         arr = self._make_array([1.0, 2.0, 3.0])
-        in_a = annotate.input_tensors("node_a", {"in_a": arr})
-        with annotate.warp_op("node_a"):
-            out_a1 = self._warp_copy(in_a)
-            out_a2 = self._warp_add_scalar(in_a, 1.0)
-        out_a1, out_a2 = annotate.output_tensors(
-            "node_a", {"out_a1": out_a1, "out_a2": out_a2}, export_with="onnx"
-        )
+        out_a1 = out_a2 = None
+        for _ in range(2):
+            in_a = annotate.input_tensors("node_a", {"in_a": arr})
+            with annotate.warp_op("node_a"):
+                out_a1 = self._warp_copy(in_a)
+                out_a2 = self._warp_add_scalar(in_a, 1.0)
+            out_a1, out_a2 = annotate.output_tensors(
+                "node_a", {"out_a1": out_a1, "out_a2": out_a2}, export_with="onnx"
+            )
 
         buffer1 = wp.empty_like(out_a1)
         buffer2 = wp.empty_like(out_a2)
@@ -657,22 +705,25 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
         annotate.mirror_leapp_tags(out_a1, buffer1)
         annotate.mirror_leapp_tags(out_a2, buffer2)
 
-        in_b1, in_b2 = annotate.input_tensors(
-            "node_b", {"in_b1": buffer1, "in_b2": buffer2}
-        )
-        with annotate.warp_op("node_b"):
-            out_b1 = self._warp_copy(in_b1)
-            out_b2 = self._warp_copy(in_b2)
-        out_b1, out_b2 = annotate.output_tensors(
-            "node_b", {"out_b1": out_b1, "out_b2": out_b2}, export_with="onnx"
-        )
+        out_b1 = out_b2 = None
+        for _ in range(2):
+            in_b1, in_b2 = annotate.input_tensors(
+                "node_b", {"in_b1": buffer1, "in_b2": buffer2}
+            )
+            with annotate.warp_op("node_b"):
+                out_b1 = self._warp_copy(in_b1)
+                out_b2 = self._warp_copy(in_b2)
+            out_b1, out_b2 = annotate.output_tensors(
+                "node_b", {"out_b1": out_b1, "out_b2": out_b2}, export_with="onnx"
+            )
 
-        in_c1, in_c2 = annotate.input_tensors(
-            "node_c", {"in_c1": out_b1, "in_c2": out_b2}
-        )
-        with annotate.warp_op("node_c"):
-            final = self._warp_add_arrays(in_c1, in_c2)
-        annotate.output_tensors("node_c", {"final": final}, export_with="onnx")
+        for _ in range(2):
+            in_c1, in_c2 = annotate.input_tensors(
+                "node_c", {"in_c1": out_b1, "in_c2": out_b2}
+            )
+            with annotate.warp_op("node_c"):
+                final = self._warp_add_arrays(in_c1, in_c2)
+            annotate.output_tensors("node_c", {"final": final}, export_with="onnx")
 
         leapp.stop()
         leapp.compile_graph(visualize=False)

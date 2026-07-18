@@ -43,6 +43,8 @@ class TracedTensorNode(LeappNode):
         self.tracer.root = torch.nn.Module()
         self.tracer.tensor_attrs = {}
         self._warp_segment_counter = 0
+        self._warp_segments: list["WarpSegment"] = []
+        self._next_warp_segment_ordinal = 0
 
         self.m = None
 
@@ -65,6 +67,70 @@ class TracedTensorNode(LeappNode):
     @property
     def is_tracing(self) -> bool:
         return not self._model_captured
+
+    @property
+    def has_pending_warp_segments(self) -> bool:
+        return any(segment.is_pending_capture for segment in self._warp_segments)
+
+    @property
+    def warp_segments(self) -> tuple["WarpSegment", ...]:
+        return tuple(self._warp_segments)
+
+    def next_warp_segment_ordinal(self) -> int:
+        ordinal = self._next_warp_segment_ordinal
+        self._next_warp_segment_ordinal += 1
+        return ordinal
+
+    def add_warp_segment(
+        self,
+        segment: "WarpSegment",
+    ) -> None:
+        if segment.segment_ordinal != len(self._warp_segments):
+            raise RuntimeError(
+                f"[{self.name}] Warp segment ordinal {segment.segment_ordinal} "
+                f"does not match expected {len(self._warp_segments)}."
+            )
+        self._warp_segments.append(segment)
+
+    def get_warp_segment(self, segment_ordinal: int) -> "WarpSegment | None":
+        if segment_ordinal >= len(self._warp_segments):
+            return None
+        return self._warp_segments[segment_ordinal]
+
+    def complete_warp_segment(
+        self,
+        segment: "WarpSegment",
+    ) -> None:
+        segment_ordinal = segment.segment_ordinal
+        try:
+            stored = self._warp_segments[segment_ordinal]
+        except IndexError as exc:
+            raise RuntimeError(
+                f"[{self.name}] No discovered Warp segment for ordinal "
+                f"{segment_ordinal}."
+            ) from exc
+        if stored is not segment:
+            raise RuntimeError(
+                f"[{self.name}] Captured Warp segment {segment_ordinal} is not "
+                "the stored discovery segment."
+            )
+        if segment.apic_graph is None:
+            raise RuntimeError(
+                f"[{self.name}] Captured Warp segment {segment_ordinal} has no APIC graph."
+            )
+
+    def reset_trace_state(self) -> None:
+        self.graph = fx.Graph()
+        self.tracer = fx.Tracer()
+        self.tracer.graph = self.graph
+        self.tracer.root = torch.nn.Module()
+        self.tracer.tensor_attrs = {}
+        self._warp_segment_counter = 0
+        self._next_warp_segment_ordinal = 0
+        self.trimmed_inputs = set()
+        self._next_buffer_idx = 0
+        self.m = None
+        self._model_captured = False
 
     def compile_trace(self, tensors: dict[str, "TracedTensor"], backend=None, backend_params={},
                        static_tensors: dict[str, torch.Tensor] | None = None,
@@ -489,20 +555,35 @@ class TracedTensorNode(LeappNode):
         Returns:
             TracedTensor: A traced tensor in this context
         """
+        existing = self.get_io_description_by_name(name, self.inputs)
+        has_placeholder = any(
+            node.op == "placeholder" and node.target == name
+            for node in self.graph.nodes
+        )
+        if existing is not None and not has_placeholder:
+            self.validate_input_and_update_tags(name, name, data)
+            return self._create_io_helper(data, name, to="traced")
         self.add_input(name, name, data, semantics=semantics)
         traced_data = self._create_io_helper(data, name, to="traced")
         return traced_data
 
     def create_output(self, data, name: str, static: bool = False, semantics=None):
+        existing = self.get_io_description_by_name(name, self.outputs)
         if static:
             self._validate_static_tensor(data, name)
             wrapped = self._create_io_helper(data, name, to="static")
             self.tag_data(data, name)
+            if existing is not None:
+                self.validate_output_and_update_tags(name, name, data)
+                return wrapped
             self.add_output(name, name, data, semantics=semantics)
             return wrapped
         else:
             unwrapped_data = self._create_io_helper(data, name, to="tensor")
             self.tag_data(unwrapped_data, name)
+            if existing is not None:
+                self.validate_output_and_update_tags(name, name, unwrapped_data)
+                return unwrapped_data
             self.add_output(name, name, unwrapped_data, semantics=semantics)
             return unwrapped_data
 

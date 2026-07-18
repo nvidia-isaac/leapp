@@ -111,6 +111,10 @@ class LeappNode():
     def captured(self):
         # this is defaulted to False. the compile_trace method should set this to true
         return self._model_captured
+
+    @property
+    def has_pending_warp_segments(self) -> bool:
+        return False
     
     @property
     def compiled_model(self):
