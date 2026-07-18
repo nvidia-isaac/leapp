@@ -16,11 +16,15 @@
 #
 
 from typing import TYPE_CHECKING
-import inspect
 import os
 import tempfile
 from pathlib import Path
 
+from leapp.utils.caller_identity import (
+    caller_identity_has_same_anchor,
+    format_caller_identity,
+    get_caller_stack_identity,
+)
 from leapp.leapp_graph.custom_operator_registry import warp_operator
 from leapp.leapp_graph.custom_operator_registry.warp_operator.bundle import (
     WRP_FILENAME,
@@ -160,8 +164,6 @@ else:
 
         for ref, proxy in zip(output_refs, output_proxies):
             ref.proxy = proxy
-            ref.context = node_ref
-            segment.output_proxies[ref.name] = proxy
             proxy.node.meta["leapp_warp_segment"] = segment
             proxy.node.meta["leapp_warp_output_ref"] = ref
             _update_output_ref_proxy(node_ref, ref, proxy)
@@ -187,43 +189,130 @@ else:
             self._scope = None
             self._capture = None
             self._segment = None
+            self._phase = None #state machine for the warp op
             self.device = device
 
         def __enter__(self):
-            scoped_capture_params = inspect.signature(wp.ScopedCapture).parameters
-            if "apic" not in scoped_capture_params or not hasattr(wp, "capture_save"):
-                raise RuntimeError(
-                    "annotate.warp_op requires Warp APIC support "
-                    "(ScopedCapture(..., apic=True) and wp.capture_save). "
-                    f"Installed Warp version: {getattr(wp, '__version__', 'unknown')}."
+            segment_ordinal = self.node_ref.next_warp_segment_ordinal()
+            stored_segment = self.node_ref.get_warp_segment(segment_ordinal)
+            if stored_segment is None:
+                self._segment = self._warp_backend.begin_discovery_segment(
+                    node_name=self.node_name,
+                    segment_ordinal=segment_ordinal,
+                    call_stack=get_caller_stack_identity(),
                 )
-            self._segment = WarpSegment(
-                node_name=self.node_name,
-                device=self.device,
-            )
-            self._warp_backend.push_segment(self._segment)
-            self._scope = wp.ScopedCapture(
-                device=self.device,
-                force_module_load=True,
-                apic=True,
-            )
-            self._capture = self._scope.__enter__()
+                self._phase = "discovery"
+            elif stored_segment.is_pending_capture:
+                call_stack = get_caller_stack_identity()
+                if not caller_identity_has_same_anchor(
+                    stored_segment.call_stack,
+                    call_stack,
+                ):
+                    # TODO: switch to fatal instead of error
+                    message = (
+                        f"[{self.node_name}] Warp segment {stored_segment.segment_ordinal} was "
+                        "re-entered from a different annotation origin.\n"
+                        "Discovery origin:\n"
+                        f"{format_caller_identity(stored_segment.call_stack)}\n"
+                        f"Capture origin:\n{format_caller_identity(call_stack)}"
+                    )
+                    _get_logger().error(f"Fatal: {message}")
+                    raise RuntimeError(message)
+
+                self._segment = self._warp_backend.begin_capture_segment(
+                    segment=stored_segment
+                )
+                self._phase = "capture"
+                with self._warp_backend.paused():
+                    self._scope = wp.ScopedCapture(
+                        device=self.device,
+                        force_module_load=True,
+                        apic=True,
+                    )
+                    self._capture = self._scope.__enter__()
             return self
 
         def __exit__(self, exc_type, exc_value, traceback):
+            if self._segment is None or self._phase is None:
+                return False
+            call_stack = get_caller_stack_identity()
+            if not self._warp_backend.call_stack_matches_segment(
+                self._segment,
+                call_stack,
+            ):
+                return False
+            if self._phase == "discovery":
+                return self._exit_discovery(
+                    exc_type,
+                    exc_value,
+                    traceback,
+                    call_stack,
+                )
+            if self._phase == "capture":
+                return self._exit_capture(
+                    exc_type,
+                    exc_value,
+                    traceback,
+                    call_stack,
+                )
+            raise RuntimeError(f"Unknown WarpOp phase: {self._phase}")
+
+        def _exit_discovery(
+            self,
+            exc_type,
+            exc_value,
+            traceback,
+            call_stack,
+        ):
+            try:
+                if exc_type is None and self._segment is not None:
+                    closed = self._warp_backend.end_discovery_segment(
+                        self._segment,
+                        call_stack,
+                    )
+                    if closed is None:
+                        return False
+                    self.node_ref.add_warp_segment(self._segment)
+                    self._segment.status = "open"
+                    _insert_warp_marker(
+                        self.node_ref,
+                        self._segment,
+                        wrp_archive=b"\0",
+                    )
+            finally:
+                if self._segment is not None:
+                    active = self._warp_backend.active_segment
+                    if active is self._segment:
+                        self._warp_backend.deactivate_segment(self._segment)
+            return False
+
+        def _exit_capture(
+            self,
+            exc_type,
+            exc_value,
+            traceback,
+            call_stack,
+        ):
             scope_result = False
             segment_popped = False
             try:
                 if self._scope is not None:
-                    scope_result = self._scope.__exit__(exc_type, exc_value, traceback)
+                    with self._warp_backend.paused():
+                        scope_result = self._scope.__exit__(
+                            exc_type, exc_value, traceback
+                        )
                 if exc_type is None and self._segment is not None:
                     graph = self._capture.graph
                     self._segment.apic_graph = graph
                     self._segment.add_event({"kind": "scoped_capture"})
+                    if not self._warp_backend.end_capture_segment(
+                        self._segment,
+                        call_stack,
+                    ):
+                        return False
                     # The Warp capture is closed at this point. Deactivate the
                     # LEAPP segment before internal save/replay work so CUPTI
                     # warnings only cover user CUDA work inside the segment.
-                    self._warp_backend.pop_segment(self._segment)
                     segment_popped = True
                     # Save before replay so formal inputs and closure buffers
                     # are snapshotted at the capture boundary, not after execution.
@@ -236,8 +325,9 @@ else:
                         )
                         wp.capture_launch(graph)
                         wp.synchronize()
+                    self.node_ref.complete_warp_segment(self._segment)
             finally:
                 if self._segment is not None and not segment_popped:
-                    self._warp_backend.pop_segment(self._segment)
+                    self._warp_backend.deactivate_segment(self._segment)
 
             return scope_result

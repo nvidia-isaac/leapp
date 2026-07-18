@@ -165,6 +165,10 @@ class ExportManager:
             name for name, node in self.nodes.items()
             if node.node_index == LeappNode.UNSET_NODE_INDEX
         ]
+        pending_warp_nodes = [
+            name for name, node in self.nodes.items()
+            if node.has_pending_warp_segments
+        ]
         if incomplete_nodes:
             incomplete_nodes.sort()
             formatted = ", ".join(incomplete_nodes)
@@ -173,6 +177,15 @@ class ExportManager:
                 f"{formatted}. Did you forget to call output_tensors() "
                 "or finish the annotated function?",
                 error_type=Exception)
+        if pending_warp_nodes:
+            # TODO: use fatal instead of error
+            pending_warp_nodes.sort()
+            formatted = ", ".join(pending_warp_nodes)
+            raise Exception(
+                "The following nodes discovered explicit Warp segments but were "
+                f"not executed a second time for APIC capture: {formatted}. "
+                "Run the same annotated path again before compiling the graph."
+            )
 
     def _setup_new_node(self, name, node_class: LeappNode, **kwargs):
         if name in self.nodes:
@@ -257,6 +270,12 @@ class ExportManager:
                 node_name, TracedTensorNode)
 
         _caller_identity = get_caller_stack_identity()
+
+        if ( #if discovered a node with pending warp segments but not yet tracing means we need to reset.
+            traced_tensors_node.has_pending_warp_segments
+            and not traced_tensors_node.is_tracing
+        ):
+            traced_tensors_node.reset_trace_state()
 
         # if the node is not tracing, we validate the inputs only and return the raw tensors
         # the node is not tracing if it is already compiled.

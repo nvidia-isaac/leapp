@@ -77,8 +77,11 @@ import sys
 import warp as wp
 from warp._src.context import Function as WarpKernelLanguageFunction
 
+from leapp.utils.caller_identity import caller_identity_has_same_anchor
+
 from .cupti_oracle import WarpCudaOracle
 from .traced_wp_array import TracedWpArray
+from .warp_segment import WarpSegment
 
 _WRAPPER_MARKER = "__leapp_warp_detector_wrapper__"
 _ALLOWED_DUNDER_METHODS = {"__init__"}
@@ -146,7 +149,88 @@ class WarpPatchBackend:
         self._installed = True
         return self
 
-    def push_segment(self, segment: Any) -> None:
+    def begin_discovery_segment(
+        self,
+        *,
+        node_name: str,
+        segment_ordinal: int,
+        call_stack: Any,
+    ) -> WarpSegment:
+        segment = WarpSegment(
+            node_name=node_name,
+            segment_ordinal=segment_ordinal,
+            call_stack=call_stack,
+        )
+        self.activate_segment(segment)
+        return segment
+
+    def call_stack_matches_segment(
+        self,
+        segment: WarpSegment,
+        call_stack: Any,
+    ) -> bool:
+        return caller_identity_has_same_anchor(segment.call_stack, call_stack)
+
+    def end_discovery_segment(
+        self,
+        segment: WarpSegment,
+        call_stack: Any,
+    ) -> WarpSegment | None:
+        if not self.call_stack_matches_segment(segment, call_stack):
+            return None
+
+        active = self.deactivate_segment(segment)
+        if active is not segment:
+            raise RuntimeError("Discovery Warp segment is not active.")
+
+        warp_call_events = tuple(
+            event for event in segment.events if event.get("kind") == "warp_call"
+        )
+        call_qualnames = tuple(str(event["qualname"]) for event in warp_call_events)
+        segment.call_qualnames = call_qualnames
+        segment.status = "closed"
+        return segment
+
+    def begin_capture_segment(
+        self,
+        *,
+        segment: WarpSegment,
+    ) -> WarpSegment:
+        segment.status = "open"
+        segment.events.clear()
+        segment.input_refs.clear()
+        segment.output_refs.clear()
+        segment.marker_proxy = None
+        segment.proxy_name = None
+        segment.apic_graph = None
+        self.activate_segment(segment)
+        return segment
+
+    def end_capture_segment(self, segment: WarpSegment, call_stack: Any) -> bool:
+        if not self.call_stack_matches_segment(segment, call_stack):
+            return False
+
+        active = self.deactivate_segment(segment)
+        if active is not segment:
+            raise RuntimeError("Capture Warp segment is not active.")
+
+        expected_qualnames = segment.call_qualnames
+        actual_qualnames = tuple(
+            str(event["qualname"])
+            for event in segment.events
+            if event.get("kind") == "warp_call"
+        )
+        if actual_qualnames != expected_qualnames:
+            segment.invalidate()
+            raise RuntimeError(
+                f"[{segment.node_name}] Warp segment "
+                f"{segment.segment_ordinal} "
+                "diverged between discovery and capture. "
+                f"Expected calls {expected_qualnames}, got {actual_qualnames}."
+            )
+        return True
+
+    def activate_segment(self, segment: Any) -> None:
         """Make ``segment`` the active destination for detected Warp calls."""
         if self._active_segment is not None:
             raise RuntimeError(
@@ -156,8 +240,8 @@ class WarpPatchBackend:
         self._active_segment = segment
         self._cuda_oracle.set_segment(segment)
 
-    def pop_segment(self, segment: Any | None = None) -> Any | None:
-        """Remove and return the active Warp segment."""
+    def deactivate_segment(self, segment: Any | None = None) -> Any | None:
+        """Deactivate and return the active Warp segment."""
         if self._active_segment is None:
             return None
 
@@ -432,7 +516,7 @@ class WarpPatchBackend:
                 result = original(*call_args, **call_kwargs)
 
             self._process_post_call_arrays(
-                segment, qualname, args, kwargs, result, trace_state
+                segment, args, kwargs, result, trace_state
             )
 
             return result
@@ -619,17 +703,15 @@ class WarpPatchBackend:
     def _process_post_call_arrays(
         self,
         segment: Any | None,
-        qualname: str,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
         result: Any,
         trace_state: "_WarpTraceState | None",
     ) -> None:
         seen: set[int] = set()
-        for val, name in [(args, "args"), (kwargs, "kwargs"), (result, "return")]:
+        for value in (args, kwargs, result):
             self._process_post_call_node(
-                val,
-                name,
+                value,
                 segment,
                 trace_state,
                 seen,
@@ -639,7 +721,6 @@ class WarpPatchBackend:
     def _process_post_call_node(
         self,
         obj: Any,
-        path: str,
         segment: Any | None,
         trace_state: "_WarpTraceState | None",
         seen: set[int],
@@ -666,35 +747,32 @@ class WarpPatchBackend:
                     trace_state.proxy,
                 )
                 if segment is not None:
-                    segment.add_output_ref(traced_array, path=path)
+                    segment.add_output_ref(traced_array)
                     traced_array.warp_segment = segment
             return
 
         if isinstance(obj, dict):
-            for key, value in obj.items():
+            for value in obj.values():
                 self._process_post_call_node(
                     value,
-                    f"{path}[{key!r}]",
                     segment,
                     trace_state,
                     seen,
                     depth=depth + 1,
                 )
         elif isinstance(obj, (list, tuple)):
-            for index, item in enumerate(obj):
+            for item in obj:
                 self._process_post_call_node(
                     item,
-                    f"{path}[{index}]",
                     segment,
                     trace_state,
                     seen,
                     depth=depth + 1,
                 )
         elif isinstance(obj, (set, frozenset)):
-            for index, item in enumerate(obj):
+            for item in obj:
                 self._process_post_call_node(
                     item,
-                    f"{path}[{index}]",
                     segment,
                     trace_state,
                     seen,
