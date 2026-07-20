@@ -271,10 +271,12 @@ class ExportManager:
 
         _caller_identity = get_caller_stack_identity()
 
-        if ( #if discovered a node with pending warp segments but not yet tracing means we need to reset.
+        # A completed discovery trace starts Warp capture on its next re-entry.
+        if (
             traced_tensors_node.has_pending_warp_segments
             and not traced_tensors_node.is_tracing
         ):
+            traced_tensors_node.begin_warp_capture()
             traced_tensors_node.reset_trace_state()
 
         # if the node is not tracing, we validate the inputs only and return the raw tensors

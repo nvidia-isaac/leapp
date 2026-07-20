@@ -45,6 +45,20 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
             self.assertTrue(model_exists,
                             f"Model {model_name} does not exist")
 
+    def verify_node_io(self, node, *, inputs=None, outputs=None):
+        if inputs is not None:
+            self.assertEqual(
+                len(node.inputs),
+                inputs,
+                f"Expected {inputs} node input(s), got {len(node.inputs)}",
+            )
+        if outputs is not None:
+            self.assertEqual(
+                len(node.outputs),
+                outputs,
+                f"Expected {outputs} node output(s), got {len(node.outputs)}",
+            )
+
     def verify_num_connections(self, leapp_annotation, nodes=None, inputs=None, outputs=None,
                                internal_connections=None, feedback_connections=None):
         if nodes is not None:

@@ -153,12 +153,10 @@ class WarpPatchBackend:
         self,
         *,
         node_name: str,
-        segment_ordinal: int,
         call_stack: Any,
     ) -> WarpSegment:
         segment = WarpSegment(
             node_name=node_name,
-            segment_ordinal=segment_ordinal,
             call_stack=call_stack,
         )
         self.activate_segment(segment)
@@ -223,9 +221,8 @@ class WarpPatchBackend:
         if actual_qualnames != expected_qualnames:
             segment.invalidate()
             raise RuntimeError(
-                f"[{segment.node_name}] Warp segment "
-                f"{segment.segment_ordinal} "
-                "diverged between discovery and capture. "
+                f"[{segment.node_name}] Warp segment diverged between "
+                "discovery and capture. "
                 f"Expected calls {expected_qualnames}, got {actual_qualnames}."
             )
         return True

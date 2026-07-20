@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from leapp.leapp_graph.leapp_node import LeappNode
 import torch
 import torch.fx as fx
@@ -42,9 +43,9 @@ class TracedTensorNode(LeappNode):
         self.tracer.graph = self.graph
         self.tracer.root = torch.nn.Module()
         self.tracer.tensor_attrs = {}
-        self._warp_segment_counter = 0
-        self._warp_segments: list["WarpSegment"] = []
-        self._next_warp_segment_ordinal = 0
+        self._discovered_warp_segments: list["WarpSegment"] = []
+        self._pending_warp_segments: deque["WarpSegment"] = deque()
+        self._is_warp_capture_active = False
 
         self.m = None
 
@@ -70,54 +71,37 @@ class TracedTensorNode(LeappNode):
 
     @property
     def has_pending_warp_segments(self) -> bool:
-        return any(segment.is_pending_capture for segment in self._warp_segments)
+        return bool(self._pending_warp_segments)
+
+    @property
+    def is_warp_capture_active(self) -> bool:
+        return self._is_warp_capture_active
 
     @property
     def warp_segments(self) -> tuple["WarpSegment", ...]:
-        return tuple(self._warp_segments)
+        return tuple(self._discovered_warp_segments)
 
-    def next_warp_segment_ordinal(self) -> int:
-        ordinal = self._next_warp_segment_ordinal
-        self._next_warp_segment_ordinal += 1
-        return ordinal
+    def begin_warp_capture(self) -> None:
+        self._is_warp_capture_active = True
 
-    def add_warp_segment(
-        self,
-        segment: "WarpSegment",
-    ) -> None:
-        if segment.segment_ordinal != len(self._warp_segments):
+    def acquire_warp_segment(self) -> "WarpSegment | None":
+        return self._pending_warp_segments[0] if self._pending_warp_segments else None
+
+    def add_warp_segment(self, segment: "WarpSegment") -> None:
+        segment.runner_name = f"warp_segment_{len(self._discovered_warp_segments)}"
+        self._discovered_warp_segments.append(segment)
+        self._pending_warp_segments.append(segment)
+
+    def complete_warp_segment(self, segment: "WarpSegment") -> None:
+        if not self._pending_warp_segments or self._pending_warp_segments[0] is not segment:
             raise RuntimeError(
-                f"[{self.name}] Warp segment ordinal {segment.segment_ordinal} "
-                f"does not match expected {len(self._warp_segments)}."
-            )
-        self._warp_segments.append(segment)
-
-    def get_warp_segment(self, segment_ordinal: int) -> "WarpSegment | None":
-        if segment_ordinal >= len(self._warp_segments):
-            return None
-        return self._warp_segments[segment_ordinal]
-
-    def complete_warp_segment(
-        self,
-        segment: "WarpSegment",
-    ) -> None:
-        segment_ordinal = segment.segment_ordinal
-        try:
-            stored = self._warp_segments[segment_ordinal]
-        except IndexError as exc:
-            raise RuntimeError(
-                f"[{self.name}] No discovered Warp segment for ordinal "
-                f"{segment_ordinal}."
-            ) from exc
-        if stored is not segment:
-            raise RuntimeError(
-                f"[{self.name}] Captured Warp segment {segment_ordinal} is not "
-                "the stored discovery segment."
+                f"[{self.name}] Captured Warp regions out of discovery order."
             )
         if segment.apic_graph is None:
             raise RuntimeError(
-                f"[{self.name}] Captured Warp segment {segment_ordinal} has no APIC graph."
+                f"[{self.name}] Captured Warp segment has no APIC graph."
             )
+        self._pending_warp_segments.popleft()
 
     def reset_trace_state(self) -> None:
         self.graph = fx.Graph()
@@ -125,8 +109,6 @@ class TracedTensorNode(LeappNode):
         self.tracer.graph = self.graph
         self.tracer.root = torch.nn.Module()
         self.tracer.tensor_attrs = {}
-        self._warp_segment_counter = 0
-        self._next_warp_segment_ordinal = 0
         self.trimmed_inputs = set()
         self._next_buffer_idx = 0
         self.m = None
@@ -828,9 +810,9 @@ class TracedTensorNode(LeappNode):
             result[name] = state_info["output"]
         return result
 
-    def _create_warp_bundle_proxy(self, wrp_archive: bytes) -> Proxy:
+    def _create_warp_bundle_proxy(self, wrp_archive: bytes, runner_name: str) -> Proxy:
         """Wire a pre-packed WRPB archive as a ``get_attr`` FX node."""
-        buffer_name = f"_warp_bundle_{self._warp_segment_counter}"
+        buffer_name = f"_{runner_name}_bundle"
         bundle_tensor = torch.frombuffer(bytearray(wrp_archive), dtype=torch.uint8).clone()
         self.tracer.root.register_buffer(buffer_name, bundle_tensor, persistent=True)
         bundle_node = self.graph.create_node(
@@ -838,7 +820,7 @@ class TracedTensorNode(LeappNode):
             buffer_name,
             (),
             {},
-            name=f"warp_bundle_{self._warp_segment_counter}",
+            name=f"{runner_name}_bundle",
         )
         return Proxy(bundle_node, self.tracer)
 
@@ -848,6 +830,7 @@ class TracedTensorNode(LeappNode):
         input_proxies: list[Proxy],
         wrp_archive: bytes,
         output_count: int,
+        runner_name: str,
     ) -> tuple[Proxy, list[Proxy]]:
         """Create the FX proxy nodes for a Warp runner op.
 
@@ -855,9 +838,7 @@ class TracedTensorNode(LeappNode):
         only mutates the FX graph: bundle ``get_attr``, one ``leapp::warp_runner``
         call, plus one positional ``operator.getitem`` per candidate output.
         """
-        bundle_proxy = self._create_warp_bundle_proxy(wrp_archive)
-        op_name = f"warp_segment_{self._warp_segment_counter}"
-        self._warp_segment_counter += 1
+        bundle_proxy = self._create_warp_bundle_proxy(wrp_archive, runner_name)
 
         # The op consumes only the segment's traced inputs (as a Tensor[]) and
         # *produces* its outputs via per-output ``operator.getitem``. Segment
@@ -872,7 +853,7 @@ class TracedTensorNode(LeappNode):
             warp_operator.get_op().default,
             ([*input_proxies], encoded_metadata, bundle_proxy),
             {},
-            name=op_name,
+            name=runner_name,
         )
 
         # The op returns a Tensor[]; extract each output positionally so index i
@@ -886,7 +867,7 @@ class TracedTensorNode(LeappNode):
                     operator.getitem,
                     (warp_runner, idx),
                     {},
-                    name=f"{op_name}_output_{idx}",
+                    name=f"{runner_name}_output_{idx}",
                 )
             )
 

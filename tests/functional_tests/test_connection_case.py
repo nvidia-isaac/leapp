@@ -24,16 +24,6 @@ from tests.warp_support import WarpTestCase
 
 
 @wp.kernel
-def _warp_add_scalar_kernel(
-    src: wp.array(dtype=wp.float32),
-    value: wp.float32,
-    dst: wp.array(dtype=wp.float32),
-):
-    i = wp.tid()
-    dst[i] = src[i] + value
-
-
-@wp.kernel
 def _warp_add_arrays_kernel(
     src1: wp.array(dtype=wp.float32),
     src2: wp.array(dtype=wp.float32),
@@ -363,26 +353,6 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
 class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
     """Warp equivalents of the torch connection/tag tests in TestConnectionCase."""
 
-    DEVICE = "cuda"
-
-    def _make_array(self, values):
-        return wp.array(values, dtype=wp.float32, device=self.DEVICE)
-
-    def _warp_copy(self, src):
-        dst = wp.empty_like(src)
-        wp.copy(dst, src)
-        return dst
-
-    def _warp_add_scalar(self, src, value):
-        dst = wp.empty_like(src)
-        wp.launch(
-            _warp_add_scalar_kernel,
-            dim=src.size,
-            inputs=[src, wp.float32(value)],
-            outputs=[dst],
-        )
-        return dst
-
     def _warp_add_arrays(self, src1, src2):
         dst = wp.empty_like(src1)
         wp.launch(
@@ -398,7 +368,8 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
         for _ in range(2):
             src_traced = annotate.input_tensors(node_name, {input_name: src})
             with annotate.warp_op(node_name):
-                dst = self._warp_copy(src_traced)
+                dst = wp.empty_like(src_traced)
+                wp.copy(dst, src_traced)
             dst = annotate.output_tensors(
                 node_name, {output_name: dst}, export_with="onnx"
             )
@@ -409,7 +380,13 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
         for _ in range(2):
             src_traced = annotate.input_tensors(node_name, {input_name: src})
             with annotate.warp_op(node_name):
-                dst = self._warp_add_scalar(src_traced, value)
+                dst = wp.empty_like(src_traced)
+                wp.launch(
+                    self.kernels.add_scalar,
+                    dim=src_traced.size,
+                    inputs=[src_traced, wp.float32(value)],
+                    outputs=[dst],
+                )
             dst = annotate.output_tensors(
                 node_name, {output_name: dst}, export_with="onnx"
             )
@@ -431,7 +408,7 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
         """Two warp nodes connected by a tagged wp.array output -> input edge."""
         leapp.start(name=self.TEST_GRAPH_NAME)
 
-        arr1 = self._make_array([1.0, 2.0, 3.0])
+        arr1 = wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)
         arr2 = self._run_copy_node("node_a", "arr1", "arr2", arr1)
 
         self.assertTrue(hasattr(arr2, "leapp_tag"))
@@ -456,9 +433,13 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
 
     def test_warp_node_requires_second_execution_before_compile(self):
         leapp.start(name=self.TEST_GRAPH_NAME)
-        arr = annotate.input_tensors("node_a", {"in_a": self._make_array([1.0, 2.0, 3.0])})
+        arr = annotate.input_tensors(
+            "node_a",
+            {"in_a": wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)},
+        )
         with annotate.warp_op("node_a"):
-            out = self._warp_copy(arr)
+            out = wp.empty_like(arr)
+            wp.copy(out, arr)
         annotate.output_tensors("node_a", {"out_a": out}, export_with="onnx")
         leapp.stop()
 
@@ -467,14 +448,21 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
 
     def test_multiple_explicit_warp_segments_in_one_node(self):
         leapp.start(name=self.TEST_GRAPH_NAME)
-        source = self._make_array([1.0, 2.0, 3.0])
+        source = wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)
 
         for _ in range(2):
             arr = annotate.input_tensors("node_a", {"in_a": source})
             with annotate.warp_op("node_a"):
-                copied = self._warp_copy(arr)
+                copied = wp.empty_like(arr)
+                wp.copy(copied, arr)
             with annotate.warp_op("node_a"):
-                out = self._warp_add_scalar(copied, 2.0)
+                out = wp.empty_like(copied)
+                wp.launch(
+                    self.kernels.add_scalar,
+                    dim=copied.size,
+                    inputs=[copied, wp.float32(2.0)],
+                    outputs=[out],
+                )
             annotate.output_tensors("node_a", {"out_a": out}, export_with="onnx")
 
         leapp.stop()
@@ -487,7 +475,7 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
         leapp.start(name=self.TEST_GRAPH_NAME)
         for _ in range(10):
             arr = self._run_copy_node(
-                "warp_a", "arr", "out", self._make_array([1.0, 2.0, 3.0])
+                "warp_a", "arr", "out", wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)
             )
             arr = self._run_copy_node("warp_b", "arr", "out", arr)
             arr = self._run_copy_node("warp_c", "arr", "out", arr)
@@ -504,8 +492,8 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
     def test_feedback_connections(self):
         """Warp nodes with a feedback edge across trace iterations."""
         leapp.start(name=self.TEST_GRAPH_NAME, verbose=False)
-        loop_back = self._make_array([0.0, 0.0, 0.0])
-        external = self._make_array([1.0, 2.0, 3.0])
+        loop_back = wp.array([0.0, 0.0, 0.0], dtype=wp.float32, device=self.DEVICE)
+        external = wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)
         for _ in range(2):
             in_a, loop = annotate.input_tensors(
                 "node_a", {"inputA": external, "loop_back": loop_back}
@@ -539,8 +527,8 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
 
     def test_interleaved_traced_nodes_keep_forward_execution_order(self):
         """Completed warp node output consumed by a later node is forward flow."""
-        seed = self._make_array([1.0, 2.0, 3.0])
-        external = self._make_array([10.0, 20.0, 30.0])
+        seed = wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)
+        external = wp.array([10.0, 20.0, 30.0], dtype=wp.float32, device=self.DEVICE)
 
         leapp.start(name=self.TEST_GRAPH_NAME)
 
@@ -588,13 +576,20 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
         """Tags survive chained warp nodes and buffer hand-offs."""
         leapp.start(name=self.TEST_GRAPH_NAME)
 
-        arr = self._make_array([1.0, 2.0, 3.0])
+        arr = wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)
         out_a1 = out_a2 = None
         for _ in range(2):
             in_a = annotate.input_tensors("node_a", {"in_a": arr})
             with annotate.warp_op("node_a"):
-                out_a1 = self._warp_copy(in_a)
-                out_a2 = self._warp_add_scalar(in_a, 1.0)
+                out_a1 = wp.empty_like(in_a)
+                wp.copy(out_a1, in_a)
+                out_a2 = wp.empty_like(in_a)
+                wp.launch(
+                    self.kernels.add_scalar,
+                    dim=in_a.size,
+                    inputs=[in_a, wp.float32(1.0)],
+                    outputs=[out_a2],
+                )
             out_a1, out_a2 = annotate.output_tensors(
                 "node_a", {"out_a1": out_a1, "out_a2": out_a2}, export_with="onnx"
             )
@@ -615,7 +610,8 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
                 "node_e", {"in_e1": out_d, "in_e2": out_b}
             )
             with annotate.warp_op("node_e"):
-                final = self._warp_copy(in_e1)
+                final = wp.empty_like(in_e1)
+                wp.copy(final, in_e1)
             annotate.output_tensors("node_e", {"final": final}, export_with="onnx")
 
         leapp.stop()
@@ -633,7 +629,7 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
         """mirror_leapp_tags with in-place wp.copy between warp nodes."""
         leapp.start(name=self.TEST_GRAPH_NAME)
 
-        out_a = self._run_copy_node("node_a", "in_a", "out_a", self._make_array([1.0, 2.0, 3.0]))
+        out_a = self._run_copy_node("node_a", "in_a", "out_a", wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE))
         buffer = wp.empty_like(out_a)
         wp.copy(buffer, out_a)
         annotate.mirror_leapp_tags(out_a, buffer)
@@ -667,7 +663,7 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
         leapp.start(name=self.TEST_GRAPH_NAME)
 
         upstream = self._run_copy_node(
-            "upstream", "in_a", "out_a", self._make_array([1.0, 2.0, 3.0])
+            "upstream", "in_a", "out_a", wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)
         )
         buffered = processor.copy_to_buffer(upstream)
         processed = self._run_copy_node("process", "in_b", "out_b", buffered)
@@ -687,13 +683,20 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
         """mirror_leapp_tags with multiple wp.array buffers between warp nodes."""
         leapp.start(name=self.TEST_GRAPH_NAME)
 
-        arr = self._make_array([1.0, 2.0, 3.0])
+        arr = wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)
         out_a1 = out_a2 = None
         for _ in range(2):
             in_a = annotate.input_tensors("node_a", {"in_a": arr})
             with annotate.warp_op("node_a"):
-                out_a1 = self._warp_copy(in_a)
-                out_a2 = self._warp_add_scalar(in_a, 1.0)
+                out_a1 = wp.empty_like(in_a)
+                wp.copy(out_a1, in_a)
+                out_a2 = wp.empty_like(in_a)
+                wp.launch(
+                    self.kernels.add_scalar,
+                    dim=in_a.size,
+                    inputs=[in_a, wp.float32(1.0)],
+                    outputs=[out_a2],
+                )
             out_a1, out_a2 = annotate.output_tensors(
                 "node_a", {"out_a1": out_a1, "out_a2": out_a2}, export_with="onnx"
             )
@@ -711,8 +714,10 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
                 "node_b", {"in_b1": buffer1, "in_b2": buffer2}
             )
             with annotate.warp_op("node_b"):
-                out_b1 = self._warp_copy(in_b1)
-                out_b2 = self._warp_copy(in_b2)
+                out_b1 = wp.empty_like(in_b1)
+                wp.copy(out_b1, in_b1)
+                out_b2 = wp.empty_like(in_b2)
+                wp.copy(out_b2, in_b2)
             out_b1, out_b2 = annotate.output_tensors(
                 "node_b", {"out_b1": out_b1, "out_b2": out_b2}, export_with="onnx"
             )
@@ -740,7 +745,7 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
         leapp.start(name=self.TEST_GRAPH_NAME)
 
         out1 = self._run_copy_node(
-            "source", "in_a", "out_a", self._make_array([1.0, 2.0, 3.0])
+            "source", "in_a", "out_a", wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)
         )
 
         buffer1 = wp.empty_like(out1)
@@ -767,7 +772,7 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
 
     def test_mirror_leapp_tags_noop_outside_tracing(self):
         """mirror_leapp_tags safely no-ops outside of tracing."""
-        source = self._make_array([1.0, 2.0, 3.0])
+        source = wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)
         target = wp.zeros(3, dtype=wp.float32, device=self.DEVICE)
         wp.copy(target, source)
 

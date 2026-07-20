@@ -75,8 +75,6 @@ class WarpTensorRef:
 class WarpSegment:
     # Owning LEAPP node name. A segment should not span multiple node graphs.
     node_name: str
-    # Position in the owning node's Warp segment list.
-    segment_ordinal: int = 0
     # Discovery call-site anchor used to reject mismatched capture reentry.
     call_stack: Any | None = None
     # Warp call sequence observed during discovery.
@@ -91,6 +89,8 @@ class WarpSegment:
     output_refs: dict[str, WarpTensorRef] = field(default_factory=dict)
     # FX proxy for the single segment marker node.
     marker_proxy: Proxy | None = None
+    # Stable FX runner base name assigned when the segment is discovered.
+    runner_name: str | None = None
     # FX marker name, e.g. ``warp_segment_0``.
     proxy_name: str | None = None
     # Live APIC graph object during trace/export; intentionally not serialized.

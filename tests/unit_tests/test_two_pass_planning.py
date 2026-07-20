@@ -1,13 +1,6 @@
-#
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-#
-
-import unittest
-
 from leapp.leapp_graph.datatypes.warp import WarpSegment
 from leapp.leapp_graph.datatypes.warp.patching import WarpPatchBackend
-from leapp.leapp_graph.traced_node import TracedTensorNode
+import unittest
 
 
 class TestWarpTwoPassPlanning(unittest.TestCase):
@@ -15,7 +8,6 @@ class TestWarpTwoPassPlanning(unittest.TestCase):
         backend = WarpPatchBackend()
         segment = backend.begin_discovery_segment(
             node_name="node",
-            segment_ordinal=0,
             call_stack=("caller.py", 10, "func"),
         )
 
@@ -29,7 +21,6 @@ class TestWarpTwoPassPlanning(unittest.TestCase):
 
         self.assertIs(discovered, segment)
         self.assertEqual(discovered.node_name, "node")
-        self.assertEqual(discovered.segment_ordinal, 0)
         self.assertEqual(discovered.call_qualnames, ("warp.launch", "warp.copy"))
         self.assertIsNone(backend.active_segment)
 
@@ -37,7 +28,6 @@ class TestWarpTwoPassPlanning(unittest.TestCase):
         backend = WarpPatchBackend()
         segment = backend.begin_discovery_segment(
             node_name="node",
-            segment_ordinal=0,
             call_stack=("caller.py", 10, "func"),
         )
 
@@ -54,7 +44,6 @@ class TestWarpTwoPassPlanning(unittest.TestCase):
         backend = WarpPatchBackend()
         discovered = WarpSegment(
             node_name="node",
-            segment_ordinal=0,
             call_stack=("caller.py", 10, "func"),
             call_qualnames=("warp.launch",),
             status="closed",
@@ -84,30 +73,3 @@ class TestWarpTwoPassPlanning(unittest.TestCase):
             )
 
         self.assertIsNone(backend.active_segment)
-
-    def test_node_warp_pending_state_comes_from_segment_graph(self):
-        node = TracedTensorNode("node")
-        discovered = WarpSegment(
-            node_name="node",
-            segment_ordinal=0,
-            call_stack=("caller.py", 10, "func"),
-        )
-
-        self.assertTrue(node.is_tracing)
-        self.assertFalse(node.has_pending_warp_segments)
-        self.assertEqual(node.next_warp_segment_ordinal(), 0)
-        node.add_warp_segment(discovered)
-        self.assertTrue(node.has_pending_warp_segments)
-
-        self.assertIs(node.get_warp_segment(0), discovered)
-        discovered.apic_graph = object()
-        node.complete_warp_segment(discovered)
-        self.assertFalse(node.has_pending_warp_segments)
-        self.assertIs(node.get_warp_segment(0), discovered)
-
-        node.reset_trace_state()
-        self.assertEqual(node.next_warp_segment_ordinal(), 0)
-
-
-if __name__ == "__main__":
-    unittest.main()
