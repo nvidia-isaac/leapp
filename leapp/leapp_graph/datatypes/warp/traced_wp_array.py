@@ -75,15 +75,15 @@ class TracedWpArray(wp.array):
         cls, array: wp.array, name: str, context, proxy: Proxy
     ) -> "TracedWpArray":
         """Turn an existing raw ``wp.array`` into a traced array in place."""
-        if not isinstance(array, wp.array):
-            raise TypeError(f"Expected wp.array, got {type(array).__name__}")
-        if not isinstance(array, cls):
-            if type(array) is not wp.array:
-                raise TypeError(
-                    "Can only class-swap exact raw wp.array instances into "
-                    f"{cls.__name__}; got {type(array).__name__}"
-                )
-            array.__class__ = cls
+        if type(array) is cls:
+            array._init_tracing_state(name, context, proxy)
+            return array
+        if type(array) is not wp.array:
+            raise TypeError(
+                "Can only class-swap exact raw wp.array instances into "
+                f"{cls.__name__}; got {type(array).__name__}"
+            )
+        array.__class__ = cls
         array._init_tracing_state(name, context, proxy)
         return array
 

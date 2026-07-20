@@ -549,6 +549,7 @@ class WarpPatchBackend:
     def _handle_boundary_call(
         self, original: Callable, args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> tuple[bool, Any]:
+        # lazy to avoid circular imports
         from leapp.leapp_graph.datatypes import as_traced, is_tracable_tensor_type
 
         is_init = id(original) == self._boundary_array_init_id
@@ -577,7 +578,14 @@ class WarpPatchBackend:
         if raw is src.data:
             return True, src
         if is_tracable_tensor_type(raw):
-            return True, as_traced(raw, src.name, src.context_obj, src.proxy)
+            traced_raw = as_traced(
+                raw,
+                src.name,
+                src.context_obj,
+                src.proxy,
+                preserve_identity=isinstance(raw, wp.array),
+            )
+            return True, traced_raw
         return True, raw
 
     def _find_single_active_traced_data(
@@ -733,15 +741,16 @@ class WarpPatchBackend:
         seen.add(obj_id)
 
         # needs to lazy import to avoid circular import
-        from leapp.leapp_graph.datatypes import is_tracable_tensor_type
+        from leapp.leapp_graph.datatypes import as_traced, is_tracable_tensor_type
 
         if is_tracable_tensor_type(obj):
             if trace_state is not None and isinstance(obj, wp.array):
-                traced_array = TracedWpArray.make_traced_in_place(
+                traced_array = as_traced(
                     obj,
                     trace_state.name,
                     trace_state.context,
                     trace_state.proxy,
+                    preserve_identity=True,
                 )
                 if segment is not None:
                     segment.add_output_ref(traced_array)
