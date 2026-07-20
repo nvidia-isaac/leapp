@@ -13,6 +13,8 @@ import sys
 import unittest
 from pathlib import Path
 
+import warp as wp
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _WARP_RUNTIME_DIR = (
     _REPO_ROOT
@@ -66,6 +68,49 @@ class WarpTestCase(unittest.TestCase):
     TODO: Remove once the ONNX custom op is always prebuilt and discovered
     automatically; warp tests can then inherit LEAPPFunctionalTestBase only.
     """
+
+    DEVICE = "cuda"
+
+    class kernels:
+        @wp.kernel
+        def add_scalar(
+            src: wp.array(dtype=wp.float32),
+            value: wp.float32,
+            dst: wp.array(dtype=wp.float32),
+        ):
+            i = wp.tid()
+            dst[i] = src[i] + value
+
+        @wp.kernel
+        def divide_in_place(
+            data: wp.array(dtype=wp.float32),
+            divisor: wp.float32,
+        ):
+            i = wp.tid()
+            data[i] = data[i] / divisor
+
+        @wp.kernel
+        def average_three(
+            a: wp.array(dtype=wp.float32),
+            b: wp.array(dtype=wp.float32),
+            c: wp.array(dtype=wp.float32),
+            out: wp.array(dtype=wp.float32),
+        ):
+            i = wp.tid()
+            out[i] = (a[i] + b[i] + c[i]) / 3.0
+
+        @wp.kernel
+        def scale_and_split(
+            data: wp.array(dtype=wp.float32),
+            out_sum: wp.array(dtype=wp.float32),
+            out_diff: wp.array(dtype=wp.float32),
+        ):
+            i = wp.tid()
+            original = data[i]
+            scaled = original / 2.0
+            data[i] = scaled
+            out_sum[i] = scaled + original
+            out_diff[i] = original - scaled
 
     @classmethod
     def setUpClass(cls):

@@ -149,6 +149,10 @@ else:
             output_mask=output_mask,
         )
         encoded_metadata = warp_operator.encode_runtime_metadata(runtime_metadata)
+        if segment.runner_name is None:
+            raise RuntimeError(
+                f"Warp segment for node '{segment.node_name}' has no runner name."
+            )
 
         # this step inserts the FX proxy and updates all the outputs.
         warp_runner, output_proxies = node_ref.create_warp_proxy(
@@ -156,6 +160,7 @@ else:
             input_proxies,
             wrp_archive,
             len(output_refs),
+            segment.runner_name,
         )
 
         segment.marker_proxy = warp_runner
@@ -189,20 +194,24 @@ else:
             self._scope = None
             self._capture = None
             self._segment = None
-            self._phase = None #state machine for the warp op
+            self._exit_function = None
             self.device = device
 
         def __enter__(self):
-            segment_ordinal = self.node_ref.next_warp_segment_ordinal()
-            stored_segment = self.node_ref.get_warp_segment(segment_ordinal)
-            if stored_segment is None:
+            if not self.node_ref.is_warp_capture_active:
                 self._segment = self._warp_backend.begin_discovery_segment(
                     node_name=self.node_name,
-                    segment_ordinal=segment_ordinal,
                     call_stack=get_caller_stack_identity(),
                 )
-                self._phase = "discovery"
-            elif stored_segment.is_pending_capture:
+                self._exit_function = self._exit_discovery
+            else:
+                stored_segment = self.node_ref.acquire_warp_segment()
+                if stored_segment is None:
+                    # TODO: switch to fatal instead of error
+                    raise RuntimeError(
+                        f"[{self.node_name}] Warp capture encountered more "
+                        "regions than discovery."
+                    )
                 call_stack = get_caller_stack_identity()
                 if not caller_identity_has_same_anchor(
                     stored_segment.call_stack,
@@ -210,8 +219,8 @@ else:
                 ):
                     # TODO: switch to fatal instead of error
                     message = (
-                        f"[{self.node_name}] Warp segment {stored_segment.segment_ordinal} was "
-                        "re-entered from a different annotation origin.\n"
+                        f"[{self.node_name}] Warp segment was re-entered from "
+                        "a different annotation origin.\n"
                         "Discovery origin:\n"
                         f"{format_caller_identity(stored_segment.call_stack)}\n"
                         f"Capture origin:\n{format_caller_identity(call_stack)}"
@@ -222,7 +231,7 @@ else:
                 self._segment = self._warp_backend.begin_capture_segment(
                     segment=stored_segment
                 )
-                self._phase = "capture"
+                self._exit_function = self._exit_capture
                 with self._warp_backend.paused():
                     self._scope = wp.ScopedCapture(
                         device=self.device,
@@ -233,7 +242,7 @@ else:
             return self
 
         def __exit__(self, exc_type, exc_value, traceback):
-            if self._segment is None or self._phase is None:
+            if self._segment is None or self._exit_function is None:
                 return False
             call_stack = get_caller_stack_identity()
             if not self._warp_backend.call_stack_matches_segment(
@@ -241,21 +250,12 @@ else:
                 call_stack,
             ):
                 return False
-            if self._phase == "discovery":
-                return self._exit_discovery(
-                    exc_type,
-                    exc_value,
-                    traceback,
-                    call_stack,
-                )
-            if self._phase == "capture":
-                return self._exit_capture(
-                    exc_type,
-                    exc_value,
-                    traceback,
-                    call_stack,
-                )
-            raise RuntimeError(f"Unknown WarpOp phase: {self._phase}")
+            return self._exit_function(
+                exc_type,
+                exc_value,
+                traceback,
+                call_stack,
+            )
 
         def _exit_discovery(
             self,
