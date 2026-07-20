@@ -60,8 +60,9 @@ class TracedTensorNode(LeappNode):
     def _get_required_io_description(self, name: str, io_list: list, io_kind: str):
         desc = self.get_io_description_by_name(name, io_list)
         if desc is None:
-            raise RuntimeError(
-                f"State tensor '{name}' in node '{self.name}' is missing its {io_kind} description."
+            _get_logger().fatal(
+                f"State tensor '{name}' in node '{self.name}' is missing its {io_kind} description.",
+                error_type=RuntimeError,
             )
         return desc
 
@@ -94,12 +95,14 @@ class TracedTensorNode(LeappNode):
 
     def complete_warp_segment(self, segment: "WarpSegment") -> None:
         if not self._pending_warp_segments or self._pending_warp_segments[0] is not segment:
-            raise RuntimeError(
-                f"[{self.name}] Captured Warp regions out of discovery order."
+            _get_logger().fatal(
+                f"[{self.name}] Captured Warp regions out of discovery order.",
+                error_type=RuntimeError,
             )
         if segment.apic_graph is None:
-            raise RuntimeError(
-                f"[{self.name}] Captured Warp segment has no APIC graph."
+            _get_logger().fatal(
+                f"[{self.name}] Captured Warp segment has no APIC graph.",
+                error_type=RuntimeError,
             )
         self._pending_warp_segments.popleft()
 

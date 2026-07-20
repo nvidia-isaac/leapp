@@ -253,9 +253,10 @@ def extract_return_names(func):
             # Different number of return values - this is an error
             count_details = {count: return_counts.count(
                 count) for count in unique_counts}
-            raise Exception(
+            _get_logger().fatal(
                 f"Function {func.__name__} has inconsistent return statements with different numbers of values: "
-                f"{count_details}. All return statements must return the same number of values."
+                f"{count_details}. All return statements must return the same number of values.",
+                error_type=Exception,
             )
 
         # All return statements have the same number of values
@@ -344,19 +345,28 @@ def get_attribute_value_from_namespace(namespace, attr_name):
         parts = attr_name.split(".")
         final_attr_name = parts[-1]
         if parts[0] not in namespace:
-            raise Exception(f"Variable '{parts[0]}' not found in namespace")
+            _get_logger().fatal(
+                f"Variable '{parts[0]}' not found in namespace",
+                error_type=Exception,
+            )
         
         obj = namespace[parts[0]]
         for attr in parts[1:]:
             try:
                 obj = getattr(obj, attr)
             except Exception as e:
-                raise Exception(
+                _get_logger().fatal(
                     f"Error attempting to find {attr_name}, "
-                    f"failed to get attribute {attr}\n", e)
+                    f"failed to get attribute {attr}",
+                    error_type=Exception,
+                    cause=e,
+                )
     else:
         if attr_name not in namespace:
-            raise Exception(f"Variable '{attr_name}' not found in namespace")
+            _get_logger().fatal(
+                f"Variable '{attr_name}' not found in namespace",
+                error_type=Exception,
+            )
         obj = namespace[attr_name]
         final_attr_name = attr_name
 

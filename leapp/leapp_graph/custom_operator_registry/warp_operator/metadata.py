@@ -17,6 +17,8 @@ import json
 from collections.abc import Iterable
 from typing import Any
 
+from leapp.utils.logging import _get_logger
+
 from .schema import QUALIFIED_NAME
 
 RUNTIME_METADATA_VERSION = 1
@@ -30,20 +32,29 @@ def encode_runtime_metadata(metadata: dict[str, Any]) -> str:
 def decode_runtime_metadata(encoded: str) -> dict[str, Any]:
     """Decode and minimally validate runtime metadata."""
     if not encoded:
-        raise ValueError(f"{QUALIFIED_NAME}: runtime_metadata is empty")
+        _get_logger().fatal(
+            f"{QUALIFIED_NAME}: runtime_metadata is empty",
+            error_type=ValueError,
+        )
     try:
         metadata = json.loads(encoded)
     except json.JSONDecodeError as exc:
-        raise ValueError(
-            f"{QUALIFIED_NAME}: invalid runtime_metadata JSON: {exc}"
-        ) from exc
+        _get_logger().fatal(
+            f"{QUALIFIED_NAME}: invalid runtime_metadata JSON: {exc}",
+            error_type=ValueError,
+            cause=exc,
+        )
     if not isinstance(metadata, dict):
-        raise ValueError(f"{QUALIFIED_NAME}: runtime_metadata must decode to an object")
+        _get_logger().fatal(
+            f"{QUALIFIED_NAME}: runtime_metadata must decode to an object",
+            error_type=ValueError,
+        )
     version = metadata.get("schema_version")
     if version != RUNTIME_METADATA_VERSION:
-        raise ValueError(
+        _get_logger().fatal(
             f"{QUALIFIED_NAME}: unsupported runtime_metadata schema_version "
-            f"{version!r}; expected {RUNTIME_METADATA_VERSION}"
+            f"{version!r}; expected {RUNTIME_METADATA_VERSION}",
+            error_type=ValueError,
         )
     return metadata
 
@@ -121,19 +132,22 @@ def build_runtime_metadata(
 ) -> dict[str, Any]:
     """Build the metadata payload consumed by all runtime adapters."""
     if len(output_refs) != len(output_shapes):
-        raise ValueError(
+        _get_logger().fatal(
             f"{QUALIFIED_NAME}: output_refs ({len(output_refs)}) and "
-            f"output_shapes ({len(output_shapes)}) must have equal length"
+            f"output_shapes ({len(output_shapes)}) must have equal length",
+            error_type=ValueError,
         )
     if len(output_refs) != len(output_dtypes):
-        raise ValueError(
+        _get_logger().fatal(
             f"{QUALIFIED_NAME}: output_refs ({len(output_refs)}) and "
-            f"output_dtypes ({len(output_dtypes)}) must have equal length"
+            f"output_dtypes ({len(output_dtypes)}) must have equal length",
+            error_type=ValueError,
         )
     if len(output_refs) != len(output_mask):
-        raise ValueError(
+        _get_logger().fatal(
             f"{QUALIFIED_NAME}: output_refs ({len(output_refs)}) and "
-            f"output_mask ({len(output_mask)}) must have equal length"
+            f"output_mask ({len(output_mask)}) must have equal length",
+            error_type=ValueError,
         )
 
     inputs = []
@@ -167,7 +181,10 @@ def build_runtime_metadata(
 def output_specs(metadata: dict[str, Any]) -> list[dict[str, Any]]:
     outputs = metadata.get("outputs", [])
     if not isinstance(outputs, list):
-        raise ValueError(f"{QUALIFIED_NAME}: runtime_metadata.outputs must be a list")
+        _get_logger().fatal(
+            f"{QUALIFIED_NAME}: runtime_metadata.outputs must be a list",
+            error_type=ValueError,
+        )
     return outputs
 
 

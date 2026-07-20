@@ -16,6 +16,8 @@ from typing import Type, Union, Optional
 import numpy as np
 import torch as _torch
 
+from leapp.utils.logging import _get_logger
+
 from .traced_data import TracedData
 from .torch.traced_tensor import TracedTensor
 from .numpy.traced_np_array import TracedNpArray
@@ -153,8 +155,9 @@ def as_traced(
     """
     if preserve_identity:
         if wp is None or TracedWpArray is None or not isinstance(data, wp.array):
-            raise TypeError(
-                "preserve_identity=True is only supported for Warp arrays"
+            _get_logger().fatal(
+                "preserve_identity=True is only supported for Warp arrays",
+                error_type=TypeError,
             )
         return TracedWpArray.make_traced_in_place(data, name, context, proxy)
 
@@ -168,9 +171,10 @@ def as_traced(
     traced_class = get_traced_class_for(data)
     
     if traced_class is None:
-        raise TypeError(
+        _get_logger().fatal(
             f"Cannot create traced data from type {type(data).__name__}. "
-            f"Supported types: {', '.join(t.__name__ for t in TRACABLE_BASE_TYPES)}"
+            f"Supported types: {', '.join(t.__name__ for t in TRACABLE_BASE_TYPES)}",
+            error_type=TypeError,
         )
     
     return traced_class(data, name, context, proxy)
@@ -185,8 +189,9 @@ def to_export_torch_tensor(data) -> _torch.Tensor:
         return _torch.from_numpy(data)
     if wp is not None and isinstance(data, wp.array):
         return wp.to_torch(data)
-    raise TypeError(
-        f"Cannot convert type {type(data).__name__} to torch.Tensor"
+    _get_logger().fatal(
+        f"Cannot convert type {type(data).__name__} to torch.Tensor",
+        error_type=TypeError,
     )
 
 # =============================================================================

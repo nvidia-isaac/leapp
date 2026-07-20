@@ -35,11 +35,15 @@ def get_module_template(name, parent_class, constant_attrs):
         if 'self.' in name:
             name = name.split('self.')[1]
         if name in self.saved_buffers:
-            raise ValueError(
-                f"Buffer with name '{name}' was already registered")
+            _get_logger().fatal(
+                f"Buffer with name '{name}' was already registered",
+                error_type=ValueError,
+            )
         if name in self.__constant__:
-            raise ValueError(
-                f"Buffer with name '{name}' was already registered as a constant")
+            _get_logger().fatal(
+                f"Buffer with name '{name}' was already registered as a constant",
+                error_type=ValueError,
+            )
         if hasattr(self, name):
             delattr(self, name)
         self.register_buffer(name, value)

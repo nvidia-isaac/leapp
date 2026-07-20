@@ -141,8 +141,9 @@ class SimplifiedONNXProgram:
             device_id = prepared.device.index or 0
             np_dtype = self._torch_dtype_to_numpy_dtype(prepared.dtype)
             if np_dtype is None:
-                raise TypeError(
-                    f"Unsupported CUDA input dtype for ONNX Runtime I/O binding: {prepared.dtype}"
+                _get_logger().fatal(
+                    f"Unsupported CUDA input dtype for ONNX Runtime I/O binding: {prepared.dtype}",
+                    error_type=TypeError,
                 )
             binding.bind_input(
                 name=name,
@@ -158,8 +159,9 @@ class SimplifiedONNXProgram:
         for output_meta in self._output_metas:
             torch_dtype = self._onnx_type_to_torch_dtype(output_meta.type)
             if torch_dtype is None:
-                raise TypeError(
-                    f"Unsupported ONNX output dtype for CUDA I/O binding: {output_meta.type}"
+                _get_logger().fatal(
+                    f"Unsupported ONNX output dtype for CUDA I/O binding: {output_meta.type}",
+                    error_type=TypeError,
                 )
 
             output_tensor = torch.empty(
@@ -286,8 +288,9 @@ class SimplifiedONNXProgram:
             custom_op_library = os.environ.get("LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY")
             if custom_op_library:
                 if not os.path.exists(custom_op_library):
-                    raise FileNotFoundError(
-                        f"LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY does not exist: {custom_op_library}"
+                    _get_logger().fatal(
+                        f"LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY does not exist: {custom_op_library}",
+                        error_type=FileNotFoundError,
                     )
                 sess_options.register_custom_ops_library(custom_op_library)
             # ORT_ENABLE_ALL can silently corrupt results for certain graph
@@ -315,9 +318,10 @@ class SimplifiedONNXProgram:
         self._ensure_session()
 
         if len(args) != len(self._input_names):
-            raise ValueError(
+            _get_logger().fatal(
                 f"Expected {len(self._input_names)} inputs, got {len(args)}. "
-                f"Input names: {self._input_names}"
+                f"Input names: {self._input_names}",
+                error_type=ValueError,
             )
 
         # Determine output device from input tensors

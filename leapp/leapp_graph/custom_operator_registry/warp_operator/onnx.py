@@ -40,17 +40,19 @@ def lower_warp_runner_to_onnx(
 
     tracer = _core.current_tracer
     if tracer is None:
-        raise RuntimeError(
-            f"Cannot lower {QUALIFIED_NAME}: ONNX export tracer is not active."
+        _get_logger().fatal(
+            f"Cannot lower {QUALIFIED_NAME}: ONNX export tracer is not active.",
+            error_type=RuntimeError,
         )
 
     metadata = decode_runtime_metadata(runtime_metadata)
     shape_lists = output_shapes(metadata)
     dtype_lists = output_dtypes(metadata)
     if len(shape_lists) != len(dtype_lists):
-        raise ValueError(
+        _get_logger().fatal(
             f"{QUALIFIED_NAME}: runtime_metadata output shapes ({len(shape_lists)}) "
-            f"and dtypes ({len(dtype_lists)}) must have equal length"
+            f"and dtypes ({len(dtype_lists)}) must have equal length",
+            error_type=ValueError,
         )
 
     data_inputs = list(inputs)

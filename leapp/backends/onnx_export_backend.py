@@ -59,9 +59,10 @@ class ONNXExportBackend(ExportBackend):
             new_input_name = f"{name}_in"
             new_output_name = f"{name}_out"
             if new_input_name in used_names or new_output_name in used_names:
-                raise ValueError(
+                _get_logger().fatal(
                     f"[{self.node_context.name}] Cannot resolve overlapping ONNX I/O name '{name}' "
-                    f"because '{new_input_name}' or '{new_output_name}' is already in use."
+                    f"because '{new_input_name}' or '{new_output_name}' is already in use.",
+                    error_type=ValueError,
                 )
             self.node_context.change_input_name(name, new_input_name)
             self.node_context.change_output_name(name, new_output_name)
@@ -91,13 +92,14 @@ class ONNXExportBackend(ExportBackend):
         renamed_inputs = [name for name in actual_input_names if name not in expected_input_names]
         
         if renamed_inputs:
-            raise ValueError(
+            _get_logger().fatal(
                 f"[{self.node_context.name}] ONNX export renamed inputs: {renamed_inputs}. "
                 "This typically happens with identity/passthrough functions with onnx-dynamo. "
                 "This usecase is not supported by LEAPP, please: \n"
                 "1. use the onnx-torchscript export backend instead\n"
                 "2. use a different backend, such as torch-script or torch-trace \n"
-                "3. remove the inputs that are not used in the computation or directly returned as output"
+                "3. remove the inputs that are not used in the computation or directly returned as output",
+                error_type=ValueError,
             )
         
         if removed_inputs:
@@ -188,10 +190,11 @@ class ONNXExportBackend(ExportBackend):
         ]
 
         if len(wrp_nodes) != len(segments):
-            raise ValueError(
+            _get_logger().fatal(
                 f"[{self.node_context.name}] WrpRunner node count "
                 f"({len(wrp_nodes)}) does not match saved Warp segments "
-                f"({len(segments)}); cannot correlate bundles."
+                f"({len(segments)}); cannot correlate bundles.",
+                error_type=ValueError,
             )
 
         embedded = 0
@@ -200,9 +203,10 @@ class ONNXExportBackend(ExportBackend):
                 segment.marker_proxy.node if segment.marker_proxy is not None else None
             )
             if op_node is None:
-                raise ValueError(
+                _get_logger().fatal(
                     f"[{self.node_context.name}] Saved Warp segment has no marker node; "
-                    "cannot patch runtime metadata."
+                    "cannot patch runtime metadata.",
+                    error_type=ValueError,
                 )
             runtime_metadata = op_node.args[1]
 

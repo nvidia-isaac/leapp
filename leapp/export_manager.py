@@ -178,13 +178,13 @@ class ExportManager:
                 "or finish the annotated function?",
                 error_type=Exception)
         if pending_warp_nodes:
-            # TODO: use fatal instead of error
             pending_warp_nodes.sort()
             formatted = ", ".join(pending_warp_nodes)
-            raise Exception(
+            _get_logger().fatal(
                 "The following nodes discovered explicit Warp segments but were "
                 f"not executed a second time for APIC capture: {formatted}. "
-                "Run the same annotated path again before compiling the graph."
+                "Run the same annotated path again before compiling the graph.",
+                error_type=Exception,
             )
 
     def _setup_new_node(self, name, node_class: LeappNode, **kwargs):
@@ -734,21 +734,34 @@ class ExportManager:
         if not ExportManager._interpret_graph or self.is_dry_run(node_name):
             return nullcontext()
         if WarpOp is None:
-            raise ImportError("LEAPP: warp_op requires warp-lang (pip install warp-lang).")
+            _get_logger().fatal(
+                "LEAPP: warp_op requires warp-lang (pip install warp-lang).",
+                error_type=ImportError,
+            )
         warp_backend = self.patcher.warp
         if warp_backend is None:
-            raise ImportError("LEAPP: the warp backend is not installed. Please call leapp.start(..., global_patching=True).")
+            _get_logger().fatal(
+                "LEAPP: the warp backend is not installed. "
+                "Please call leapp.start(..., global_patching=True).",
+                error_type=ImportError,
+            )
 
         if node_name not in self.nodes:
-            raise ValueError(f"LEAPP: node '{node_name}' not found. Call annotate.input_tensors() first to create the node.")
+            _get_logger().fatal(
+                f"LEAPP: node '{node_name}' not found. "
+                "Call annotate.input_tensors() first to create the node.",
+                error_type=ValueError,
+            )
 
         node = self.nodes[node_name]
         if not node.is_tracing:
             return nullcontext()
 
         if not self.patcher.installed:
-            raise RuntimeError(
-                "LEAPP: warp_op requires global patching (call leapp.start(..., global_patching=True))."
+            _get_logger().fatal(
+                "LEAPP: warp_op requires global patching "
+                "(call leapp.start(..., global_patching=True)).",
+                error_type=RuntimeError,
             )
 
         return WarpOp(
@@ -847,8 +860,10 @@ class ExportManager:
             return
         try:
             if not verify_data_exact_match(source, target):
-                raise Exception(
-                    f"Error: source and target do not match: {source} != {target}")
+                _get_logger().fatal(
+                    f"Error: source and target do not match: {source} != {target}",
+                    error_type=Exception,
+                )
             mirror_all_tensor_tags(source, target)
         except Exception as e:
             _get_logger().fatal(

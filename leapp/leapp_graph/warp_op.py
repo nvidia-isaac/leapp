@@ -50,9 +50,10 @@ else:
         Returns archive bytes for immediate FX embedding.
         """
         if segment.apic_graph is None:
-            raise RuntimeError(
+            _get_logger().fatal(
                 f"[{node_name}] Warp segment '{segment.proxy_name or segment.node_name}' "
-                "has no APIC graph to save."
+                "has no APIC graph to save.",
+                error_type=RuntimeError,
             )
 
         bundle_dir = tempfile.mkdtemp(prefix=f"leapp_warp_{node_name}_")
@@ -105,11 +106,15 @@ else:
         if segment.status == "closed":
             return segment
         if segment.status == "invalid":
-            raise RuntimeError("Cannot close invalid Warp segment.")
+            _get_logger().fatal(
+                "Cannot close invalid Warp segment.",
+                error_type=RuntimeError,
+            )
         if segment.node_name != node_ref.name:
-            raise ValueError(
+            _get_logger().fatal(
                 f"Warp segment belongs to node '{segment.node_name}', not "
-                f"'{node_ref.name}'."
+                f"'{node_ref.name}'.",
+                error_type=ValueError,
             )
 
         if segment.is_empty:
@@ -128,9 +133,10 @@ else:
         output_dtypes: list[str] = []
         for ref in output_refs:
             if ref.shape is None:
-                raise RuntimeError(
+                _get_logger().fatal(
                     f"Warp segment output '{ref.name}' has no observed shape; "
-                    f"cannot emit {warp_operator.QUALIFIED_NAME}."
+                    f"cannot emit {warp_operator.QUALIFIED_NAME}.",
+                    error_type=RuntimeError,
                 )
             output_shapes.append([int(dim) for dim in ref.shape])
             output_dtypes.append(
@@ -150,8 +156,9 @@ else:
         )
         encoded_metadata = warp_operator.encode_runtime_metadata(runtime_metadata)
         if segment.runner_name is None:
-            raise RuntimeError(
-                f"Warp segment for node '{segment.node_name}' has no runner name."
+            _get_logger().fatal(
+                f"Warp segment for node '{segment.node_name}' has no runner name.",
+                error_type=RuntimeError,
             )
 
         # this step inserts the FX proxy and updates all the outputs.
@@ -207,17 +214,16 @@ else:
             else:
                 stored_segment = self.node_ref.acquire_warp_segment()
                 if stored_segment is None:
-                    # TODO: switch to fatal instead of error
-                    raise RuntimeError(
+                    _get_logger().fatal(
                         f"[{self.node_name}] Warp capture encountered more "
-                        "regions than discovery."
+                        "regions than discovery.",
+                        error_type=RuntimeError,
                     )
                 call_stack = get_caller_stack_identity()
                 if not caller_identity_has_same_anchor(
                     stored_segment.call_stack,
                     call_stack,
                 ):
-                    # TODO: switch to fatal instead of error
                     message = (
                         f"[{self.node_name}] Warp segment was re-entered from "
                         "a different annotation origin.\n"
@@ -225,8 +231,7 @@ else:
                         f"{format_caller_identity(stored_segment.call_stack)}\n"
                         f"Capture origin:\n{format_caller_identity(call_stack)}"
                     )
-                    _get_logger().error(f"Fatal: {message}")
-                    raise RuntimeError(message)
+                    _get_logger().fatal(message, error_type=RuntimeError)
 
                 self._segment = self._warp_backend.begin_capture_segment(
                     segment=stored_segment

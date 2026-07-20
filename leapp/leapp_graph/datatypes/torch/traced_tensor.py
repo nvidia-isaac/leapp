@@ -229,7 +229,10 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             A TracedTensor wrapping the target tensor with source's proxy
         """
         if not isinstance(source, TracedTensor):
-            raise TypeError(f"source must be a TracedTensor, got {type(source)}")
+            _get_logger().fatal(
+                f"source must be a TracedTensor, got {type(source)}",
+                error_type=TypeError,
+            )
 
         # Copy the actual data
         target.copy_(source.tensor)
@@ -281,10 +284,11 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
             #validate the script_module
             if not isinstance(script_module, torch.nn.Module):
-                raise RuntimeError(
+                _get_logger().fatal(
                     f"Could not obtain nn.Module from {type(func).__name__}. "
                     f"func.__self__={type(getattr(func, '__self__', None))}, "
-                    f"func.owner={type(getattr(func, 'owner', None))}"
+                    f"func.owner={type(getattr(func, 'owner', None))}",
+                    error_type=RuntimeError,
                 )
 
             # Clone+detach real_args so they are plain tensors with no
@@ -1177,9 +1181,10 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         
         # copy=False but copy is required → raise error (NumPy 2.0 semantics)
         if copy is False and needs_dtype_copy:
-            raise ValueError(
+            _get_logger().fatal(
                 f"Unable to avoid copy while creating an array with dtype {dtype} "
-                f"from array with dtype {result.dtype}."
+                f"from array with dtype {result.dtype}.",
+                error_type=ValueError,
             )
         
         if needs_dtype_copy:

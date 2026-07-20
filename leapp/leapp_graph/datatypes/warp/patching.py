@@ -78,6 +78,7 @@ import warp as wp
 from warp._src.context import Function as WarpKernelLanguageFunction
 
 from leapp.utils.caller_identity import caller_identity_has_same_anchor
+from leapp.utils.logging import _get_logger
 
 from .cupti_oracle import WarpCudaOracle
 from .traced_wp_array import TracedWpArray
@@ -179,7 +180,10 @@ class WarpPatchBackend:
 
         active = self.deactivate_segment(segment)
         if active is not segment:
-            raise RuntimeError("Discovery Warp segment is not active.")
+            _get_logger().fatal(
+                "Discovery Warp segment is not active.",
+                error_type=RuntimeError,
+            )
 
         warp_call_events = tuple(
             event for event in segment.events if event.get("kind") == "warp_call"
@@ -210,7 +214,10 @@ class WarpPatchBackend:
 
         active = self.deactivate_segment(segment)
         if active is not segment:
-            raise RuntimeError("Capture Warp segment is not active.")
+            _get_logger().fatal(
+                "Capture Warp segment is not active.",
+                error_type=RuntimeError,
+            )
 
         expected_qualnames = segment.call_qualnames
         actual_qualnames = tuple(
@@ -220,19 +227,21 @@ class WarpPatchBackend:
         )
         if actual_qualnames != expected_qualnames:
             segment.invalidate()
-            raise RuntimeError(
+            _get_logger().fatal(
                 f"[{segment.node_name}] Warp segment diverged between "
                 "discovery and capture. "
-                f"Expected calls {expected_qualnames}, got {actual_qualnames}."
+                f"Expected calls {expected_qualnames}, got {actual_qualnames}.",
+                error_type=RuntimeError,
             )
         return True
 
     def activate_segment(self, segment: Any) -> None:
         """Make ``segment`` the active destination for detected Warp calls."""
         if self._active_segment is not None:
-            raise RuntimeError(
+            _get_logger().fatal(
                 "A Warp segment is already active; only one segment may be "
-                "open globally at a time."
+                "open globally at a time.",
+                error_type=RuntimeError,
             )
         self._active_segment = segment
         self._cuda_oracle.set_segment(segment)
@@ -244,7 +253,10 @@ class WarpPatchBackend:
 
         active = self._active_segment
         if segment is not None and active is not segment:
-            raise ValueError("Warp segment is not the active segment.")
+            _get_logger().fatal(
+                "Warp segment is not the active segment.",
+                error_type=ValueError,
+            )
         self._active_segment = None
         self._cuda_oracle.set_segment(None)
         return active
@@ -599,9 +611,10 @@ class WarpPatchBackend:
         if not contexts:
             return None
         if len(contexts) > 1:
-            raise ValueError(
+            _get_logger().fatal(
                 "Warp boundary call received traced data from different LEAPP "
-                "trace contexts. Mixing active contexts is not supported."
+                "trace contexts. Mixing active contexts is not supported.",
+                error_type=ValueError,
             )
 
         src = TracedData.find_traced_data([args, kwargs or {}])
@@ -612,6 +625,7 @@ class WarpPatchBackend:
     def _validate_boundary_dtype(self, kwargs: dict[str, Any]) -> None:
         dtype = kwargs.get("dtype")
         if dtype is not None and getattr(dtype, "_shape_", None):
+            # TODO: location to look into dtypes
             raise NotImplementedError(
                 "LEAPP warp boundary tracing does not yet support vector/matrix "
                 f"warp dtypes (got {dtype}). Reshape in torch/numpy first or use a "
@@ -680,10 +694,10 @@ class WarpPatchBackend:
         source = traced_inputs[0]
         for candidate in traced_inputs[1:]:
             if candidate.context_obj is not source.context_obj:
-                raise ValueError(
+                _get_logger().fatal(
                     f"{qualname} received traced Warp arrays from different LEAPP "
-                    "trace contexts. Propagating mixed Warp trace contexts is "
-                    "not supported yet."
+                    "trace contexts.",
+                    error_type=ValueError,
                 )
 
         return _WarpTraceState(source.name, source.context_obj, source.proxy)

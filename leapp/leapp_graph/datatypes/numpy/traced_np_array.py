@@ -962,9 +962,10 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         
         # copy=False but copy is required → raise error (NumPy 2.0 semantics)
         if copy is False and needs_dtype_copy:
-            raise ValueError(
+            _get_logger().fatal(
                 f"Unable to avoid copy while creating an array with dtype {dtype} "
-                f"from array with dtype {self.dtype}."
+                f"from array with dtype {self.dtype}.",
+                error_type=ValueError,
             )
         
         # If not tracing, return plain numpy array
