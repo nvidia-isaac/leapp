@@ -113,7 +113,14 @@ def get_traced_class_for(obj_or_type: Union[type, object]) -> Optional[Type[Trac
     return None
 
 
-def as_traced(data, name: str, context, proxy) -> TracedData:
+def as_traced(
+    data,
+    name: str,
+    context,
+    proxy,
+    *,
+    preserve_identity: bool = False,
+) -> TracedData:
     """Create a TracedData instance from a tensor or array.
     
     This is a factory function that automatically selects the appropriate
@@ -124,6 +131,8 @@ def as_traced(data, name: str, context, proxy) -> TracedData:
         name: Name for the traced data (used in export and graph)
         context: The TraceContext that owns this data
         proxy: The fx.Proxy for graph recording
+        preserve_identity: When supported, trace the original object instead of
+            creating a wrapper. Currently only supported for Warp arrays.
         
     Returns:
         A TracedData instance (TracedTensor or TracedNpArray)
@@ -142,6 +151,13 @@ def as_traced(data, name: str, context, proxy) -> TracedData:
         >>> type(traced)
         <class 'TracedNpArray'>
     """
+    if preserve_identity:
+        if wp is None or TracedWpArray is None or not isinstance(data, wp.array):
+            raise TypeError(
+                "preserve_identity=True is only supported for Warp arrays"
+            )
+        return TracedWpArray.make_traced_in_place(data, name, context, proxy)
+
     # If already traced, unwrap to get the underlying tensor/array
     # We need to create a NEW traced instance with the new context
     # This erases any knowledge of previous operations operated on the data

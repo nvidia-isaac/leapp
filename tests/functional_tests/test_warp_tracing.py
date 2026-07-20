@@ -197,8 +197,6 @@ class TestWarpOp(WarpTestCase, LEAPPFunctionalTestBase):
         for _ in range(2):
             traced = annotate.input_tensors("node_a", {"in_a": source})
             array = wp.from_numpy(traced * 2.0)
-            # Keep allocation outside the captured region; allocating inside
-            # currently crashes during APIC save for NumPy-originated arrays.
             added = wp.empty_like(array)
             with annotate.warp_op("node_a"):
                 wp.launch(
@@ -217,6 +215,61 @@ class TestWarpOp(WarpTestCase, LEAPPFunctionalTestBase):
         self.assertFalse(node.has_pending_warp_segments)
         self.verify_node_io(node, inputs=1, outputs=1)
         self.assertEqual(len(node.warp_segments), 1)
+        self.verify_all_models_exist("node_a")
+
+    def test_numpy_to_warp_to_numpy_with_capture_allocation_in_one_node(self):
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        source = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+
+        for _ in range(2):
+            traced = annotate.input_tensors("node_a", {"in_a": source})
+            array = wp.from_numpy(traced * 2.0)
+            with annotate.warp_op("node_a"):
+                added = wp.empty_like(array)
+                wp.launch(
+                    self.kernels.add_scalar,
+                    dim=array.size,
+                    inputs=[array, wp.float32(2.0)],
+                    outputs=[added],
+                )
+            out = added.numpy() * 2.0 + 1.0
+            annotate.output_tensors("node_a", {"out_a": out}, export_with="onnx")
+
+        node = annotate.get_nodes()["node_a"]
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        self.assertFalse(node.has_pending_warp_segments)
+        self.verify_node_io(node, inputs=1, outputs=1)
+        self.assertEqual(len(node.warp_segments), 1)
+        self.verify_all_models_exist("node_a")
+
+    def test_multiple_numpy_origin_warp_segments_allocate_inside_one_node(self):
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        source = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+
+        for _ in range(2):
+            current = annotate.input_tensors("node_a", {"in_a": source})
+            for segment_index in range(4):
+                array = wp.from_numpy(current + float(segment_index))
+                with annotate.warp_op("node_a"):
+                    current_warp = wp.empty_like(array)
+                    wp.launch(
+                        self.kernels.add_scalar,
+                        dim=array.size,
+                        inputs=[array, wp.float32(segment_index + 1)],
+                        outputs=[current_warp],
+                    )
+                current = current_warp.numpy()
+            annotate.output_tensors("node_a", {"out_a": current}, export_with="onnx")
+
+        node = annotate.get_nodes()["node_a"]
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        self.assertFalse(node.has_pending_warp_segments)
+        self.verify_node_io(node, inputs=1, outputs=1)
+        self.assertEqual(len(node.warp_segments), 4)
         self.verify_all_models_exist("node_a")
 
     def test_warp_to_numpy_to_warp_in_one_node(self):
