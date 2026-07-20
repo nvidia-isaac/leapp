@@ -516,9 +516,11 @@ class LeappNode():
             return
         current_input_names = [input.name_str for input in self.inputs]
         if new_name in current_input_names:
-            raise Exception(
+            _get_logger().fatal(
                 f"Error requesting input name change for {self.name}/{old_name}:"
-                f" {new_name} is already in use")
+                f" {new_name} is already in use",
+                error_type=Exception,
+            )
         for input in self.inputs:
             if input.name_str == old_name:
                 input.change_name(new_name)
@@ -530,9 +532,11 @@ class LeappNode():
             return
         current_output_names = [output.name_str for output in self.outputs]
         if new_name in current_output_names:
-            raise Exception(
+            _get_logger().fatal(
                 f"Error requesting output name change for {self.name}:"
-                f" {new_name} is already in use")
+                f" {new_name} is already in use",
+                error_type=Exception,
+            )
         for output in self.outputs:
             if output.name_str == old_name:
                 output.change_name(new_name)

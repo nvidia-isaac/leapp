@@ -9,6 +9,7 @@ import warp as wp
 
 from ..traced_data import TracedData
 from leapp.utils.dtype import DtypeCodec, register_dtype_codec
+from leapp.utils.logging import _get_logger
 
 
 # Register the Warp dtype codec so leapp core can convert warp dtypes to common
@@ -79,9 +80,10 @@ class TracedWpArray(wp.array):
             array._init_tracing_state(name, context, proxy)
             return array
         if type(array) is not wp.array:
-            raise TypeError(
+            _get_logger().fatal(
                 "Can only class-swap exact raw wp.array instances into "
-                f"{cls.__name__}; got {type(array).__name__}"
+                f"{cls.__name__}; got {type(array).__name__}",
+                error_type=TypeError,
             )
         array.__class__ = cls
         array._init_tracing_state(name, context, proxy)

@@ -53,6 +53,8 @@ from pathlib import Path
 import torch
 import torch.fx as fx
 
+from leapp.utils.logging import _get_logger
+
 MAGIC = b"WRPB"
 VERSION = 1
 WRP_FILENAME = "segment.wrp"
@@ -61,7 +63,10 @@ WRP_FILENAME = "segment.wrp"
 def _collect_bundle_files(wrp_path: Path) -> list[tuple[str, bytes]]:
     wrp_path = wrp_path.resolve()
     if not wrp_path.is_file():
-        raise FileNotFoundError(f".wrp file not found: {wrp_path}")
+        _get_logger().fatal(
+            f".wrp file not found: {wrp_path}",
+            error_type=FileNotFoundError,
+        )
 
     parent = wrp_path.parent
     files: list[tuple[str, bytes]] = [(wrp_path.name, wrp_path.read_bytes())]

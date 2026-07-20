@@ -61,9 +61,11 @@ class TorchExportBackend(ExportBackend):
 class TorchTraceExportBackend(TorchExportBackend):
     def compile(self, m: torch.nn.Module = None):
         if not len(self.node_context.register_buffers) == 0:
-            raise Exception(
+            _get_logger().fatal(
                 "TorchTraceExportBackend does not support buffers, "
-                "consider using export_with='jit-trace'")
+                "consider using export_with='jit-trace'",
+                error_type=Exception,
+            )
         if m is None:
             m = self.module_builder()
         m = m.eval()

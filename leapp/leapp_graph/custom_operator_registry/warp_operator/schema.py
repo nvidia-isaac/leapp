@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import torch
 
+from leapp.utils.logging import _get_logger
+
 NAMESPACE = "leapp"
 OP_NAME = "warp_runner"
 QUALIFIED_NAME = f"{NAMESPACE}::{OP_NAME}"
@@ -27,5 +29,8 @@ def get_op() -> "torch._ops.OpOverloadPacket":
 def _resolve_dtype(name: str) -> torch.dtype:
     dtype = getattr(torch, name, None)
     if not isinstance(dtype, torch.dtype):
-        raise ValueError(f"{QUALIFIED_NAME}: unknown output dtype name '{name}'")
+        _get_logger().fatal(
+            f"{QUALIFIED_NAME}: unknown output dtype name '{name}'",
+            error_type=ValueError,
+        )
     return dtype

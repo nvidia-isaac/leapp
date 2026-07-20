@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import torch
 
+from leapp.utils.logging import _get_logger
+
 from .metadata import decode_runtime_metadata, output_dtypes, output_shapes
 from .schema import QUALIFIED_NAME, _resolve_dtype
 
@@ -18,9 +20,10 @@ def _decode_output_spec(runtime_metadata: str) -> tuple[list[list[int]], list[st
     shape_lists = output_shapes(metadata)
     dtype_lists = output_dtypes(metadata)
     if len(shape_lists) != len(dtype_lists):
-        raise ValueError(
+        _get_logger().fatal(
             f"{QUALIFIED_NAME}: runtime_metadata output shapes ({len(shape_lists)}) "
-            f"and dtypes ({len(dtype_lists)}) must have equal length"
+            f"and dtypes ({len(dtype_lists)}) must have equal length",
+            error_type=ValueError,
         )
     return shape_lists, dtype_lists
 

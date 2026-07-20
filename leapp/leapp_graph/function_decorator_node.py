@@ -65,10 +65,11 @@ class FunctionDecoratorNode(LeappNode):
 
         overlap = self.register_buffers & self.environment_constants
         if overlap:
-            raise ValueError(
+            _get_logger().fatal(
                 f"FunctionDecoratorNode '{self.name}': The following names are "
                 f"present in both register_buffers and environment_constants: {overlap}. "
-                "Please ensure there is no overlap between these two lists."
+                "Please ensure there is no overlap between these two lists.",
+                error_type=ValueError,
             )
 
         self.setup_backend(backend, backend_params)
@@ -169,9 +170,11 @@ class FunctionDecoratorNode(LeappNode):
                 self.add_output(output_name, output_name, result[i])
         else:
             if not len(return_names) == 1:
-                raise Exception(
+                _get_logger().fatal(
                     f"Error: {self.name} has {len(return_names)}"
-                    " outputs, but only one output is detected")
+                    " outputs, but only one output is detected",
+                    error_type=Exception,
+                )
             self.tag_data(result, return_names[0])
             self.add_output(return_names[0], return_names[0], result)
 
@@ -241,9 +244,11 @@ class FunctionDecoratorNode(LeappNode):
                     output_name, output_name, result[i])
         else:
             if not len(return_names) == 1:
-                raise Exception(
+                _get_logger().fatal(
                     f"Error: {self.name} has {len(return_names)}"
-                    " outputs, but only one output is detected")
+                    " outputs, but only one output is detected",
+                    error_type=Exception,
+                )
             self.tag_data(result, return_names[0])
             self.validate_output_and_update_tags(
                 return_names[0], return_names[0], result)
