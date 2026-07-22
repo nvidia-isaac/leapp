@@ -12,9 +12,9 @@ represent the segment outputs.
 Torch-facing custom autograd wrappers are not inherently opaque to this
 mechanism.  ``torch.autograd.Function.forward`` still executes eagerly with a
 ``TracedTensor``, so calls such as ``wp.from_torch``, ``wp.launch``, and
-``wp.to_torch`` reach these wrappers.  They must still execute inside an
-explicit Warp segment; patched calls outside ``annotate.warp_op`` run normally
-but do not create an APIC-backed FX node.
+``wp.to_torch`` reach these wrappers.  Patched calls can run inside an explicit
+``annotate.warp_op`` context or trigger automatic ``WarpOp`` placement when
+they first touch actively traced Warp data.
 
 Important lifecycle limitation: ``wp.to_torch`` inside an open segment
 -----------------------------------------------------------------------
@@ -77,10 +77,11 @@ import sys
 import warp as wp
 from warp._src.context import Function as WarpKernelLanguageFunction
 
-from leapp.utils.caller_identity import caller_identity_has_same_anchor
+from leapp.utils.caller_identity import caller_identity_has_same_anchor, get_caller_stack_identity
 from leapp.utils.logging import _get_logger
 
 from .cupti_oracle import WarpCudaOracle
+from .session import WarpTraceSession
 from .traced_wp_array import TracedWpArray
 from .warp_segment import WarpSegment
 
@@ -116,12 +117,11 @@ class WarpPatchBackend:
     def __init__(self) -> None:
         self._patches: list[_Patch] = []
         self._wrappers_by_original_id: dict[int, Any] = {}
-        self._recording_paused = False
-        self._active_segment: Any | None = None
+        self._session: Any | None = None
         self._installed = False
         self._boundary_function_ids: set[int] = set()
         self._boundary_array_init_id: int | None = None
-        self._cuda_oracle = WarpCudaOracle()
+        self._cuda_oracle: WarpCudaOracle | None = None
     #########################################################
     # Properties
     #########################################################
@@ -140,154 +140,59 @@ class WarpPatchBackend:
 
         if self._installed:
             return self
-
+ 
+        self._cuda_oracle = WarpCudaOracle(self.close_warp_segment)
+        self._session = WarpTraceSession()
+        self._cuda_oracle.set_session(self._session)
         self._register_boundary_functions()
         self._patch_warp_modules()
 
         self._patch_loaded_aliases()
-        self._cuda_oracle.start()
 
         self._installed = True
         return self
-
-    def begin_discovery_segment(
-        self,
-        *,
-        node_name: str,
-        call_stack: Any,
-    ) -> WarpSegment:
-        segment = WarpSegment(
-            node_name=node_name,
-            call_stack=call_stack,
-        )
-        self.activate_segment(segment)
-        return segment
 
     def call_stack_matches_segment(
         self,
         segment: WarpSegment,
         call_stack: Any,
     ) -> bool:
-        return caller_identity_has_same_anchor(segment.call_stack, call_stack)
+        return caller_identity_has_same_anchor(segment.open_call_stack, call_stack)
 
-    def end_discovery_segment(
-        self,
-        segment: WarpSegment,
-        call_stack: Any,
-    ) -> WarpSegment | None:
-        if not self.call_stack_matches_segment(segment, call_stack):
-            return None
-
-        active = self.deactivate_segment(segment)
-        if active is not segment:
+    def create_warp_op(self, node_ref: Any):
+        """Create a WarpOp owned by this patch backend."""
+        if not self.installed or self._session is None:
             _get_logger().fatal(
-                "Discovery Warp segment is not active.",
-                error_type=RuntimeError,
+                "LEAPP: the warp backend is not installed. "
+                "Please call leapp.start(..., global_patching=True), and make sure warp-lang is installed.",
+                error_type=ImportError,
             )
+        from leapp.leapp_graph.warp_op import WarpOp
 
-        warp_call_events = tuple(
-            event for event in segment.events if event.get("kind") == "warp_call"
+        return WarpOp(
+            node_ref,
+            session=self._session,
         )
-        call_qualnames = tuple(str(event["qualname"]) for event in warp_call_events)
-        segment.call_qualnames = call_qualnames
-        segment.status = "closed"
-        return segment
 
-    def begin_capture_segment(
-        self,
-        *,
-        segment: WarpSegment,
-    ) -> WarpSegment:
-        segment.status = "open"
-        segment.events.clear()
-        segment.input_refs.clear()
-        segment.output_refs.clear()
-        segment.marker_proxy = None
-        segment.proxy_name = None
-        segment.apic_graph = None
-        self.activate_segment(segment)
-        return segment
-
-    def end_capture_segment(self, segment: WarpSegment, call_stack: Any) -> bool:
-        if not self.call_stack_matches_segment(segment, call_stack):
-            return False
-
-        active = self.deactivate_segment(segment)
-        if active is not segment:
-            _get_logger().fatal(
-                "Capture Warp segment is not active.",
-                error_type=RuntimeError,
-            )
-
-        expected_qualnames = segment.call_qualnames
-        actual_qualnames = tuple(
-            str(event["qualname"])
-            for event in segment.events
-            if event.get("kind") == "warp_call"
+    def close_warp_segment(self, *_args: Any, **_kwargs: Any) -> None:
+        """Request closure of the active unowned Warp segment."""
+        if self._session is None:
+            return
+        self._session.close_warp_segment(
+            close_call_stack=get_caller_stack_identity(),
         )
-        if actual_qualnames != expected_qualnames:
-            segment.invalidate()
-            _get_logger().fatal(
-                f"[{segment.node_name}] Warp segment diverged between "
-                "discovery and capture. "
-                f"Expected calls {expected_qualnames}, got {actual_qualnames}.",
-                error_type=RuntimeError,
-            )
-        return True
 
-    def activate_segment(self, segment: Any) -> None:
-        """Make ``segment`` the active destination for detected Warp calls."""
-        if self._active_segment is not None:
-            _get_logger().fatal(
-                "A Warp segment is already active; only one segment may be "
-                "open globally at a time.",
-                error_type=RuntimeError,
-            )
-        self._active_segment = segment
-        self._cuda_oracle.set_segment(segment)
-
-    def deactivate_segment(self, segment: Any | None = None) -> Any | None:
-        """Deactivate and return the active Warp segment."""
-        if self._active_segment is None:
-            return None
-
-        active = self._active_segment
-        if segment is not None and active is not segment:
-            _get_logger().fatal(
-                "Warp segment is not the active segment.",
-                error_type=ValueError,
-            )
-        self._active_segment = None
-        self._cuda_oracle.set_segment(None)
-        return active
-
-    @property
-    def active_segment(self) -> Any | None:
-        return self._active_segment
-
-    @contextlib.contextmanager
-    def paused(self):
-        """Suppress Warp call detection for the duration of the block.
-
-        Temporarily routes patched Warp functions straight to their original
-        implementations and allows soft-banned CUDA callbacks as Warp-owned.
-        Previous state is restored so nested pauses compose correctly.
-        """
-        previous_recording_paused = self._recording_paused
-        previous_cuda_allowed = self._cuda_oracle.set_warp_cuda_allowed(True)
-        self._recording_paused = True
-        try:
-            yield
-        finally:
-            self._recording_paused = previous_recording_paused
-            self._cuda_oracle.set_warp_cuda_allowed(previous_cuda_allowed)
+    def _pause_context(self):
+        if self._session is None:
+            return contextlib.nullcontext()
+        return self._session.pause()
 
     def uninstall(self) -> None:
         """Restore every attribute patched by this detector."""
 
-        self._active_segment = None
-        self._cuda_oracle.set_segment(None)
-        self._cuda_oracle.stop()
+        if self._cuda_oracle is not None:
+            self._cuda_oracle.stop()
+            self._cuda_oracle = None
 
         for patch in reversed(self._patches):
             try:
@@ -307,6 +212,7 @@ class WarpPatchBackend:
         self._wrappers_by_original_id.clear()
         self._boundary_function_ids.clear()
         self._boundary_array_init_id = None
+        self._session = None
         self._installed = False
 
     #########################################################
@@ -502,7 +408,7 @@ class WarpPatchBackend:
     def _make_wrapper(self, qualname: str, original: Callable) -> Callable:
         @functools.wraps(original)
         def wrapped(*args, **kwargs):
-            if self._recording_paused:
+            if self._session is not None and self._session.paused:
                 return original(*args, **kwargs)
 
             if id(original) in self._boundary_function_ids:
@@ -516,12 +422,12 @@ class WarpPatchBackend:
             # untouched, so there is nothing to convert back afterward.
             traced_inputs, call_args, call_kwargs = self._normalize_and_collect(args, kwargs)
             trace_state = self._build_trace_state(qualname, traced_inputs)
-            segment = self._resolve_segment(trace_state)
+            segment = self._resolve_or_begin_warp_segment(trace_state)
 
             if segment is not None:
                 self._record_segment_inputs(segment, qualname, traced_inputs)
 
-            with self.paused():
+            with self._pause_context():
                 result = original(*call_args, **call_kwargs)
 
             self._process_post_call_arrays(
@@ -563,6 +469,7 @@ class WarpPatchBackend:
     ) -> tuple[bool, Any]:
         # lazy to avoid circular imports
         from leapp.leapp_graph.datatypes import as_traced, is_tracable_tensor_type
+        from leapp.leapp_graph.datatypes.traced_data import TracedData
 
         is_init = id(original) == self._boundary_array_init_id
         if is_init and not args:
@@ -571,15 +478,18 @@ class WarpPatchBackend:
         search_args = args[1:] if is_init else args
         src = self._find_single_active_traced_data(search_args, kwargs)
         if src is None or not src.is_tracing:
+            if is_init:
+                with self._pause_context():
+                    original(*args, **kwargs)
+                return True, None
             return False, None
 
         self._validate_boundary_dtype(kwargs)
-        from leapp.leapp_graph.datatypes.traced_data import TracedData
 
         call_args = TracedData.unwrap_traced_data(args)
         call_kwargs = TracedData.unwrap_traced_data(kwargs)
 
-        with self.paused():
+        with self._pause_context():
             raw = original(*call_args, **call_kwargs)
 
         if is_init:
@@ -595,7 +505,6 @@ class WarpPatchBackend:
                 src.name,
                 src.context_obj,
                 src.proxy,
-                preserve_identity=isinstance(raw, wp.array),
             )
             return True, traced_raw
         return True, raw
@@ -702,10 +611,29 @@ class WarpPatchBackend:
 
         return _WarpTraceState(source.name, source.context_obj, source.proxy)
 
-    def _resolve_segment(self, trace_state: "_WarpTraceState | None") -> Any | None:
-        if self.active_segment is not None:
-            return self.active_segment
+    def _resolve_or_begin_warp_segment(
+        self,
+        trace_state: "_WarpTraceState | None",
+    ) -> Any | None:
+        active_segment = None if self._session is None else self._session.active_segment
+        if active_segment is not None:
+            return active_segment
+        if trace_state is not None:
+            warp_op = self._begin_boundary_closeable_warp_op(trace_state)
+            return None if warp_op is None else warp_op.segment
         return None
+
+    def _begin_boundary_closeable_warp_op(
+        self,
+        trace_state: "_WarpTraceState",
+    ) -> Any | None:
+        node_ref = trace_state.context
+        if node_ref is None or not getattr(node_ref, "is_tracing", False):
+            return None
+        warp_op = self.create_warp_op(node_ref)
+        return warp_op.begin(
+            call_stack=get_caller_stack_identity(),
+        )
 
     def _record_segment_inputs(
         self,
@@ -728,6 +656,9 @@ class WarpPatchBackend:
         trace_state: "_WarpTraceState | None",
     ) -> None:
         seen: set[int] = set()
+        # Warp kernels and runtime helpers can mutate arrays through arguments
+        # without declaring intent, so conservatively inspect all call inputs and
+        # return values for arrays that may need to be tracked as segment outputs.
         for value in (args, kwargs, result):
             self._process_post_call_node(
                 value,
@@ -764,7 +695,6 @@ class WarpPatchBackend:
                     trace_state.name,
                     trace_state.context,
                     trace_state.proxy,
-                    preserve_identity=True,
                 )
                 if segment is not None:
                     segment.add_output_ref(traced_array)

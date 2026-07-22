@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sys
-import threading
 import traceback
 from typing import Any
 
@@ -56,12 +55,15 @@ class WarpCudaOracle:
     # They are not explicitly filtered because non-listed callbacks are allowed
     # by default; only hard-ban and soft-ban fragments below create warnings.
 
-    def __init__(self) -> None:
-        self._active_segment: Any | None = None
+    def __init__(self, boundary_handler=None) -> None:
+        self._session: Any | None = None
         self._subscriber: int | None = None
-        self._thread_state = threading.local()
         self._warned_by_segment: dict[int, set[tuple[str, str, str]]] = {}
         self._callback = self._on_callback
+        self._boundary_handler = boundary_handler
+
+    def set_session(self, session: Any | None) -> None:
+        self._session = session
 
     def start(self) -> None:
         if self._subscriber is not None:
@@ -72,7 +74,6 @@ class WarpCudaOracle:
 
     def stop(self) -> None:
         if self._subscriber is None:
-            self._active_segment = None
             return
 
         try:
@@ -84,19 +85,8 @@ class WarpCudaOracle:
         except Exception:
             pass
         self._subscriber = None
-        self._active_segment = None
+        self._session = None
         self._warned_by_segment.clear()
-
-    def set_segment(self, segment: Any | None) -> None:
-        self._active_segment = segment
-        if segment is None:
-            return
-        self._warned_by_segment.setdefault(id(segment), set())
-
-    def set_warp_cuda_allowed(self, allowed: bool) -> bool:
-        previous = bool(getattr(self._thread_state, "warp_cuda_allowed", False))
-        self._thread_state.warp_cuda_allowed = allowed
-        return previous
 
     def _on_callback(
         self,
@@ -105,7 +95,8 @@ class WarpCudaOracle:
         cbid: int,
         _cbdata: Any,
     ) -> None:
-        segment = self._active_segment
+        session = self._session
+        segment = None if session is None else session.active_segment
         if segment is None:
             return
 
@@ -114,13 +105,15 @@ class WarpCudaOracle:
         reason = self._trip_reason(callback)
         if reason is None:
             return
-        if reason == "foreign_cuda" and self._inside_warp_cuda_window():
+        if self._inside_warp_cuda_window():
             return
 
         self._warn(segment, domain, callback, reason)
+        if self._boundary_handler is not None:
+            self._boundary_handler(segment, domain, callback, reason)
 
     def _inside_warp_cuda_window(self) -> bool:
-        return bool(getattr(self._thread_state, "warp_cuda_allowed", False))
+        return bool(self._session is not None and self._session.paused)
 
     def _warn(self, segment: Any, domain: str, callback: str, reason: str) -> None:
         segment_id = id(segment)

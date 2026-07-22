@@ -43,7 +43,6 @@ from leapp.utils.utils import (get_relative_path,
                                mirror_all_tensor_tags,
                                extract_return_names,
                                frame_to_namespace)
-from leapp.leapp_graph.warp_op import WarpOp
 from contextlib import nullcontext
 
 class ExportManager:
@@ -181,7 +180,7 @@ class ExportManager:
             pending_warp_nodes.sort()
             formatted = ", ".join(pending_warp_nodes)
             _get_logger().fatal(
-                "The following nodes discovered explicit Warp segments but were "
+                "The following nodes discovered Warp segments but were "
                 f"not executed a second time for APIC capture: {formatted}. "
                 "Run the same annotated path again before compiling the graph.",
                 error_type=Exception,
@@ -343,6 +342,9 @@ class ExportManager:
                 "Call annotate.input_tensors() before annotate.output_tensors() for the same node name.",
                 error_type=Exception)
 
+        # force the warp segment to close if any.
+        if self.patcher.warp is not None:
+            self.patcher.warp.close_warp_segment()
         # process outputs
         flattened_tensors = flatten_io_structure(tensors, '')
 
@@ -733,16 +735,11 @@ class ExportManager:
     def warp_op(self, node_name: str, inputs: list[str] = None, outputs: list[str] = None, **params):
         if not ExportManager._interpret_graph or self.is_dry_run(node_name):
             return nullcontext()
-        if WarpOp is None:
-            _get_logger().fatal(
-                "LEAPP: warp_op requires warp-lang (pip install warp-lang).",
-                error_type=ImportError,
-            )
         warp_backend = self.patcher.warp
         if warp_backend is None:
             _get_logger().fatal(
                 "LEAPP: the warp backend is not installed. "
-                "Please call leapp.start(..., global_patching=True).",
+                "Please call leapp.start(..., global_patching=True), and make sure warp-lang is installed.",
                 error_type=ImportError,
             )
 
@@ -757,17 +754,7 @@ class ExportManager:
         if not node.is_tracing:
             return nullcontext()
 
-        if not self.patcher.installed:
-            _get_logger().fatal(
-                "LEAPP: warp_op requires global patching "
-                "(call leapp.start(..., global_patching=True)).",
-                error_type=RuntimeError,
-            )
-
-        return WarpOp(
-            node,
-            warp_backend=warp_backend,
-        )
+        return warp_backend.create_warp_op(node)
 
     def _method(self, **params):
         """Legacy decorator for tracing functions via sys.settrace + ModuleBuilder.
