@@ -644,7 +644,12 @@ class WarpPatchBackend:
         segment.add_event({"kind": "warp_call", "qualname": qualname})
 
         for array in traced_inputs:
-            if array.warp_segment is not segment:
+            # if the array is already in the segment output, it has been seen and is not a new input
+            is_current_segment_output = any(
+                ref.array is array or getattr(ref.array, "ptr", None) == array.ptr
+                for ref in segment.output_refs.values()
+            )
+            if not is_current_segment_output:
                 segment.add_input_ref(array)
 
     def _process_post_call_arrays(
