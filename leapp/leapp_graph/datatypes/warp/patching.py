@@ -178,9 +178,16 @@ class WarpPatchBackend:
         """Request closure of the active unowned Warp segment."""
         if self._session is None:
             return
-        self._session.close_warp_segment(
+        if self._session.paused:
+            return
+        closed = self._session.close_warp_segment(
             close_call_stack=get_caller_stack_identity(),
         )
+        if not closed:
+            _get_logger().warning(
+                "Boundary requested closure of an explicit active WarpOp; "
+                "leaving it open because it is protected by its owner token."
+            )
 
     def _pause_context(self):
         if self._session is None:
