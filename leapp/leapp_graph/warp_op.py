@@ -251,6 +251,17 @@ else:
 
         def _begin_capture(self, call_stack, *, owner_token=None) -> None:
             self._mode = "capture"
+            if self._session.active_warp_op is not None:
+                closed = self._session.close_warp_segment(
+                    close_call_stack=call_stack,
+                )
+                if not closed:
+                    _get_logger().fatal(
+                        "Cannot begin WarpOp because the active WarpOp is "
+                        "protected by an owner token. An operation is likely attempting to open a new"
+                        "segment inside a warp_op.",
+                        error_type=RuntimeError,
+                    )
             stored_segment = self.node_ref.acquire_warp_segment()
             if stored_segment is None:
                 _get_logger().fatal(

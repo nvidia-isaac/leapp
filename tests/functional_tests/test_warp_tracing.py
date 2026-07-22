@@ -214,7 +214,7 @@ class TestWarpOp(WarpTestCase, LEAPPFunctionalTestBase):
 
         self.assertFalse(node.has_pending_warp_segments)
         self.verify_node_io(node, inputs=1, outputs=1)
-        self.assertEqual(len(node.warp_segments), 1)
+        self.assertEqual(len(node.warp_segments), 2)
         self.verify_all_models_exist("node_a")
 
     def test_numpy_to_warp_to_numpy_with_capture_allocation_in_one_node(self):
@@ -298,7 +298,7 @@ class TestWarpOp(WarpTestCase, LEAPPFunctionalTestBase):
 
         self.assertFalse(node.has_pending_warp_segments)
         self.verify_node_io(node, inputs=1, outputs=1)
-        self.assertEqual(len(node.warp_segments), 2)
+        self.assertEqual(len(node.warp_segments), 4)
         self.verify_all_models_exist("node_a")
 
     def test_compile_fails_when_second_warp_pass_never_runs(self):
