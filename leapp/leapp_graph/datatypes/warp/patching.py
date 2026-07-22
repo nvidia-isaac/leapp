@@ -74,6 +74,7 @@ from dataclasses import dataclass
 import inspect
 import sys
 
+import torch
 import warp as wp
 from warp._src.context import Function as WarpKernelLanguageFunction
 
@@ -120,6 +121,8 @@ class WarpPatchBackend:
         self._session: Any | None = None
         self._installed = False
         self._boundary_function_ids: set[int] = set()
+        self._sync_boundary_function_ids: set[int] = set()
+        self._readback_boundary_function_ids: set[int] = set()
         self._boundary_array_init_id: int | None = None
         self._cuda_oracle: WarpCudaOracle | None = None
     #########################################################
@@ -140,10 +143,15 @@ class WarpPatchBackend:
 
         if self._installed:
             return self
- 
+
+        if torch.cuda.is_available():
+            torch.cuda.init()
+            torch.cuda.memory.caching_allocator_enable(False)
+
         self._cuda_oracle = WarpCudaOracle(self.close_warp_segment)
         self._session = WarpTraceSession()
         self._cuda_oracle.set_session(self._session)
+        self._cuda_oracle.start()
         self._register_boundary_functions()
         self._patch_warp_modules()
 
@@ -218,6 +226,8 @@ class WarpPatchBackend:
         self._patches.clear()
         self._wrappers_by_original_id.clear()
         self._boundary_function_ids.clear()
+        self._sync_boundary_function_ids.clear()
+        self._readback_boundary_function_ids.clear()
         self._boundary_array_init_id = None
         self._session = None
         self._installed = False
@@ -418,6 +428,12 @@ class WarpPatchBackend:
             if self._session is not None and self._session.paused:
                 return original(*args, **kwargs)
 
+            # Warp sync APIs are hard boundaries. Close before running them, and
+            # do not pause: pausing would hide the CUDA sync from CUPTI.
+            if id(original) in self._sync_boundary_function_ids:
+                self.close_warp_segment()
+                return original(*args, **kwargs)
+
             if id(original) in self._boundary_function_ids:
                 handled, result = self._handle_boundary_call(original, args, kwargs)
                 if handled:
@@ -453,15 +469,19 @@ class WarpPatchBackend:
     def _register_boundary_functions(self) -> None:
         """Record original boundary callables before patching replaces them."""
         self._boundary_function_ids = set()
+        self._sync_boundary_function_ids = set()
+        self._readback_boundary_function_ids = set()
         self._boundary_array_init_id = None
 
         array_init = getattr(wp.array, "__init__", None)
+        to_torch = getattr(wp, "to_torch", None)
+        array_numpy = getattr(wp.array, "numpy", None)
         candidates = [
             array_init,
             getattr(wp, "from_torch", None),
-            getattr(wp, "to_torch", None),
+            to_torch,
             getattr(wp, "from_numpy", None),
-            getattr(wp.array, "numpy", None),
+            array_numpy,
         ]
         for fn in candidates:
             if fn is None or not callable(fn):
@@ -470,6 +490,18 @@ class WarpPatchBackend:
             self._boundary_function_ids.add(fn_id)
             if fn is array_init:
                 self._boundary_array_init_id = fn_id
+            if fn is to_torch or fn is array_numpy:
+                self._readback_boundary_function_ids.add(fn_id)
+
+        for sync_name in (
+            "synchronize",
+            "synchronize_device",
+            "synchronize_event",
+            "synchronize_stream",
+        ):
+            sync_fn = getattr(wp, sync_name, None)
+            if sync_fn is not None and callable(sync_fn):
+                self._sync_boundary_function_ids.add(id(sync_fn))
 
     def _handle_boundary_call(
         self, original: Callable, args: tuple[Any, ...], kwargs: dict[str, Any]
@@ -492,6 +524,11 @@ class WarpPatchBackend:
             return False, None
 
         self._validate_boundary_dtype(kwargs)
+
+        # Host conversion/readback ends the current Warp segment before the
+        # CUDA copy/sync happens under pause (which CUPTI would otherwise miss).
+        if id(original) in self._readback_boundary_function_ids:
+            self.close_warp_segment()
 
         call_args = TracedData.unwrap_traced_data(args)
         call_kwargs = TracedData.unwrap_traced_data(kwargs)

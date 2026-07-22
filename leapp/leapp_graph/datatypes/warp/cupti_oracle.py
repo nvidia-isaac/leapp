@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import sys
-import traceback
 from typing import Any
 
 from cupti import cupti
+
+from leapp.utils.logging import _get_logger
 
 
 
@@ -108,14 +108,16 @@ class WarpCudaOracle:
         if self._inside_warp_cuda_window():
             return
 
-        self._warn(segment, domain, callback, reason)
+        self._log_cupti_event(segment, domain, callback, reason)
         if self._boundary_handler is not None:
             self._boundary_handler(segment, domain, callback, reason)
 
     def _inside_warp_cuda_window(self) -> bool:
         return bool(self._session is not None and self._session.paused)
 
-    def _warn(self, segment: Any, domain: str, callback: str, reason: str) -> None:
+    def _log_cupti_event(
+        self, segment: Any, domain: str, callback: str, reason: str
+    ) -> None:
         segment_id = id(segment)
         key = (domain, callback, reason)
         warned = self._warned_by_segment.setdefault(segment_id, set())
@@ -125,15 +127,10 @@ class WarpCudaOracle:
 
         node_name = getattr(segment, "node_name", "<unknown>")
         segment_name = getattr(segment, "proxy_name", None) or node_name
-        stack = "".join(traceback.format_stack())
-        print(
-            "[LEAPP][Warp][CUPTI] CUDA boundary warning while Warp segment is open\n"
-            f"  node: {node_name}\n"
-            f"  segment: {segment_name}\n"
-            f"  reason: {reason}\n"
-            f"  callback: {domain}.{callback}\n"
-            f"  python_stack:\n{stack}",
-            file=sys.stderr,
+        _get_logger().info(
+            "CUDA boundary while Warp segment is open "
+            f"(node={node_name}, segment={segment_name}, "
+            f"reason={reason}, callback={domain}.{callback})"
         )
 
     def _domain_name(self, domain_id: int) -> str:
