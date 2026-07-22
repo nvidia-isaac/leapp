@@ -120,8 +120,6 @@ def as_traced(
     name: str,
     context,
     proxy,
-    *,
-    preserve_identity: bool = False,
 ) -> TracedData:
     """Create a TracedData instance from a tensor or array.
     
@@ -133,8 +131,6 @@ def as_traced(
         name: Name for the traced data (used in export and graph)
         context: The TraceContext that owns this data
         proxy: The fx.Proxy for graph recording
-        preserve_identity: When supported, trace the original object instead of
-            creating a wrapper. Currently only supported for Warp arrays.
         
     Returns:
         A TracedData instance (TracedTensor or TracedNpArray)
@@ -153,12 +149,10 @@ def as_traced(
         >>> type(traced)
         <class 'TracedNpArray'>
     """
-    if preserve_identity:
-        if wp is None or TracedWpArray is None or not isinstance(data, wp.array):
-            _get_logger().fatal(
-                "preserve_identity=True is only supported for Warp arrays",
-                error_type=TypeError,
-            )
+    # Warp arrays own allocator/deleter state that cannot be safely recreated
+    # from a non-owning ``ptr`` view, so trace them by class-swapping in place
+    # before the generic wrapper path can construct a new object.
+    if wp is not None and TracedWpArray is not None and isinstance(data, wp.array):
         return TracedWpArray.make_traced_in_place(data, name, context, proxy)
 
     # If already traced, unwrap to get the underlying tensor/array

@@ -46,24 +46,14 @@ class TracedWpArray(wp.array):
 
     def __new__(cls, array, name, context, proxy):
         obj = wp.array.__new__(cls)
-        from leapp.leapp_graph.datatypes.patching import get_warp_backend
-
-        # Warp's array initializers are patched in place by the session backend;
-        # pause detection so they populate ptr/shape/etc. on this half-built object
-        # instead of normalizing ``self`` into a ``.data`` view (which needs ptr).
-        warp_backend = get_warp_backend()
-        init_kwargs = dict(
+        wp.array.__init__(
+            obj,
             dtype=array.dtype,
             shape=array.shape,
             ptr=array.ptr,
             device=array.device,
             copy=False,
         )
-        if warp_backend is not None:
-            with warp_backend.paused():
-                wp.array.__init__(obj, **init_kwargs)
-        else:
-            wp.array.__init__(obj, **init_kwargs)
         obj._init_tracing_state(name, context, proxy)
         return obj
 
@@ -135,13 +125,7 @@ class TracedWpArray(wp.array):
 
     @property
     def tensor(self) -> torch.Tensor:
-        from leapp.leapp_graph.datatypes.patching import get_warp_backend
-
-        warp_backend = get_warp_backend()
-        if warp_backend is not None:
-            with warp_backend.paused():
-                return wp.to_torch(self.data)
-        return wp.to_torch(self.data)
+        return wp.to_torch(self)
 
     @property
     def proxy(self) -> Proxy:

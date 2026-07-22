@@ -20,6 +20,7 @@ from leapp.leapp_graph.datatypes import (
     as_traced,
     is_tracable_tensor_type,
 )
+from leapp.leapp_graph.datatypes.patching import get_warp_backend
 from leapp.utils.tensor_description import (
     resolve_tensor_descriptions_to_names,
     flatten_io_structure,
@@ -32,13 +33,24 @@ import collections
 if TYPE_CHECKING:
     from leapp.leapp_graph.datatypes.warp import WarpSegment
 
+# fx graph overloads to create custom behavior when interacting with the graph.
+# keep local so that only the tracedTensorNode can create it.
+class _LeappFXGraph(fx.Graph):
+    """FX graph that notifies the Warp backend before graph mutation."""
+
+    def create_node(self, *args, **kwargs):
+        warp_backend = get_warp_backend()
+        if warp_backend is not None:
+            warp_backend.close_warp_segment()
+        return super().create_node(*args, **kwargs)
+
 
 class TracedTensorNode(LeappNode):
     def __init__(self, name, *args, dry_run=False, **kwargs):
         if args or kwargs:
             _get_logger().warning(f"{name} received unexpected arguments on initialization. these arguments will be ignored.")
         super().__init__(name, dry_run=dry_run)
-        self.graph = fx.Graph()
+        self.graph = _LeappFXGraph()
         self.tracer = fx.Tracer()
         self.tracer.graph = self.graph
         self.tracer.root = torch.nn.Module()
@@ -54,7 +66,6 @@ class TracedTensorNode(LeappNode):
 
         # Buffer tracker for auto-detecting stateful buffers (set by annotate.module())
         self._buffer_tracker = None
-
         self._next_buffer_idx = 0
 
     def _get_required_io_description(self, name: str, io_list: list, io_kind: str):
@@ -107,7 +118,7 @@ class TracedTensorNode(LeappNode):
         self._pending_warp_segments.popleft()
 
     def reset_trace_state(self) -> None:
-        self.graph = fx.Graph()
+        self.graph = _LeappFXGraph()
         self.tracer = fx.Tracer()
         self.tracer.graph = self.graph
         self.tracer.root = torch.nn.Module()

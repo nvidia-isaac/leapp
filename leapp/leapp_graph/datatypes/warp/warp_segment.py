@@ -75,8 +75,10 @@ class WarpTensorRef:
 class WarpSegment:
     # Owning LEAPP node name. A segment should not span multiple node graphs.
     node_name: str
-    # Discovery call-site anchor used to reject mismatched capture reentry.
-    call_stack: Any | None = None
+    # Discovery open-site anchor used to reject mismatched capture reentry.
+    open_call_stack: Any | None = None
+    # Discovery close-site anchor, kept for future boundary tracing.
+    close_call_stack: Any | None = None
     # Warp call sequence observed during discovery.
     call_qualnames: tuple[str, ...] = ()
     # Lifecycle state; invalid segments fail closed instead of silently exporting.
