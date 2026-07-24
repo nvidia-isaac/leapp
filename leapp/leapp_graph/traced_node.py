@@ -93,8 +93,11 @@ class TracedTensorNode(LeappNode):
     def warp_segments(self) -> tuple["WarpSegment", ...]:
         return tuple(self._discovered_warp_segments)
 
-    def begin_warp_capture(self) -> None:
+    def prepare_warp_capture(self) -> None:
+        if not self.has_pending_warp_segments or self.is_tracing:
+            return
         self._is_warp_capture_active = True
+        self.reset_trace_state()
 
     def acquire_warp_segment(self) -> "WarpSegment | None":
         return self._pending_warp_segments[0] if self._pending_warp_segments else None

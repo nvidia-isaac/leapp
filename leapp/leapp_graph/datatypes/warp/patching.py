@@ -180,6 +180,7 @@ class WarpPatchBackend:
         return WarpOp(
             node_ref,
             session=self._session,
+            capture=node_ref.is_warp_capture_active,
         )
 
     def close_warp_segment(self, *_args: Any, **_kwargs: Any) -> None:

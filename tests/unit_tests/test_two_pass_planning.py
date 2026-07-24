@@ -36,7 +36,7 @@ class TestWarpTwoPassPlanning(unittest.TestCase):
 
     def test_warp_op_discovery_close_records_segment_bookmark(self):
         session = WarpTraceSession()
-        warp_op = WarpOp(_FakeNode(), session=session)
+        warp_op = WarpOp(_FakeNode(), session=session, capture=False)
         warp_op.begin(("caller.py", 10, "func"))
         segment = warp_op.segment
 
@@ -53,6 +53,16 @@ class TestWarpTwoPassPlanning(unittest.TestCase):
         self.assertEqual(discovered.close_call_stack, ("caller.py", 10, "func"))
         self.assertEqual(discovered.call_qualnames, ("warp.launch", "warp.copy"))
         self.assertIs(session.active_segment, segment)
+
+    def test_warp_op_exit_without_begin_is_fatal(self):
+        warp_op = WarpOp(
+            _FakeNode(),
+            session=WarpTraceSession(),
+            capture=False,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "before the Warp operation was initialized"):
+            warp_op.__exit__(None, None, None)
 
     def test_backend_call_stack_match_uses_open_call_stack(self):
         backend = WarpPatchBackend()
@@ -87,7 +97,7 @@ class TestWarpTwoPassPlanning(unittest.TestCase):
             marker_proxy=object(),
             proxy_name="warp_segment_0",
         )
-        warp_op = WarpOp(_FakeNode(), session=session)
+        warp_op = WarpOp(_FakeNode(), session=session, capture=True)
         segment = warp_op._prepare_capture_segment(discovered)
         warp_op._segment = segment
         session.register_warp_op(warp_op, segment)
@@ -104,3 +114,14 @@ class TestWarpTwoPassPlanning(unittest.TestCase):
             warp_op._finalize_capture()
 
         self.assertIs(session.active_segment, segment)
+
+    def test_capture_exit_fails_when_close_watcher_misses(self):
+        session = WarpTraceSession()
+        warp_op = WarpOp(_FakeNode(), session=session, capture=True)
+        segment = WarpSegment(node_name="node", status="open")
+
+        warp_op._segment = segment
+        session.register_warp_op(warp_op, segment, owner_token=warp_op)
+
+        with self.assertRaisesRegex(RuntimeError, "close call stack was detected"):
+            warp_op.__exit__(None, None, None)
