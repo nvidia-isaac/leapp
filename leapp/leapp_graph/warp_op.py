@@ -186,48 +186,75 @@ else:
             node_ref: Any,
             *,
             session: Any,
+            capture: bool,
             device: str = "cuda:0",
         ):
             self.node_ref = node_ref
             self.node_name = node_ref.name
-            self.node_graph = node_ref.graph
             self._session = session
 
             # scoped capture variables
             self._scope = None
             self._capture = None
             self._segment = None
-            self._exit_function = None
-            self._mode = None
             self.device = device
+            if capture:
+                self._begin_impl = self._begin_capture
+                self._terminate_impl = self._terminate_capture
+                self._context_exit_impl = self._context_exit_capture
+            else:
+                self._begin_impl = self._begin_discovery
+                self._terminate_impl = self._terminate_discovery
+                self._context_exit_impl = self._context_exit_discovery
 
         @property
         def segment(self):
             return self._segment
 
+        # automatically called as part of the context manager protocol
         def __enter__(self):
             call_stack = get_caller_stack_identity()
-            self.begin(call_stack, owner_token=self)
+            self._begin_impl(call_stack, owner_token=self)
             return self
 
+        # manually called to begin the Warp operation
         def begin(self, call_stack, *, owner_token=None):
-            if not self.node_ref.is_warp_capture_active:
-                self._begin_discovery(call_stack, owner_token=owner_token)
-            else:
-                self._begin_capture(call_stack, owner_token=owner_token)
+            self._begin_impl(call_stack, owner_token=owner_token)
             return self
 
+        # automatically called as part of the context manager protocol
         def __exit__(self, exc_type, exc_value, traceback):
-            if self._segment is None or self._exit_function is None:
+            if self._segment is None:
+                _get_logger().fatal(
+                    "WarpOp.__exit__ called before the Warp operation was "
+                    "initialized.",
+                    error_type=RuntimeError,
+                )
+            return self._context_exit_impl(exc_type, exc_value, traceback)
+
+        # manually called to terminate the Warp operation
+        def terminate(
+            self,
+            exc_type=None,
+            exc_value=None,
+            traceback=None,
+            *,
+            close_call_stack=None,
+        ):
+            if self._segment is None:
+                return None
+            return self._terminate_impl(
+                exc_type=exc_type, exc_value=exc_value,
+                traceback=traceback, close_call_stack=close_call_stack,
+            )
+
+        def _context_exit_discovery(self, exc_type, exc_value, traceback):
+            if self._session.active_warp_op is not self:
                 return False
             call_stack = get_caller_stack_identity()
-            if not caller_identity_has_same_anchor(
-                self._segment.open_call_stack,
-                call_stack,
-            ):
+            if not self._session.release_owner(self):
                 return False
             self._session.close_warp_segment(
-                requester=self,
                 close_call_stack=call_stack,
                 exc_type=exc_type,
                 exc_value=exc_value,
@@ -235,8 +262,18 @@ else:
             )
             return False
 
+        def _context_exit_capture(self, exc_type, exc_value, traceback):
+
+            # the context should complete capture before the __exit__ function is called.
+            if self._session.active_warp_op is self:
+                _get_logger().fatal(
+                    "Warp capture reached WarpOp.__exit__ before its "
+                    "close call stack was detected.",
+                    error_type=RuntimeError,
+                )
+            return False
+
         def _begin_discovery(self, call_stack, *, owner_token=None) -> None:
-            self._mode = "discovery"
             self._segment = WarpSegment(
                 node_name=self.node_name,
                 open_call_stack=call_stack,
@@ -247,10 +284,8 @@ else:
                 owner_token=owner_token,
                 close_call_stack=call_stack,
             )
-            self._exit_function = self._exit_discovery
 
         def _begin_capture(self, call_stack, *, owner_token=None) -> None:
-            self._mode = "capture"
             if self._session.active_warp_op is not None:
                 closed = self._session.close_warp_segment(
                     close_call_stack=call_stack,
@@ -289,7 +324,6 @@ else:
                 owner_token=owner_token,
                 close_call_stack=call_stack,
             )
-            self._exit_function = self._exit_capture
             with self._session.pause():
                 self._scope = wp.ScopedCapture(
                     device=self.device,
@@ -297,8 +331,12 @@ else:
                     apic=True,
                 )
                 self._capture = self._scope.__enter__()
+            if owner_token is not None:
+                self._session.watch_for_close(
+                    stored_segment.close_call_stack,
+                )
 
-        def terminate(
+        def _terminate_discovery(
             self,
             exc_type=None,
             exc_value=None,
@@ -306,20 +344,6 @@ else:
             *,
             close_call_stack=None,
         ):
-            if self._segment is None or self._exit_function is None:
-                return None
-            if self._mode == "discovery":
-                return self._terminate_discovery(close_call_stack=close_call_stack)
-            if self._mode == "capture":
-                return self._exit_capture(
-                    exc_type,
-                    exc_value,
-                    traceback,
-                    close_call_stack,
-                )
-            return None
-
-        def _terminate_discovery(self, *, close_call_stack):
             closed = self._finalize_discovery(close_call_stack=close_call_stack)
             self.node_ref.add_warp_segment(closed)
             self._segment.status = "open"
@@ -329,17 +353,6 @@ else:
                 wrp_archive=b"\0",
             )
             return closed
-
-        def _exit_discovery(
-            self,
-            exc_type,
-            exc_value,
-            traceback,
-            call_stack,
-        ):
-            if exc_type is None and self._segment is not None:
-                self._terminate_discovery(close_call_stack=call_stack)
-            return False
 
         def _finalize_discovery(self, *, close_call_stack) -> WarpSegment:
             if self._segment is None:
@@ -369,7 +382,7 @@ else:
             segment.apic_graph = None
             return segment
 
-        def _finalize_capture(self) -> bool:
+        def _finalize_capture(self) -> None:
             if self._segment is None:
                 _get_logger().fatal(
                     "Capture WarpOp has no active segment.",
@@ -389,14 +402,13 @@ else:
                     f"Expected calls {expected_qualnames}, got {actual_qualnames}.",
                     error_type=RuntimeError,
                 )
-            return True
-
-        def _exit_capture(
+        def _terminate_capture(
             self,
             exc_type,
             exc_value,
             traceback,
-            call_stack,
+            *,
+            close_call_stack,
         ):
             scope_result = False
             if self._scope is not None:
@@ -407,8 +419,7 @@ else:
             if exc_type is None and self._segment is not None:
                 graph = self._capture.graph
                 self._segment.apic_graph = graph
-                if not self._finalize_capture():
-                    return False
+                self._finalize_capture()
                 # Save before replay so formal inputs and closure buffers are
                 # snapshotted at the capture boundary, not after execution.
                 with self._session.pause():

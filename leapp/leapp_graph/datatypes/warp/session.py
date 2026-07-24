@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import contextlib
+import sys
 from typing import Any
 
+from leapp.utils.caller_identity import (
+    caller_identity_has_same_anchor,
+    get_caller_stack_identity,
+)
 from leapp.utils.logging import _get_logger
 
 
@@ -18,6 +23,8 @@ class WarpTraceSession:
         self.active_segment: Any | None = None
         self.active_warp_op: Any | None = None
         self.owner_token: Any | None = None
+        self._close_trace = None
+        self._previous_trace = None
         # TODO: revisit if we need 2 different pause states for cupti and patching
         self._pause_depth = 0 # used to detect nested pauses.
 
@@ -54,6 +61,60 @@ class WarpTraceSession:
         self.active_segment = segment
         self.owner_token = owner_token
 
+    def release_owner(self, requester: Any) -> bool:
+        if self.owner_token is None:
+            return True
+        if requester is not self.owner_token:
+            return False
+        self.owner_token = None
+        return True
+
+    def watch_for_close(self, close_call_stack: Any) -> None:
+        """Close the active segment when its discovery close site is re-entered."""
+        self.stop_watching_for_close()
+        self._previous_trace = sys.gettrace()
+
+        def close_trace(frame, event, _arg):
+            if event != "call":
+                return close_trace
+            # A one-line with body shares the context's close anchor.
+            if (
+                frame.f_code.co_name != "__exit__"
+                or frame.f_locals.get("self") is not self.active_warp_op
+            ):
+                return close_trace
+
+            call_stack = get_caller_stack_identity()
+            if not caller_identity_has_same_anchor(
+                close_call_stack,
+                call_stack,
+            ):
+                return close_trace
+
+            exc_type = frame.f_locals.get("exc_type")
+            exc_value = frame.f_locals.get("exc_value")
+            traceback = frame.f_locals.get("traceback")
+            self.stop_watching_for_close()
+            self.release_owner(self.active_warp_op)
+            self.close_warp_segment(
+                close_call_stack=call_stack,
+                exc_type=exc_type,
+                exc_value=exc_value,
+                traceback=traceback,
+            )
+            return None
+
+        self._close_trace = close_trace
+        sys.settrace(close_trace)
+
+    def stop_watching_for_close(self) -> None:
+        if self._close_trace is None:
+            return
+        if sys.gettrace() is self._close_trace:
+            sys.settrace(self._previous_trace)
+        self._close_trace = None
+        self._previous_trace = None
+
     def close_warp_segment(
         self,
         *,
@@ -82,6 +143,7 @@ class WarpTraceSession:
         return True
 
     def reset(self) -> None:
+        self.stop_watching_for_close()
         self.active_segment = None
         self.active_warp_op = None
         self.owner_token = None
