@@ -80,8 +80,6 @@ def lower_warp_runner_to_onnx(
     )
     tracer.nodes.append(node)
 
-    if len(outputs) == 1:
-        return outputs[0]
     return outputs
 
 
