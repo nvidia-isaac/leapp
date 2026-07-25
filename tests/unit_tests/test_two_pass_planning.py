@@ -4,6 +4,7 @@ from leapp.leapp_graph.datatypes.warp import TracedWpArray, wp
 from leapp.leapp_graph.datatypes.warp.patching import WarpPatchBackend
 from leapp.leapp_graph.datatypes.warp.session import WarpTraceSession
 from leapp.leapp_graph.warp_op import WarpOp
+from leapp.utils.caller_identity import CallerFrame, CallerIdentity
 import unittest
 
 
@@ -114,6 +115,58 @@ class TestWarpTwoPassPlanning(unittest.TestCase):
             warp_op._finalize_capture()
 
         self.assertIs(session.active_segment, segment)
+
+    def test_capture_rejects_close_outside_watched_location(self):
+        session = WarpTraceSession()
+        segment = WarpSegment(node_name="node", status="open")
+        warp_op = _FakeWarpOp(segment)
+        expected_close = CallerIdentity(
+            CallerFrame("discovery.py", 10, "expected_close"),
+        )
+        attempted_close = CallerIdentity(
+            CallerFrame("capture.py", 20, "attempted_close"),
+        )
+        session.register_warp_op(warp_op, segment)
+        session.watch_for_close(expected_close, requester=None)
+
+        try:
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Warp segment was expected to close at",
+            ) as raised:
+                session.close_warp_segment(
+                    close_call_stack=attempted_close,
+                )
+            self.assertIn("discovery.py:10 in expected_close", str(raised.exception))
+            self.assertIn("capture.py:20 in attempted_close", str(raised.exception))
+            self.assertIs(session.active_segment, segment)
+        finally:
+            session.stop_watching_for_close()
+
+    def test_owned_capture_rejects_different_requester(self):
+        session = WarpTraceSession()
+        segment = WarpSegment(node_name="node", status="open")
+        warp_op = _FakeWarpOp(segment)
+        session.register_warp_op(
+            warp_op,
+            segment,
+            owner_token=warp_op,
+        )
+        session.watch_for_close(
+            ("discovery.py", 10, "expected_close"),
+            requester=warp_op,
+        )
+
+        try:
+            closed = session.close_warp_segment(
+                requester=object(),
+                close_call_stack=("capture.py", 20, "attempted_close"),
+            )
+            self.assertFalse(closed)
+            self.assertIs(session.active_segment, segment)
+        finally:
+            session.stop_watching_for_close()
+            session.close_warp_segment(requester=warp_op)
 
     def test_capture_exit_fails_when_close_watcher_misses(self):
         session = WarpTraceSession()

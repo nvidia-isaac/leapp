@@ -252,9 +252,8 @@ else:
             if self._session.active_warp_op is not self:
                 return False
             call_stack = get_caller_stack_identity()
-            if not self._session.release_owner(self):
-                return False
             self._session.close_warp_segment(
+                requester=self,
                 close_call_stack=call_stack,
                 exc_type=exc_type,
                 exc_value=exc_value,
@@ -288,6 +287,7 @@ else:
         def _begin_capture(self, call_stack, *, owner_token=None) -> None:
             if self._session.active_warp_op is not None:
                 closed = self._session.close_warp_segment(
+                    requester=owner_token,
                     close_call_stack=call_stack,
                 )
                 if not closed:
@@ -331,9 +331,11 @@ else:
                     apic=True,
                 )
                 self._capture = self._scope.__enter__()
-            if owner_token is not None:
+            if stored_segment.close_call_stack is not None:
                 self._session.watch_for_close(
                     stored_segment.close_call_stack,
+                    requester=owner_token,
+                    require_context_exit=owner_token is not None,
                 )
 
         def _terminate_discovery(
