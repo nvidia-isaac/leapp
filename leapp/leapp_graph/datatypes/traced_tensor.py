@@ -148,6 +148,17 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         return func
 
     @staticmethod
+    def _safe_tensor_version(tensor: torch.Tensor | None) -> int | None:
+        # Used to detect in-place mutations.
+        if tensor is None:
+            return None
+        try:
+            return tensor._version
+        except RuntimeError:
+            # Inference tensors may not expose version counters.
+            return None
+
+    @staticmethod
     def find_traced_tensor(obj):
         """Find the first TracedTensor in obj (including nested in lists/tuples)."""
         if isinstance(obj, TracedTensor):
@@ -425,10 +436,17 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         # Extract real tensors for actual computation
         real_args = tuple(TracedTensor.unwrap_traced_tensor(arg) for arg in args)
         real_kwargs = {k: TracedTensor.unwrap_traced_tensor(v) for k, v in kwargs.items()}
+        receiver = args[0] if args and isinstance(args[0], TracedTensor) else None
+        real_receiver = real_args[0] if receiver is not None else None
+        receiver_version = cls._safe_tensor_version(real_receiver)
 
         # ================== EXECUTE THE ACTUAL OPERATION ==================
         tensor_out = func(*real_args, **real_kwargs)
         # ================== END OF EXECUTE THE ACTUAL OPERATION ===========
+        receiver_was_mutated = (
+            receiver_version is not None
+            and cls._safe_tensor_version(real_receiver) != receiver_version
+        )
 
         # Skip tracing if context is not tracing - return raw tensors
         if not traced_tensor.validate_status(args, kwargs):
@@ -475,6 +493,18 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         proxy_out = traced_tensor._context.tracer.create_proxy(
             "call_function", func, proxy_args, proxy_kwargs
         )
+
+        if (
+            receiver_was_mutated
+            and isinstance(tensor_out, torch.Tensor)
+            and tensor_out is real_receiver
+        ):
+            receiver._init_tracing_state(
+                receiver._name_from_proxy(proxy_out),
+                receiver.context_obj,
+                proxy_out,
+            )
+            return receiver
 
         # Handle multiple outputs (e.g., torch.split returns a tuple)
         if isinstance(tensor_out, (tuple, list)):
@@ -852,10 +882,18 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
     def copy_(self, src, non_blocking=False):
         """In-place copy method."""
-        unwrapped = TracedData.unwrap_traced_data(src)
-        underlying = self.as_subclass(torch.Tensor)
-        underlying.copy_(unwrapped, non_blocking=non_blocking)
-        return underlying
+        if not self.is_tracing:
+            unwrapped = TracedData.unwrap_traced_data(src)
+            underlying = self.as_subclass(torch.Tensor)
+            underlying.copy_(unwrapped, non_blocking=non_blocking)
+            return underlying
+
+        return type(self).__torch_function__(
+            torch.Tensor.copy_,
+            (type(self),),
+            (self, src),
+            {"non_blocking": non_blocking},
+        )
 
     # =========================================================================
     # Comparison Operators

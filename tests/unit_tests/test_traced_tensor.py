@@ -1202,6 +1202,38 @@ class TestTracedTensor(unittest.TestCase):
         graph_result = ctx.m(torch.tensor([1.0, 2.0, 3.0]))
         self.assertTrue(torch.allclose(graph_result, expected))
 
+    def test_inplace_method_fill_discarded_result(self):
+        """Test that discarded in-place method results update the original proxy."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+        original_id = id(x)
+
+        x.fill_(3.0)
+
+        self.assertEqual(id(x), original_id)
+        expected = torch.tensor([3.0, 3.0, 3.0])
+        self.assertTrue(torch.allclose(x.tensor, expected))
+
+        ctx.compile_trace({'x': x})
+        graph_result = ctx.m(torch.tensor([1.0, 2.0, 3.0]))
+        self.assertTrue(torch.allclose(graph_result, expected))
+
+    def test_inplace_method_copy_discarded_result(self):
+        """Test discarded copy_ results still update the original proxy."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+        original_id = id(x)
+        source = torch.tensor([10.0, 20.0, 30.0])
+
+        x.copy_(source)
+
+        self.assertEqual(id(x), original_id)
+        self.assertTrue(torch.allclose(x.tensor, source))
+
+        ctx.compile_trace({'x': x})
+        graph_result = ctx.m(torch.tensor([1.0, 2.0, 3.0]))
+        self.assertTrue(torch.allclose(graph_result, source))
+
     def test_inplace_chained_operations(self):
         """Test chained in-place operations."""
         ctx = TracedTensorNode(name="test", node_index=0)
