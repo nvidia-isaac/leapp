@@ -401,5 +401,121 @@ class TestWarpOp(WarpTestCase, LEAPPFunctionalTestBase):
             leapp.compile_graph(visualize=False)
 
 
+class TestWarpAutomaticSegmentDetection(WarpTestCase, LEAPPFunctionalTestBase):
+    NODE_NAME = "node_a"
+
+    def _run_single_node_operation(self, operation):
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        source = wp.array(
+            [1.0, 2.0, 3.0],
+            dtype=wp.float32,
+            device=self.DEVICE,
+        )
+
+        for _ in range(2):
+            values = annotate.input_tensors(self.NODE_NAME, {"in_a": source})
+            output = operation(values)
+            annotate.output_tensors(
+                self.NODE_NAME,
+                {"out_a": output},
+                export_with="onnx",
+            )
+
+        node = annotate.get_nodes()[self.NODE_NAME]
+        leapp.stop()
+        return node
+
+    def test_sync_device_boundary_creates_two_segments(self):
+        def operation(values):
+            values = self._launch_add(values, 1.0)
+            wp.synchronize_device(values.device)
+            return self._launch_add(values, 2.0)
+
+        node = self._run_single_node_operation(operation)
+        leapp.compile_graph(visualize=False)
+        self._assert_compiled_segments(node, 2)
+
+    def test_torch_roundtrip_boundary_creates_two_segments(self):
+        def operation(values):
+            values = self._launch_add(values, 1.0)
+            values = self._torch_roundtrip(values, 2.0)
+            return self._launch_add(values, 3.0)
+
+        node = self._run_single_node_operation(operation)
+        leapp.compile_graph(visualize=False)
+        self._assert_compiled_segments(node, 2)
+
+    def test_numpy_roundtrip_boundary_creates_two_segments(self):
+        def operation(values):
+            values = self._launch_add(values, 1.0)
+            values = self._numpy_roundtrip(values, 2.0)
+            return self._launch_add(values, 3.0)
+
+        node = self._run_single_node_operation(operation)
+        leapp.compile_graph(visualize=False)
+        self._assert_compiled_segments(node, 2)
+
+    def test_warp_copy_stays_in_one_segment(self):
+        def operation(values):
+            values = self._launch_add(values, 1.0)
+            copied = wp.empty_like(values)
+            wp.copy(copied, values)
+            return self._launch_add(copied, 2.0)
+
+        node = self._run_single_node_operation(operation)
+        leapp.compile_graph(visualize=False)
+        self._assert_compiled_segments(node, 1)
+
+    def test_mixed_sync_and_torch_roundtrip_creates_three_segments(self):
+        def operation(values):
+            values = self._launch_add(values, 1.0)
+            wp.synchronize_device(values.device)
+            values = self._launch_add(values, 2.0)
+            values = self._torch_roundtrip(values, 3.0)
+            return self._launch_add(values, 4.0)
+
+        node = self._run_single_node_operation(operation)
+        leapp.compile_graph(visualize=False)
+        self._assert_compiled_segments(node, 3)
+
+    def test_loop_boundary_and_torch_roundtrip_creates_three_segments(self):
+        def operation(values):
+            for index in range(2):
+                values = self._launch_add(values, float(index + 1))
+                if index == 0:
+                    wp.synchronize_device(values.device)
+            values = self._torch_roundtrip(values, 3.0)
+            return self._launch_add(values, 4.0)
+
+        node = self._run_single_node_operation(operation)
+        leapp.compile_graph(visualize=False)
+        self._assert_compiled_segments(node, 3)
+
+    def test_manual_warp_op_between_automatic_segments_creates_three_segments(self):
+        def operation(values):
+            values = self._launch_add(values, 1.0)
+            wp.synchronize_device(values.device)
+            values = self._launch_manual_add(values, 2.0)
+            values = self._torch_roundtrip(values, 3.0)
+            return self._launch_add(values, 4.0)
+
+        node = self._run_single_node_operation(operation)
+        leapp.compile_graph(visualize=False)
+        self._assert_compiled_segments(node, 3)
+
+    def test_manual_warp_op_before_automatic_segments_creates_three_segments(self):
+        def operation(values):
+            values = self._launch_manual_add(values, 1.0)
+            values = self._torch_roundtrip(values, 2.0)
+            values = self._launch_add(values, 3.0)
+            wp.synchronize_device(values.device)
+            return self._launch_add(values, 4.0)
+
+        node = self._run_single_node_operation(operation)
+
+        leapp.compile_graph(visualize=False)
+        self._assert_compiled_segments(node, 3)
+
+
 if __name__ == "__main__":
     unittest.main()

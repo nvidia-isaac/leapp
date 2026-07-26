@@ -71,6 +71,49 @@ class WarpTestCase(unittest.TestCase):
 
     DEVICE = "cuda"
 
+    def _launch_add(self, values, value):
+        output = wp.empty_like(values)
+        wp.launch(
+            self.kernels.add_scalar,
+            dim=values.size,
+            inputs=[values, wp.float32(value)],
+            outputs=[output],
+            device=values.device,
+        )
+        return output
+
+    def _launch_manual_add(self, values, value, node_name=None):
+        from leapp.leapp import _MANAGER as annotate
+
+        if node_name is None:
+            node_name = self.NODE_NAME
+        with annotate.warp_op(node_name, device=values.device):
+            output = self._launch_add(values, value)
+        return output
+
+    def _torch_roundtrip(self, values, value):
+        tensor = wp.to_torch(values)
+        tensor = tensor + value
+        return wp.from_torch(tensor)
+
+    def _numpy_roundtrip(self, values, value):
+        array = values.numpy()
+        array = array + value
+        return wp.from_numpy(array, device=values.device)
+
+    def _assert_compiled_segments(self, node, expected_segments):
+        self.assertFalse(node.has_pending_warp_segments)
+        self.verify_node_io(node, inputs=1, outputs=1)
+        self.assertEqual(len(node.warp_segments), expected_segments)
+        self.assertEqual(
+            [segment.runner_name for segment in node.warp_segments],
+            [f"warp_segment_{index}" for index in range(expected_segments)],
+        )
+        self.assertTrue(
+            all(segment.apic_graph is not None for segment in node.warp_segments)
+        )
+        self.verify_all_models_exist(self.NODE_NAME)
+
     class kernels:
         @wp.kernel
         def add_scalar(
