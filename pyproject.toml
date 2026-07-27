@@ -48,6 +48,8 @@ classifiers = [
 # __init__subclass__ is provided in 3.6+
 requires-python = ">=3.10"
 dependencies = [
+    # Developed in lockstep with LEAPP and installed from source out of
+    # packages/leapp-visualization. See CONTRIBUTING.md for the dev setup.
     "leapp-visualization==0.5.2; python_version >= '3.11'",
     "torch>=2.6.0",
     "PyYAML>=6.0",

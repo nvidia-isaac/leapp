@@ -31,6 +31,17 @@ def test_visualization_dependency_is_conditional_on_python_311():
     assert '"fast-sugiyama>=0.5.3"' in visualization_pyproject
 
 
+def test_visualization_package_is_sourced_from_this_repo():
+    root_pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    ci_workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    assert (
+        'leapp-visualization = { path = "packages/leapp-visualization" }'
+        in root_pyproject
+    )
+    assert "pip install -e ./packages/leapp-visualization" in ci_workflow
+
+
 def test_compile_graph_warns_and_skips_unsupported_visualization(tmp_path, monkeypatch):
     def fail_render(*args, **kwargs):
         raise AssertionError("renderer must not be loaded below Python 3.11")
