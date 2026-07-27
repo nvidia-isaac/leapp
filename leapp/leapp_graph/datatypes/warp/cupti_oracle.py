@@ -16,6 +16,24 @@ except ImportError:
     cupti = None
     CUPTI_AVAILABLE = False
 
+if CUPTI_AVAILABLE:
+    # cupti-python 12.x/13.0 exposes these enums in snake_case, while newer
+    # 13.x versions also expose PascalCase aliases. Resolve by symbol so LEAPP
+    # can run with either CUDA 12 or CUDA 13 CUPTI wheels.
+    _DRIVER_API_TRACE_CBID = getattr(
+        cupti,
+        "Driver_api_trace_cbid",
+        getattr(cupti, "driver_api_trace_cbid", None),
+    )
+    _RUNTIME_API_TRACE_CBID = getattr(
+        cupti,
+        "Runtime_api_trace_cbid",
+        getattr(cupti, "runtime_api_trace_cbid", None),
+    )
+else:
+    _DRIVER_API_TRACE_CBID = None
+    _RUNTIME_API_TRACE_CBID = None
+
 
 class WarpCudaOracle:
     """Warning-only CUPTI oracle for CUDA work during active Warp segments."""
@@ -68,6 +86,7 @@ class WarpCudaOracle:
         self._session: Any | None = None
         self._subscriber: int | None = None
         self._warned_by_segment: dict[int, set[tuple[str, str, str]]] = {}
+        self._callback_error_logged = False
         self._callback = self._on_callback
         self._boundary_handler = boundary_handler
 
@@ -106,6 +125,19 @@ class WarpCudaOracle:
         cbid: int,
         _cbdata: Any,
     ) -> None:
+        try:
+            self._handle_callback(domain_id, cbid)
+        except Exception as exc:
+            # Exceptions cannot escape CUPTI callbacks safely; CUDA reports
+            # them as low-level SystemErrors at the original API callsite.
+            if not self._callback_error_logged:
+                _get_logger().warning(
+                    "LEAPP disabled one CUPTI callback after an internal "
+                    f"decode error: {exc}"
+                )
+                self._callback_error_logged = True
+
+    def _handle_callback(self, domain_id: int, cbid: int) -> None:
         session = self._session
         segment = None if session is None else session.active_segment
         if segment is None:
@@ -151,8 +183,8 @@ class WarpCudaOracle:
 
     def _callback_name(self, domain: str, cbid: int) -> str:
         enum_type = {
-            "DRIVER_API": cupti.Driver_api_trace_cbid,
-            "RUNTIME_API": cupti.Runtime_api_trace_cbid,
+            "DRIVER_API": _DRIVER_API_TRACE_CBID,
+            "RUNTIME_API": _RUNTIME_API_TRACE_CBID,
             "SYNCHRONIZE": cupti.CallbackIdSync,
             "RESOURCE": cupti.CallbackIdResource,
             "STATE": cupti.CallbackIdState,

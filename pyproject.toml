@@ -58,7 +58,7 @@ dependencies = [
     # Visualization layout/render deps (Python 3.11+ only; skipped on 3.10).
     "fast-sugiyama>=0.5.3; python_version >= '3.11'",
     "Pillow>=10.0.0; python_version >= '3.11'",
-    "cupti-python>=13.0; sys_platform == 'linux'",
+    "cupti-python>=12.8,<14; sys_platform == 'linux'",
 ]
 
 [project.optional-dependencies]
