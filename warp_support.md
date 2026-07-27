@@ -271,3 +271,30 @@ Automatic routing follows these rules:
 When automatic detection cannot express a desired boundary safely, use an
 explicit `annotate.warp_op()` block and keep the block limited to replayable
 Warp operations.
+
+## Try an inference pass
+
+After exporting a Warp graph and configuring `LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY`,
+run a full-pipeline smoke test with `InferenceManager`. The general workflow is
+covered in the LEAPP [runtime and validation guide](docs/source/guides/runtime.rst)
+and in the published docs at
+[Runtime and validation](https://nvidia-isaac.github.io/leapp/guides/runtime.html).
+
+```python
+from leapp import InferenceManager
+
+manager = InferenceManager("explicit_warp/explicit_warp.yaml")
+
+print(manager.inputs)
+print(manager.outputs)
+
+mock_inputs = manager.get_mock_input()
+outputs = manager.run_policy(mock_inputs)
+
+print(outputs)
+```
+
+For Warp ONNX exports, run this in the same environment used to build the ONNX
+custom op. If the custom op is missing, built against a different ONNX Runtime
+version, or loaded without ONNX Runtime's CUDA execution provider, the smoke
+test will fail before the Warp runner can execute.
