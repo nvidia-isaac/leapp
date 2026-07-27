@@ -59,7 +59,7 @@ dependencies = [
     "onnxruntime>=1.20.0",
     "onnxscript>=0.1.0",
     "safetensors>=0.5.0",
-    "cupti-python>=13.0; sys_platform == 'linux'",
+    "cupti-python>=12.8,<14; sys_platform == 'linux'",
 ]
 
 [project.optional-dependencies]
