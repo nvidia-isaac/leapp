@@ -39,7 +39,8 @@ def start(name, save_path=".", verbose=False, dry_run=False, non_traced=None, ma
     ``name`` may be a bare graph name (``"my_graph"``), a relative path
     (``"foo/bar"``), or an absolute path (``"/tmp/my_graph"``). LEAPP always
     uses the trailing path component as the graph name for emitted artifacts
-    (``<graph_name>.yaml``, ``<graph_name>.png``, ``<graph_name>_initial_values.safetensors``)
+    (``<graph_name>.yaml``, ``<graph_name>.png``,
+    ``<graph_name>_initial_values.safetensors``)
     and resolves the final output directory as ``save_path / dirname(name) / basename(name)``.
     An absolute ``name`` overrides ``save_path`` (mirroring ``os.path.join`` semantics).
     """
@@ -105,7 +106,12 @@ def stop():
 
 
 def compile_graph(visualize=True, verbose=None, validate=True, dry_run=False, rtol=1e-3, atol=1e-5, strict=True):
-    """Compile and save the computational graph from traced nodes."""
+    """Compile and save the computational graph from traced nodes.
+
+    When ``visualize`` is ``True`` on Python 3.11 or later, LEAPP writes
+    a static ``.png`` graph artifact to the graph output
+    directory. Earlier Python versions emit a warning and skip visualization.
+    """
     manager = _MANAGER
 
     # Enforce lifecycle: compile only after tracing is stopped.
@@ -140,10 +146,7 @@ def compile_graph(visualize=True, verbose=None, validate=True, dry_run=False, rt
     models = manager.get_io_descriptions()
 
     if visualize:
-        try:
-            graph.visualize(manager.get_save_path(), manager.get_graph_name())
-        except Exception as e:
-            _get_logger().error(f"Error visualizing graph: {e}")
+        graph.visualize(manager.get_save_path(), manager.get_graph_name())
 
     internal_connections, total_edges = graph.get_graph_statistics()
 
@@ -202,4 +205,3 @@ class AnnotateAPI:
 
 
 annotate = AnnotateAPI()
-
