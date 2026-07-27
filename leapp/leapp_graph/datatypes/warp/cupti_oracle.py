@@ -2,10 +2,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from cupti import cupti
-
 from leapp.utils.logging import _get_logger
 
+# Soft-import CUPTI so missing cupti-python (e.g. Windows, where the package
+# has no wheels) does not break importing the Warp tracing modules. Torch and
+# NumPy tracing must still work when warp-lang is present but CUPTI is not.
+# WarpOp._verify_warp() enforces CUPTI/Linux when Warp tracing is actually used.
+try:
+    from cupti import cupti
+
+    CUPTI_AVAILABLE = True
+except ImportError:
+    cupti = None
+    CUPTI_AVAILABLE = False
 
 
 class WarpCudaOracle:
@@ -67,6 +76,8 @@ class WarpCudaOracle:
 
     def start(self) -> None:
         if self._subscriber is not None:
+            return
+        if not CUPTI_AVAILABLE:
             return
 
         self._subscriber = int(cupti.subscribe(self._callback, None))
