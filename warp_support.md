@@ -107,6 +107,10 @@ ExportedProgram (`pt2`) export paths.
 For automatic detection, LEAPP wraps public Warp API calls and observes CUDA
 activity that may require the current segment to close.
 
+Warp nodes must currently be exported with ONNX. Use `export_with="onnx"` when
+calling `annotate.output_tensors()` for nodes that contain Warp operations;
+other export backends are not supported for Warp graphs yet.
+
 ## Explicit `warp_op` annotation
 
 Use `annotate.warp_op(node_name)` when the intended Warp region has a clear
