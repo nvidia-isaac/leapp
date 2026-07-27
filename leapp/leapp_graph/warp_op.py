@@ -16,6 +16,7 @@
 #
 
 import os
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -181,6 +182,22 @@ else:
 
 
     class WarpOp:
+        @staticmethod
+        def _verify_warp() -> None:
+            from leapp.leapp_graph.datatypes.warp.cupti_oracle import CUPTI_AVAILABLE
+
+            if sys.platform != "linux":
+                _get_logger().fatal(
+                    "LEAPP: Warp tracing is only available on Linux.",
+                    error_type=ImportError,
+                )
+            if not CUPTI_AVAILABLE:
+                _get_logger().fatal(
+                    "LEAPP: Warp tracing requires cupti-python. "
+                    "Install cupti-python and retry.",
+                    error_type=ImportError,
+                )
+
         def __init__(
             self,
             node_ref: Any,
@@ -189,6 +206,7 @@ else:
             capture: bool,
             device: str = "cuda:0",
         ):
+            self._verify_warp()
             self.node_ref = node_ref
             self.node_name = node_ref.name
             self._session = session
