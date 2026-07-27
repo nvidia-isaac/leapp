@@ -262,14 +262,16 @@ else:
             return False
 
         def _context_exit_capture(self, exc_type, exc_value, traceback):
-
-            # the context should complete capture before the __exit__ function is called.
-            if self._session.active_warp_op is self:
-                _get_logger().fatal(
-                    "Warp capture reached WarpOp.__exit__ before its "
-                    "close call stack was detected.",
-                    error_type=RuntimeError,
-                )
+            if self._session.active_warp_op is not self:
+                return False
+            call_stack = get_caller_stack_identity()
+            self._session.close_warp_segment(
+                requester=self,
+                close_call_stack=call_stack,
+                exc_type=exc_type,
+                exc_value=exc_value,
+                traceback=traceback,
+            )
             return False
 
         def _begin_discovery(self, call_stack, *, owner_token=None) -> None:
@@ -331,12 +333,6 @@ else:
                     apic=True,
                 )
                 self._capture = self._scope.__enter__()
-            if stored_segment.close_call_stack is not None:
-                self._session.watch_for_close(
-                    stored_segment.close_call_stack,
-                    requester=owner_token,
-                    require_context_exit=owner_token is not None,
-                )
 
         def _terminate_discovery(
             self,
@@ -404,6 +400,29 @@ else:
                     f"Expected calls {expected_qualnames}, got {actual_qualnames}.",
                     error_type=RuntimeError,
                 )
+
+        def _validate_capture_close(self, close_call_stack) -> None:
+            if self._segment is None:
+                _get_logger().fatal(
+                    "Capture WarpOp has no active segment.",
+                    error_type=RuntimeError,
+                )
+            expected_close_call_stack = self._segment.close_call_stack
+            if not caller_identity_has_same_anchor(
+                expected_close_call_stack,
+                close_call_stack,
+            ):
+                self._segment.invalidate()
+                _get_logger().fatal(
+                    f"[{self.node_name}] Warp segment closed at a different "
+                    "annotation origin between discovery and capture.\n"
+                    "Discovery close origin:\n"
+                    f"{format_caller_identity(expected_close_call_stack)}\n"
+                    "Capture close origin:\n"
+                    f"{format_caller_identity(close_call_stack)}",
+                    error_type=RuntimeError,
+                )
+
         def _terminate_capture(
             self,
             exc_type,
@@ -418,6 +437,7 @@ else:
                     scope_result = self._scope.__exit__(
                         exc_type, exc_value, traceback
                     )
+            self._validate_capture_close(close_call_stack)
             if exc_type is None and self._segment is not None:
                 graph = self._capture.graph
                 self._segment.apic_graph = graph

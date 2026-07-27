@@ -425,6 +425,133 @@ class TestWarpAutomaticSegmentDetection(WarpTestCase, LEAPPFunctionalTestBase):
         leapp.stop()
         return node
 
+    def test_same_node_interleaved_warp_arrays_stay_in_one_segment(self):
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        source1 = wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)
+        source2 = wp.array([4.0, 5.0, 6.0], dtype=wp.float32, device=self.DEVICE)
+
+        for _ in range(2):
+            array1 = annotate.input_tensors("node1", {"a": source1})
+            array2 = annotate.input_tensors("node1", {"b": source2})
+
+            array1 = self._launch_add(array1, 1.0)
+            array2 = self._launch_add(array2, 1.0)
+            array1 = self._launch_add(array1, 1.0)
+
+            annotate.output_tensors(
+                "node1",
+                {"a": array1, "b": array2},
+                export_with="onnx",
+            )
+
+        node = annotate.get_nodes()["node1"]
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        self.assertFalse(node.has_pending_warp_segments)
+        self.verify_node_io(node, inputs=2, outputs=2)
+        self.assertEqual(len(node.warp_segments), 1)
+        self.assertIsNotNone(node.warp_segments[0].apic_graph)
+        self.verify_all_models_exist("node1")
+
+    def test_interleaved_warp_nodes_split_on_context_switch(self):
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        source1 = wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)
+        source2 = wp.array([4.0, 5.0, 6.0], dtype=wp.float32, device=self.DEVICE)
+
+        for _ in range(2):
+            node1_array = annotate.input_tensors("node1", {"a": source1})
+            node2_array = annotate.input_tensors("node2", {"b": source2})
+
+            node1_array = self._launch_add(node1_array, 1.0)
+            node2_array = self._launch_add(node2_array, 1.0)
+            node1_array = self._launch_add(node1_array, 1.0)
+
+            annotate.output_tensors("node1", {"a": node1_array}, export_with="onnx")
+            annotate.output_tensors("node2", {"b": node2_array}, export_with="onnx")
+
+        node1 = annotate.get_nodes()["node1"]
+        node2 = annotate.get_nodes()["node2"]
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        self.assertFalse(node1.has_pending_warp_segments)
+        self.assertFalse(node2.has_pending_warp_segments)
+        self.verify_node_io(node1, inputs=1, outputs=1)
+        self.verify_node_io(node2, inputs=1, outputs=1)
+        self.assertEqual(len(node1.warp_segments), 2)
+        self.assertEqual(len(node2.warp_segments), 1)
+        self.assertTrue(
+            all(segment.apic_graph is not None for segment in node1.warp_segments)
+        )
+        self.assertTrue(
+            all(segment.apic_graph is not None for segment in node2.warp_segments)
+        )
+        self.verify_all_models_exist("node1", "node2")
+
+    def test_probe_style_interleaved_warp_nodes_split_on_context_switch(self):
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        source1 = wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)
+        source2 = wp.array([4.0, 5.0, 6.0], dtype=wp.float32, device=self.DEVICE)
+
+        for _ in range(2):
+            node1_array = annotate.input_tensors("node1", {"a": source1})
+            node2_array = annotate.input_tensors("node2", {"b": source2})
+
+            node1_array = self._launch_increment_in_place(node1_array)
+            node2_array = self._launch_increment_in_place(node2_array)
+            node1_array = self._launch_increment_in_place(node1_array)
+
+            annotate.output_tensors("node1", {"a": node1_array}, export_with="onnx")
+            annotate.output_tensors("node2", {"b": node2_array}, export_with="onnx")
+
+        node1 = annotate.get_nodes()["node1"]
+        node2 = annotate.get_nodes()["node2"]
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        self.assertFalse(node1.has_pending_warp_segments)
+        self.assertFalse(node2.has_pending_warp_segments)
+        self.verify_node_io(node1, inputs=1, outputs=1)
+        self.verify_node_io(node2, inputs=1, outputs=1)
+        self.assertEqual(len(node1.warp_segments), 2)
+        self.assertEqual(len(node2.warp_segments), 1)
+        self.verify_all_models_exist("node1", "node2")
+
+    def test_single_warp_call_with_arrays_from_multiple_nodes_still_fails(self):
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        source1 = wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)
+        source2 = wp.array([4.0, 5.0, 6.0], dtype=wp.float32, device=self.DEVICE)
+        output = wp.empty_like(source1)
+
+        array1 = annotate.input_tensors("node1", {"a": source1})
+        array2 = annotate.input_tensors("node2", {"b": source2})
+
+        with self.assertRaisesRegex(ValueError, "different LEAPP trace contexts"):
+            wp.launch(
+                self.kernels.average_three,
+                dim=array1.size,
+                inputs=[array1, array2, array1],
+                outputs=[output],
+                device=array1.device,
+            )
+        leapp.stop()
+
+    def test_context_switch_inside_explicit_warp_op_still_fails(self):
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        source1 = wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)
+        source2 = wp.array([4.0, 5.0, 6.0], dtype=wp.float32, device=self.DEVICE)
+        node1_array = annotate.input_tensors("node1", {"a": source1})
+        node2_array = annotate.input_tensors("node2", {"b": source2})
+
+        try:
+            with self.assertRaisesRegex(RuntimeError, "active WarpOp is protected"):
+                with annotate.warp_op("node1", device=self.DEVICE):
+                    self._launch_add(node1_array, 1.0)
+                    self._launch_add(node2_array, 1.0)
+        finally:
+            leapp.stop()
+
     def test_sync_device_boundary_creates_two_segments(self):
         def operation(values):
             values = self._launch_add(values, 1.0)

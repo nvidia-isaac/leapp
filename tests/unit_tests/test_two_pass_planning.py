@@ -6,6 +6,7 @@ from leapp.leapp_graph.datatypes.warp.session import WarpTraceSession
 from leapp.leapp_graph.warp_op import WarpOp
 from leapp.utils.caller_identity import CallerFrame, CallerIdentity
 import unittest
+from unittest.mock import patch
 
 
 class _FakeNode:
@@ -116,32 +117,28 @@ class TestWarpTwoPassPlanning(unittest.TestCase):
 
         self.assertIs(session.active_segment, segment)
 
-    def test_capture_rejects_close_outside_watched_location(self):
-        session = WarpTraceSession()
-        segment = WarpSegment(node_name="node", status="open")
-        warp_op = _FakeWarpOp(segment)
+    def test_capture_close_fails_on_divergent_close_site(self):
         expected_close = CallerIdentity(
             CallerFrame("discovery.py", 10, "expected_close"),
         )
         attempted_close = CallerIdentity(
             CallerFrame("capture.py", 20, "attempted_close"),
         )
-        session.register_warp_op(warp_op, segment)
-        session.watch_for_close(expected_close, requester=None)
+        warp_op = WarpOp(_FakeNode(), session=WarpTraceSession(), capture=True)
+        warp_op._segment = WarpSegment(
+            node_name="node",
+            close_call_stack=expected_close,
+            status="open",
+        )
 
-        try:
-            with self.assertRaisesRegex(
-                RuntimeError,
-                "Warp segment was expected to close at",
-            ) as raised:
-                session.close_warp_segment(
-                    close_call_stack=attempted_close,
-                )
-            self.assertIn("discovery.py:10 in expected_close", str(raised.exception))
-            self.assertIn("capture.py:20 in attempted_close", str(raised.exception))
-            self.assertIs(session.active_segment, segment)
-        finally:
-            session.stop_watching_for_close()
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "closed at a different annotation origin",
+        ) as raised:
+            warp_op._validate_capture_close(attempted_close)
+        self.assertIn("discovery.py:10 in expected_close", str(raised.exception))
+        self.assertIn("capture.py:20 in attempted_close", str(raised.exception))
+        self.assertEqual(warp_op.segment.status, "invalid")
 
     def test_owned_capture_rejects_different_requester(self):
         session = WarpTraceSession()
@@ -152,29 +149,33 @@ class TestWarpTwoPassPlanning(unittest.TestCase):
             segment,
             owner_token=warp_op,
         )
-        session.watch_for_close(
-            ("discovery.py", 10, "expected_close"),
-            requester=warp_op,
+
+        closed = session.close_warp_segment(
+            requester=object(),
+            close_call_stack=("capture.py", 20, "attempted_close"),
         )
+        self.assertFalse(closed)
+        self.assertIs(session.active_segment, segment)
+        session.close_warp_segment(requester=warp_op)
 
-        try:
-            closed = session.close_warp_segment(
-                requester=object(),
-                close_call_stack=("capture.py", 20, "attempted_close"),
-            )
-            self.assertFalse(closed)
-            self.assertIs(session.active_segment, segment)
-        finally:
-            session.stop_watching_for_close()
-            session.close_warp_segment(requester=warp_op)
-
-    def test_capture_exit_fails_when_close_watcher_misses(self):
+    def test_explicit_capture_exit_closes_owned_segment_directly(self):
         session = WarpTraceSession()
         warp_op = WarpOp(_FakeNode(), session=session, capture=True)
-        segment = WarpSegment(node_name="node", status="open")
+        close_call_stack = ("caller.py", 10, "close")
+        segment = WarpSegment(
+            node_name="node",
+            close_call_stack=close_call_stack,
+            status="open",
+        )
 
         warp_op._segment = segment
         session.register_warp_op(warp_op, segment, owner_token=warp_op)
 
-        with self.assertRaisesRegex(RuntimeError, "close call stack was detected"):
-            warp_op.__exit__(None, None, None)
+        with patch(
+            "leapp.leapp_graph.warp_op.get_caller_stack_identity",
+            return_value=close_call_stack,
+        ):
+            warp_op.__exit__(RuntimeError, RuntimeError("failure"), None)
+
+        self.assertIsNone(session.active_segment)
+        self.assertIsNone(session.active_warp_op)

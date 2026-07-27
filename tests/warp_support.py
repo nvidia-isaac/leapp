@@ -82,6 +82,15 @@ class WarpTestCase(unittest.TestCase):
         )
         return output
 
+    def _launch_increment_in_place(self, values):
+        wp.launch(
+            self.kernels.increment_in_place,
+            dim=values.size,
+            inputs=[values],
+            device=values.device,
+        )
+        return values
+
     def _launch_manual_add(self, values, value, node_name=None):
         from leapp.leapp import _MANAGER as annotate
 
@@ -131,6 +140,11 @@ class WarpTestCase(unittest.TestCase):
         ):
             i = wp.tid()
             data[i] = data[i] / divisor
+
+        @wp.kernel
+        def increment_in_place(data: wp.array(dtype=wp.float32)):
+            i = wp.tid()
+            data[i] = data[i] + 1.0
 
         @wp.kernel
         def average_three(

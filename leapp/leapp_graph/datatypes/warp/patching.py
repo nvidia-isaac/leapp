@@ -101,6 +101,7 @@ class _Patch:
 
 @dataclass(frozen=True)
 class _WarpTraceState:
+    # this is the simplification of the traced state provided by the proxies
     name: str
     context: Any
     proxy: Any
@@ -230,6 +231,8 @@ class WarpPatchBackend:
         self._sync_boundary_function_ids.clear()
         self._readback_boundary_function_ids.clear()
         self._boundary_array_init_id = None
+        if self._session is not None:
+            self._session.reset()
         self._session = None
         self._installed = False
 
@@ -662,11 +665,21 @@ class WarpPatchBackend:
     ) -> Any | None:
         active_segment = None if self._session is None else self._session.active_segment
         if active_segment is not None:
-            return active_segment
+            if trace_state is None:
+                return active_segment
+            incoming_node_name = getattr(trace_state.context, "name", None)
+            if incoming_node_name == active_segment.node_name:
+                return active_segment # same node, no need to close
+            else:
+                # different node, close the active segment
+                self.close_warp_segment()
+                warp_op = self._begin_boundary_closeable_warp_op(trace_state)
+                return None if warp_op is None else warp_op.segment
         if trace_state is not None:
+            # no active segment, begin a new one
             warp_op = self._begin_boundary_closeable_warp_op(trace_state)
             return None if warp_op is None else warp_op.segment
-        return None
+        return None # no active segment, no need to close
 
     def _begin_boundary_closeable_warp_op(
         self,
