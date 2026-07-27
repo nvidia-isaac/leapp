@@ -5,7 +5,22 @@ import math
 from PIL import Image, ImageDraw, ImageFont
 
 from .geometry import EdgeGeometry, GraphGeometry, Point, Rect, _visible_port_kind
-from .svg_renderer import COLORS
+
+COLORS = {
+    "background": "#F7F8FA",
+    "node": "#FFFFFF",
+    "node_border": "#C9D2DE",
+    "header": "#EDF2F7",
+    "text": "#18212F",
+    "secondary_text": "#5E6B7A",
+    "forward_edge": "#566273",
+    "feedback_edge": "#B42318",
+    "graph_input": "#2F855A",
+    "graph_output": "#C2410C",
+    "torch": "#2563EB",
+    "warp": "#76B900",
+    "unknown_backend": "#667085",
+}
 
 _SCALE_FACTOR = 2
 _NODE_RADIUS = 6

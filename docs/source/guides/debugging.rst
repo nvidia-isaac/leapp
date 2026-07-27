@@ -182,9 +182,9 @@ Choosing the right option
 Related debugging tools
 =======================
 
-* On Python 3.11+, ``leapp.compile_graph(visualize=True)`` writes SVG and PNG
-  graph images that are useful for checking node connectivity. Python 3.10
-  emits a warning and skips these artifacts.
+* On Python 3.11+, ``leapp.compile_graph(visualize=True)`` writes a PNG
+  graph image that is useful for checking node connectivity. Python 3.10
+  emits a warning and skips this artifact.
 * ``leapp.compile_graph(validate=True, strict=True, rtol=..., atol=...)``
   compares exported model outputs against captured outputs. See
   :doc:`runtime`.

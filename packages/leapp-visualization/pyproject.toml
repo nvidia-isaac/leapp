@@ -19,7 +19,7 @@ authors = [
 maintainers = [
     {name = "Frank Lai", email = "frlai@nvidia.com"}
 ]
-keywords = ["graph-visualization", "layout", "svg", "png", "pipeline-graphs"]
+keywords = ["graph-visualization", "layout", "png", "pipeline-graphs"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

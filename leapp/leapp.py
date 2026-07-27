@@ -39,7 +39,7 @@ def start(name, save_path=".", verbose=False, dry_run=False, non_traced=None, ma
     ``name`` may be a bare graph name (``"my_graph"``), a relative path
     (``"foo/bar"``), or an absolute path (``"/tmp/my_graph"``). LEAPP always
     uses the trailing path component as the graph name for emitted artifacts
-    (``<graph_name>.yaml``, ``<graph_name>.svg``, ``<graph_name>.png``,
+    (``<graph_name>.yaml``, ``<graph_name>.png``,
     ``<graph_name>_initial_values.safetensors``)
     and resolves the final output directory as ``save_path / dirname(name) / basename(name)``.
     An absolute ``name`` overrides ``save_path`` (mirroring ``os.path.join`` semantics).
@@ -109,7 +109,7 @@ def compile_graph(visualize=True, verbose=None, validate=True, dry_run=False, rt
     """Compile and save the computational graph from traced nodes.
 
     When ``visualize`` is ``True`` on Python 3.11 or later, LEAPP writes
-    static ``.svg`` and ``.png`` graph artifacts to the graph output
+    a static ``.png`` graph artifact to the graph output
     directory. Earlier Python versions emit a warning and skip visualization.
     """
     manager = _MANAGER

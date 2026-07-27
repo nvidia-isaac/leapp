@@ -121,7 +121,7 @@ class BaseExampleTest(unittest.TestCase):
 
         # Check each expected file
         for expected_file in expected_files:
-            if sys.version_info < (3, 11) and Path(expected_file).suffix in {".svg", ".png"}:
+            if sys.version_info < (3, 11) and Path(expected_file).suffix == ".png":
                 self.assertNotIn(
                     expected_file,
                     actual_files,

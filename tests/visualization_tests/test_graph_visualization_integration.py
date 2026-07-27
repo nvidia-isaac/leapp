@@ -32,7 +32,7 @@ class FakeNode:
     node_index: int = 0
 
 
-def test_leapp_graph_visualize_writes_svg_and_png(tmp_path: Path):
+def test_leapp_graph_visualize_writes_png(tmp_path: Path):
     node = FakeNode(
         name="policy",
         inputs=[FakeTensorDescription("obs", "float32", (1, 12))],
@@ -43,12 +43,9 @@ def test_leapp_graph_visualize_writes_svg_and_png(tmp_path: Path):
     graph = LeappGraph(nodes={"policy": node})
     graph.visualize(save_path=str(tmp_path), graph_name="demo")
 
-    svg_path = tmp_path / "demo.svg"
     png_path = tmp_path / "demo.png"
-    assert svg_path.exists()
     assert png_path.exists()
-    assert "policy" in svg_path.read_text(encoding="utf-8")
-    assert "command" in svg_path.read_text(encoding="utf-8")
+    assert not (tmp_path / "demo.svg").exists()
     assert Image.open(png_path).size[0] > 0
 
 

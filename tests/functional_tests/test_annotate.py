@@ -918,13 +918,10 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
         leapp.stop()
         leapp.compile_graph(visualize=True)
 
-        svg_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.svg")
         png_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.png")
         if sys.version_info >= (3, 11):
-            assert os.path.exists(svg_path)
             assert os.path.exists(png_path)
         else:
-            assert not os.path.exists(svg_path)
             assert not os.path.exists(png_path)
 
         # 4 nodes, 1 external input

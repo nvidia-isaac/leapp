@@ -121,13 +121,13 @@ class LeappGraph:
         if not _visualization_supported():
             warnings.warn(
                 "Graph visualization requires Python 3.11 or later; "
-                "skipping SVG and PNG generation.",
+                "skipping PNG generation.",
                 RuntimeWarning,
                 stacklevel=2,
             )
             return
 
-        svg_path, png_path = _render_visual_graph(
+        png_path = _render_visual_graph(
             self.nodes,
             self.connections,
             self.feedback_connections,
@@ -136,7 +136,6 @@ class LeappGraph:
             save_path,
             graph_name,
         )
-        _get_logger().info(f"Graph visualization saved as: {svg_path}")
         _get_logger().info(f"Graph visualization saved as: {png_path}")
 
     def get_graph_statistics(self):

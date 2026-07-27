@@ -1,7 +1,7 @@
-# LEAPP graph visualization uses static layered SVG and PNG artifacts
+# LEAPP graph visualization uses a static layered PNG artifact
 
 LEAPP will replace the current interactive Matplotlib graph visualizer with a static
-layered visualization that emits both SVG and PNG from `compile_graph(visualize=True)` on
+layered visualization that emits a PNG from `compile_graph(visualize=True)` on
 Python 3.11 or later.
 
 ## Decision
@@ -9,8 +9,7 @@ Python 3.11 or later.
 Use `fast-sugiyama` as the layout engine for directed graph layer/order placement, then use
 renderer code from a sibling `leapp-visualization` package to draw a static visualization.
 LEAPP owns the adapter that converts LEAPP graph objects into the generic visualization
-model. The SVG is the primary artifact. The PNG is generated from the same resolved geometry
-as a companion raster artifact.
+model. The PNG is the single rendered artifact, drawn from the resolved geometry.
 
 The visualization renders graph inputs, graph outputs, leapp nodes, and data-flow edges.
 Each leapp node renders visualization ports for its tensor inputs and outputs. Port labels
@@ -32,8 +31,9 @@ The renderer can stay generic because graph inputs, graph outputs, feedback edge
 node/backend hints, and semantic tensor `kind` can all be represented in a reusable visual
 graph model. LEAPP-specific extraction stays in LEAPP's adapter.
 
-SVG provides a modern, docs-friendly primary artifact. PNG remains useful for reports,
-README previews, and tools that do not embed SVG well.
+A single raster artifact keeps one rendering pipeline to maintain. Vector output would need
+a second, independent renderer kept pixel-equivalent to the raster one, which is not worth
+the maintenance burden. PNG embeds everywhere docs, reports, and README previews need it.
 
 ## Consequences
 
@@ -45,7 +45,6 @@ on Python versions below 3.11. Matplotlib can be removed if no other runtime pat
 Rendering becomes deterministic and headless. Users no longer need to manually position
 nodes or close a GUI window to save the graph image.
 
-The renderer must implement node sizing, port placement, text truncation, edge routing, SVG
-generation, and PNG drawing. This is more local rendering code than delegating everything to
-Graphviz, but avoids non-Python system dependencies and gives LEAPP control over its visual
+The renderer must implement node sizing, port placement, text truncation, edge routing, and
+PNG drawing. This is more local rendering code than delegating everything to Graphviz, but avoids non-Python system dependencies and gives LEAPP control over its visual
 language.

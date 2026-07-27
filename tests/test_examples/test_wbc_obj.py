@@ -38,7 +38,6 @@ class TestWBCObj(BaseExampleTest):
         # Expected output files - these should be similar to wbc_plain but for sample_wbc_obj
         expected_files = [
             'wbc_obj.onnx',
-            'sample_wbc_obj.svg',
             'sample_wbc_obj.png',
             'sample_wbc_obj.yaml'
         ]

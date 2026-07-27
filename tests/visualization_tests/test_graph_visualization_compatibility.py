@@ -57,5 +57,4 @@ def test_compile_graph_warns_and_skips_unsupported_visualization(tmp_path, monke
         leapp.compile_graph(visualize=True, validate=False)
 
     assert (tmp_path / "demo" / "demo.yaml").exists()
-    assert not (tmp_path / "demo" / "demo.svg").exists()
     assert not (tmp_path / "demo" / "demo.png").exists()

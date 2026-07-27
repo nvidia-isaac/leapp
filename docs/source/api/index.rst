@@ -159,8 +159,8 @@ The method performs the complete pipeline:
 #. Build connections by analyzing data flow.
 #. Save compiled models to ``{save_path}/{name}/``.
 #. Generate ``{name}.yaml`` with the complete graph description.
-#. Generate ``{name}.svg`` and ``{name}.png`` if ``visualize=True`` and
-   Python 3.11 or later is running.
+#. Generate ``{name}.png`` if ``visualize=True`` and Python 3.11 or later is
+   running.
 #. Log graph statistics.
 
 Generated artifacts
@@ -169,9 +169,7 @@ Generated artifacts
 * Compiled models --- one file per node (``.pt``, ``.onnx``).
 * ``{name}.yaml`` --- model descriptions, pipeline connections
   (``data_flow`` and ``feedback_flow``), and system information.
-* ``{name}.svg`` --- primary graph visualization (when ``visualize=True`` on
-  Python 3.11+).
-* ``{name}.png`` --- companion graph visualization (when ``visualize=True`` on
+* ``{name}.png`` --- graph visualization (when ``visualize=True`` on
   Python 3.11+).
 
 Output YAML structure
@@ -777,8 +775,7 @@ This creates:
 
    exports/complete_pipeline/
    |-- complete_pipeline.yaml    # Graph description
-   |-- complete_pipeline.svg     # Primary visualization
-   |-- complete_pipeline.png     # Companion visualization
+   |-- complete_pipeline.png     # Graph visualization
    |-- preprocess.pt             # Preprocessing model
    |-- inference.pt              # Inference model
    |-- postprocess.pt            # Postprocessing model

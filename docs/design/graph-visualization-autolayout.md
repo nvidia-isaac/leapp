@@ -13,7 +13,7 @@ interactive Matplotlib window where users manually drag nodes before saving the 
 not a good default for export workflows, CI, docs generation, or headless runs.
 
 This design replaces the interactive Matplotlib visualization with a static, automatically
-laid-out graph rendering. The new renderer emits both SVG and PNG and lives in the reusable
+laid-out graph rendering. The new renderer emits a PNG and lives in the reusable
 `leapp-visualization` sibling package. LEAPP keeps a small adapter that maps LEAPP nodes and
 tensor descriptors into the generic visualization model. The renderer uses a layered layout
 similar in spirit to rqt_graph and Netron, and it renders named tensor ports inside each
@@ -49,11 +49,10 @@ References:
 
 ### Functional requirements
 
-- On Python 3.11+, `leapp.compile_graph(visualize=True)` emits:
-  - `<graph_name>.svg`
-  - `<graph_name>.png`
-- The SVG is the primary artifact. The PNG is a raster companion generated from the same
-  visual geometry.
+- On Python 3.11+, `leapp.compile_graph(visualize=True)` emits `<graph_name>.png`.
+- The PNG is the only rendered artifact. Vector output is deliberately not emitted: raster
+  and vector generation are separate rendering pipelines, and maintaining two of them in
+  lockstep is not worth the cost.
 - The renderer is static only. No embedded JavaScript, no hover behavior, and no browser
   runtime assumptions.
 - The visualization shows:
@@ -78,7 +77,6 @@ References:
   a warning on earlier Python versions.
 - Rendering must work in headless CI.
 - Layout should be deterministic for stable docs and regression tests.
-- The SVG should be readable in docs and browsers without external CSS/assets.
 - The visual style should be modern and LEAPP-specific, not a raw NetworkX/Matplotlib plot.
 
 ### Out of scope
@@ -105,8 +103,7 @@ flowchart LR
     B --> C[leapp-visualization model]
     C --> D[Layered layout adapter]
     D --> E[Geometry resolver]
-    E --> F[SVG renderer]
-    E --> G[PNG renderer]
+    E --> F[PNG renderer]
 ```
 
 ### Visualization model and LEAPP adapter
@@ -158,7 +155,7 @@ instead of calling the Sugiyama solver.
 
 ### Geometry resolver
 
-The resolver translates abstract layout coordinates into concrete SVG/PNG coordinates:
+The resolver translates abstract layout coordinates into concrete pixel coordinates:
 
 - Measure each leapp node from its title and port labels.
 - Reserve a fixed row height per visualization port.
@@ -176,15 +173,9 @@ joint_pos
 state/joint/position
 ```
 
-The kind line is omitted when absent. Long text is truncated for visual bounds; the SVG may
-include a `<title>` element with the full label for accessibility even though the artifact is
-otherwise static.
+The kind line is omitted when absent. Long text is truncated for visual bounds.
 
-### SVG renderer
-
-The SVG renderer emits a self-contained SVG string. It should not depend on an external SVG
-library unless that proves materially simpler than using `xml.etree.ElementTree` or careful
-string generation.
+### Renderer
 
 Visual direction:
 
@@ -212,20 +203,14 @@ Default visual tokens:
 - Warp backend accent: `#76B900`
 - Other/unknown backend accent: `#667085`
 
-Typography should use a system sans stack in SVG:
-`Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`.
-PNG rendering should use the closest available bundled/system font, with DejaVu Sans as the
+Typography should use the closest available bundled/system font, with DejaVu Sans as the
 expected Linux fallback. Font differences must not affect graph topology.
 
 ### PNG renderer
 
-Use Pillow to render the same geometry directly to PNG. Do not convert SVG to PNG via
-Graphviz, Cairo, browser automation, or any other system binary. This keeps PNG generation
-inside uv/pip dependencies.
-
-The PNG renderer can share the same colors, coordinates, text truncation, path control
-points, and arrowhead math as the SVG renderer. Exact antialiasing will differ from browser
-SVG rendering, but topology and placement should match.
+Use Pillow to render the resolved geometry directly to PNG. Do not shell out to Graphviz,
+Cairo, browser automation, or any other system binary. This keeps PNG generation inside
+uv/pip dependencies.
 
 ## Dependency and packaging changes
 
@@ -304,8 +289,7 @@ Deferred. It remains a fallback option if `fast-sugiyama` is unsuitable.
 |------|--------|------------|------------|
 | `fast-sugiyama` does not understand port geometry | Medium | High | Use it only for node layer/order; compute ports and edges in LEAPP. |
 | Feedback edges disturb forward flow | High | Medium | Exclude feedback edges from ranking and route them separately. |
-| PNG output diverges from SVG | Medium | Medium | Render from one geometry model and add image smoke tests. |
-| Long labels make nodes unreadable | Medium | High | Truncate visible text, keep full text in SVG `<title>`, use deterministic max widths. |
+| Long labels make nodes unreadable | Medium | High | Truncate visible text and use deterministic max widths. |
 | Python 3.10 cannot install `fast-sugiyama` | Medium | High | Keep core LEAPP installable and warning-and-skip visualization below Python 3.11. |
 | Large graphs become visually dense | Medium | Medium | Keep compact terminals, deterministic spacing, and future room for subgraph collapsing. |
 
@@ -323,23 +307,18 @@ Deferred. It remains a fallback option if `fast-sugiyama` is unsuitable.
   - graph inputs are left of target nodes
   - graph outputs are right of source nodes
   - feedback paths stay outside the main bounding box
-- Snapshot-test SVG structurally:
-  - contains expected node ids, port labels, shape/dtype/kind text
-  - contains arrow marker definitions
-  - does not contain JavaScript
 - PNG smoke test:
   - file exists
   - image opens with Pillow
   - dimensions are non-zero
   - selected non-background pixels exist
-- Functional test `leapp.compile_graph(visualize=True)` emits both files on Python 3.11+.
+- Functional test `leapp.compile_graph(visualize=True)` emits the PNG on Python 3.11+.
 - Compatibility test verifies Python 3.10 warns, skips visualization, and still completes
   graph compilation.
 
 ## V1 decisions
 
-- Docs should refer to SVG as the primary graph visualization artifact and PNG as the
-  companion raster artifact.
-- `compile_graph(visualize=True)` emits both SVG and PNG on Python 3.11+. On Python 3.10 it
-  warns and skips both artifacts. No visualization format option is added yet.
+- PNG is the single graph visualization artifact.
+- `compile_graph(visualize=True)` emits the PNG on Python 3.11+. On Python 3.10 it warns and
+  skips it. No visualization format option is added yet.
 - The visual style ships with the token set above. Future theming is out of scope.

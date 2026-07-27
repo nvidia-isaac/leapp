@@ -14,5 +14,4 @@ if sys.version_info < (3, 11):
         "test_graph_visualization_integration.py",
         "test_graph_visualization_layout.py",
         "test_graph_visualization_png.py",
-        "test_graph_visualization_svg.py",
     ]
