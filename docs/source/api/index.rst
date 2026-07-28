@@ -25,7 +25,7 @@ Graph lifecycle
 ``leapp.start()``
 -----------------
 
-Initialize and start LEAPP graph interpretation.
+Initialize and start LEAPP graph tracing.
 
 Signature
 ~~~~~~~~~
@@ -739,8 +739,8 @@ Methods
    * - Method
      - Description
    * - ``run_policy(inputs)``
-     - Run the full pipeline. ``inputs`` is a dict of
-       ``"node_name/input_name"`` to ``torch.Tensor``. Returns a dict of
+     - Run the full pipeline. ``inputs`` is a dict that maps
+       ``"node_name/input_name"`` keys to ``torch.Tensor`` values. Returns a dict of
        final pipeline outputs. ``manager(inputs)`` is an equivalent
        shorthand.
    * - ``get_mock_input()``
