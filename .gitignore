@@ -11,9 +11,6 @@ dist/
 # PyPI upload artifacts
 .pypirc
 
-# Local agent workflow artifacts
-.superpowers/
-
 # Virtual environments
 venv/
 env/

@@ -121,14 +121,6 @@ class BaseExampleTest(unittest.TestCase):
 
         # Check each expected file
         for expected_file in expected_files:
-            if sys.version_info < (3, 11) and Path(expected_file).suffix == ".png":
-                self.assertNotIn(
-                    expected_file,
-                    actual_files,
-                    f"Visualization file '{expected_file}' should not be generated "
-                    "below Python 3.11",
-                )
-                continue
             self.assertIn(
                 expected_file,
                 actual_files,

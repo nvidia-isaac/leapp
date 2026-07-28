@@ -132,9 +132,8 @@ Parameters
 ~~~~~~~~~~
 
 * ``visualize`` (bool, optional): Generate a graph visualization.
-  Defaults to ``True``. Requires Python 3.11 or later; earlier versions
-  emit a warning and skip visualization. On supported Python versions,
-  visualization errors stop compilation.
+  Defaults to ``True``. Visualization errors are logged but do not stop
+  compilation.
 * ``verbose`` (bool | None, optional): Override verbose logging for the
   compile step. ``None`` leaves the current setting unchanged.
 * ``validate`` (bool, optional): Validate exported models against
@@ -159,8 +158,7 @@ The method performs the complete pipeline:
 #. Build connections by analyzing data flow.
 #. Save compiled models to ``{save_path}/{name}/``.
 #. Generate ``{name}.yaml`` with the complete graph description.
-#. Generate ``{name}.png`` if ``visualize=True`` and Python 3.11 or later is
-   running.
+#. Generate ``{name}.png`` if ``visualize=True``.
 #. Log graph statistics.
 
 Generated artifacts
@@ -169,8 +167,7 @@ Generated artifacts
 * Compiled models --- one file per node (``.pt``, ``.onnx``).
 * ``{name}.yaml`` --- model descriptions, pipeline connections
   (``data_flow`` and ``feedback_flow``), and system information.
-* ``{name}.png`` --- graph visualization (when ``visualize=True`` on
-  Python 3.11+).
+* ``{name}.png`` --- graph visualization (when ``visualize=True``).
 
 Output YAML structure
 ~~~~~~~~~~~~~~~~~~~~~
@@ -775,7 +772,7 @@ This creates:
 
    exports/complete_pipeline/
    |-- complete_pipeline.yaml    # Graph description
-   |-- complete_pipeline.png     # Graph visualization
+   |-- complete_pipeline.png     # Visualization
    |-- preprocess.pt             # Preprocessing model
    |-- inference.pt              # Inference model
    |-- postprocess.pt            # Postprocessing model

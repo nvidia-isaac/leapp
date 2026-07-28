@@ -3,18 +3,6 @@ SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All 
 SPDX-License-Identifier: Apache-2.0
 -->
 
-#### Development Setup
-
-`leapp-visualization` (in `packages/leapp-visualization`) is developed in lockstep with LEAPP and is installed from source, not from a package index. Install it before LEAPP itself:
-
-```bash
-# Python 3.11+ only; LEAPP skips visualization on Python 3.10.
-pip install -e ./packages/leapp-visualization
-pip install -e ".[dev]"
-```
-
-With `uv`, `[tool.uv.sources]` already points at the local path, so `uv sync` is enough.
-
 #### Signing Your Work
 
 * We require that all contributors "sign-off" on their commits. This certifies that the contribution is your original work, or you have rights to submit it under the same license, or a compatible license.
