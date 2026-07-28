@@ -36,7 +36,6 @@ sha256sum
 # Python / library names
 numpy
 ndarray
-matplotlib
 pyenchant
 sphinxcontrib
 sphinxmermaid

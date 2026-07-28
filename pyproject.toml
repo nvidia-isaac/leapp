@@ -37,8 +37,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -52,13 +50,14 @@ classifiers = [
 requires-python = ">=3.10"
 dependencies = [
     "torch>=2.6.0",
-    "matplotlib>=3.5.0",
-    "networkx>=2.6",
     "PyYAML>=6.0",
     "onnx>=1.19.0",
     "onnxruntime>=1.20.0",
     "onnxscript>=0.1.0",
     "safetensors>=0.5.0",
+    # Visualization layout/render deps (Python 3.11+ only; skipped on 3.10).
+    "fast-sugiyama>=0.5.3; python_version >= '3.11'",
+    "Pillow>=10.0.0; python_version >= '3.11'",
 ]
 
 [project.optional-dependencies]
@@ -79,9 +78,9 @@ include-package-data = true
 zip-safe = false
 
 [tool.setuptools.packages.find]
-# Automatically find packages in the current directory
-where = ["."]
-include = ["leapp*"]
+# Include internal visualization modules shipped with leapp.
+where = [".", "packages/leapp-visualization/src"]
+include = ["leapp*", "leapp_visualization*"]
 exclude = ["tests*"]
 
 [tool.setuptools.package-data]

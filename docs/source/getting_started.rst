@@ -9,7 +9,9 @@ Installation
 
    pip install leapp
 
-LEAPP requires Python 3.8+ and PyTorch 2.6.0+. The full dependency list is
+LEAPP requires Python 3.10+ and PyTorch 2.6.0+. Graph visualization requires
+Python 3.11+; on Python 3.10, LEAPP warns and skips PNG generation while
+completing the rest of the export. The full dependency list is
 in the :doc:`/index`.
 
 Welcome to LEAPP! This guide walks you through the basics of using LEAPP
@@ -233,7 +235,8 @@ artifacts and the metadata needed to wire them together.
    .. grid-item-card:: Graph visualization
       :class-card: sd-rounded-3
 
-      Optional diagrams make the traced pipeline easier to inspect and discuss.
+      Optional PNG diagrams make the traced pipeline easier to inspect
+      and discuss.
 
 Try it yourself
 ===============
@@ -245,9 +248,10 @@ Try it yourself
 Graph visualization
 -------------------
 
-LEAPP writes a graph visualization showing exported nodes, graph inputs and
-outputs, and data-flow connections between nodes. Use it to verify that
-LEAPP detected the node boundaries and cross-node connections you intended.
+On Python 3.11+, LEAPP writes a PNG graph visualization showing exported
+nodes, graph inputs and outputs, and data-flow connections between nodes.
+Python 3.10 warns and skips this artifact. Use it to verify that LEAPP
+detected the node boundaries and cross-node connections you intended.
 
 .. image:: _static/images/getting_started_graph.png
    :alt: Getting started graph
