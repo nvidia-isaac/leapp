@@ -15,20 +15,15 @@
 # limitations under the License.
 #
 
-from __future__ import annotations
-
-import os
-
-from .geometry import resolve_geometry
-from .layout import compute_layered_layout
-from .model import VisualGraph
-from .png_renderer import write_png
+import sys
 
 
-def render_graph(graph: VisualGraph, save_path: str, graph_name: str) -> str:
-    layout = compute_layered_layout(graph)
-    geometry = resolve_geometry(graph, layout, graph_name)
-
-    png_path = os.path.join(save_path, f"{graph_name}.png")
-    write_png(png_path, geometry)
-    return png_path
+if sys.version_info < (3, 11):
+    collect_ignore_glob = [
+        "test_graph_visualization_builder.py",
+        "test_graph_visualization_geometry.py",
+        "test_graph_visualization_imports.py",
+        "test_graph_visualization_integration.py",
+        "test_graph_visualization_layout.py",
+        "test_graph_visualization_png.py",
+    ]

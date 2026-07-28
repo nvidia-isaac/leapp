@@ -49,15 +49,15 @@ classifiers = [
 # onnx>=1.19.0 requires python>=3.10
 requires-python = ">=3.10"
 dependencies = [
-    # Developed in lockstep with LEAPP and installed from source out of
-    # packages/leapp-visualization. See CONTRIBUTING.md for the dev setup.
-    "leapp-visualization==0.5.2; python_version >= '3.11'",
     "torch>=2.6.0",
     "PyYAML>=6.0",
     "onnx>=1.19.0",
     "onnxruntime>=1.20.0",
     "onnxscript>=0.1.0",
     "safetensors>=0.5.0",
+    # Visualization layout/render deps (Python 3.11+ only; skipped on 3.10).
+    "fast-sugiyama>=0.5.3; python_version >= '3.11'",
+    "Pillow>=10.0.0; python_version >= '3.11'",
 ]
 
 [project.optional-dependencies]
@@ -73,17 +73,14 @@ Homepage = "https://github.com/nvidia-isaac/leapp"
 Repository = "https://github.com/nvidia-isaac/leapp"
 Issues = "https://github.com/nvidia-isaac/leapp/issues"
 
-[tool.uv.sources]
-leapp-visualization = { path = "packages/leapp-visualization" }
-
 [tool.setuptools]
 include-package-data = true
 zip-safe = false
 
 [tool.setuptools.packages.find]
-# Automatically find packages in the current directory
-where = ["."]
-include = ["leapp*"]
+# Include internal visualization modules shipped with leapp.
+where = [".", "packages/leapp-visualization/src"]
+include = ["leapp*", "leapp_visualization*"]
 exclude = ["tests*"]
 
 [tool.setuptools.package-data]
