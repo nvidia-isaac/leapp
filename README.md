@@ -15,6 +15,8 @@ LEAPP is designed for pipelines that chain multiple PyTorch models or processing
 pip install leapp
 ```
 
+LEAPP requires Python 3.10+ and PyTorch 2.6.0+.
+
 ## Quick example
 
 ```python
