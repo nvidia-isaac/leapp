@@ -163,46 +163,52 @@ def test_draw_edge_samples_forward_and_graph_output_routes_for_arrowheads(monkey
     ]
 
 
-def test_draw_edge_renders_feedback_with_line_segments_and_raw_arrowhead(monkeypatch):
+def test_draw_edge_renders_feedback_with_rounded_route(monkeypatch):
     arrow_calls = []
     line_calls = []
+    rounded_route = [Point(380.0, 153.0), Point(390.0, 143.0), Point(110.0, 153.0)]
 
     class DrawStub:
         def line(self, points, *, fill, width, joint):
             line_calls.append((points, fill, width, joint))
 
-    def fail_sample(*args, **kwargs):
-        raise AssertionError("feedback edges should not use cubic sampling")
+    def fake_rounded(points):
+        assert points == edge.points
+        return rounded_route
 
     def fake_arrowhead(draw, start, end, color):
         arrow_calls.append((start, end, color))
 
     edge = _geometry().edges["edge:feedback"]
 
-    monkeypatch.setattr(png_renderer, "sample_cubic", fail_sample)
+    monkeypatch.setattr(png_renderer, "sample_rounded_polyline", fake_rounded)
     monkeypatch.setattr(png_renderer, "_draw_arrowhead", fake_arrowhead)
 
     png_renderer._draw_edge(DrawStub(), edge)
 
     assert len(line_calls) == 1
     points, fill, width, joint = line_calls[0]
-    assert len(points) == len(edge.points)
+    assert points == png_renderer._scaled_points(rounded_route)
     assert fill == png_renderer._color("feedback_edge")
     assert width == png_renderer._scaled_width(2.5)
     assert joint == "curve"
     assert arrow_calls == [
-        (edge.points[-2], edge.points[-1], png_renderer._color("feedback_edge")),
+        (rounded_route[-2], rounded_route[-1], png_renderer._color("feedback_edge")),
     ]
 
 
 def test_write_png_renders_on_scaled_canvas_then_downsamples(monkeypatch, tmp_path: Path):
-    calls = {"new": None, "resize": None, "save": None}
+    calls = {"new": None, "convert": None, "resize": None, "save": None}
 
     class FinalImageStub:
         def save(self, path, format):
             calls["save"] = (path, format)
 
     class ImageStub:
+        def convert(self, mode):
+            calls["convert"] = mode
+            return self
+
         def resize(self, size, resample):
             calls["resize"] = (size, resample)
             return FinalImageStub()
@@ -226,6 +232,7 @@ def test_write_png_renders_on_scaled_canvas_then_downsamples(monkeypatch, tmp_pa
     write_png(str(path), _geometry())
 
     assert calls["new"] == ("RGBA", (1000, 520), png_renderer._color("background"))
+    assert calls["convert"] == "RGB"
     assert calls["resize"] == ((500, 260), png_renderer.Image.Resampling.LANCZOS)
     assert calls["save"] == (str(path), "PNG")
 

@@ -40,6 +40,8 @@ _PORT_DETAIL_CHAR_WIDTH = 6.2
 _PORT_NAME_MAX_CHARS = 24
 _PORT_DETAIL_MAX_CHARS = 32
 _FEEDBACK_LANE_STEP = 34.0
+_FEEDBACK_STUB = 24.0
+_FEEDBACK_STUB_STEP = 8.0
 
 
 @dataclass(frozen=True)
@@ -386,16 +388,13 @@ def _build_edge_geometry(
     if edge.kind == "feedback":
         lane_index = feedback_lane_index[edge.id]
         lane_y = content_bounds.y - ((lane_index + 1) * _FEEDBACK_LANE_STEP)
-        lane_mid_x = (
-            content_bounds.x - _CANVAS_MARGIN
-            if end.x <= start.x
-            else content_bounds.x + content_bounds.width + _CANVAS_MARGIN
-        )
+        stub = _FEEDBACK_STUB + (lane_index * _FEEDBACK_STUB_STEP)
         points = (
             start,
-            Point(start.x, lane_y),
-            Point(lane_mid_x, lane_y),
-            Point(end.x, lane_y),
+            Point(start.x + stub, start.y),
+            Point(start.x + stub, lane_y),
+            Point(end.x - stub, lane_y),
+            Point(end.x - stub, end.y),
             end,
         )
     else:

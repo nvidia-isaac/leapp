@@ -47,10 +47,12 @@ _TERMINAL_PADDING = 12.0
 _PORT_DOT_RADIUS = 4.0
 _EDGE_WIDTH = 2.5
 _TERMINAL_BORDER_WIDTH = 1.5
+_TERMINAL_FILL_ALPHA = 31
 _NODE_BORDER_WIDTH = 1.5
 _PORT_ACCENT_WIDTH = 3.0
 _ARROW_LENGTH = 10.0
 _ARROW_HALF_WIDTH = 3.5
+_FEEDBACK_CORNER_RADIUS = 10.0
 _FONT_REGULAR_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 _FONT_BOLD_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
@@ -85,7 +87,7 @@ def write_png(path: str, geometry: GraphGeometry) -> None:
     for port in sorted(geometry.ports.values(), key=lambda port: (port.rect.y, port.rect.x, port.id)):
         _draw_port(draw, port, fonts)
 
-    final_image = image.resize((width, height), Image.Resampling.LANCZOS)
+    final_image = image.convert("RGB").resize((width, height), Image.Resampling.LANCZOS)
     final_image.save(path, format="PNG")
 
 
@@ -111,10 +113,58 @@ def sample_cubic(points: tuple[Point, Point, Point, Point], samples: int = 24) -
     return sampled
 
 
+def sample_rounded_polyline(
+    points: tuple[Point, ...],
+    radius: float = _FEEDBACK_CORNER_RADIUS,
+    samples_per_corner: int = 4,
+) -> list[Point]:
+    if len(points) < 3:
+        return list(points)
+
+    sampled = [points[0]]
+    for previous, corner, following in zip(points, points[1:], points[2:]):
+        incoming_x = corner.x - previous.x
+        incoming_y = corner.y - previous.y
+        outgoing_x = following.x - corner.x
+        outgoing_y = following.y - corner.y
+        incoming_length = math.hypot(incoming_x, incoming_y)
+        outgoing_length = math.hypot(outgoing_x, outgoing_y)
+        corner_radius = min(radius, incoming_length / 2.0, outgoing_length / 2.0)
+
+        if corner_radius == 0.0:
+            sampled.append(corner)
+            continue
+
+        before = Point(
+            corner.x - (incoming_x / incoming_length) * corner_radius,
+            corner.y - (incoming_y / incoming_length) * corner_radius,
+        )
+        after = Point(
+            corner.x + (outgoing_x / outgoing_length) * corner_radius,
+            corner.y + (outgoing_y / outgoing_length) * corner_radius,
+        )
+        sampled.append(before)
+        for sample_index in range(1, samples_per_corner + 1):
+            t = sample_index / samples_per_corner
+            one_minus_t = 1.0 - t
+            sampled.append(
+                Point(
+                    (one_minus_t ** 2) * before.x
+                    + 2.0 * one_minus_t * t * corner.x
+                    + (t ** 2) * after.x,
+                    (one_minus_t ** 2) * before.y
+                    + 2.0 * one_minus_t * t * corner.y
+                    + (t ** 2) * after.y,
+                )
+            )
+    sampled.append(points[-1])
+    return sampled
+
+
 def _draw_edge(draw: ImageDraw.ImageDraw, edge: EdgeGeometry) -> None:
     color = _color(_edge_color_name(edge.kind))
     if edge.kind == "feedback":
-        route = list(edge.points)
+        route = sample_rounded_polyline(edge.points)
     else:
         route = sample_cubic(edge.points)  # type: ignore[arg-type]
 
@@ -150,7 +200,14 @@ def _draw_terminal(
     fonts: dict[str, ImageFont.ImageFont | ImageFont.FreeTypeFont],
 ) -> None:
     color = _color(kind)
-    _rounded_rect(draw, rect, fill=(color[0], color[1], color[2], 31), outline=color, width=_TERMINAL_BORDER_WIDTH, radius=_TERMINAL_RADIUS)
+    _rounded_rect(
+        draw,
+        rect,
+        fill=_blend_with_background(color, _TERMINAL_FILL_ALPHA),
+        outline=color,
+        width=_TERMINAL_BORDER_WIDTH,
+        radius=_TERMINAL_RADIUS,
+    )
     anchor_on_right = anchor.x >= rect.x + rect.width
     text_x = rect.x + _TERMINAL_PADDING if anchor_on_right else rect.x + rect.width - _TERMINAL_PADDING
     _draw_text(
@@ -336,6 +393,22 @@ def _accent_color(name: str | None) -> tuple[int, int, int, int]:
     if not name:
         return _color("node_border")
     return _hex_to_rgba(COLORS.get(name, COLORS["node_border"]))
+
+
+def _blend_with_background(color: tuple[int, int, int, int], alpha: int) -> tuple[int, int, int, int]:
+    """Flatten a translucent tint onto the canvas background.
+
+    ImageDraw overwrites pixels instead of compositing them, so a low-alpha fill
+    would leave the shape transparent rather than tinted.
+    """
+    background = _color("background")
+    weight = alpha / 255.0
+    return (
+        round(color[0] * weight + background[0] * (1.0 - weight)),
+        round(color[1] * weight + background[1] * (1.0 - weight)),
+        round(color[2] * weight + background[2] * (1.0 - weight)),
+        255,
+    )
 
 
 def _hex_to_rgba(value: str, alpha: int = 255) -> tuple[int, int, int, int]:

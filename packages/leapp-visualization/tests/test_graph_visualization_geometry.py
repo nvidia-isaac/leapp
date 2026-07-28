@@ -455,6 +455,11 @@ def test_geometry_routes_forward_and_feedback_edges_differently():
     assert forward.kind == "forward"
     assert feedback.kind == "feedback"
     assert min(point.y for point in feedback.points) < geometry.content_bounds.y
+    assert len(feedback.points) == 6
+    assert feedback.points[1].x > feedback.points[0].x
+    assert feedback.points[-2].x < feedback.points[-1].x
+    assert feedback.points[2].y == feedback.points[3].y
+    assert feedback.points[2].x > feedback.points[3].x
     assert forward.points[0].x < forward.points[-1].x
 
 
