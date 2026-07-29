@@ -211,6 +211,8 @@ gh-pages
 PyData
 walkthrough
 provenance
+reproducibility
+deployable
 filesystem
 checksum
 checksums

@@ -181,7 +181,7 @@ Semantic Fields
 ===============
 
 Semantic fields are optional tensor-port fields. A deployment library can use
-these fields to connect raw tensors to robot concepts, message schemas, topic
+these fields to connect raw tensors to robot concepts, message formats, topic
 names, controller APIs, coordinate frames, or UI labels.
 
 ``kind``
