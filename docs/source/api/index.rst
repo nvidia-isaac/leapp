@@ -264,34 +264,6 @@ The method logs statistics including:
 Semantic metadata
 =================
 
-``TemporalAxis``
---------------------
-
-Mark one ``element_names`` axis as temporal and attach an absolute period in
-milliseconds to the tensor YAML entry.
-
-.. code-block:: python
-
-   from leapp import TensorSemantics, TemporalAxis
-
-   TensorSemantics(
-       name="actions",
-       ref=actions,
-       element_names=[TemporalAxis(period_ms=100), ["hip", "knee", "ankle"]],
-   )
-
-This emits the reserved bare axis sentinel and the period metadata:
-
-.. code-block:: yaml
-
-   element_names:
-   - __temporal_axis__
-   - [hip, knee, ankle]
-   temporal_period_ms: 100
-
-``__temporal_axis__`` is reserved for LEAPP output; use
-``TemporalAxis`` rather than writing the sentinel directly.
-
 ``TensorSemantics``
 -------------------
 
@@ -337,6 +309,34 @@ Behavior
   provides the tensor key.
 * Public semantic fields with non-``None`` values are serialized in the YAML.
 * ``extra`` fields are flattened into the same YAML mapping as built-in fields.
+
+``TemporalAxis``
+~~~~~~~~~~~~~~~~
+
+Mark one ``element_names`` axis as temporal and attach an absolute period in
+milliseconds to the tensor YAML entry.
+
+.. code-block:: python
+
+   from leapp import TensorSemantics, TemporalAxis
+
+   TensorSemantics(
+       name="actions",
+       ref=actions,
+       element_names=[TemporalAxis(period_ms=100), ["hip", "knee", "ankle"]],
+   )
+
+This emits the reserved bare axis sentinel and the period metadata:
+
+.. code-block:: yaml
+
+   element_names:
+   - __temporal_axis__
+   - [hip, knee, ankle]
+   temporal_period_ms: 100
+
+``__temporal_axis__`` is reserved for LEAPP output; use
+``TemporalAxis`` rather than writing the sentinel directly.
 
 .. warning::
 
@@ -389,7 +389,7 @@ Enum values
    BODY_LINEAR_VELOCITY = target/body/linear_velocity
    BODY_ANGULAR_ACCELERATION = target/body/angular_acceleration
 
-See :doc:`/guides/semantics` for examples and field guidance.
+See :doc:`/semantics/usage` for examples and field guidance.
 
 Annotations
 ===========
@@ -413,7 +413,7 @@ Parameters
 * ``tensors`` (required): Either a dict of named raw tensors or a
   ``TensorSemantics`` / list of ``TensorSemantics``. Bare tensors and
   other unnamed top-level collections are not supported. See
-  :doc:`/guides/semantics`.
+  :doc:`/semantics/usage`.
 
 Returns
 ~~~~~~~
@@ -878,5 +878,6 @@ See also
 * :doc:`/getting_started` --- learn the basics
 * :doc:`/guides/nodes` --- advanced node patterns
 * :doc:`/guides/graph` --- graph and feedback operations
-* :doc:`/guides/runtime` --- validation and runtime verification
-* :doc:`/guides/semantics` --- semantic data annotation
+* :doc:`/guides/runtime` --- validation
+* :doc:`/leapp_runtime` --- LEAPP Python runtime
+* :doc:`/semantics/usage` --- semantic data annotation

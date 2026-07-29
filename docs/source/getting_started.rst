@@ -26,6 +26,13 @@ You'll learn how to:
 * Use :func:`~leapp.annotate.method` as a shorthand for simple,
   self-contained functions
 
+.. note::
+
+   This example is intentionally the bare minimum needed to show graph
+   annotation. For downstream deployment, add semantic metadata so runtimes can
+   map tensors to robot state, commands, and outputs; see
+   :doc:`semantics/usage`.
+
 Example: a robot sensor pipeline
 ================================
 
@@ -49,16 +56,22 @@ runs a small policy stage on those features.
        vel_norm = vel / _VEL_SCALE
        return pos_norm, vel_norm
 
-   def capture_joint_observations(joint_pos, joint_vel):
+   def capture_joint_observations():
+       # Simulates reading live joint sensors each time this function is called.
+       JOINT_POS = torch.randn(6)
+       JOINT_VEL = torch.randn(6)
        return annotate.input_tensors("obs_processor", {
-           "joint_pos": joint_pos,
-           "joint_vel": joint_vel,
+           "joint_pos": JOINT_POS,
+           "joint_vel": JOINT_VEL,
        })
 
-   def capture_context(orientation, cmd_vel):
+   def capture_context():
+       # Simulates reading live orientation and command context each call.
+       ORIENTATION = torch.tensor([1.0, 0.0, 0.0, 0.0])
+       CMD_VEL = torch.tensor([0.5, 0.0, 0.1])
        return annotate.input_tensors("obs_processor", {
-           "orientation": orientation,
-           "cmd_vel": cmd_vel,
+           "orientation": ORIENTATION,
+           "cmd_vel": CMD_VEL,
        })
 
    def project_gravity(quat: torch.Tensor) -> torch.Tensor:
@@ -78,17 +91,12 @@ runs a small policy stage on those features.
    _b = torch.zeros(6)
 
    def main():
-       joint_pos = torch.randn(6)
-       joint_vel = torch.randn(6)
-       orientation = torch.tensor([1.0, 0.0, 0.0, 0.0])
-       cmd_vel = torch.tensor([0.5, 0.0, 0.1])
-
        leapp.start(name="sample_pipeline")
 
        # NODE 1: observation preprocessing.
        # Multiple input_tensors() calls can contribute to the same node.
-       pos, vel = capture_joint_observations(joint_pos, joint_vel)
-       quat, cmd = capture_context(orientation, cmd_vel)
+       pos, vel = capture_joint_observations()
+       quat, cmd = capture_context()
 
        pos_norm, vel_norm = normalize_joints(pos, vel)
        gravity_vec = project_gravity(quat)
@@ -301,5 +309,6 @@ Next steps
 
 * Explore more complex pipelines in the ``examples/`` directory of the
   source tree.
-* Learn advanced features in :doc:`guides/index`.
+* Learn graph annotation patterns in :doc:`guides/nodes` and exported-model
+  runtime details in :doc:`generated_configs`.
 * Browse the full :doc:`api/index`.
