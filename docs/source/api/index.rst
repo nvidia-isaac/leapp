@@ -668,7 +668,7 @@ Behavior
 #. If data does not match, logs an error and raises rather than copying
    incorrect tracing metadata.
 
-See :doc:`/guides/graph` for context.
+See :doc:`/guides/buffers` for between-node copy examples.
 
 Runtime
 =======

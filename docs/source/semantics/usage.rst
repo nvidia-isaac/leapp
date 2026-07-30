@@ -1,6 +1,6 @@
-=====
-Usage
-=====
+======================
+Tensor Semantics Usage
+======================
 
 Semantic annotations add runtime-facing meaning to tensors using
 :class:`~leapp.TensorSemantics`. Semantic annotations describe **what**

@@ -307,8 +307,8 @@ This YAML contains:
 Next steps
 ==========
 
-* Explore more complex pipelines in the ``examples/`` directory of the
-  source tree.
+* Take a look at the :doc:`semantics/usage` guide to learn how to add semantic metadata to your pipeline.
 * Learn graph annotation patterns in :doc:`guides/nodes` and exported-model
   runtime details in :doc:`generated_configs`.
+* Learn how to interpret and run the generated bundle in :doc:`generated_configs`.
 * Browse the full :doc:`api/index`.

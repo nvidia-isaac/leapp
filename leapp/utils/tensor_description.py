@@ -119,9 +119,9 @@ class TensorSemantics:
 
     # Semantic fields
     kind: Optional[InputKindEnum | OutputKindEnum | str] = None
-    element_names: Optional[List] = None
-    extra: Optional[Dict[str, Any]] = None
+    element_names: Optional[List] = None # deprecated
     temporal_period_ms: Optional[float] = field(default=None, init=False)
+    extra: Optional[Dict[str, Any]] = None
 
     def __post_init__(self):
         '''error checking, auto conditioning'''

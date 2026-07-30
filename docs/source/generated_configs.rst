@@ -11,6 +11,12 @@ deployment system which models to load, which external values to provide, how
 node outputs feed later node inputs, and how robot-facing tensors should be
 named and interpreted.
 
+.. note::
+
+   Understanding this section is only needed for debugging and implementing
+   your own runtime. To run an exported bundle, use the
+   :doc:`leapp_runtime` page.
+
 Bundle layout
 =============
 
@@ -100,6 +106,14 @@ Per-node model contracts. Each key is a node name; each value identifies the
 compiled artifact for that node and describes the tensor ports that the runtime
 must provide and consume.
 
+The ``models`` mapping is deterministically ordered. LEAPP guarantees:
+
+* Entries appear in the order nodes were finalized during tracing
+  (typically ``output_tensors()``, or when an annotated method returns).
+* A runtime that executes nodes in this order runs producers before
+  consumers for forward ``pipeline.data_flow`` edges. Cyclic dependencies
+  are recorded separately in ``pipeline.feedback_flow``.
+
 ``models.<node>.inputs`` and ``models.<node>.outputs``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -107,6 +121,10 @@ must provide and consume.
    ``name``, ``dtype``, ``shape``, and ``type``. A deployment library should
    use these fields to allocate buffers, validate incoming values, and preserve
    backend input and output ordering.
+
+   Both lists are deterministically ordered. The order of ``inputs`` is the
+   order the compiled model expects for its positional arguments, and the
+   order of ``outputs`` is the order the model returns values.
 
 ``models.<node>.parameters``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -193,6 +211,23 @@ names, controller APIs, coordinate frames, or UI labels.
    without relying only on tensor names. See
    :doc:`semantics/kind_element_names`.
 
+   .. code-block:: yaml
+
+      models:
+        policy:
+          inputs:
+          - name: joint_pos
+            dtype: float32
+            shape: [6]
+            type: tensor
+            kind: state/joint/position
+          outputs:
+          - name: joint_targets
+            dtype: float32
+            shape: [6]
+            type: tensor
+            kind: target/joint/position
+
 ``element_names``
 -----------------
 
@@ -201,6 +236,25 @@ names, controller APIs, coordinate frames, or UI labels.
    robot messages into model order, verify that expected joints are present,
    and label outputs. See :doc:`semantics/kind_element_names`.
 
+   .. code-block:: yaml
+
+      models:
+        policy:
+          inputs:
+          - name: joint_pos
+            dtype: float32
+            shape: [6]
+            type: tensor
+            element_names: [[left_hip, left_knee, left_ankle,
+              right_hip, right_knee, right_ankle]]
+          outputs:
+          - name: joint_targets
+            dtype: float32
+            shape: [6]
+            type: tensor
+            element_names: [[left_hip, left_knee, left_ankle,
+              right_hip, right_knee, right_ankle]]
+
 ``__temporal_axis__`` and ``temporal_period_ms``
 ------------------------------------------------
 
@@ -208,3 +262,17 @@ names, controller APIs, coordinate frames, or UI labels.
    A deployment library can use these fields to interpret action chunks,
    trajectories, history windows, or other batched time samples. See
    :doc:`semantics/temporal`.
+
+   .. code-block:: yaml
+
+      models:
+        policy:
+          outputs:
+          - name: actions
+            dtype: float32
+            shape: [4, 3]
+            type: tensor
+            element_names:
+            - __temporal_axis__
+            - [hip, knee, ankle]
+            temporal_period_ms: 100
