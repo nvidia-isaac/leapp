@@ -168,6 +168,7 @@ Use this decision table:
 - Alias mapping (important):
   - `export_with="jit"` is an alias for `jit-script`.
   - `export_with="onnx"` is an alias for `onnx-dynamo`.
+  - `export_with="pt2"` is an alias for `exported-program`.
 - Recommended default:
   - Start with `export_with="jit"` (`jit-script`) for fastest bring-up.
 - ONNX backend differences:
@@ -177,6 +178,11 @@ Use this decision table:
   - `onnx-torchscript`:
     - TorchScript-based ONNX export path.
     - Prefer for recurrent models (notably `nn.GRU`/`nn.LSTM`) when dynamo export can produce problematic graphs.
+- ExportedProgram backend:
+  - `export_with="exported-program"` (alias `pt2`) saves a `torch.export` `.pt2` artifact.
+  - YAML `backend` is written as `pt2`.
+  - Good when you want the modern exported-program representation instead of TorchScript or ONNX.
+  - `InferenceManager` loads `.pt2` artifacts; pass runtime inputs on the model device when CUDA is available.
 - No-export / BYO-model option:
   - `export_with=None` uses `NoneExportBackend` (no compilation/export for that node by default).
   - You can still supply your own artifact via `backend_params={"model_path": ".../model.pt"}` or `...onnx`.
@@ -184,7 +190,7 @@ Use this decision table:
 - Selective non-tracing:
   - `non_traced=[...]` is the preferred public API when only some nodes should behave like placeholder / metadata-only nodes.
   - Those nodes effectively force `export_with=None` while keeping I/O capture and graph edges.
-- Additional explicit names supported: `jit-script`, `jit-trace`, `onnx-dynamo`, `onnx-torchscript`.
+- Additional explicit names supported: `jit-script`, `jit-trace`, `onnx-dynamo`, `onnx-torchscript`, `exported-program`.
 
 ## Fast integration recipe for user projects
 

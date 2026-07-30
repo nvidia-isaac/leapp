@@ -173,17 +173,18 @@ class ExportManager:
         if incomplete_nodes:
             incomplete_nodes.sort()
             formatted = ", ".join(incomplete_nodes)
-            raise Exception(
+            _get_logger().fatal(
                 "The following nodes were created but never completed: "
                 f"{formatted}. Did you forget to call output_tensors() "
-                "or finish the annotated function?"
-            )
+                "or finish the annotated function?",
+                error_type=Exception)
 
     def _setup_new_node(self, name, node_class: LeappNode, **kwargs):
         if name in self.nodes:
-            raise Exception(
+            _get_logger().fatal(
                 f"Error: node '{name}' already exists. "
-                f"Cannot create a new node with the same name.")
+                f"Cannot create a new node with the same name.",
+                error_type=Exception)
 
         if self.is_dry_run(name):
             kwargs['export_with'] = None
@@ -224,28 +225,28 @@ class ExportManager:
             tensors, metadata = unwrap_tensor_semantics(tensors)
 
         if is_tracable_tensor_type(tensors):
-            raise TypeError(
+            _get_logger().fatal(
                 f"{api_name}() for node '{node_name}' does not accept a bare tensor. "
-                "Pass a dict of named tensors or a TensorSemantics/list of TensorSemantics."
-            )
+                "Pass a dict of named tensors or a TensorSemantics/list of TensorSemantics.",
+                error_type=TypeError)
 
         if isinstance(tensors, dict):
             return tensors, metadata
 
-        raise TypeError(
+        _get_logger().fatal(
             f"{api_name}() for node '{node_name}' expects either a dict of named tensors "
-            f"or a TensorSemantics/list of TensorSemantics. Received {type(tensors).__name__}."
-        )
+            f"or a TensorSemantics/list of TensorSemantics. Received {type(tensors).__name__}.",
+            error_type=TypeError)
 
     #########################################################
     # annotation APIs
     #########################################################
     def input_tensors(self, node_name: str, tensors):
         if TracingLock().is_active:
-            _get_logger().error(
+            _get_logger().fatal(
                 "Cannot call input_tensors() while a _method()-traced function "
-                "is executing. Mixing active contexts is not allowed.")
-            raise Exception("Mixing active contexts is not allowed")
+                "is executing. Mixing active contexts is not allowed.",
+                error_type=Exception)
 
         tensors, metadata = self._normalize_named_tensor_payload(
             "input_tensors", node_name, tensors)
@@ -273,10 +274,11 @@ class ExportManager:
                 None,
             )
             if matching_origin is None:
-                raise Exception(
+                _get_logger().fatal(
                     f"Error: node '{node_name}' is being called from a different annotation origin "
                     f"than the first trace. Cannot reuse a node name from a different call site.\n"
-                    f"New call site:\n{format_caller_identity(_caller_identity)}")
+                    f"New call site:\n{format_caller_identity(_caller_identity)}",
+                    error_type=Exception)
             if _caller_identity not in traced_tensors_node._caller_identities:
                 _get_logger().warning(
                     f"Warning: node '{node_name}' is being re-entered from a new caller context, "
@@ -320,9 +322,10 @@ class ExportManager:
         if node_name in self.nodes:
             traced_tensors_node = self.nodes[node_name]
         else:
-            raise Exception(
+            _get_logger().fatal(
                 f"output_tensors() called for node '{node_name}' but input_tensors() was never called for it. "
-                "Call annotate.input_tensors() before annotate.output_tensors() for the same node name.")
+                "Call annotate.input_tensors() before annotate.output_tensors() for the same node name.",
+                error_type=Exception)
 
         # process outputs
         flattened_tensors = flatten_io_structure(tensors, '')
@@ -408,8 +411,7 @@ class ExportManager:
             msg = (
                 f"register_buffer() called for node '{node_name}' but node not found. "
                 "Call annotate.input_tensors() first to create the node.")
-            _get_logger().error(msg)
-            raise Exception(msg)
+            _get_logger().fatal(msg, error_type=Exception)
 
         # Normalize input to a dict with auto-generated names if needed
         tensors, was_single = self._normalize_buffer_input(node_name, tensors)
@@ -420,8 +422,7 @@ class ExportManager:
             msg = (
                 f"register_buffer() is not supported for node '{node_name}' — "
                 "it was created with the legacy method annotation.")
-            _get_logger().error(msg)
-            raise Exception(msg)
+            _get_logger().fatal(msg, error_type=Exception)
 
         if not traced_node.is_tracing:
             values = list(tensors.values())
@@ -458,12 +459,12 @@ class ExportManager:
     def _validate_flat_state_payload(api_name: str, node_name: str, tensors):
         for state_name, value in tensors.items():
             if not is_tracable_tensor_type(value):
-                raise TypeError(
+                _get_logger().fatal(
                     f"{api_name}() for node '{node_name}' does not support nested state structures. "
                     f"State '{state_name}' has unsupported top-level type {type(value).__name__}. "
                     "Please either explicitly list out each state as its own named tensor "
-                    "or use input_tensors() and rely on LEAPP feedback detection."
-                )
+                    "or use input_tensors() and rely on LEAPP feedback detection.",
+                    error_type=TypeError)
 
     @staticmethod
     def _validate_initial_traced_payload(api_name: str, node_name: str,
@@ -494,8 +495,7 @@ class ExportManager:
                 "make sure to replace your original tensors with the return value of annotation functions.\n"
                 "2. An operation in your computation broke tracing (e.g. converting to numpy and back).\n"
                 f"3. You passed raw tensors instead of the traced ones to {api_name}().")
-            _get_logger().error(msg)
-            raise Exception(msg)
+            _get_logger().fatal(msg, error_type=Exception)
 
         context_names = {
             tensor.context for tensor in flattened_tensors.values()
@@ -505,8 +505,7 @@ class ExportManager:
                 f"{api_name}() for node '{node_name}' received tensors that belong to a different node: "
                 f"{context_names}. Make sure you are passing tensors derived from "
                 f"annotate.input_tensors('{node_name}', ...) to annotate.{api_name}('{node_name}', ...).")
-            _get_logger().error(msg)
-            raise Exception(msg)
+            _get_logger().fatal(msg, error_type=Exception)
 
     def state_tensors(self, node_name: str, tensors: dict[str, torch.Tensor]) -> TracedTensor | tuple[TracedTensor, ...]:
         """Register state tensors (both inputs AND outputs) for a traced node.
@@ -523,8 +522,7 @@ class ExportManager:
             msg = (
                 f"state_tensors() called for node '{node_name}' but node not found. "
                 "Call annotate.input_tensors() first to create the node.")
-            _get_logger().error(msg)
-            raise Exception(msg)
+            _get_logger().fatal(msg, error_type=Exception)
 
         traced_node = self.nodes[node_name]
 
@@ -532,8 +530,7 @@ class ExportManager:
             msg = (
                 f"state_tensors() is not supported for node '{node_name}' — "
                 "it was created with the legacy method annotation.")
-            _get_logger().error(msg)
-            raise Exception(msg)
+            _get_logger().fatal(msg, error_type=Exception)
 
         self._validate_flat_state_payload("state_tensors", node_name, tensors)
 
@@ -556,8 +553,7 @@ class ExportManager:
             msg = (
                 f"update_state() called for node '{node_name}' but node not found. "
                 "Call annotate.input_tensors() first to create the node.")
-            _get_logger().error(msg)
-            raise Exception(msg)
+            _get_logger().fatal(msg, error_type=Exception)
 
         traced_node = self.nodes[node_name]
 
@@ -565,8 +561,7 @@ class ExportManager:
             msg = (
                 f"update_state() is not supported for node '{node_name}' — "
                 "it was created with the legacy method annotation.")
-            _get_logger().error(msg)
-            raise Exception(msg)
+            _get_logger().fatal(msg, error_type=Exception)
 
         self._validate_flat_state_payload("update_state", node_name, tensors)
 
@@ -623,8 +618,7 @@ class ExportManager:
 
         if node_name not in self.nodes:
             msg = f"Error: module() called for node '{node_name}' but node not found. Call input_tensors() first to create the node."
-            _get_logger().error(msg)
-            raise Exception(msg)
+            _get_logger().fatal(msg, error_type=Exception)
 
         from leapp.buffer_tracker import BufferTracker
         tracker = BufferTracker(model, node_name, self, buffer_names=buffer_names)
@@ -692,12 +686,15 @@ class ExportManager:
                 return_names = extract_return_names(func)
 
                 if result is None:
-                    raise Exception(f"Error: annotated method {name} returned None, but LEAPP expects a return value")
+                    _get_logger().fatal(
+                        f"Error: annotated method {name} returned None, but LEAPP expects a return value",
+                        error_type=Exception)
                 elif isinstance(result, tuple):
                     if len(return_names) != len(result):
-                        _get_logger().error(
-                            f"Fatal: annotated method {name} returned {len(result)} values, "
-                            f"but LEAPP detected the following return names {return_names} from source")
+                        _get_logger().fatal(
+                            f"Error: annotated method {name} returned {len(result)} values, "
+                            f"but LEAPP detected the following return names {return_names} from source",
+                            error_type=Exception)
                     output_dict = {return_names[i]: result[i] for i in range(len(result))}
                     self.output_tensors(
                         name,
@@ -808,14 +805,14 @@ class ExportManager:
             return
         try:
             if not verify_data_exact_match(source, target):
-                _get_logger().error(
+                raise Exception(
                     f"Error: source and target do not match: {source} != {target}")
-                raise Exception("Error: source and target do not match")
             mirror_all_tensor_tags(source, target)
         except Exception as e:
-            _get_logger().error(f"Unexpected error mirroring LEAPP tags: {e}")
-            raise Exception(
-                f"Error: unexpected error mirroring LEAPP tags: {e}")
+            _get_logger().fatal(
+                f"Error: unexpected error mirroring LEAPP tags: {e}",
+                error_type=type(e),
+                cause=e)
 
     def get_io_descriptions(self):
         _get_logger().section(
@@ -844,8 +841,9 @@ class ExportManager:
 
     def save_models(self):
         if self.SAVE_PATH is None:
-            raise Exception(
-                "Error: No save path provided, please provide a save path to export the graph")
+            _get_logger().fatal(
+                "Error: No save path provided, please provide a save path to export the graph",
+                error_type=Exception)
         _get_logger().section(
             f"Saving {len(self.nodes)} models to {self.SAVE_PATH}")
         if not os.path.exists(self.SAVE_PATH):
@@ -937,6 +935,6 @@ class ExportManager:
             )
             if error_hints:
                 message += "\n\n" + "\n".join(error_hints)
-            raise Exception(message)
+            _get_logger().fatal(message, error_type=Exception)
 
         return results

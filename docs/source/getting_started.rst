@@ -9,8 +9,10 @@ Installation
 
    pip install leapp
 
-LEAPP requires Python 3.8+ and PyTorch 2.6.0+. The full dependency list is
-available in LEAPP's `pyproject.toml <https://github.com/nvidia-isaac/leapp/blob/main/pyproject.toml>`_.
+LEAPP requires Python 3.10+ and PyTorch 2.6.0+. Graph visualization requires
+Python 3.11+; on Python 3.10, LEAPP warns and skips PNG generation while
+completing the rest of the export. The full dependency list is
+in the :doc:`/index`.
 
 Welcome to LEAPP! This guide walks you through the basics of using LEAPP
 to trace and export computational graphs from PyTorch code.
@@ -23,6 +25,13 @@ You'll learn how to:
 * Understand where LEAPP writes models, YAML, and graph visualizations
 * Use :func:`~leapp.annotate.method` as a shorthand for simple,
   self-contained functions
+
+.. note::
+
+   This example is intentionally the bare minimum needed to show graph
+   annotation. For downstream deployment, add semantic metadata so runtimes can
+   map tensors to robot state, commands, and outputs; see
+   :doc:`semantics/usage`.
 
 Example: a robot sensor pipeline
 ================================
@@ -47,16 +56,22 @@ runs a small policy stage on those features.
        vel_norm = vel / _VEL_SCALE
        return pos_norm, vel_norm
 
-   def capture_joint_observations(joint_pos, joint_vel):
+   def capture_joint_observations():
+       # Simulates reading live joint sensors each time this function is called.
+       JOINT_POS = torch.randn(6)
+       JOINT_VEL = torch.randn(6)
        return annotate.input_tensors("obs_processor", {
-           "joint_pos": joint_pos,
-           "joint_vel": joint_vel,
+           "joint_pos": JOINT_POS,
+           "joint_vel": JOINT_VEL,
        })
 
-   def capture_context(orientation, cmd_vel):
+   def capture_context():
+       # Simulates reading live orientation and command context each call.
+       ORIENTATION = torch.tensor([1.0, 0.0, 0.0, 0.0])
+       CMD_VEL = torch.tensor([0.5, 0.0, 0.1])
        return annotate.input_tensors("obs_processor", {
-           "orientation": orientation,
-           "cmd_vel": cmd_vel,
+           "orientation": ORIENTATION,
+           "cmd_vel": CMD_VEL,
        })
 
    def project_gravity(quat: torch.Tensor) -> torch.Tensor:
@@ -76,17 +91,12 @@ runs a small policy stage on those features.
    _b = torch.zeros(6)
 
    def main():
-       joint_pos = torch.randn(6)
-       joint_vel = torch.randn(6)
-       orientation = torch.tensor([1.0, 0.0, 0.0, 0.0])
-       cmd_vel = torch.tensor([0.5, 0.0, 0.1])
-
        leapp.start(name="sample_pipeline")
 
        # NODE 1: observation preprocessing.
        # Multiple input_tensors() calls can contribute to the same node.
-       pos, vel = capture_joint_observations(joint_pos, joint_vel)
-       quat, cmd = capture_context(orientation, cmd_vel)
+       pos, vel = capture_joint_observations()
+       quat, cmd = capture_context()
 
        pos_norm, vel_norm = normalize_joints(pos, vel)
        gravity_vec = project_gravity(quat)
@@ -215,8 +225,8 @@ artifacts and the metadata needed to wire them together.
    .. grid-item-card:: Exported node models
       :class-card: sd-rounded-3
 
-      Per-node TorchScript or ONNX artifacts containing traced compute,
-      constants, and model weights.
+      Per-node TorchScript, ExportedProgram (``.pt2``), or ONNX artifacts
+      containing traced compute, constants, and model weights.
 
    .. grid-item-card:: Pipeline specification
       :class-card: sd-rounded-3
@@ -233,7 +243,8 @@ artifacts and the metadata needed to wire them together.
    .. grid-item-card:: Graph visualization
       :class-card: sd-rounded-3
 
-      Optional diagrams make the traced pipeline easier to inspect and discuss.
+      Optional PNG diagrams make the traced pipeline easier to inspect
+      and discuss.
 
 Try it yourself
 ===============
@@ -245,9 +256,10 @@ Try it yourself
 Graph visualization
 -------------------
 
-LEAPP writes a graph visualization showing exported nodes, graph inputs and
-outputs, and data-flow connections between nodes. Use it to verify that
-LEAPP detected the node boundaries and cross-node connections you intended.
+On Python 3.11+, LEAPP writes a PNG graph visualization showing exported
+nodes, graph inputs and outputs, and data-flow connections between nodes.
+Python 3.10 warns and skips this artifact. Use it to verify that LEAPP
+detected the node boundaries and cross-node connections you intended.
 
 .. image:: _static/images/getting_started_graph.png
    :alt: Getting started graph
@@ -295,7 +307,8 @@ This YAML contains:
 Next steps
 ==========
 
-* Explore more complex pipelines in the ``examples/`` directory of the
-  source tree.
-* Learn advanced features in :doc:`guides/index`.
+* Take a look at the :doc:`semantics/usage` guide to learn how to add semantic metadata to your pipeline.
+* Learn graph annotation patterns in :doc:`guides/nodes` and exported-model
+  runtime details in :doc:`generated_configs`.
+* Learn how to interpret and run the generated bundle in :doc:`generated_configs`.
 * Browse the full :doc:`api/index`.

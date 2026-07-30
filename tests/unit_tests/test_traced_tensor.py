@@ -18,6 +18,8 @@ import warnings
 from leapp.leapp_graph.traced_node import TracedTensorNode
 from leapp.leapp_graph.datatypes import TracedTensor
 
+from tests.unit_tests.export_format_validation import verify_exported_program
+
 Tensor = torch.Tensor | TracedTensor
 
 warnings.filterwarnings(
@@ -562,11 +564,29 @@ class TestTracedTensor(unittest.TestCase):
                 f"{test_name}: ONNX output doesn't match expected"
             )
 
+        # Test 4: ExportedProgram export
+        verify_exported_program(
+            self, graph_module, inputs, expected, test_name=test_name)
+
     def test_shape(self):
         """Test shape property."""
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(torch.randn(3, 4, 5), name="x")
         self.assertEqual(x.shape, torch.Size([3, 4, 5]))
+
+    def test_reshape_accepts_list_shape(self):
+        """Match Tensor.reshape semantics used by libraries such as einops."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.randn(3, 4), name="x")
+        reshaped = x.reshape([2, 6])
+        self.assertEqual(reshaped.shape, torch.Size([2, 6]))
+
+    def test_reshape_accepts_tuple_shape(self):
+        """Match Tensor.reshape when the shape is passed as one tuple."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.randn(3, 4), name="x")
+        reshaped = x.reshape((2, 6))
+        self.assertEqual(reshaped.shape, torch.Size([2, 6]))
 
     def test_dim(self):
         """Test dim property."""
@@ -1181,6 +1201,38 @@ class TestTracedTensor(unittest.TestCase):
         ctx.compile_trace({'x': x})
         graph_result = ctx.m(torch.tensor([1.0, 2.0, 3.0]))
         self.assertTrue(torch.allclose(graph_result, expected))
+
+    def test_inplace_method_fill_discarded_result(self):
+        """Test that discarded in-place method results update the original proxy."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+        original_id = id(x)
+
+        x.fill_(3.0)
+
+        self.assertEqual(id(x), original_id)
+        expected = torch.tensor([3.0, 3.0, 3.0])
+        self.assertTrue(torch.allclose(x.tensor, expected))
+
+        ctx.compile_trace({'x': x})
+        graph_result = ctx.m(torch.tensor([1.0, 2.0, 3.0]))
+        self.assertTrue(torch.allclose(graph_result, expected))
+
+    def test_inplace_method_copy_discarded_result(self):
+        """Test discarded copy_ results still update the original proxy."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+        original_id = id(x)
+        source = torch.tensor([10.0, 20.0, 30.0])
+
+        x.copy_(source)
+
+        self.assertEqual(id(x), original_id)
+        self.assertTrue(torch.allclose(x.tensor, source))
+
+        ctx.compile_trace({'x': x})
+        graph_result = ctx.m(torch.tensor([1.0, 2.0, 3.0]))
+        self.assertTrue(torch.allclose(graph_result, source))
 
     def test_inplace_chained_operations(self):
         """Test chained in-place operations."""
@@ -2014,7 +2066,22 @@ class TestTracedTensor(unittest.TestCase):
                         f"{func_name}: TorchScript result dtype doesn't match expected dtype",
                     )
 
-                # Test 4: ONNX export
+                # Test 4: ExportedProgram export
+                exported = torch.export.export(
+                    graph_module, (input_tensor.clone(),))
+                result_exported = exported.module()(input_tensor)
+                self.assertTrue(
+                    torch.allclose(result_exported, expected),
+                    f"{func_name}: ExportedProgram result doesn't match expected result",
+                )
+                if func_name.startswith("type_conversion_operator"):
+                    self.assertEqual(
+                        result_exported.dtype,
+                        expected.dtype,
+                        f"{func_name}: ExportedProgram result dtype doesn't match expected dtype",
+                    )
+
+                # Test 5: ONNX export
                 try:
                     with tempfile.TemporaryDirectory() as tmpdir:
                         onnx_path = pathlib.Path(tmpdir) / f"{func_name}.onnx"

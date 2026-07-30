@@ -72,9 +72,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             context: The TraceContext that owns this tensor
             proxy: The fx.Proxy for graph recording
         """
-        self._name = name
-        self._context = context
-        self._proxy = proxy
+        self._init_tracing_state(name, context, proxy)
 
     # =========================================================================
     # Properties
@@ -91,31 +89,6 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         return self.tensor
 
     @property
-    def proxy(self) -> Proxy:
-        """Get the fx.Proxy for graph recording."""
-        return self._proxy
-
-    @property
-    def name(self) -> str:
-        """Get the name of the tensor."""
-        return self._name
-
-    @property
-    def context(self) -> str:
-        """Get the name of the context that owns this tensor."""
-        return self._context.name
-
-    @property
-    def context_obj(self):
-        """Get the TraceContext that owns this tensor."""
-        return self._context
-
-    @property
-    def is_tracing(self) -> bool:
-        """Get the tracing status of the context that owns this tensor."""
-        return self._context.is_tracing
-
-    @property
     def T(self):
         """Transpose property (for 2D tensors)."""
         return torch.transpose(self, 0, 1)
@@ -130,12 +103,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         Intermediate tensors get auto-generated names based on the operation.
         When not tracing, proxy can be None.
         """
-        if proxy is not None:
-            # Generate a name based on the proxy node's name
-            intermediate_name = str(proxy.node.name)
-        else:
-            # When not tracing, use a placeholder name
-            intermediate_name = "untraced"
+        intermediate_name = self._name_from_proxy(proxy)
         return TracedTensor(tensor, intermediate_name, self._context, proxy)
 
     # =========================================================================
@@ -178,6 +146,17 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                         f"downstream _rewrite_method_descriptors should handle this by converting to call_method"
                     )
         return func
+
+    @staticmethod
+    def _safe_tensor_version(tensor: torch.Tensor | None) -> int | None:
+        # Used to detect in-place mutations.
+        if tensor is None:
+            return None
+        try:
+            return tensor._version
+        except RuntimeError:
+            # Inference tensors may not expose version counters.
+            return None
 
     @staticmethod
     def find_traced_tensor(obj):
@@ -357,9 +336,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                 )
                 if is_full_copy:
                     target.__class__ = TracedTensor
-                    target._name = value._name
-                    target._context = value._context
-                    target._proxy = value._proxy
+                    target._init_tracing_state(value.name, value.context_obj, value.proxy)
                     return True, None
 
                 _get_logger().warning(
@@ -374,9 +351,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             target, source = args[0], args[1]
             if type(target) is torch.Tensor and isinstance(source, TracedTensor):
                 target.__class__ = TracedTensor
-                target._name = source._name
-                target._context = source._context
-                target._proxy = source._proxy
+                target._init_tracing_state(source.name, source.context_obj, source.proxy)
                 return True, target
 
         return False, None
@@ -461,10 +436,17 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         # Extract real tensors for actual computation
         real_args = tuple(TracedTensor.unwrap_traced_tensor(arg) for arg in args)
         real_kwargs = {k: TracedTensor.unwrap_traced_tensor(v) for k, v in kwargs.items()}
+        receiver = args[0] if args and isinstance(args[0], TracedTensor) else None
+        real_receiver = real_args[0] if receiver is not None else None
+        receiver_version = cls._safe_tensor_version(real_receiver)
 
         # ================== EXECUTE THE ACTUAL OPERATION ==================
         tensor_out = func(*real_args, **real_kwargs)
         # ================== END OF EXECUTE THE ACTUAL OPERATION ===========
+        receiver_was_mutated = (
+            receiver_version is not None
+            and cls._safe_tensor_version(real_receiver) != receiver_version
+        )
 
         # Skip tracing if context is not tracing - return raw tensors
         if not traced_tensor.validate_status(args, kwargs):
@@ -511,6 +493,18 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         proxy_out = traced_tensor._context.tracer.create_proxy(
             "call_function", func, proxy_args, proxy_kwargs
         )
+
+        if (
+            receiver_was_mutated
+            and isinstance(tensor_out, torch.Tensor)
+            and tensor_out is real_receiver
+        ):
+            receiver._init_tracing_state(
+                receiver._name_from_proxy(proxy_out),
+                receiver.context_obj,
+                proxy_out,
+            )
+            return receiver
 
         # Handle multiple outputs (e.g., torch.split returns a tuple)
         if isinstance(tensor_out, (tuple, list)):
@@ -622,12 +616,20 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     # Special Methods: reshape and permute need custom handling
     # =========================================================================
 
+    @staticmethod
+    def _normalize_shape_args(args):
+        """Normalize Tensor method shape/dim args for torch function calls."""
+        if len(args) == 1 and isinstance(args[0], (tuple, list)):
+            return tuple(args[0])
+        return args
+
     def reshape(self, *shape):
         """Reshape the tensor.
 
         Note: torch.reshape expects (tensor, shape) but tensor.reshape
         allows both reshape(shape) and reshape(*shape), so we handle both.
         """
+        shape = self._normalize_shape_args(shape)
         return torch.reshape(self, shape)
 
     def permute(self, *dims):
@@ -636,9 +638,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         Note: torch.permute expects (tensor, dims) but tensor.permute
         allows both permute(dims) and permute(*dims), so we handle both.
         """
-        # Handle both permute(2, 0, 1) and permute((2, 0, 1))
-        if len(dims) == 1 and isinstance(dims[0], (tuple, list)):
-            dims = dims[0]
+        dims = self._normalize_shape_args(dims)
         return torch.permute(self, dims)
 
     # =========================================================================
@@ -882,10 +882,18 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
     def copy_(self, src, non_blocking=False):
         """In-place copy method."""
-        unwrapped = TracedData.unwrap_traced_data(src)
-        underlying = self.as_subclass(torch.Tensor)
-        underlying.copy_(unwrapped, non_blocking=non_blocking)
-        return underlying
+        if not self.is_tracing:
+            unwrapped = TracedData.unwrap_traced_data(src)
+            underlying = self.as_subclass(torch.Tensor)
+            underlying.copy_(unwrapped, non_blocking=non_blocking)
+            return underlying
+
+        return type(self).__torch_function__(
+            torch.Tensor.copy_,
+            (type(self),),
+            (self, src),
+            {"non_blocking": non_blocking},
+        )
 
     # =========================================================================
     # Comparison Operators

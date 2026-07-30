@@ -41,6 +41,7 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
             model_exists = False
             model_exists |= os.path.exists(os.path.join(self.TEST_GRAPH_NAME, f"{model_name}.pt"))
             model_exists |= os.path.exists(os.path.join(self.TEST_GRAPH_NAME, f"{model_name}.onnx"))
+            model_exists |= os.path.exists(os.path.join(self.TEST_GRAPH_NAME, f"{model_name}.pt2"))
             self.assertTrue(model_exists,
                             f"Model {model_name} does not exist")
 
@@ -452,6 +453,28 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
         model = torch.jit.load(os.path.join(model_path, f"{model_name}.pt"))
         
         # Flatten all inputs since models now expect flat tensor arguments
+        flat_inputs = []
+        for inp in inputs:
+            flat_inputs.extend(self._flatten_to_tensors(inp))
+        flat_expected_outputs = []
+        for out in expected_outputs:
+            flat_expected_outputs.extend(self._flatten_to_tensors(out))
+        flat_expected_outputs = tuple(flat_expected_outputs)
+        outputs = model(*flat_inputs)
+        if not isinstance(outputs, tuple):
+            outputs = (outputs,)
+
+        for output, expected_output in zip(outputs, flat_expected_outputs):
+            self.assertTrue(self.verify_data_exact_match(output, expected_output), "An output value does not match expected value: "
+                            f"got {output} but expected {expected_output}")
+
+    def verify_single_exported_program_model_expected_value(self, inputs, expected_outputs, model_name, model_path=None):
+        if model_path is None:
+            model_path = self.TEST_GRAPH_NAME
+        exported_program = torch.export.load(
+            os.path.join(model_path, f"{model_name}.pt2"))
+        model = exported_program.module()
+
         flat_inputs = []
         for inp in inputs:
             flat_inputs.extend(self._flatten_to_tensors(inp))

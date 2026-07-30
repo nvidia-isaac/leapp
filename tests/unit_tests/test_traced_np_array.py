@@ -19,6 +19,8 @@ import torch
 from leapp.leapp_graph.traced_node import TracedTensorNode
 from leapp.leapp_graph.datatypes import TracedNpArray
 
+from tests.unit_tests.export_format_validation import verify_exported_program
+
 Array = np.ndarray | TracedNpArray
 
 warnings.filterwarnings(
@@ -932,6 +934,7 @@ class TestCompiledGraphExecution(unittest.TestCase):
     1. The FX graph module produces correct output
     2. TorchScript export works and produces correct output
     3. ONNX export works and produces correct output
+    4. ExportedProgram export works and produces correct output
     """
 
     def _test_operation(self, op_name: str, np_func, input_data: np.ndarray, 
@@ -1015,7 +1018,15 @@ class TestCompiledGraphExecution(unittest.TestCase):
         except Exception as e:
             self.fail(f"{op_name}: ONNX export/execution failed: {e}")
 
-    # ==================== Arithmetic Operations ====================
+        # Test 4: ExportedProgram export and execution
+        verify_exported_program(
+            self,
+            graph_module,
+            input_tensor,
+            torch.from_numpy(expected_output).float(),
+            test_name=op_name,
+            atol=atol,
+        )
 
     def test_add_scalar(self):
         """Test: x + 1"""
@@ -1367,6 +1378,16 @@ class TestCompiledGraphExecution(unittest.TestCase):
                 )
         except Exception as e:
             self.fail(f"{test_name}: ONNX export/execution failed: {e}")
+
+        # Test 4: ExportedProgram export
+        verify_exported_program(
+            self,
+            graph_module,
+            torch_input,
+            torch_expected,
+            test_name=test_name,
+            atol=atol,
+        )
 
     def test_setitem_single_index(self):
         """Test: x[0] = 10"""

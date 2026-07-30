@@ -31,8 +31,10 @@ import os
 # Define custom log levels.
 SECTION = 25
 SYSTEM = 31
+FATAL = logging.ERROR + 1
 logging.addLevelName(SECTION, 'SECTION')
 logging.addLevelName(SYSTEM, 'SYSTEM')
+logging.addLevelName(FATAL, 'FATAL')
 
 
 class _ColoredFormatter(logging.Formatter):
@@ -46,6 +48,7 @@ class _ColoredFormatter(logging.Formatter):
         'SYSTEM': '',             # White, but above WARNING for non-verbose console output
         'WARNING': '\033[1;33m',  # Bold yellow (matching export_manager.py)
         'ERROR': '\033[91m',      # Bright red
+        'FATAL': '\033[91m',      # Same as ERROR, but raises after logging
         'CRITICAL': '\033[1;31m',  # Bold red
         'RESET': '\033[0m'        # Reset
     }
@@ -72,6 +75,8 @@ class _LeappLogger:
 
     def configure(self, savepath, verbose):
         """Configure the logger with file and console handlers."""
+        for handler in self.logger.handlers:
+            handler.close()
         self.logger.handlers.clear()
 
         # log file handler
@@ -174,6 +179,20 @@ class _LeappLogger:
         """Log error message (file always, console always)."""
         if self.initialized:
             self.logger.error(msg)
+
+    def fatal(self, msg, error_type=RuntimeError, *, cause=None):
+        """Log a fatal message, then raise it as ``error_type``."""
+        if self.initialized:
+            self.logger.log(FATAL, msg)
+
+        if isinstance(error_type, BaseException):
+            error = error_type
+        else:
+            error = error_type(msg)
+
+        if cause is not None:
+            raise error from cause
+        raise error
 
     @property
     def path(self):

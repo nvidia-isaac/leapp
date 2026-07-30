@@ -38,13 +38,24 @@ class TracedData(ABC):
             proxy: The fx.Proxy for graph recording
         """
         self._value = value
-        self._name = name
-        self._context = context
-        self._proxy = proxy
+        self._init_tracing_state(name, context, proxy)
     
     # =========================================================================
     # Common Properties
     # =========================================================================
+
+    def _init_tracing_state(self, name: str, context, proxy: Proxy) -> None:
+        """Initialize common tracing metadata for TracedData subclasses."""
+        self._name = name
+        self._context = context
+        self._proxy = proxy
+
+    @staticmethod
+    def _name_from_proxy(proxy: Proxy) -> str:
+        """Return the conventional traced-data name for an operation result."""
+        if proxy is not None:
+            return str(proxy.node.name)
+        return "untraced"
     
     @property
     def proxy(self) -> Proxy:
@@ -59,6 +70,8 @@ class TracedData(ABC):
     @property
     def context(self) -> str:
         """Get the name of the context that owns this data."""
+        if self._context is None:
+            return "untraced"
         return self._context.name
     
     @property
@@ -69,6 +82,8 @@ class TracedData(ABC):
     @property
     def is_tracing(self) -> bool:
         """Get the tracing status of the context that owns this data."""
+        if self._context is None:
+            return False
         return self._context.is_tracing
     
     @property
@@ -217,22 +232,15 @@ class TracedData(ABC):
         
         if len(contexts) > 1:
             cls_name = self.__class__.__name__
-            _get_logger().error(
+            _get_logger().fatal(
                 f"Error: detected multiple {cls_name} contexts: {contexts} inside of a traced function.\n"
                 "\n"
                 f"This happens when you mix multiple active {cls_name}s from different contexts "
-                "inside of a traced function/block.\n"
+                "inside of a traced function/block. solutions:\n"
                 "\n"
-                "Mixing active contexts is not allowed. You can: \n"
                 "1. call output_tensors() to finalize one of the nodes first\n"
-                "2. combine both nodes into a single node by calling input_tensors() with the same node name"
-            )
-            raise Exception(
-                f"Cannot mix multiple active {cls_name}s from different contexts inside of a traced function/block. "
-                "Mixing active contexts is not allowed. You can: \n"
-                "1. call output_tensors() to finalize one of the nodes first\n"
-                "2. combine both nodes into a single node by calling input_tensors() with the same node name"
-            )
+                "2. combine both nodes into a single node by calling input_tensors() with the same node name",
+                error_type=Exception)
         return True
     
     # =========================================================================

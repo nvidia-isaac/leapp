@@ -97,10 +97,10 @@ class LeappNode():
     @node_index.setter
     def node_index(self, value):
         if self._node_index != self.UNSET_NODE_INDEX:
-            raise Exception(
+            _get_logger().fatal(
                 f"Node index for '{self.name}' is already set to {self._node_index} "
-                "and cannot be reassigned."
-            )
+                "and cannot be reassigned.",
+                error_type=Exception)
         self._node_index = value
 
     @property
@@ -162,7 +162,10 @@ class LeappNode():
         self._create_backend(backend, backend_params)
 
     def _create_backend(self, backend, backend_params):
-        available_backends = ["jit-script", "jit-trace", "onnx-dynamo", "onnx-torchscript"]
+        available_backends = [
+            "jit-script", "jit-trace", "onnx-dynamo", "onnx-torchscript",
+            "exported-program",
+        ]
         if backend is None:
             self.backend = "None"
             self.export_backend = NoneExportBackend(
@@ -187,14 +190,20 @@ class LeappNode():
             from leapp.backends.onnx_export_backend import ONNXTorchScriptExportBackend
             self.export_backend = ONNXTorchScriptExportBackend(
                 self, backend_params)
+        elif backend == "exported-program" or backend == "pt2":
+            self.backend = "exported-program"
+            from leapp.backends.exported_program_backend import ExportedProgramExportBackend
+            self.export_backend = ExportedProgramExportBackend(
+                self, backend_params)
         elif backend == "cpp":
-            raise Exception("C++ backend not implemented")
+            _get_logger().fatal("C++ backend not implemented", error_type=Exception)
         elif backend == "py":
-            raise Exception("Python backend not implemented")
+            _get_logger().fatal("Python backend not implemented", error_type=Exception)
         else:
-            raise Exception(
+            _get_logger().fatal(
                 f"{self.name} Unexpected backend: {backend}, \n"
-                f"please use one of the following: {available_backends}")
+                f"please use one of the following: {available_backends}",
+                error_type=Exception)
 
     def save_model(self, save_path: str):
         self.model_path, self.md5sum, self.sha256sum = self.export_backend.save(save_path)
@@ -203,8 +212,10 @@ class LeappNode():
         try:
             self.export_backend.compile(self.m)
         except Exception as e:
-            _get_logger().error(f"Error compiling model {self.name}: {e}")
-            raise e
+            _get_logger().fatal(
+                f"Error compiling model {self.name}: {e}",
+                error_type=type(e),
+                cause=e)
 
     def get_backend(self):
         return self.export_backend.get_backend_model_type()
@@ -233,15 +244,11 @@ class LeappNode():
         existing_names = set([io.name_str for io in current_io_list])
         for description in descriptions:
             if description.name_str in existing_names:
-                _get_logger().error(
+                _get_logger().fatal(
                     f"Duplicate i/o name '{description.name_str}' in node '{node_name}'. \n"
                     f"Currently existing names: {existing_names}\n"
-                    f"Each input/output in the same node must have a unique name."
-                )
-                raise Exception(
-                    f"Duplicate name '{description.name_str}' in node '{node_name}'. "
-                    f"Each input/output must have a unique name."
-                )
+                    f"Each input/output in the same node must have a unique name.",
+                    error_type=Exception)
             existing_names.add(description.name_str)
             current_io_list.append(description)
 
@@ -303,33 +310,30 @@ class LeappNode():
             existing_io_description = LeappNode.get_io_description_by_name(
                 io_description.name_str, current_io_list)
             if existing_io_description is None:
-                _get_logger().error(
+                _get_logger().fatal(
                     f"Error: Reentering {self.name} with new i/o {io_description.name_str} but failed to find it in the current i/o list.\n"
-                    f"available i/o names: {[io.name_str for io in current_io_list]}"
-                )
-                raise Exception("Validation error when reentering node")
+                    f"available i/o names: {[io.name_str for io in current_io_list]}",
+                    error_type=Exception)
             elif existing_io_description.tag is None:
                 # THIS STEP UPDATES THE TAG FOR FEEDBACK DETECTION
                 existing_io_description.tag = io_description.tag
             elif io_description.tag is not None and existing_io_description.tag != io_description.tag:
-                _get_logger().error(
+                _get_logger().fatal(
                     f"Error: Reentering {self.name} with new i/o {io_description.name_str} \n"
                     f"but the tag has changed from {existing_io_description.tag} to {io_description.tag}.\n"
-                    f"This can happen if some dynamic behavior is not captured by the annotations"
-                )
-                raise Exception("Validation error when reentering node")
+                    f"This can happen if some dynamic behavior is not captured by the annotations",
+                    error_type=Exception)
 
             existing_io_description_dict = existing_io_description.dict()
             current_io_description_dict = io_description.dict()
 
             common_keys = existing_io_description_dict.keys() & current_io_description_dict.keys()
             if not all(existing_io_description_dict[key] == current_io_description_dict[key] for key in common_keys):
-                _get_logger().error(
+                _get_logger().fatal(
                     f"Error: Reentering {self.name} with new i/o {io_description.name_str} \n"
                     f"but the description has changed from {existing_io_description_dict} to {current_io_description_dict}.\n"
-                    f"This can happen if some dynamic behavior is not captured by the annotations"
-                )
-                raise Exception("Validation error when reentering node")
+                    f"This can happen if some dynamic behavior is not captured by the annotations",
+                    error_type=Exception)
 
             if self._cache_write_idx < self._max_cached_io:
                 existing_io_description.cached_values[self._cache_write_idx] = io_description.value

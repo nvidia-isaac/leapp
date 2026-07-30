@@ -126,14 +126,16 @@ Signature
        rtol: float = 1e-3,
        atol: float = 1e-5,
        strict: bool = True,
+       graph_configs: GraphConfigs | None = None,
    )
 
 Parameters
 ~~~~~~~~~~
 
 * ``visualize`` (bool, optional): Generate a graph visualization.
-  Defaults to ``True``. Visualization errors are logged but do not stop
-  compilation.
+  Defaults to ``True``. Requires Python 3.11 or later; earlier versions
+  emit a warning and skip visualization. On supported Python versions,
+  visualization errors stop compilation.
 * ``verbose`` (bool | None, optional): Override verbose logging for the
   compile step. ``None`` leaves the current setting unchanged.
 * ``validate`` (bool, optional): Validate exported models against
@@ -147,6 +149,8 @@ Parameters
   ``torch.allclose()``. Defaults to ``1e-5``.
 * ``strict`` (bool, optional): Raise on validation failure. Defaults
   to ``True``.
+* ``graph_configs`` (GraphConfigs, optional): Graph-level metadata to serialize
+  under the generated YAML ``pipeline.configs`` entry.
 
 Behavior
 ~~~~~~~~
@@ -158,16 +162,54 @@ The method performs the complete pipeline:
 #. Build connections by analyzing data flow.
 #. Save compiled models to ``{save_path}/{name}/``.
 #. Generate ``{name}.yaml`` with the complete graph description.
-#. Generate ``{name}.png`` if ``visualize=True``.
+#. Generate ``{name}.png`` if ``visualize=True`` and Python 3.11 or later is
+   running.
 #. Log graph statistics.
+
+``GraphConfigs``
+----------------
+
+Graph-level metadata passed to :func:`~leapp.compile_graph`.
+
+.. code-block:: python
+
+   from leapp import GraphConfigs
+
+   leapp.compile_graph(
+       graph_configs=GraphConfigs(
+           frequency_hz=50,
+           extra={"runtime": "isaac_lab"},
+       ),
+   )
+
+This emits fields under the generated ``pipeline.configs`` entry:
+
+.. code-block:: yaml
+
+   pipeline:
+     data_flow: {}
+     feedback_flow: {}
+     inputs: {}
+     outputs: {}
+     configs:
+       frequency: 50
+       runtime: isaac_lab
+
+Parameters
+~~~~~~~~~~
+
+* ``frequency`` (float | int, optional): Graph-level execution frequency in Hz.
+* ``extra`` (dict, optional): Additional graph-level fields. Keys are flattened
+  into the ``pipeline.configs`` entry rather than serialized under an ``extra`` key.
 
 Generated artifacts
 ~~~~~~~~~~~~~~~~~~~
 
-* Compiled models --- one file per node (``.pt``, ``.onnx``).
+* Compiled models --- one file per node (``.pt``, ``.pt2``, ``.onnx``).
 * ``{name}.yaml`` --- model descriptions, pipeline connections
   (``data_flow`` and ``feedback_flow``), and system information.
-* ``{name}.png`` --- graph visualization (when ``visualize=True``).
+* ``{name}.png`` --- graph visualization (when ``visualize=True`` on
+  Python 3.11+).
 
 Output YAML structure
 ~~~~~~~~~~~~~~~~~~~~~
@@ -203,8 +245,8 @@ Output YAML structure
    system information:
      python version: "3.12.9"
      torch version: "2.7.0+cu126"
-     leapp version: "0.5.2"
-     leapp config version: "1.1"
+     leapp version: "0.6.0"
+     leapp config version: "1.3"
      cuda version: "12.6"
      os: Linux
 
@@ -252,7 +294,8 @@ Parameters
   the tensor. Enum values are serialized to their string ``.value``.
 * ``element_names`` (list | str, optional): Human-readable element names. A
   string becomes ``[[name]]``; a flat list of strings becomes ``[[...]]``; a
-  per-dimension list is preserved with optional ``None`` entries.
+  per-dimension list is preserved with optional ``None`` entries. Include
+  ``TemporalAxis(...)`` as a bare axis item to mark that axis temporal.
 * ``extra`` (dict, optional): Additional semantic fields. Keys are flattened
   into the tensor YAML entry rather than serialized under an ``extra`` key.
 
@@ -266,6 +309,34 @@ Behavior
   provides the tensor key.
 * Public semantic fields with non-``None`` values are serialized in the YAML.
 * ``extra`` fields are flattened into the same YAML mapping as built-in fields.
+
+``TemporalAxis``
+~~~~~~~~~~~~~~~~
+
+Mark one ``element_names`` axis as temporal and attach an absolute period in
+milliseconds to the tensor YAML entry.
+
+.. code-block:: python
+
+   from leapp import TensorSemantics, TemporalAxis
+
+   TensorSemantics(
+       name="actions",
+       ref=actions,
+       element_names=[TemporalAxis(period_ms=100), ["hip", "knee", "ankle"]],
+   )
+
+This emits the reserved bare axis sentinel and the period metadata:
+
+.. code-block:: yaml
+
+   element_names:
+   - __temporal_axis__
+   - [hip, knee, ankle]
+   temporal_period_ms: 100
+
+``__temporal_axis__`` is reserved for LEAPP output; use
+``TemporalAxis`` rather than writing the sentinel directly.
 
 .. warning::
 
@@ -318,7 +389,7 @@ Enum values
    BODY_LINEAR_VELOCITY = target/body/linear_velocity
    BODY_ANGULAR_ACCELERATION = target/body/angular_acceleration
 
-See :doc:`/guides/semantics` for examples and field guidance.
+See :doc:`/semantics/usage` for examples and field guidance.
 
 Annotations
 ===========
@@ -342,7 +413,7 @@ Parameters
 * ``tensors`` (required): Either a dict of named raw tensors or a
   ``TensorSemantics`` / list of ``TensorSemantics``. Bare tensors and
   other unnamed top-level collections are not supported. See
-  :doc:`/guides/semantics`.
+  :doc:`/semantics/usage`.
 
 Returns
 ~~~~~~~
@@ -397,9 +468,10 @@ Parameters
   must be plain ``torch.Tensor``, not ``TracedTensor``.
 * ``**kwargs``:
 
-  * ``export_with`` (str | None): Export backend. Common values are
-    ``"jit"`` and ``"onnx"``. Other variants are ``"jit-script"``,
-    ``"jit-trace"``, ``"onnx-dynamo"``, and ``"onnx-torchscript"``. See
+  * ``export_with`` (str | None): Export backend. Common values
+    ``"jit"``, ``"onnx"``, and ``"exported-program"`` (alias ``"pt2"``).
+    Other variants are ``"jit-script"``, ``"jit-trace"``,
+    ``"onnx-dynamo"``, and ``"onnx-torchscript"``. See
     :doc:`/guides/export`.
   * ``backend_params`` (dict): Backend-specific parameters.
 
@@ -432,8 +504,8 @@ Parameters
 
 * ``node_name`` (str, optional): Custom node name. Defaults to the
   function name.
-* ``export_with`` (str | None, optional): Export backend. Common values are
-  ``"jit"`` and ``"onnx"``.
+* ``export_with`` (str | None, optional): Export backend. Common values
+  ``"jit"``, ``"onnx"``, and ``"exported-program"`` (alias ``"pt2"``).
 * ``backend_params`` (dict, optional): Backend-specific parameters.
 
 Behavior
@@ -596,7 +668,7 @@ Behavior
 #. If data does not match, logs an error and raises rather than copying
    incorrect tracing metadata.
 
-See :doc:`/guides/graph` for context.
+See :doc:`/guides/buffers` for between-node copy examples.
 
 Runtime
 =======
@@ -699,8 +771,11 @@ Notes
 
 * Input dictionaries passed to ``run_policy()`` must use
   ``node_name/input_name`` keys.
-* ``InferenceManager`` currently runs exported or referenced ``jit`` and
-  ``onnx`` models.
+* ``InferenceManager`` currently runs exported or referenced ``jit``,
+  ``pt2``, and ``onnx`` models.
+* For ``pt2`` nodes, runtime inputs should be on the same device as the
+  loaded exported program. ``get_mock_input()`` already allocates on the
+  node device.
 * Feedback state persists across successive ``run_policy()`` calls
   unless you overwrite it manually.
 
@@ -772,7 +847,7 @@ This creates:
 
    exports/complete_pipeline/
    |-- complete_pipeline.yaml    # Graph description
-   |-- complete_pipeline.png     # Visualization
+   |-- complete_pipeline.png     # Graph visualization
    |-- preprocess.pt             # Preprocessing model
    |-- inference.pt              # Inference model
    |-- postprocess.pt            # Postprocessing model
@@ -803,5 +878,6 @@ See also
 * :doc:`/getting_started` --- learn the basics
 * :doc:`/guides/nodes` --- advanced node patterns
 * :doc:`/guides/graph` --- graph and feedback operations
-* :doc:`/guides/runtime` --- validation and runtime verification
-* :doc:`/guides/semantics` --- semantic data annotation
+* :doc:`/guides/runtime` --- validation
+* :doc:`/leapp_runtime` --- LEAPP Python runtime
+* :doc:`/semantics/usage` --- semantic data annotation

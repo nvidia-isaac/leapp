@@ -14,13 +14,42 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-import os
-from safetensors.torch import save_file
 from collections import Counter
+import os
+import sys
+import warnings
+
+from safetensors.torch import save_file
 
 from leapp.utils.tensor_description import CompactYamlList, validate_connection_compatibility
 from leapp.utils.logging import _get_logger
-from .graph_gui import visualize_graph
+
+
+def _visualization_supported():
+    return sys.version_info >= (3, 11)
+
+
+def _render_visual_graph(
+    nodes,
+    connections,
+    feedback_connections,
+    graph_inputs,
+    graph_outputs,
+    save_path,
+    graph_name,
+):
+    from leapp_visualization import render_graph
+
+    from .visualization_adapter import build_visual_graph
+
+    graph = build_visual_graph(
+        nodes,
+        connections,
+        feedback_connections,
+        graph_inputs,
+        graph_outputs,
+    )
+    return render_graph(graph, save_path, graph_name)
 
 
 class LeappGraph:
@@ -89,8 +118,25 @@ class LeappGraph:
         return pipeline
 
     def visualize(self, save_path, graph_name):
-        visualize_graph(self.nodes, self.connections, self.feedback_connections,
-                        self.graph_inputs, self.graph_outputs, save_path, graph_name)
+        if not _visualization_supported():
+            warnings.warn(
+                "Graph visualization requires Python 3.11 or later; "
+                "skipping PNG generation.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return
+
+        png_path = _render_visual_graph(
+            self.nodes,
+            self.connections,
+            self.feedback_connections,
+            self.graph_inputs,
+            self.graph_outputs,
+            save_path,
+            graph_name,
+        )
+        _get_logger().info(f"Graph visualization saved as: {png_path}")
 
     def get_graph_statistics(self):
         internal_connections = 0
@@ -127,11 +173,11 @@ class LeappGraph:
             tag_counts = Counter(tags)
             duplicates = {tag for tag, count in tag_counts.items() if count > 1}
             if duplicates:
-                for duplicate in duplicates:
-                    _get_logger().error(
-                        f"Found duplicate input with the tag {duplicate} in node {node.name}")
-                raise Exception(
-                    "Error: unsupported use of sending the same tensor multiple times to the same node")
+                duplicate_list = ", ".join(sorted(duplicates))
+                _get_logger().fatal(
+                    f"Error: unsupported use of sending the same tensor multiple times to the same node. "
+                    f"Duplicate input tags in node {node.name}: {duplicate_list}",
+                    error_type=Exception)
 
             for in_idx, input in enumerate(node.inputs):
                 if input.tag is None:  # case where the input is dangling
@@ -143,8 +189,9 @@ class LeappGraph:
                     source_node_output_ports = [
                         output.tag for output in source_node.outputs]
                     if input.tag not in source_node_output_ports:
-                        raise Exception(
-                            f"Error: {source_node.name} does not produce tag {input.tag}")
+                        _get_logger().fatal(
+                            f"Error: {source_node.name} does not produce tag {input.tag}",
+                            error_type=Exception)
 
                     out_idx = source_node_output_ports.index(input.tag)
 

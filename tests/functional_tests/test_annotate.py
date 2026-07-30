@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
+import os
+import sys
 import unittest
 import torch
 import leapp
@@ -915,6 +917,12 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
 
         leapp.stop()
         leapp.compile_graph(visualize=True)
+
+        png_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.png")
+        if sys.version_info >= (3, 11):
+            assert os.path.exists(png_path)
+        else:
+            assert not os.path.exists(png_path)
 
         # 4 nodes, 1 external input
         # 3 internal connections (func1->func2a, func1->func2b, func2a->func3, func2b->func3)

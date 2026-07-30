@@ -38,11 +38,11 @@ traced graph into portable artifacts.
 
    Get started
 
-.. button-ref:: guides/index
+.. button-ref:: guides/nodes
    :ref-type: doc
    :color: secondary
 
-   Read the guides
+   Read usage guide
 
 Is LEAPP a Fit?
 ===============
@@ -118,7 +118,7 @@ How LEAPP Fits In
              <div class="leapp-diagram-output">
                <div class="leapp-artifact-grid">
                  <span>node1.pt</span>
-                 <span>node1.onnx</span>
+                 <span>node2.onnx</span>
                  <span>pipeline.yaml</span>
                  <span>visualization.png</span>
                </div>
@@ -127,21 +127,59 @@ How LEAPP Fits In
          </div>
 
 
-Get Started
-===========
+Documentation Map
+=================
 
 * Install LEAPP and walk through your first annotated policy pipeline in
   :doc:`getting_started`.
-* Explore focused guides for :doc:`guides/nodes`, :doc:`guides/export`,
-  :doc:`guides/graph`, :doc:`guides/semantics`, and :doc:`guides/runtime`.
+* Add graph-structure annotations with :doc:`guides/nodes`,
+  :doc:`guides/export`, :doc:`guides/graph`, :doc:`guides/buffers`, and
+  :doc:`guides/debugging`.
+* Add semantic data annotations with :doc:`semantics/usage`.
+* Learn how to run an exported bundle in :doc:`generated_configs` and
+  :doc:`leapp_runtime`.
 * Browse the full :doc:`api/index`.
 
 
 .. toctree::
-   :caption: Contents
+   :caption: Getting started
    :hidden:
    :maxdepth: 2
 
    getting_started
-   guides/index
+
+.. toctree::
+   :caption: Graph Structure Annotations
+   :hidden:
+   :maxdepth: 2
+
+   guides/nodes
+   guides/export
+   guides/graph
+   guides/buffers
+   guides/debugging
+   guides/runtime
+
+.. toctree::
+   :caption: Semantic Data Annotations
+   :hidden:
+   :maxdepth: 2
+
+   semantics/usage
+   semantics/kind_element_names
+   semantics/temporal
+
+.. toctree::
+   :caption: Running the Exported Model
+   :hidden:
+   :maxdepth: 2
+
+   leapp_runtime
+   generated_configs
+
+.. toctree::
+   :caption: API reference
+   :hidden:
+   :maxdepth: 2
+
    api/index

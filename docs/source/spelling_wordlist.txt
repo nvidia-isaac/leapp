@@ -36,7 +36,6 @@ sha256sum
 # Python / library names
 numpy
 ndarray
-matplotlib
 pyenchant
 sphinxcontrib
 sphinxmermaid
@@ -87,6 +86,8 @@ prescript
 torchscript
 jit
 onnx
+pt2
+exported-program
 configs
 config
 yml
@@ -107,6 +108,7 @@ TracedTensor
 TracedTensors
 TracedTensorNode
 TensorSemantics
+TemporalAxis
 InferenceManager
 InputKindEnum
 OutputKindEnum
@@ -209,6 +211,8 @@ gh-pages
 PyData
 walkthrough
 provenance
+reproducibility
+deployable
 filesystem
 checksum
 checksums

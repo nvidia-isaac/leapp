@@ -1,15 +1,9 @@
-============================
-Buffers and constant tensors
-============================
+================
+Constant tensors
+================
 
-Buffers are useful for two different jobs, and LEAPP treats them differently
-depending on whether they change during tracing:
-
-* **State buffers** are reassigned during execution and become feedback state.
-* **Constant buffers** are read but not reassigned and are baked into the
-  exported model.
-
-For modules, :func:`~leapp.annotate.module` handles both cases automatically.
+Use this page when a node must emit a tensor that is not derived from any
+traced input. For module buffer state versus constants, see :doc:`graph`.
 
 Static outputs
 ==============
@@ -65,43 +59,50 @@ The exported model returns both outputs: ``computed`` (input-dependent) and
    * Static outputs are merged with the regular outputs in the compiled
      model --- downstream nodes can consume them like any other output.
 
-Preserving tags after manual copies
-===================================
+Preserving LEAPP tags across nonstandard copies
+===============================================
 
-When LEAPP traces tensor data, it relies on internal tags to track data
-provenance. Some patterns duplicate data without standard PyTorch operations
-like ``clone()`` or ``detach()``. For example, an in-place assignment like
-``tensor[:] = other_tensor`` may copy values without carrying LEAPP tags to the
-new tensor.
+Between nodes, LEAPP uses internal tags on finished outputs to wire
+``pipeline.data_flow``. If you copy those values into another tensor with a
+nonstandard pattern such as ``buffer[:] = upstream_output``, the values move
+but the tags often do not, so the next node may look disconnected.
 
-:func:`~leapp.annotate.mirror_leapp_tags` explicitly transfers tracing tags
-from a source tensor to a target tensor after verifying that their values match.
+:func:`~leapp.annotate.mirror_leapp_tags` copies tags from the source output to
+the destination tensor after verifying that their values match.
 
-Use ``mirror_leapp_tags`` when you:
-
-* Copy tensor data using in-place operations.
-* Need to maintain tracing continuity across manual data duplication.
-* Want LEAPP to recognize that two tensors contain the same logical data.
+Use it only for copies **between** finished nodes. Inside a traced node,
+full-slice assignment and ``copy_()`` from a traced tensor are handled
+automatically.
 
 .. code-block:: python
 
    import torch
+   import leapp
    from leapp import annotate
 
-   class DataProcessor:
-       def __init__(self):
-           self._buffer = torch.zeros(10)
+   @annotate.method(export_with="jit")
+   def upstream(x: torch.Tensor):
+       return x + 1.0
 
-       @annotate.method(export_with="jit")
-       def process(self, input_data: torch.Tensor):
-           self._buffer[:] = input_data
-           annotate.mirror_leapp_tags(input_data, self._buffer)
-           return self._buffer * 2.0
+   @annotate.method(export_with="jit")
+   def downstream(x: torch.Tensor):
+       return x * 2.0
+
+   leapp.start(name="tag_copy_example")
+   out = upstream(torch.tensor([1.0, 2.0, 3.0]))
+
+   buffer = torch.zeros_like(out)
+   buffer[:] = out
+   annotate.mirror_leapp_tags(out, buffer)
+
+   result = downstream(buffer)
+   leapp.stop()
+   leapp.compile_graph()
 
 .. warning::
 
    ``mirror_leapp_tags`` requires source and target values to match exactly. It
-   is for preserving trace continuity after equivalent copies, not for marking a
+   is for preserving graph wiring after equivalent copies, not for marking a
    newly computed tensor as if it came directly from another tensor.
 
 You do not need ``mirror_leapp_tags`` for standard PyTorch operations such as

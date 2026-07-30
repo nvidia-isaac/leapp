@@ -35,6 +35,12 @@ LEAPP supports these public backend names:
    * - ``"onnx-torchscript"``
      - ``onnx-torchscript``
      - ONNX ``.onnx``
+   * - ``"exported-program"``
+     - ``exported-program``
+     - ``torch.export`` ``.pt2``
+   * - ``"pt2"``
+     - ``exported-program``
+     - ``torch.export`` ``.pt2``
    * - ``None``
      - ``NoneExportBackend``
      - No compilation
@@ -45,6 +51,8 @@ Recommended defaults:
 * use ``"onnx"`` when you want the default ONNX exporter
 * use ``"onnx-torchscript"`` for recurrent models such as ``nn.GRU`` and
   ``nn.LSTM``
+* use ``"exported-program"`` (or the ``"pt2"`` alias) when you want a
+  ``torch.export`` artifact instead of TorchScript or ONNX
 
 TorchScript export
 ==================
@@ -66,6 +74,87 @@ TorchScript export
 
    leapp.stop()
    leapp.compile_graph(validate=True)
+
+ExportedProgram export
+======================
+
+``"exported-program"`` exports each node with :func:`torch.export.export`
+and saves a ``.pt2`` artifact via :func:`torch.export.save`. The YAML
+``backend`` field is written as ``pt2``.
+
+``"pt2"`` is a shorthand alias for ``"exported-program"``, similar to how
+``"onnx"`` aliases ``"onnx-dynamo"``.
+
+Use this backend when you want the modern ``torch.export`` graph
+representation rather than TorchScript or ONNX. It is a good fit for
+feedforward PyTorch graphs that already compile cleanly through LEAPP's
+FX capture path.
+
+.. code-block:: python
+
+   import torch
+   import leapp
+   from leapp import annotate
+
+   leapp.start("exported_program_example")
+
+   x = annotate.input_tensors("policy", {"obs": torch.randn(1, 32)})
+   action = torch.tanh(x[..., :12])
+   annotate.output_tensors(
+       "policy",
+       {"action": action},
+       export_with="exported-program",
+   )
+
+   leapp.stop()
+   leapp.compile_graph(validate=True)
+
+ExportedProgram backend parameters
+----------------------------------
+
+All ExportedProgram backend parameters are passed through
+``backend_params``.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 15 65
+
+   * - Parameter
+     - Default
+     - Description
+   * - ``strict``
+     - PyTorch default
+     - Passed through to :func:`torch.export.export`
+   * - ``dynamic_shapes``
+     - ``None``
+     - Optional dynamic-shapes spec for :func:`torch.export.export`
+
+Example:
+
+.. code-block:: python
+
+   annotate.output_tensors(
+       "policy",
+       {"action": action},
+       export_with="pt2",
+       backend_params={
+           "strict": True,
+       },
+   )
+
+Runtime notes
+-------------
+
+* ``InferenceManager`` can load and run ``pt2`` artifacts.
+* When CUDA is available, LEAPP loads exported programs onto the GPU.
+  Pass runtime inputs on the same device, or use
+  ``InferenceManager.get_mock_input()`` which preallocates tensors on the
+  node device.
+* Lifted constants baked into the exported graph during trace may remain on
+  CPU even after ``module.to(device)``. Prefer ``annotate.register_buffer``
+  for values that must travel with the model, or keep runtime inputs on
+  the model device.
+* The YAML records the exporting PyTorch version in ``torch_version``.
 
 ONNX export
 ===========
@@ -160,7 +249,7 @@ The main LEAPP validation path is still:
    leapp.compile_graph(validate=True, rtol=1e-3, atol=1e-5, strict=True)
 
 That validation compares exported model outputs against the captured
-traced outputs. See :doc:`runtime` for details.
+traced outputs. See :doc:`runtime` for validation details and :doc:`/leapp_runtime` for Python runtime usage.
 
 Bringing your own model
 =======================
@@ -168,7 +257,7 @@ Bringing your own model
 Set ``export_with=None`` when you want a node to appear in the graph
 without asking LEAPP to compile it. This is useful for:
 
-* prebuilt ``.pt`` or ``.onnx`` artifacts
+* prebuilt ``.pt``, ``.pt2``, or ``.onnx`` artifacts
 * placeholder nodes that will be filled in later
 * flows where LEAPP should capture I/O and graph edges but not produce a
   model
@@ -214,5 +303,5 @@ Important behavior:
   checksums in the YAML.
 * The model path written into the YAML is made relative to the YAML
   directory when possible.
-* ``InferenceManager`` currently only runs referenced ``.pt`` and
+* ``InferenceManager`` currently runs referenced ``.pt``, ``.pt2``, and
   ``.onnx`` artifacts.

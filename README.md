@@ -15,6 +15,8 @@ LEAPP is designed for pipelines that chain multiple PyTorch models or processing
 pip install leapp
 ```
 
+LEAPP requires Python 3.10+ and PyTorch 2.6.0+.
+
 ## Quick example
 
 ```python
@@ -36,7 +38,7 @@ leapp.stop()
 leapp.compile_graph()
 ```
 
-Running this produces a `my_pipeline/` directory containing the exported models, a YAML pipeline spec, and a graph visualization.
+Running this produces a `my_pipeline/` directory containing the exported models, a YAML pipeline spec, and, on Python 3.11 or later, a PNG graph visualization. On Python 3.10, LEAPP warns and skips visualization while completing the rest of the export.
 
 ## Documentation
 
