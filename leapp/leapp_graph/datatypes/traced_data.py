@@ -6,6 +6,7 @@
 """Base class for traced data types (tensors, arrays, etc.)."""
 
 from abc import ABC, abstractmethod
+import operator
 from typing import Any, Set, Optional
 
 from torch.fx.proxy import Proxy
@@ -120,7 +121,7 @@ class TracedData(ABC):
     
     @staticmethod
     def find_traced_data(obj):
-        """Find the first TracedData in obj (including nested in lists/tuples).
+        """Find the first TracedData in a supported nested structure.
         
         Args:
             obj: Object to search (can be TracedData, list, tuple, or other)
@@ -128,15 +129,37 @@ class TracedData(ABC):
         Returns:
             The first TracedData found, or None if not found
         """
-        if isinstance(obj, TracedData):
-            return obj
-        elif isinstance(obj, (list, tuple)):
-            for item in obj:
-                result = TracedData.find_traced_data(item)
-                if result is not None:
-                    return result
-        return None
+        found = None
+
+        def visit(item):
+            nonlocal found
+            if found is None and isinstance(item, TracedData):
+                found = item
+            return item
+
+        TracedData._map_structure(obj, visit)
+        return found
     
+    @staticmethod
+    def _map_structure(obj, leaf_fn):
+        """Recursively apply leaf_fn while preserving common containers."""
+        if isinstance(obj, slice):
+            return slice(
+                TracedData._map_structure(obj.start, leaf_fn),
+                TracedData._map_structure(obj.stop, leaf_fn),
+                TracedData._map_structure(obj.step, leaf_fn),
+            )
+        if isinstance(obj, (list, tuple)):
+            return type(obj)(
+                TracedData._map_structure(item, leaf_fn) for item in obj
+            )
+        if isinstance(obj, dict):
+            return {
+                key: TracedData._map_structure(value, leaf_fn)
+                for key, value in obj.items()
+            }
+        return leaf_fn(obj)
+
     @staticmethod
     def unwrap_traced_data(obj):
         """Recursively unwrap TracedData to get raw values.
@@ -147,13 +170,10 @@ class TracedData(ABC):
         Returns:
             The unwrapped value with all TracedData replaced by their raw values
         """
-        if isinstance(obj, TracedData):
-            return obj.data
-        elif isinstance(obj, (list, tuple)):
-            return type(obj)(TracedData.unwrap_traced_data(item) for item in obj)
-        elif isinstance(obj, dict):
-            return {k: TracedData.unwrap_traced_data(v) for k, v in obj.items()}
-        return obj
+        return TracedData._map_structure(
+            obj,
+            lambda item: item.data if isinstance(item, TracedData) else item,
+        )
     
     @staticmethod
     def find_all_contexts(obj, contexts: Optional[Set[str]] = None) -> Set[str]:
@@ -168,14 +188,13 @@ class TracedData(ABC):
         """
         if contexts is None:
             contexts = set()
-        if isinstance(obj, TracedData) and obj.is_tracing:
-            contexts.add(obj.context)
-        elif isinstance(obj, (list, tuple)):
-            for item in obj:
-                TracedData.find_all_contexts(item, contexts)
-        elif isinstance(obj, dict):
-            for v in obj.values():
-                TracedData.find_all_contexts(v, contexts)
+
+        def collect(item):
+            if isinstance(item, TracedData) and item.is_tracing:
+                contexts.add(item.context)
+            return item
+
+        TracedData._map_structure(obj, collect)
         return contexts
     
     @staticmethod
@@ -188,13 +207,10 @@ class TracedData(ABC):
         Returns:
             Object with TracedData replaced by their proxies
         """
-        if isinstance(obj, TracedData):
-            return obj.proxy
-        elif isinstance(obj, (list, tuple)):
-            return type(obj)(TracedData.extract_proxy(item) for item in obj)
-        elif isinstance(obj, dict):
-            return {k: TracedData.extract_proxy(v) for k, v in obj.items()}
-        return obj
+        return TracedData._map_structure(
+            obj,
+            lambda item: item.proxy if isinstance(item, TracedData) else item,
+        )
     
     # =========================================================================
     # Common Validation
@@ -295,77 +311,151 @@ class TracedData(ABC):
     # Setitem Proxy Generation
     # =========================================================================
     
-    def _create_setitem_proxy(self, key, value_proxy):
-        """Create proxy for __setitem__ using functional torch operations.
-        
-        Converts indexed assignment to torch.index_put for graph compatibility.
-        This is shared logic that both TracedTensor and TracedNpArray can use.
-        
-        Args:
-            key: The indexing key (int, slice, tuple)
-            value_proxy: Proxy for the value, or a constant value
-            
-        Returns:
-            New proxy representing the modified tensor, or None if unsupported
+    def _register_setitem_tensor(self, value: torch.Tensor, prefix: str):
+        """Register a tensor constant and return its get_attr proxy."""
+        attr_base = f"{prefix}_{id(value)}"
+        attr_name = attr_base
+        suffix = 1
+        while hasattr(self._context.tracer.root, attr_name):
+            attr_name = f"{attr_base}_{suffix}"
+            suffix += 1
+        self._context.tracer.root.register_buffer(
+            attr_name, value.clone().detach()
+        )
+        return self._context.tracer.create_proxy(
+            "get_attr", attr_name, (), {}
+        )
+
+    @staticmethod
+    def _tensor_index_key(key):
+        """Replace traced indices with their torch graph-time values."""
+        return TracedData._map_structure(
+            key,
+            lambda item: item.tensor if isinstance(item, TracedData) else item,
+        )
+
+    def _proxy_index_key(self, key):
+        """Replace tensor indices with graph values or registered constants."""
+        def convert(item):
+            if isinstance(item, TracedData):
+                return item.proxy
+            if isinstance(item, torch.Tensor):
+                return self._register_setitem_tensor(item, "_setitem_key")
+            return item
+
+        return TracedData._map_structure(key, convert)
+
+    @staticmethod
+    def _is_supported_index_key(key):
+        """Return whether key can be lowered through the flat-index pipeline."""
+        if isinstance(key, TracedData):
+            return key.tensor.dtype in (torch.bool, torch.int32, torch.int64)
+        if isinstance(key, torch.Tensor):
+            return key.dtype in (torch.bool, torch.int32, torch.int64)
+        if isinstance(key, (list, tuple)):
+            return all(TracedData._is_supported_index_key(item) for item in key)
+        if isinstance(key, slice):
+            for bound in (key.start, key.stop, key.step):
+                if bound is None or isinstance(bound, int):
+                    continue
+                if isinstance(bound, TracedData):
+                    bound = bound.tensor
+                if not isinstance(bound, torch.Tensor) or bound.ndim != 0:
+                    return False
+                try:
+                    operator.index(bound)
+                except TypeError:
+                    return False
+            return True
+        return key is None or key is Ellipsis or isinstance(key, int)
+
+    def _create_getitem_proxy(self, key):
+        """Create a functional getitem proxy for a supported index key."""
+        if not self._is_supported_index_key(key):
+            return None
+        return self._context.tracer.create_proxy(
+            "call_function", operator.getitem,
+            (self._proxy, self._proxy_index_key(key)), {}
+        )
+
+    def _create_setitem_proxy(self, key, value_proxy, real_value=None):
+        """Lower indexed assignment to one functional flat ``index_put``.
+
+        Destination tracing, source tracing, and index kind are deliberately
+        independent here. Static indices become constant flat positions;
+        traced integer or boolean indices select positions inside the graph.
         """
-        # Convert full slice [:] to slice(0, None, 1) for uniform handling
-        # We always use index_put to maintain connection to self._proxy in the graph
-        if key == slice(None) or (isinstance(key, tuple) and all(k == slice(None) for k in key)):
-            key = slice(0, None, 1)  # Convert to explicit slice for index_put handling
-        
-        # Single index: x[i] = v → index_put(x, (tensor([i]),), v)
-        if isinstance(key, int):
+        if not self._is_supported_index_key(key):
+            return None
+
+        destination = self.tensor
+        tensor_shape = tuple(destination.shape)
+        real_key = self._tensor_index_key(key)
+        target_shape = tuple(destination[real_key].shape)
+
+        flat_positions = torch.arange(
+            destination.numel(), dtype=torch.long, device=destination.device
+        ).reshape(tensor_shape)
+        if TracedData.find_traced_data(key) is None:
+            flat_indices = flat_positions[real_key].reshape(-1)
+            indices_proxy = self._register_setitem_tensor(
+                flat_indices, "_setitem_indices"
+            )
+        else:
+            positions_proxy = self._register_setitem_tensor(
+                flat_positions, "_setitem_positions"
+            )
+            selected_proxy = self._context.tracer.create_proxy(
+                "call_function", operator.getitem,
+                (positions_proxy, self._proxy_index_key(key)), {}
+            )
             indices_proxy = self._context.tracer.create_proxy(
-                "call_function", torch.tensor, ([key],), {"dtype": torch.long}
+                "call_method", "reshape", (selected_proxy, (-1,)), {}
             )
-            if not isinstance(value_proxy, Proxy):
-                value_tensor_proxy = self._context.tracer.create_proxy(
-                    "call_function", torch.tensor, ([value_proxy],), {}
-                )
-            else:
-                # Reshape to ensure 1D for index_put
-                value_tensor_proxy = self._context.tracer.create_proxy(
-                    "call_method", "reshape", (value_proxy, (-1,)), {}
-                )
-            return self._context.tracer.create_proxy(
-                "call_function", torch.index_put,
-                (self._proxy, (indices_proxy,), value_tensor_proxy), {}
+
+        source_proxy = value_proxy
+        if not isinstance(source_proxy, Proxy):
+            source_tensor = torch.as_tensor(
+                real_value if real_value is not None else source_proxy,
+                dtype=destination.dtype,
+                device=destination.device,
             )
-        
-        # Slice: x[start:end:step] = v → index_put with arange indices
-        elif isinstance(key, slice):
-            start = key.start if key.start is not None else 0
-            end = key.stop
-            step = key.step if key.step is not None else 1
-            
-            if end is None:
-                # Use tensor size to determine end
-                size_proxy = self._context.tracer.create_proxy(
-                    "call_method", "size", (self._proxy, 0), {}
-                )
-                indices_proxy = self._context.tracer.create_proxy(
-                    "call_function", torch.arange,
-                    (start, size_proxy, step), {"dtype": torch.long}
-                )
-            else:
-                indices_proxy = self._context.tracer.create_proxy(
-                    "call_function", torch.arange,
-                    (start, end, step), {"dtype": torch.long}
-                )
-            
-            # Handle constant values - register as buffer for TorchScript compatibility
-            if not isinstance(value_proxy, Proxy):
-                value_tensor = torch.tensor(value_proxy) if not isinstance(value_proxy, torch.Tensor) else value_proxy
-                attr_name = f"_setitem_value_{id(value_tensor)}"
-                self._context.tracer.root.register_buffer(attr_name, value_tensor)
-                value_proxy = self._context.tracer.create_proxy(
-                    "get_attr", attr_name, (), {}
-                )
-            
-            return self._context.tracer.create_proxy(
-                "call_function", torch.index_put,
-                (self._proxy, (indices_proxy,), value_proxy), {}
+            if source_tensor.numel() != 1 and tuple(source_tensor.shape) != target_shape:
+                source_tensor = torch.broadcast_to(source_tensor, target_shape).clone()
+            source_proxy = self._register_setitem_tensor(
+                source_tensor, "_setitem_value"
             )
-        
-        # Unsupported key type - return None to signal caller should handle
-        return None
+        else:
+            source_numel = getattr(real_value, "numel", lambda: 1)()
+            if source_numel != 1 and tuple(getattr(real_value, "shape", ())) != target_shape:
+                source_proxy = self._context.tracer.create_proxy(
+                    "call_function", torch.broadcast_to,
+                    (source_proxy, target_shape), {}
+                )
+
+        source_proxy = self._context.tracer.create_proxy(
+            "call_method", "to", (source_proxy, self._proxy), {}
+        )
+        flat_source_proxy = self._context.tracer.create_proxy(
+            "call_method", "reshape", (source_proxy, (-1,)), {}
+        )
+        flat_destination_proxy = self._context.tracer.create_proxy(
+            "call_method", "reshape", (self._proxy, (-1,)), {}
+        )
+        updated_proxy = self._context.tracer.create_proxy(
+            "call_function", torch.index_put,
+            (flat_destination_proxy, (indices_proxy,), flat_source_proxy), {}
+        )
+        return self._context.tracer.create_proxy(
+            "call_method", "reshape", (updated_proxy, tensor_shape), {}
+        )
+
+    def _update_setitem_proxy(self, key, value_proxy, real_value=None):
+        """Record a functional assignment and install its resulting proxy."""
+        proxy_out = self._create_setitem_proxy(
+            key, value_proxy, real_value=real_value
+        )
+        if proxy_out is None:
+            return False
+        self._proxy = proxy_out
+        return True

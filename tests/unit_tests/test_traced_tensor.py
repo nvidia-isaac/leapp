@@ -18,7 +18,10 @@ import warnings
 from leapp.leapp_graph.traced_node import TracedTensorNode
 from leapp.leapp_graph.datatypes import TracedTensor
 
-from tests.unit_tests.export_format_validation import verify_exported_program
+from tests.unit_tests.export_format_validation import (
+    verify_exported_program,
+    verify_onnx_dynamo,
+)
 
 Tensor = torch.Tensor | TracedTensor
 
@@ -512,7 +515,16 @@ class TensorArithmeticFunctions:
 class TestTracedTensor(unittest.TestCase):
     """Test TracedTensor operations."""
 
-    def validate_export(self, graph_module, inputs, expected, test_name="test"):
+    def validate_export(
+        self,
+        graph_module,
+        inputs,
+        expected,
+        test_name="test",
+        *,
+        verify_legacy_onnx=True,
+        verify_dynamo_onnx=False,
+    ):
         """Validate graph_module execution across FX, TorchScript, and ONNX.
         
         Args:
@@ -543,28 +555,43 @@ class TestTracedTensor(unittest.TestCase):
             f"{test_name}: TorchScript output doesn't match expected"
         )
         
-        # Test 3: ONNX export
-        with tempfile.TemporaryDirectory() as tmpdir:
-            onnx_path = pathlib.Path(tmpdir) / f"{test_name}.onnx"
-            torch.onnx.export(
+        # Test 3: legacy ONNX export
+        if verify_legacy_onnx:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                onnx_path = pathlib.Path(tmpdir) / f"{test_name}.onnx"
+                torch.onnx.export(
+                    graph_module,
+                    inputs,
+                    onnx_path,
+                    dynamo=False,
+                    export_params=True,
+                    opset_version=17,
+                    input_names=input_names,
+                    output_names=["output"],
+                )
+                session = ort.InferenceSession(str(onnx_path))
+                onnx_inputs = {
+                    name: inp.numpy() for name, inp in zip(input_names, inputs)
+                }
+                output_onnx = session.run(None, onnx_inputs)[0]
+                self.assertTrue(
+                    torch.allclose(torch.from_numpy(output_onnx), expected, atol=1e-5),
+                    f"{test_name}: ONNX output doesn't match expected",
+                )
+
+        # Test 4: dynamo ONNX export
+        if verify_dynamo_onnx:
+            verify_onnx_dynamo(
+                self,
                 graph_module,
                 inputs,
-                onnx_path,
-                dynamo=False,
-                export_params=True,
-                opset_version=17,
+                expected,
+                test_name=test_name,
                 input_names=input_names,
-                output_names=['output'],
-            )
-            session = ort.InferenceSession(str(onnx_path))
-            onnx_inputs = {name: inp.numpy() for name, inp in zip(input_names, inputs)}
-            output_onnx = session.run(None, onnx_inputs)[0]
-            self.assertTrue(
-                torch.allclose(torch.from_numpy(output_onnx), expected, atol=1e-5),
-                f"{test_name}: ONNX output doesn't match expected"
+                output_names=["output"],
             )
 
-        # Test 4: ExportedProgram export
+        # Test 5: ExportedProgram export
         verify_exported_program(
             self, graph_module, inputs, expected, test_name=test_name)
 
@@ -2283,8 +2310,9 @@ class TestTracedTensor(unittest.TestCase):
         self.assertTrue(torch.allclose(x.tensor, expected))
 
     # ==================== Setitem Export Tests ====================
-    # These tests verify that setitem operations can be exported to FX, TorchScript, and ONNX
-    # by using functional equivalents (index_put, arange) instead of in-place __setitem__.
+    # These tests verify setitem lowering without raw __setitem__ nodes.
+    # Older 1-D cases still require legacy ONNX; newer tuple slice cases require
+    # export-first backends (dynamo ONNX and ExportedProgram) and may skip legacy ONNX.
 
     def test_setitem_single_index_fx_torchscript_onnx(self):
         """Test: x[0] = 10 exports correctly to FX, TorchScript, and ONNX."""
@@ -2343,12 +2371,12 @@ class TestTracedTensor(unittest.TestCase):
         self.validate_export(ctx.m, (input_tensor,), expected, "setitem_step")
 
     def test_setitem_with_traced_tensor_slice_fx_torchscript_onnx(self):
-        """Test: x[0] = 1.0 then x[2:4] = other[1:3] exports correctly."""
+        """Test traced integer and slice sources in one assignment chain exports correctly."""
         ctx = TracedTensorNode(name="test_setitem_cross_tensor", node_index=0)
         x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0]), name="x")
         other = ctx.create_input(torch.tensor([10.0, 20.0, 30.0, 40.0, 50.0]), name="other")
 
-        x[0] = 1.0
+        x[0] = other[4]
         x[2:4] = other[1:3]
         y = x * 2
 
@@ -2356,44 +2384,267 @@ class TestTracedTensor(unittest.TestCase):
 
         input_x = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
         input_other = torch.tensor([10.0, 20.0, 30.0, 40.0, 50.0])
-        # x after mutations: [1.0, 2.0, 20.0, 30.0, 5.0]
-        expected = torch.tensor([2.0, 4.0, 40.0, 60.0, 10.0])
+        # x after mutations: [50.0, 2.0, 20.0, 30.0, 5.0]
+        expected = torch.tensor([100.0, 4.0, 40.0, 60.0, 10.0])
         self.validate_export(ctx.m, (input_x, input_other), expected, "setitem_cross_tensor")
 
-    @pytest.mark.skip(reason="Tuple-of-slices keys are not lowered by _create_setitem_proxy(), so export is expected to fail until that lowering is implemented.")
-    def test_setitem_multidim_partial_slice_fx_torchscript_onnx(self):
-        """Test multi-dimensional partial slice assignment export.
-
-        This currently falls back to raw __setitem__ because tuple-of-slices
-        keys are not lowered by _create_setitem_proxy(), so export is expected
-        to fail until that lowering is implemented.
-        """
+    def test_setitem_multidim_partial_slice_fx_torchscript_dynamo_onnx(self):
+        """Test tuple slice setitem for export-first backends."""
         ctx = TracedTensorNode(name="test_setitem_multidim_partial_export", node_index=0)
         x = ctx.create_input(torch.arange(36.0).reshape(1, 6, 6), name="x")
         other = ctx.create_input(torch.arange(36.0, 72.0).reshape(1, 6, 6), name="other")
 
         x[:, 0:3, 0:3] = other[:, 0:3, 0:3]
-        y = x[:, 3:6, 3:6] * 2.0
+        y = x[:, 0:3, 0:3] * 2.0
 
         ctx.compile_trace({'y': y})
+
+        self.assertNotIn("__setitem__", str(ctx.m.graph))
 
         input_x = torch.arange(36.0).reshape(1, 6, 6)
         input_other = torch.arange(36.0, 72.0).reshape(1, 6, 6)
         expected = input_x.clone()
         expected[:, 0:3, 0:3] = input_other[:, 0:3, 0:3]
-        expected = expected[:, 3:6, 3:6] * 2.0
+        expected = expected[:, 0:3, 0:3] * 2.0
 
         self.validate_export(
             ctx.m,
             (input_x, input_other),
             expected,
             "setitem_multidim_partial",
+            verify_legacy_onnx=False,
+            verify_dynamo_onnx=True,
+        )
+
+    def test_setitem_multidim_partial_imul_fx_torchscript_dynamo_onnx(self):
+        """Test OSC-style partial slice augmented assignment for export-first backends."""
+        ctx = TracedTensorNode(name="test_setitem_multidim_imul", node_index=0)
+        x = ctx.create_input(torch.arange(13.0).reshape(1, 13), name="x")
+
+        x[:, 0:3] *= 0.1
+        x[:, 3:7] *= 0.5
+        x[:, 7:13] *= 100.0
+        y = x + 1.0
+
+        ctx.compile_trace({'y': y})
+
+        self.assertNotIn("__setitem__", str(ctx.m.graph))
+
+        input_x = torch.arange(13.0).reshape(1, 13)
+        scale = torch.tensor([0.1] * 3 + [0.5] * 4 + [100.0] * 6)
+        expected = input_x * scale + 1.0
+        self.validate_export(
+            ctx.m,
+            (input_x,),
+            expected,
+            "setitem_multidim_imul",
+            verify_legacy_onnx=False,
+            verify_dynamo_onnx=True,
+        )
+
+    def test_setitem_integer_step_slice_scalar_fx_torchscript_dynamo_onnx(self):
+        """Test tuple integer/slice setitem without requiring legacy ONNX."""
+        ctx = TracedTensorNode(name="test_setitem_integer_slice", node_index=0)
+        x = ctx.create_input(torch.arange(15.0).reshape(3, 5), name="x")
+
+        x[1, 1:5:2] = 9.0
+        y = x * 2.0
+
+        ctx.compile_trace({'y': y})
+
+        self.assertNotIn("__setitem__", str(ctx.m.graph))
+
+        input_x = torch.arange(15.0).reshape(3, 5)
+        expected = input_x.clone()
+        expected[1, 1:5:2] = 9.0
+        expected *= 2.0
+        self.validate_export(
+            ctx.m,
+            (input_x,),
+            expected,
+            "setitem_integer_step_slice_scalar",
+            verify_legacy_onnx=False,
+            verify_dynamo_onnx=True,
+        )
+
+    def test_setitem_tuple_slice_from_constant_tensor(self):
+        """A traced destination accepts a sliced plain-tensor source."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.arange(12.0).reshape(3, 4), name="x")
+        source = torch.arange(20.0, 32.0).reshape(3, 4)
+
+        x[0:2, 1:3] = source[1:3, 0:2]
+        y = x + 1.0
+        ctx.compile_trace({"y": y})
+        self.assertNotIn("__setitem__", str(ctx.m.graph))
+
+        input_x = torch.arange(40.0, 52.0).reshape(3, 4)
+        expected = input_x.clone()
+        expected[0:2, 1:3] = source[1:3, 0:2]
+        expected += 1.0
+        self.validate_export(
+            ctx.m,
+            (input_x,),
+            expected,
+            "setitem_tuple_slice_constant_source",
+            verify_legacy_onnx=False,
+            verify_dynamo_onnx=True,
+        )
+
+    def test_plain_destination_integer_from_traced_integer(self):
+        """plain[int] = traced[int] promotes and records the partial update."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+
+        buf = torch.full((4,), -1.0)
+        buf[2] = x[1]
+        self.assertIsInstance(buf, TracedTensor)
+        y = buf * 2.0
+        ctx.compile_trace({"y": y})
+
+        input_x = torch.tensor([5.0, 6.0, 7.0])
+        expected = torch.tensor([-2.0, -2.0, 12.0, -2.0])
+        self.validate_export(
+            ctx.m,
+            (input_x,),
+            expected,
+            "plain_destination_integer",
+            verify_legacy_onnx=False,
+            verify_dynamo_onnx=True,
+        )
+
+    def test_getitem_with_traced_slice_bounds(self):
+        """Traced 0-D integer slice bounds remain runtime graph inputs."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.arange(12.0).reshape(2, 6), name="x")
+        start = ctx.create_input(torch.tensor(1), name="start")
+        stop = ctx.create_input(torch.tensor(4), name="stop")
+
+        y = x[:, start:stop] * 2.0
+        ctx.compile_trace({"y": y})
+
+        input_x = torch.arange(12.0, 24.0).reshape(2, 6)
+        input_start = torch.tensor(2)
+        input_stop = torch.tensor(6)
+        expected = input_x[:, input_start:input_stop] * 2.0
+        self.validate_export(
+            ctx.m,
+            (input_x, input_start, input_stop),
+            expected,
+            "getitem_traced_slice_bounds",
+            verify_legacy_onnx=False,
+            verify_dynamo_onnx=True,
+        )
+
+    def test_augmented_setitem_with_traced_slice_bounds(self):
+        """Dynamic scalar slice bounds work through getitem and writeback."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.arange(12.0).reshape(2, 6), name="x")
+        start = ctx.create_input(torch.tensor(1), name="start")
+        stop = ctx.create_input(torch.tensor(4), name="stop")
+
+        x[:, start:stop] *= 3.0
+        y = x + 1.0
+        ctx.compile_trace({"y": y})
+        self.assertNotIn("__setitem__", str(ctx.m.graph))
+
+        input_x = torch.arange(12.0, 24.0).reshape(2, 6)
+        input_start = torch.tensor(2)
+        input_stop = torch.tensor(6)
+        expected = input_x.clone()
+        expected[:, input_start:input_stop] *= 3.0
+        expected += 1.0
+        self.validate_export(
+            ctx.m,
+            (input_x, input_start, input_stop),
+            expected,
+            "augmented_setitem_traced_slice_bounds",
+            verify_legacy_onnx=False,
+            verify_dynamo_onnx=True,
+        )
+
+    def test_setitem_with_traced_integer_index(self):
+        """Mixed slices and a traced integer index use the common lowering."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.arange(8.0).reshape(2, 4), name="x")
+        index = ctx.create_input(torch.tensor([1, 3]), name="index")
+        source = ctx.create_input(torch.tensor([[20.0, 30.0], [40.0, 50.0]]), name="source")
+
+        x[:, index] = source
+        y = x * 2.0
+        ctx.compile_trace({"y": y})
+        self.assertNotIn("__setitem__", str(ctx.m.graph))
+
+        input_x = torch.arange(8.0).reshape(2, 4)
+        input_index = torch.tensor([0, 2])
+        input_source = torch.tensor([[10.0, 11.0], [12.0, 13.0]])
+        expected = input_x.clone()
+        expected[:, input_index] = input_source
+        expected *= 2.0
+        self.validate_export(
+            ctx.m,
+            (input_x, input_index, input_source),
+            expected,
+            "setitem_traced_integer_index",
+            verify_legacy_onnx=False,
+            verify_dynamo_onnx=True,
+        )
+
+    def test_setitem_with_traced_boolean_mask(self):
+        """A traced boolean mask supports scalar assignment."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.arange(5.0), name="x")
+        mask = ctx.create_input(
+            torch.tensor([True, False, True, False, False]), name="mask"
+        )
+
+        x[mask] = 9.0
+        y = x + 1.0
+        ctx.compile_trace({"y": y})
+        self.assertNotIn("__setitem__", str(ctx.m.graph))
+
+        input_x = torch.arange(5.0)
+        input_mask = torch.tensor([False, True, False, True, True])
+        expected = input_x.clone()
+        expected[input_mask] = 9.0
+        expected += 1.0
+        self.validate_export(
+            ctx.m,
+            (input_x, input_mask),
+            expected,
+            "setitem_traced_boolean_mask",
+            verify_legacy_onnx=False,
+            verify_dynamo_onnx=True,
         )
         
-    # ==================== Class Swap: plain_tensor[:] = TracedTensor ====================
-    # When a plain torch.Tensor is the target of a full-slice assignment or
-    # copy_() with a TracedTensor source, the plain tensor is silently upgraded
-    # to a TracedTensor so subsequent operations continue the FX trace.
+    def test_plain_destination_with_traced_index(self):
+        """A traced key alone is enough to promote a plain destination."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        index = ctx.create_input(torch.tensor([0, 2]), name="index")
+
+        buf = torch.full((4,), -1.0)
+        buf[index] = 5.0
+        self.assertIsInstance(buf, TracedTensor)
+        y = buf + 1.0
+        ctx.compile_trace({"y": y})
+
+        input_index = torch.tensor([1, 3])
+        expected = torch.full((4,), -1.0)
+        expected[input_index] = 5.0
+        expected += 1.0
+        self.validate_export(
+            ctx.m,
+            (input_index,),
+            expected,
+            "plain_destination_traced_index",
+            verify_legacy_onnx=False,
+            verify_dynamo_onnx=True,
+        )
+
+    # ==================== Plain-destination assignment promotion ====================
+    # A plain tensor is promoted when its assignment depends on a traced source
+    # or traced index. Full replacement may reuse the source proxy; partial
+    # replacement starts from a registered snapshot of the original destination.
 
     def test_class_swap_full_slice(self):
         """plain_buf[:] = traced upgrades buf and continues the trace."""
@@ -2482,15 +2733,31 @@ class TestTracedTensor(unittest.TestCase):
         expected = input_tensor * 3.0 + 10.0
         self.validate_export(ctx.m, (input_tensor,), expected, "class_swap_chained")
 
-    def test_class_swap_does_not_fire_for_partial_slice(self):
-        """Partial slice buf[0:2] = traced should NOT upgrade buf."""
+    def test_plain_destination_partial_slice_promotes_and_exports(self):
+        """A partial write promotes a plain buffer and preserves untouched data."""
         ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+        x = ctx.create_input(torch.arange(8.0).reshape(2, 4), name="x")
 
-        buf = torch.zeros(3)
-        buf[0:2] = x[0:2]
+        buf = torch.full((2, 4), -1.0)
+        buf[:, 1:3] = x[:, 0:2]
 
-        self.assertNotIsInstance(buf, TracedTensor)
+        self.assertIsInstance(buf, TracedTensor)
+        y = buf * 2.0
+        ctx.compile_trace({"y": y})
+        self.assertNotIn("__setitem__", str(ctx.m.graph))
+
+        input_x = torch.arange(8.0, 16.0).reshape(2, 4)
+        expected = torch.full((2, 4), -1.0)
+        expected[:, 1:3] = input_x[:, 0:2]
+        expected *= 2.0
+        self.validate_export(
+            ctx.m,
+            (input_x,),
+            expected,
+            "plain_destination_partial_slice",
+            verify_legacy_onnx=False,
+            verify_dynamo_onnx=True,
+        )
 
     def test_class_swap_does_not_fire_for_traced_target(self):
         """When target is already a TracedTensor, the existing __setitem__ handles it."""
@@ -2510,35 +2777,73 @@ class TestTracedTensor(unittest.TestCase):
         output = ctx.m(input_x, input_y)
         self.assertTrue(torch.allclose(output, expected))
 
-    # ==================== Unsupported Operation error message ====================
-    def test_tuple_boolean_indexing_with_traced_mask_raises_error(self):
-        """Test that tuple boolean indexing with TracedTensor remains unsupported."""
+    # ==================== Mixed traced-index augmented assignment ====================
+    def test_tuple_traced_boolean_mask_augmented_assignment(self):
+        """x[:, mask] *= scalar lowers as getitem, multiply, then setitem."""
         ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(torch.tensor([[1.0, 2.0], [3.0, 4.0]]), name="x")
-        mask = ctx.create_input(torch.tensor([True, False]), name="mask")
+        x = ctx.create_input(torch.arange(8.0).reshape(2, 4), name="x")
+        mask = ctx.create_input(
+            torch.tensor([True, False, True, False]), name="mask"
+        )
 
-        with self.assertRaises(NotImplementedError) as context:
-            _ = x[:, mask]
+        x[:, mask] *= 3.0
+        y = x + 1.0
+        ctx.compile_trace({"y": y})
+        self.assertNotIn("__setitem__", str(ctx.m.graph))
 
-        error_msg = str(context.exception)
-        self.assertIn("Boolean/mask indexing", error_msg)
-        self.assertIn("not supported", error_msg)
-        self.assertIn("masked_select", error_msg)
+        input_x = torch.arange(8.0).reshape(2, 4)
+        input_mask = torch.tensor([False, True, False, True])
+        expected = input_x.clone()
+        expected[:, input_mask] *= 3.0
+        expected += 1.0
+        self.validate_export(
+            ctx.m,
+            (input_x, input_mask),
+            expected,
+            "tuple_traced_mask_augmented_assignment",
+            verify_legacy_onnx=False,
+            verify_dynamo_onnx=True,
+        )
 
-    def test_tuple_advanced_indexing_with_traced_indices_raises_error(self):
-        """Test that tuple advanced indexing with TracedTensor indices remains unsupported."""
+    def test_tuple_traced_integer_index_augmented_assignment(self):
+        """x[:, indices] += source reuses existing iadd and setitem handling."""
         ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(torch.tensor(
-            [[10.0, 20.0, 30.0], [40.0, 50.0, 60.0]]), name="x")
-        indices = ctx.create_input(torch.tensor([0, 2], dtype=torch.long), name="indices")
+        x = ctx.create_input(torch.arange(8.0).reshape(2, 4), name="x")
+        indices = ctx.create_input(torch.tensor([0, 2]), name="indices")
+        source = ctx.create_input(
+            torch.tensor([[10.0, 20.0], [30.0, 40.0]]), name="source"
+        )
 
-        with self.assertRaises(NotImplementedError) as context:
-            _ = x[:, indices]
+        x[:, indices] += source
+        y = x * 2.0
+        ctx.compile_trace({"y": y})
+        self.assertNotIn("__setitem__", str(ctx.m.graph))
 
-        error_msg = str(context.exception)
-        self.assertIn("Advanced indexing", error_msg)
-        self.assertIn("not supported", error_msg)
-        self.assertIn("torch.index_select", error_msg)
+        input_x = torch.arange(8.0).reshape(2, 4)
+        input_indices = torch.tensor([1, 3])
+        input_source = torch.tensor([[5.0, 6.0], [7.0, 8.0]])
+        expected = input_x.clone()
+        expected[:, input_indices] += input_source
+        expected *= 2.0
+        self.validate_export(
+            ctx.m,
+            (input_x, input_indices, input_source),
+            expected,
+            "tuple_traced_index_augmented_assignment",
+            verify_legacy_onnx=False,
+            verify_dynamo_onnx=True,
+        )
+
+    def test_tuple_unsupported_traced_index_raises_not_implemented(self):
+        """Unsupported mixed traced keys use LEAPP fatal with a stable type."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.arange(6.0).reshape(2, 3), name="x")
+        index = ctx.create_input(torch.tensor([0.0, 1.0]), name="index")
+
+        with self.assertRaisesRegex(
+            NotImplementedError, "Mixed traced indexing supports"
+        ):
+            _ = x[:, index]
 
     # ==================== TorchScript Module Interaction Tests ====================
     def test_tracing_through_torchscript_module(self):

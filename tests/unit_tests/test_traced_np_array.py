@@ -19,7 +19,10 @@ import torch
 from leapp.leapp_graph.traced_node import TracedTensorNode
 from leapp.leapp_graph.datatypes import TracedNpArray
 
-from tests.unit_tests.export_format_validation import verify_exported_program
+from tests.unit_tests.export_format_validation import (
+    verify_exported_program,
+    verify_onnx_dynamo,
+)
 
 Array = np.ndarray | TracedNpArray
 
@@ -1432,6 +1435,110 @@ class TestCompiledGraphExecution(unittest.TestCase):
         
         expected = np.array([20.0, 4.0, 60.0, 8.0, 100.0])
         self._test_setitem("setitem_step", input_data, setitem_func, expected)
+
+
+    def _validate_dynamic_setitem(self, graph_module, inputs, expected, test_name):
+        """Validate export-first backends for traced NumPy index inputs."""
+        actual = graph_module(*inputs)
+        self.assertTrue(torch.allclose(actual, expected, atol=1e-5))
+
+        scripted = torch.jit.script(graph_module)
+        scripted_actual = scripted(*inputs)
+        self.assertTrue(torch.allclose(scripted_actual, expected, atol=1e-5))
+
+        verify_onnx_dynamo(
+            self, graph_module, inputs, expected, test_name=test_name
+        )
+        verify_exported_program(
+            self, graph_module, inputs, expected, test_name=test_name
+        )
+
+    def test_setitem_traced_integer_index_augmented_assignment(self):
+        """NumPy x[:, indices] += source uses shared getitem/setitem lowering."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(
+            np.arange(8, dtype=np.float32).reshape(2, 4), name="x"
+        )
+        indices = ctx.create_input(
+            np.array([0, 2], dtype=np.int64), name="indices"
+        )
+        source = ctx.create_input(
+            np.array([[10.0, 20.0], [30.0, 40.0]], dtype=np.float32),
+            name="source",
+        )
+
+        x[:, indices] += source
+        result = x * 2.0
+        ctx.compile_trace({"result": result})
+        self.assertNotIn("__setitem__", str(ctx.m.graph))
+
+        input_x = torch.arange(8, dtype=torch.float32).reshape(2, 4)
+        input_indices = torch.tensor([1, 3], dtype=torch.int64)
+        input_source = torch.tensor([[5.0, 6.0], [7.0, 8.0]])
+        expected = input_x.clone()
+        expected[:, input_indices] += input_source
+        expected *= 2.0
+        self._validate_dynamic_setitem(
+            ctx.m,
+            (input_x, input_indices, input_source),
+            expected,
+            "numpy_traced_integer_augmented_assignment",
+        )
+
+    def test_setitem_traced_boolean_mask_augmented_assignment(self):
+        """NumPy x[:, mask] *= scalar uses shared getitem/setitem lowering."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(
+            np.arange(8, dtype=np.float32).reshape(2, 4), name="x"
+        )
+        mask = ctx.create_input(
+            np.array([True, False, True, False]), name="mask"
+        )
+
+        x[:, mask] *= 3.0
+        result = x + 1.0
+        ctx.compile_trace({"result": result})
+        self.assertNotIn("__setitem__", str(ctx.m.graph))
+
+        input_x = torch.arange(8, dtype=torch.float32).reshape(2, 4)
+        input_mask = torch.tensor([False, True, False, True])
+        expected = input_x.clone()
+        expected[:, input_mask] *= 3.0
+        expected += 1.0
+        self._validate_dynamic_setitem(
+            ctx.m,
+            (input_x, input_mask),
+            expected,
+            "numpy_traced_mask_augmented_assignment",
+        )
+
+    def test_setitem_traced_index_plain_numpy_source(self):
+        """A traced NumPy destination accepts a constant ndarray source."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(
+            np.arange(8, dtype=np.float32).reshape(2, 4), name="x"
+        )
+        indices = ctx.create_input(
+            np.array([0, 2], dtype=np.int64), name="indices"
+        )
+        source = np.array([[11.0, 12.0], [13.0, 14.0]], dtype=np.float32)
+
+        x[:, indices] = source
+        result = x - 1.0
+        ctx.compile_trace({"result": result})
+        self.assertNotIn("__setitem__", str(ctx.m.graph))
+
+        input_x = torch.arange(8, dtype=torch.float32).reshape(2, 4)
+        input_indices = torch.tensor([1, 3], dtype=torch.int64)
+        expected = input_x.clone()
+        expected[:, input_indices] = torch.from_numpy(source)
+        expected -= 1.0
+        self._validate_dynamic_setitem(
+            ctx.m,
+            (input_x, input_indices),
+            expected,
+            "numpy_traced_index_plain_source",
+        )
 
 
 if __name__ == "__main__":

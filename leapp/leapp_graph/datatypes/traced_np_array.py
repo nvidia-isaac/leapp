@@ -316,14 +316,8 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
 
     @staticmethod
     def unwrap_traced_array(obj):
-        """Recursively unwrap TracedNpArrays to get underlying numpy arrays."""
-        if isinstance(obj, TracedData):
-            return obj.data
-        elif isinstance(obj, (list, tuple)):
-            return type(obj)(TracedNpArray.unwrap_traced_array(item) for item in obj)
-        elif isinstance(obj, dict):
-            return {k: TracedNpArray.unwrap_traced_array(v) for k, v in obj.items()}
-        return obj
+        """Recursively unwrap traced data to native values."""
+        return TracedData.unwrap_traced_data(obj)
 
     @staticmethod
     def find_traced_array(obj):
@@ -352,19 +346,15 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
                 TracedNpArray.find_all_contexts(v, contexts)
         return contexts
     def _extract_proxy(self, obj):
-        """Recursively extract proxies for graph recording."""
-        if isinstance(obj, TracedNpArray):
-            return obj.proxy
-        elif isinstance(obj, TracedData):
-            return obj.proxy
-        elif isinstance(obj, np.ndarray):
-            # Convert numpy array to torch tensor for the graph
-            return torch.from_numpy(obj.copy())
-        elif isinstance(obj, (list, tuple)):
-            return type(obj)(self._extract_proxy(item) for item in obj)
-        elif isinstance(obj, dict):
-            return {k: self._extract_proxy(v) for k, v in obj.items()}
-        return obj
+        """Recursively extract proxies and convert constant NumPy arrays."""
+        def convert(item):
+            if isinstance(item, TracedData):
+                return item.proxy
+            if isinstance(item, np.ndarray):
+                return torch.from_numpy(item.copy())
+            return item
+
+        return TracedData._map_structure(obj, convert)
 
     def _convert_numpy_kwargs_to_torch(self, proxy_kwargs, torch_func, original_kwargs=None, args=None):
         """Convert numpy kwargs to torch kwargs.
@@ -770,58 +760,32 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
 
     def __getitem__(self, key):
         """Handle array indexing."""
-        # Get result from underlying array
-        result = self.view(np.ndarray)[key]
+        real_key = TracedData.unwrap_traced_data(key)
+        result = self.view(np.ndarray)[real_key]
 
-        if not self.validate_status():
+        if not self.validate_status(args=(key,)):
             return result
 
-        # Record indexing in graph
-        proxy_key = self._extract_proxy(key) if not isinstance(key, (slice, type(None))) else key
-        proxy_out = self._context.tracer.create_proxy(
-            "call_function", operator.getitem, (self.proxy, proxy_key), {}
-        )
+        proxy_out = self._create_getitem_proxy(key)
+        if proxy_out is None:
+            proxy_key = self._extract_proxy(key)
+            proxy_out = self._context.tracer.create_proxy(
+                "call_function", operator.getitem,
+                (self.proxy, proxy_key), {}
+            )
 
         if isinstance(result, np.ndarray):
             return self._new(result, proxy_out)
         return result
 
-    def __setitem__(self, key, value):
-        """Indexed assignment using functional operations for graph compatibility.
-        
-        Uses the shared _create_setitem_proxy helper from TracedData to convert
-        __setitem__ to torch.index_put for FX/TorchScript/ONNX compatibility.
-        """
-        # Unwrap value if it's a TracedNpArray
-        unwrapped_value = TracedNpArray.unwrap_traced_array(value)
-        
-        # Perform the actual assignment on the underlying array
-        self.view(np.ndarray)[key] = unwrapped_value
+    def _record_assignment(self, key, value, real_value):
+        """Record one functional assignment and update this object's proxy."""
+        value_proxy = value.proxy if isinstance(value, TracedData) else value
+        if self._update_setitem_proxy(
+            key, value_proxy, real_value=real_value
+        ):
+            return True
 
-        # Skip tracing if context is not tracing
-        if not self.validate_status():
-            return
-
-        # Extract proxy from value if it's a TracedNpArray, or convert to tensor for graph
-        if isinstance(value, TracedNpArray):
-            value_proxy = value.proxy
-        elif isinstance(value, np.ndarray):
-            # Convert numpy array to torch tensor in graph
-            value_proxy = self._context.tracer.create_proxy(
-                "call_function", torch.as_tensor, (value.tolist(),), {}
-            )
-        else:
-            # Scalar or list - will be handled by _create_setitem_proxy
-            value_proxy = value
-
-        # Use shared helper to create the proxy
-        proxy_out = self._create_setitem_proxy(key, value_proxy)
-        
-        if proxy_out is not None:
-            self._proxy = proxy_out
-            return
-        
-        # Handle unsupported cases with warnings
         if isinstance(key, tuple):
             if all(isinstance(k, int) for k in key):
                 _get_logger().warning(
@@ -838,11 +802,26 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
                 f"Indexing with {type(key).__name__} in setitem may not export correctly. "
                 "Consider using functional operations instead."
             )
-        
-        # Fallback: record __setitem__ directly (may not export)
-        self._proxy = self._context.tracer.create_proxy(
-            "call_method", "__setitem__", (self._proxy, key, value_proxy), {}
-        )
+        return False
+
+    def __setitem__(self, key, value):
+        """Indexed assignment with functional ``index_put`` lowering.
+
+        Plain ``np.ndarray`` destinations cannot be promoted into
+        ``TracedNpArray``; the destination must already be traced.
+        """
+        real_key = TracedData.unwrap_traced_data(key)
+        real_value = TracedNpArray.unwrap_traced_array(value)
+        self.view(np.ndarray)[real_key] = real_value
+
+        if not self.validate_status(args=(key, value)):
+            return
+
+        if not self._record_assignment(key, value, real_value):
+            value_proxy = value.proxy if isinstance(value, TracedData) else value
+            self._proxy = self._context.tracer.create_proxy(
+                "call_method", "__setitem__", (self._proxy, key, value_proxy), {}
+            )
 
     # =========================================================================
     # Array Methods (delegate to numpy functions)
