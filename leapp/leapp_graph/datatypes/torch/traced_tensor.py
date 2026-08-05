@@ -130,6 +130,10 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         intermediate_name = self._name_from_proxy(proxy)
         return TracedTensor(tensor, intermediate_name, self._context, proxy)
 
+    def _promote_inactive_result(self, result):
+        from leapp.leapp_graph.datatypes import promote_traced_result
+        return promote_traced_result(result, self)
+
     # =========================================================================
     # Static Methods
     # =========================================================================
@@ -524,9 +528,12 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             and cls._safe_tensor_version(real_receiver) != receiver_version
         )
 
-        # Skip tracing if context is not tracing - return raw tensors
+        # Inactive contexts keep tensor-valued results promoted without
+        # recording additional FX operations.
         if not traced_tensor.validate_status(args, kwargs):
-            return tensor_out
+            if receiver_was_mutated and receiver is not None:
+                return receiver
+            return traced_tensor._promote_inactive_result(tensor_out)
 
         # ================== SPECIAL CASES IN HANDLING ==================
         handled, result = cls._handle_scripted_call(
@@ -625,7 +632,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                         method = getattr(underlying, name, None)
                         if method is not None:
                             method(*TracedData.unwrap_traced_data(args), **TracedData.unwrap_traced_data(kwargs))
-                        return underlying
+                        return self
 
                     # Record as functional operation
                     result = torch_func(self, *args, **kwargs)
@@ -663,9 +670,8 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                     result = attr(*args, **kwargs)
                     # If result is a tensor, wrap it in TracedTensor
                     if isinstance(result, torch.Tensor):
-                        # Skip tracing if context is not tracing - return raw tensor
                         if not self.validate_status():
-                            return result
+                            return self._promote_inactive_result(result)
                         # Create a proxy node for this operation
                         proxy = self._proxy._tracer.create_proxy(
                             'call_method', name, (self._proxy,) + args, kwargs)
@@ -777,7 +783,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             unwrapped = TracedData.unwrap_traced_data(other)
             underlying = self.as_subclass(torch.Tensor)
             underlying.add_(unwrapped)
-            return underlying
+            return self
 
         # Record as functional operation in graph
         result = torch.add(self, other)
@@ -796,7 +802,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             unwrapped = TracedData.unwrap_traced_data(other)
             underlying = self.as_subclass(torch.Tensor)
             underlying.sub_(unwrapped)
-            return underlying
+            return self
 
         result = torch.sub(self, other)
         with torch.no_grad():
@@ -811,7 +817,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             unwrapped = TracedData.unwrap_traced_data(other)
             underlying = self.as_subclass(torch.Tensor)
             underlying.mul_(unwrapped)
-            return underlying
+            return self
 
         result = torch.mul(self, other)
         with torch.no_grad():
@@ -826,7 +832,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             unwrapped = TracedData.unwrap_traced_data(other)
             underlying = self.as_subclass(torch.Tensor)
             underlying.div_(unwrapped)
-            return underlying
+            return self
 
         result = torch.div(self, other)
         with torch.no_grad():
@@ -841,7 +847,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             unwrapped = TracedData.unwrap_traced_data(other)
             underlying = self.as_subclass(torch.Tensor)
             underlying.pow_(unwrapped)
-            return underlying
+            return self
 
         result = torch.pow(self, other)
         with torch.no_grad():
@@ -858,7 +864,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             underlying = self.as_subclass(torch.Tensor)
             result_data = torch.matmul(underlying, unwrapped)
             underlying.copy_(result_data)
-            return underlying
+            return self
 
         result = torch.matmul(self, other)
         with torch.no_grad():
@@ -877,7 +883,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             unwrapped = TracedData.unwrap_traced_data(other)
             underlying = self.as_subclass(torch.Tensor)
             underlying.add_(unwrapped, alpha=alpha)
-            return underlying
+            return self
         # Record as functional operation
         result = torch.add(self, other, alpha=alpha)
         with torch.no_grad():
@@ -892,7 +898,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             unwrapped = TracedData.unwrap_traced_data(other)
             underlying = self.as_subclass(torch.Tensor)
             underlying.sub_(unwrapped, alpha=alpha)
-            return underlying
+            return self
 
         result = torch.sub(self, other, alpha=alpha)
         with torch.no_grad():
@@ -907,7 +913,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             unwrapped = TracedData.unwrap_traced_data(other)
             underlying = self.as_subclass(torch.Tensor)
             underlying.mul_(unwrapped)
-            return underlying
+            return self
 
         result = torch.mul(self, other)
         with torch.no_grad():
@@ -922,7 +928,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             unwrapped = TracedData.unwrap_traced_data(other)
             underlying = self.as_subclass(torch.Tensor)
             underlying.div_(unwrapped, rounding_mode=rounding_mode)
-            return underlying
+            return self
 
         result = torch.div(self, other, rounding_mode=rounding_mode)
         with torch.no_grad():
@@ -937,7 +943,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             unwrapped = TracedData.unwrap_traced_data(exponent)
             underlying = self.as_subclass(torch.Tensor)
             underlying.pow_(unwrapped)
-            return underlying
+            return self
 
         result = torch.pow(self, exponent)
         with torch.no_grad():
@@ -965,7 +971,6 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                 (self._proxy, Ellipsis, value_proxy), {},
             )
         return self
-
 
     # =========================================================================
     # Comparison Operators
@@ -1013,9 +1018,8 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         if isinstance(key, TracedTensor):
             result_tensor = self.tensor[key.tensor]
 
-            # Skip tracing if context is not tracing - return raw tensor
             if not self.validate_status(args=(key,)):
-                return result_tensor
+                return self._promote_inactive_result(result_tensor)
 
             # Check if it's a boolean tensor (mask)
             if key.dtype == torch.bool:
@@ -1061,9 +1065,8 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
         result_tensor = self.tensor[key]
 
-        # Skip tracing if context is not tracing - return raw tensor
         if not self.validate_status():
-            return result_tensor
+            return self._promote_inactive_result(result_tensor)
 
         proxy_out = self._context.tracer.create_proxy(
             "call_function", operator.getitem, (self._proxy, key), {}
@@ -1128,9 +1131,8 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         """
         result_tensor = self.tensor.to(*args, **kwargs)
 
-        # Skip tracing if context is not tracing - return raw tensor
         if not self.validate_status():
-            return result_tensor
+            return self._promote_inactive_result(result_tensor)
 
         # For type conversions, we track it as an operation
         proxy_out = self._context.tracer.create_proxy(
@@ -1151,12 +1153,9 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         """
         np_data = self.as_subclass(torch.Tensor).detach().cpu().numpy()
         
-        # Skip tracing if context is not tracing - return raw numpy array
-        if not self.validate_status():
-            return np_data
-        
-        # Return TracedNpArray with inherited proxy/context
-        from leapp.leapp_graph.datatypes import as_traced  # lazy import to avoid circular dependency
+        # Conversion is representation-only, so both active and inactive
+        # sources forward their complete tracing state.
+        from leapp.leapp_graph.datatypes import as_traced
         return as_traced(np_data, self.name, self.context_obj, self.proxy)
 
     def __array__(self, dtype=None, copy=None):

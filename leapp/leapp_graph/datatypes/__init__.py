@@ -11,6 +11,7 @@ This module provides:
 - NumPy-to-PyTorch compatibility utilities
 """
 
+from collections.abc import Mapping
 from typing import Type, Union, Optional
 
 import numpy as np
@@ -149,17 +150,19 @@ def as_traced(
         >>> type(traced)
         <class 'TracedNpArray'>
     """
-    # Warp arrays own allocator/deleter state that cannot be safely recreated
-    # from a non-owning ``ptr`` view, so trace them by class-swapping in place
-    # before the generic wrapper path can construct a new object.
-    if wp is not None and TracedWpArray is not None and isinstance(data, wp.array):
-        return TracedWpArray.make_traced_in_place(data, name, context, proxy)
-
-    # If already traced, unwrap to get the underlying tensor/array
-    # We need to create a NEW traced instance with the new context
-    # This erases any knowledge of previous operations operated on the data
-    if isinstance(data, TracedData):
+    # Rewrapping an existing traced value must not rebind the producer object.
+    # Consumers receive a fresh traced carrier for their own node context so the
+    # original value can still fan out to other nodes.
+    was_traced = isinstance(data, TracedData)
+    if was_traced:
         data = data.data
+
+    # Exact raw Warp arrays can be promoted in place. Existing TracedWpArrays
+    # were unwrapped above and must instead get a fresh non-owning traced alias.
+    if wp is not None and TracedWpArray is not None and isinstance(data, wp.array):
+        if was_traced:
+            return TracedWpArray(data, name, context, proxy)
+        return TracedWpArray.make_traced_in_place(data, name, context, proxy)
     
     # Find the appropriate traced class
     traced_class = get_traced_class_for(data)
@@ -172,6 +175,30 @@ def as_traced(
         )
     
     return traced_class(data, name, context, proxy)
+
+
+def promote_traced_result(data, source: TracedData, *, name: str | None = None,
+                          proxy=None):
+    """Promote tensor-valued results using the source tracing state."""
+    result_name = source.name if name is None else name
+    result_proxy = source.proxy if proxy is None else proxy
+
+    if isinstance(data, Mapping):
+        return type(data)(
+            (key, promote_traced_result(value, source,
+                                        name=result_name, proxy=result_proxy))
+            for key, value in data.items()
+        )
+    if isinstance(data, (list, tuple)):
+        return type(data)(
+            promote_traced_result(value, source,
+                                  name=result_name, proxy=result_proxy)
+            for value in data
+        )
+    if is_tracable_tensor_type(data):
+        return as_traced(data, result_name, source.context_obj, result_proxy)
+    return data
+
 
 def to_export_torch_tensor(data) -> _torch.Tensor:
     """Convert a traceable LEAPP value to ``torch.Tensor`` for export metadata."""
@@ -205,6 +232,7 @@ __all__ = [
     "TRACED_TYPES",
     # Factory and type checking functions
     "as_traced",
+    "promote_traced_result",
     "is_tracable_tensor_type",
     "is_traced_type",
     "get_traced_class_for",
