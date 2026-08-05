@@ -506,8 +506,8 @@ class WarpPatchBackend:
             return False, None
 
         search_args = args[1:] if is_init else args
-        src = self._find_single_active_traced_data(search_args, kwargs)
-        if src is None or not src.is_tracing:
+        src = self._find_single_traced_data(search_args, kwargs)
+        if src is None:
             if is_init:
                 with self._pause_context():
                     original(*args, **kwargs)
@@ -542,27 +542,36 @@ class WarpPatchBackend:
             return True, traced_raw
         return True, raw
 
-    def _find_single_active_traced_data(
+    def _find_single_traced_data(
         self, args: tuple[Any, ...], kwargs: dict[str, Any] | None = None
     ):
         # lazy to avoid circular imports
         from leapp.leapp_graph.datatypes.traced_data import TracedData
 
-        contexts = TracedData.find_all_contexts([args, kwargs or {}])
+        values = []
 
-        if not contexts:
+        def collect(obj):
+            if isinstance(obj, TracedData):
+                values.append(obj)
+            elif isinstance(obj, dict):
+                for value in obj.values():
+                    collect(value)
+            elif isinstance(obj, (list, tuple, set, frozenset)):
+                for value in obj:
+                    collect(value)
+
+        collect([args, kwargs or {}])
+        if not values:
             return None
-        if len(contexts) > 1:
+
+        context_ids = {id(value.context_obj) for value in values}
+        if len(context_ids) > 1:
             _get_logger().fatal(
                 "Warp boundary call received traced data from different LEAPP "
-                "trace contexts. Mixing active contexts is not supported.",
+                "trace contexts. Mixing contexts is not supported.",
                 error_type=ValueError,
             )
-
-        src = TracedData.find_traced_data([args, kwargs or {}])
-        if src is None or not src.is_tracing:
-            return None
-        return src
+        return values[0]
 
     def _normalize_and_collect(
         self, args: tuple[Any, ...], kwargs: dict[str, Any]
@@ -594,13 +603,10 @@ class WarpPatchBackend:
             return obj
 
         if isinstance(obj, TracedWpArray):
-            # Always hand Warp an exact ``wp.array`` view (so both concrete
-            # and generic kernels accept it), but only record the array for
-            # trace-state propagation when its owning context is actively
-            # tracing. A traced array whose context has stopped tracing thus
-            # flows through as plain data and never re-traces the outputs.
-            if obj.is_tracing:
-                traced.append(obj)
+            # Always hand Warp an exact ``wp.array`` view. Active carriers
+            # drive segment capture; inactive carriers only propagate tracing
+            # state to array-valued results.
+            traced.append(obj)
             return obj.data
 
         if isinstance(obj, dict):

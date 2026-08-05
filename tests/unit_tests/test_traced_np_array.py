@@ -790,8 +790,8 @@ class TestTracedNpArray(unittest.TestCase):
 
     # ==================== Operations After Compile Tests ====================
 
-    def test_operations_after_compile_return_arrays(self):
-        """Test that operations return raw arrays after compile_trace."""
+    def test_operations_after_compile_preserve_traced_arrays(self):
+        """Test that inactive NumPy operations preserve traced carriers."""
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
         y = x * 2
@@ -801,13 +801,14 @@ class TestTracedNpArray(unittest.TestCase):
         # After compilation, is_tracing should be False
         self.assertFalse(ctx.is_tracing)
         
-        # Operations on traced array should now return regular arrays
-        z = x + 1
-        self.assertIsInstance(z, np.ndarray)
-        self.assertNotIsInstance(z, TracedNpArray)
+        results = [x + 1, x.copy(), x.astype(np.float32), np.asarray(x)]
+        for result in results:
+            self.assertIsInstance(result, TracedNpArray)
+            self.assertFalse(result.is_tracing)
+            self.assertIs(result.context_obj, ctx)
 
-    def test_getitem_after_compile_returns_array(self):
-        """Test that indexing returns raw array after compile."""
+    def test_getitem_after_compile_preserves_traced_array(self):
+        """Test that array-valued indexing preserves an inactive carrier."""
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(np.array([1.0, 2.0, 3.0, 4.0, 5.0]), name="x")
         # Use slice to get array output (scalar indexing returns np.float64, not array)
@@ -815,9 +816,10 @@ class TestTracedNpArray(unittest.TestCase):
         
         ctx.compile_trace({'y': y})
         
-        # Indexing after compile should return regular array
         z = x[2:4]
-        self.assertNotIsInstance(z, TracedNpArray)
+        self.assertIsInstance(z, TracedNpArray)
+        self.assertFalse(z.is_tracing)
+        self.assertIs(z.context_obj, ctx)
 
     # ==================== Context Validation Tests ====================
 

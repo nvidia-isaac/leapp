@@ -678,7 +678,9 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
             if i == 0:
                 self.assertTrue(type(tensor1) is TracedTensor)
             if i > 0:
-                self.assertTrue(type(tensor1) is torch.Tensor)
+                self.assertTrue(type(tensor1) is TracedTensor)
+                self.assertFalse(tensor1.is_tracing)
+                self.assertEqual(tensor1.context, "func1")
             tensor1 += 0
             annotate.output_tensors(
                 'func1', {'output1': tensor1}, export_with="jit")

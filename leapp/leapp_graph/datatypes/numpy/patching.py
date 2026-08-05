@@ -54,9 +54,9 @@ class NumpyPatchBackend:
         def patched(data, *args, **kwargs):
             from leapp.leapp_graph.datatypes import is_traced_type
 
-            is_traced_and_tracing = is_traced_type(data) and data.is_tracing
+            is_traced = is_traced_type(data)
 
-            if is_traced_and_tracing:
+            if is_traced:
                 dtype = kwargs.get("dtype")
                 copy = kwargs.get("copy")
                 return data.__array__(dtype=dtype, copy=copy)

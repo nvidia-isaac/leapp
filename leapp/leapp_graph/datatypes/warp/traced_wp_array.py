@@ -54,6 +54,8 @@ class TracedWpArray(wp.array):
             device=array.device,
             copy=False,
         )
+        # Keep the source allocation alive for non-owning consumer aliases.
+        obj._ref = array
         obj._init_tracing_state(name, context, proxy)
         return obj
 
@@ -152,7 +154,7 @@ class TracedWpArray(wp.array):
         context = getattr(self, "_context", None)
         if context is None:
             return False
-        return context.is_tracing
+        return context.is_tracing and not getattr(context, "dry_run", False)
 
     def _new(self, value: Any, proxy: Proxy = None) -> "TracedWpArray":
         name = TracedData._name_from_proxy(proxy)
