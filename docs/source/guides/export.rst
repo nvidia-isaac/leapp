@@ -249,7 +249,7 @@ The main LEAPP validation path is still:
    leapp.compile_graph(validate=True, rtol=1e-3, atol=1e-5, strict=True)
 
 That validation compares exported model outputs against the captured
-traced outputs. See :doc:`runtime` for details.
+traced outputs. See :doc:`runtime` for validation details and :doc:`/leapp_runtime` for Python runtime usage.
 
 Bringing your own model
 =======================

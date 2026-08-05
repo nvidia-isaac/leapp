@@ -36,7 +36,6 @@ sha256sum
 # Python / library names
 numpy
 ndarray
-matplotlib
 pyenchant
 sphinxcontrib
 sphinxmermaid
@@ -212,6 +211,8 @@ gh-pages
 PyData
 walkthrough
 provenance
+reproducibility
+deployable
 filesystem
 checksum
 checksums

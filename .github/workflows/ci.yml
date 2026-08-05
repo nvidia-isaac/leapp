@@ -28,18 +28,24 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      # Visualization modules ship with leapp; gated deps install on 3.11+.
       - name: Install package and test dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev,test]"
 
       - name: Run pytest
-        run: pytest tests/ -v
+        run: pytest tests/ packages/leapp-visualization/tests/ -v
 
   docs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - uses: actions/setup-python@v5
         with:

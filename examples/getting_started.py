@@ -34,19 +34,25 @@ def normalize_joints(pos: torch.Tensor, vel: torch.Tensor):
     return pos_norm, vel_norm
 
 
-def capture_joint_observations(joint_pos: torch.Tensor, joint_vel: torch.Tensor):
+def capture_joint_observations():
     """First input_tensors() call for the obs_processor node."""
+    # Simulates reading live joint sensors each time this function is called.
+    JOINT_POS = torch.randn(6)
+    JOINT_VEL = torch.randn(6)
     return annotate.input_tensors("obs_processor", {
-        "joint_pos": joint_pos,
-        "joint_vel": joint_vel,
+        "joint_pos": JOINT_POS,
+        "joint_vel": JOINT_VEL,
     })
 
 
-def capture_context(orientation: torch.Tensor, cmd_vel: torch.Tensor):
+def capture_context():
     """Second input_tensors() call for the same obs_processor node."""
+    # Simulates reading live orientation and command context each call.
+    ORIENTATION = torch.tensor([1.0, 0.0, 0.0, 0.0])
+    CMD_VEL = torch.tensor([0.5, 0.0, 0.1])
     return annotate.input_tensors("obs_processor", {
-        "orientation": orientation,
-        "cmd_vel": cmd_vel,
+        "orientation": ORIENTATION,
+        "cmd_vel": CMD_VEL,
     })
 
 
@@ -74,18 +80,12 @@ _W, _b = torch.randn(18, 6) * 0.05, torch.zeros(6)
 
 
 def main():
-    # Example robot state.
-    joint_pos = torch.randn(6)
-    joint_vel = torch.randn(6)
-    orientation = torch.tensor([1.0, 0.0, 0.0, 0.0])
-    cmd_vel = torch.tensor([0.5, 0.0, 0.1])
-
     leapp.start(name="sample_pipeline")
 
     # Node 1: observation preprocessing.
     # These two calls contribute inputs to the same traced node.
-    pos, vel = capture_joint_observations(joint_pos, joint_vel)
-    quat, cmd = capture_context(orientation, cmd_vel)
+    pos, vel = capture_joint_observations()
+    quat, cmd = capture_context()
 
     pos_norm, vel_norm = normalize_joints(pos, vel)
     gravity_vec = project_gravity(quat)  # helper function calls are traced too

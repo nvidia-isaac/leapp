@@ -25,7 +25,7 @@ Graph lifecycle
 ``leapp.start()``
 -----------------
 
-Initialize and start LEAPP graph interpretation.
+Initialize and start LEAPP graph tracing.
 
 Signature
 ~~~~~~~~~
@@ -133,8 +133,9 @@ Parameters
 ~~~~~~~~~~
 
 * ``visualize`` (bool, optional): Generate a graph visualization.
-  Defaults to ``True``. Visualization errors are logged but do not stop
-  compilation.
+  Defaults to ``True``. Requires Python 3.11 or later; earlier versions
+  emit a warning and skip visualization. On supported Python versions,
+  visualization errors stop compilation.
 * ``verbose`` (bool | None, optional): Override verbose logging for the
   compile step. ``None`` leaves the current setting unchanged.
 * ``validate`` (bool, optional): Validate exported models against
@@ -161,7 +162,8 @@ The method performs the complete pipeline:
 #. Build connections by analyzing data flow.
 #. Save compiled models to ``{save_path}/{name}/``.
 #. Generate ``{name}.yaml`` with the complete graph description.
-#. Generate ``{name}.png`` if ``visualize=True``.
+#. Generate ``{name}.png`` if ``visualize=True`` and Python 3.11 or later is
+   running.
 #. Log graph statistics.
 
 ``GraphConfigs``
@@ -206,7 +208,8 @@ Generated artifacts
 * Compiled models --- one file per node (``.pt``, ``.pt2``, ``.onnx``).
 * ``{name}.yaml`` --- model descriptions, pipeline connections
   (``data_flow`` and ``feedback_flow``), and system information.
-* ``{name}.png`` --- graph visualization (when ``visualize=True``).
+* ``{name}.png`` --- graph visualization (when ``visualize=True`` on
+  Python 3.11+).
 
 Output YAML structure
 ~~~~~~~~~~~~~~~~~~~~~
@@ -243,8 +246,8 @@ Output YAML structure
      python version: "3.12.9"
      torch version: "2.7.0+cu126"
      warp version: null
-     leapp version: "0.5.2"
-     leapp config version: "1.2"
+     leapp version: "0.6.0"
+     leapp config version: "1.3"
      cuda version: "12.6"
      os: Linux
 
@@ -261,34 +264,6 @@ The method logs statistics including:
 
 Semantic metadata
 =================
-
-``TemporalAxis``
---------------------
-
-Mark one ``element_names`` axis as temporal and attach an absolute period in
-milliseconds to the tensor YAML entry.
-
-.. code-block:: python
-
-   from leapp import TensorSemantics, TemporalAxis
-
-   TensorSemantics(
-       name="actions",
-       ref=actions,
-       element_names=[TemporalAxis(period_ms=100), ["hip", "knee", "ankle"]],
-   )
-
-This emits the reserved bare axis sentinel and the period metadata:
-
-.. code-block:: yaml
-
-   element_names:
-   - __temporal_axis__
-   - [hip, knee, ankle]
-   temporal_period_ms: 100
-
-``__temporal_axis__`` is reserved for LEAPP output; use
-``TemporalAxis`` rather than writing the sentinel directly.
 
 ``TensorSemantics``
 -------------------
@@ -335,6 +310,34 @@ Behavior
   provides the tensor key.
 * Public semantic fields with non-``None`` values are serialized in the YAML.
 * ``extra`` fields are flattened into the same YAML mapping as built-in fields.
+
+``TemporalAxis``
+~~~~~~~~~~~~~~~~
+
+Mark one ``element_names`` axis as temporal and attach an absolute period in
+milliseconds to the tensor YAML entry.
+
+.. code-block:: python
+
+   from leapp import TensorSemantics, TemporalAxis
+
+   TensorSemantics(
+       name="actions",
+       ref=actions,
+       element_names=[TemporalAxis(period_ms=100), ["hip", "knee", "ankle"]],
+   )
+
+This emits the reserved bare axis sentinel and the period metadata:
+
+.. code-block:: yaml
+
+   element_names:
+   - __temporal_axis__
+   - [hip, knee, ankle]
+   temporal_period_ms: 100
+
+``__temporal_axis__`` is reserved for LEAPP output; use
+``TemporalAxis`` rather than writing the sentinel directly.
 
 .. warning::
 
@@ -387,7 +390,7 @@ Enum values
    BODY_LINEAR_VELOCITY = target/body/linear_velocity
    BODY_ANGULAR_ACCELERATION = target/body/angular_acceleration
 
-See :doc:`/guides/semantics` for examples and field guidance.
+See :doc:`/semantics/usage` for examples and field guidance.
 
 Annotations
 ===========
@@ -411,7 +414,7 @@ Parameters
 * ``tensors`` (required): Either a dict of named raw tensors or a
   ``TensorSemantics`` / list of ``TensorSemantics``. Bare tensors and
   other unnamed top-level collections are not supported. See
-  :doc:`/guides/semantics`.
+  :doc:`/semantics/usage`.
 
 Returns
 ~~~~~~~
@@ -666,7 +669,7 @@ Behavior
 #. If data does not match, logs an error and raises rather than copying
    incorrect tracing metadata.
 
-See :doc:`/guides/graph` for context.
+See :doc:`/guides/buffers` for between-node copy examples.
 
 Runtime
 =======
@@ -737,8 +740,8 @@ Methods
    * - Method
      - Description
    * - ``run_policy(inputs)``
-     - Run the full pipeline. ``inputs`` is a dict of
-       ``"node_name/input_name"`` to ``torch.Tensor``. Returns a dict of
+     - Run the full pipeline. ``inputs`` is a dict that maps
+       ``"node_name/input_name"`` keys to ``torch.Tensor`` values. Returns a dict of
        final pipeline outputs. ``manager(inputs)`` is an equivalent
        shorthand.
    * - ``get_mock_input()``
@@ -845,7 +848,7 @@ This creates:
 
    exports/complete_pipeline/
    |-- complete_pipeline.yaml    # Graph description
-   |-- complete_pipeline.png     # Visualization
+   |-- complete_pipeline.png     # Graph visualization
    |-- preprocess.pt             # Preprocessing model
    |-- inference.pt              # Inference model
    |-- postprocess.pt            # Postprocessing model
@@ -876,5 +879,6 @@ See also
 * :doc:`/getting_started` --- learn the basics
 * :doc:`/guides/nodes` --- advanced node patterns
 * :doc:`/guides/graph` --- graph and feedback operations
-* :doc:`/guides/runtime` --- validation and runtime verification
-* :doc:`/guides/semantics` --- semantic data annotation
+* :doc:`/guides/runtime` --- validation
+* :doc:`/leapp_runtime` --- LEAPP Python runtime
+* :doc:`/semantics/usage` --- semantic data annotation

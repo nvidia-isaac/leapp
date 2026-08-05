@@ -1,3 +1,4 @@
 include README.md
 include LICENSE
 recursive-include leapp *.py
+recursive-include packages/leapp-visualization/src/leapp_visualization *.py

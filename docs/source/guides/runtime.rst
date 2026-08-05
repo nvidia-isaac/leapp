@@ -1,15 +1,14 @@
-======================
-Runtime and validation
-======================
+==========
+Validation
+==========
 
 This guide focuses on how to validate that a LEAPP export is correct.
-There are three layers of confidence:
+There are two layers of validation during export:
 
 #. Automatic per-node validation during
    ``leapp.compile_graph(validate=True)``.
 #. Replay validation across cached re-entry examples using
    ``max_cached_io``.
-#. End-to-end runtime checks with :class:`~leapp.InferenceManager`.
 
 Automatic validation during ``compile_graph()``
 ===============================================
@@ -167,82 +166,6 @@ validates:
 These checks catch cases where later executions no longer match the
 original trace shape, dtype, or connection structure.
 
-Python runtime tooling with ``InferenceManager``
-================================================
-
-After export, :class:`~leapp.InferenceManager` is a lightweight Python-side
-deployment and testing tool for exported LEAPP graphs. Use it to
-smoke-test the full pipeline, validate exported artifacts end to end, and
-run the graph directly from Python before handing it off to production.
-
-.. code-block:: python
-
-   from leapp import InferenceManager
-
-   manager = InferenceManager("my_graph/my_graph.yaml")
-
-   print(manager.inputs)
-   print(manager.outputs)
-
-   mock_inputs = manager.get_mock_input()
-   outputs = manager.run_policy(mock_inputs)
-
-``InferenceManager`` is useful for:
-
-* smoke-testing the full exported pipeline from Python
-* checking that YAML, models, and graph wiring are internally consistent
-* validating that runtime inputs and outputs look sane after export
-* prototyping or deploying the exported graph from a Python runtime
-
-ONNX runtime notes
-------------------
-
-* LEAPP uses ``onnxruntime`` by default, which is CPU-safe on all systems.
-* If you want ``InferenceManager`` to use ONNX Runtime's CUDA execution
-  provider, install ``onnxruntime-gpu`` in the inference environment.
-* When the CUDA execution provider is available, LEAPP prefers it
-  automatically for ONNX-backed nodes and can use the faster CUDA I/O
-  binding path.
-
-ExportedProgram runtime notes
------------------------------
-
-* ``pt2`` artifacts are loaded with :func:`torch.export.load` and run
-  through the exported module's callable wrapper.
-* When CUDA is available, LEAPP loads ``pt2`` models onto the GPU.
-* ``run_policy()`` does not automatically move user-provided tensors to
-  the node device. Either pass inputs on the correct device or use
-  ``get_mock_input()`` for smoke tests.
-* Lifted constants captured during export may remain on CPU inside the
-  exported graph. Keep runtime inputs on the model device, and prefer
-  ``annotate.register_buffer`` for constants that must move with the
-  model.
-
-On construction, ``InferenceManager``:
-
-* loads the YAML description
-* loads all referenced JIT, ExportedProgram (``.pt2``), and ONNX models
-* validates pipeline connection shape/dtype compatibility
-* preallocates node input buffers
-* prepopulates feedback inputs from ``pipeline.initial_values`` when
-  present
-
-Feedback-state checks
----------------------
-
-For graphs with feedback:
-
-* feedback inputs are auto-initialized from the exported safetensors file
-  when available
-* you can inspect feedback targets via ``manager.feedback_inputs``
-* you can manually override any feedback input with
-  ``set_input_value(...)``
-
-.. code-block:: python
-
-   manager = InferenceManager("my_graph/my_graph.yaml")
-   manager.set_input_value("stateful_node", "h", torch.zeros(1, 32))
-
 Recommended validation workflow
 ===============================
 
@@ -253,8 +176,6 @@ For high-confidence exports:
 #. Run ``leapp.compile_graph(validate=True, strict=True)``.
 #. Relax ``rtol`` / ``atol`` only when the mismatch is expected numerical
    drift.
-#. Run a quick ``InferenceManager`` smoke test on the exported YAML.
-#. Keep using ``InferenceManager`` as a simple Python runtime wrapper.
 
 When validation fails
 =====================
