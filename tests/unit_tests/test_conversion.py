@@ -50,16 +50,17 @@ class TestTracedTensorToNumpy(unittest.TestCase):
         self.assertIsInstance(y, TracedNpArray)
         np.testing.assert_array_almost_equal(y, np.array([1.0, 2.0, 3.0]))
 
-    def test_numpy_method_returns_ndarray_after_compile(self):
-        """Test TracedTensor.numpy() returns plain ndarray after compile."""
+    def test_numpy_method_preserves_traced_array_after_compile(self):
+        """Test TracedTensor.numpy() preserves an inactive traced carrier."""
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
         ctx.compile_trace({'output': x * 2})
         
         y = x.numpy()
         
-        self.assertIsInstance(y, np.ndarray)
-        self.assertNotIsInstance(y, TracedNpArray)
+        self.assertIsInstance(y, TracedNpArray)
+        self.assertFalse(y.is_tracing)
+        self.assertIs(y.context_obj, ctx)
 
     def test_np_array_returns_traced_np_array(self):
         """Test np.array(TracedTensor) returns TracedNpArray when patched."""
@@ -133,17 +134,18 @@ class TestNumpyToTracedTensor(unittest.TestCase):
         self.assertIsInstance(y, TracedTensor)
         self.assertTrue(torch.allclose(y.tensor, torch.tensor([1.0, 2.0, 3.0])))
 
-    def test_torch_from_numpy_returns_tensor_after_compile(self):
-        """Test torch.from_numpy returns plain tensor after compile."""
+    def test_torch_from_numpy_preserves_traced_tensor_after_compile(self):
+        """Test torch.from_numpy preserves an inactive traced carrier."""
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(np.array([1.0, 2.0, 3.0], dtype=np.float32), name="x")
         ctx.compile_trace({'output': x * 2})
         
-        # After compile, x is no longer tracing
-        y = torch.from_numpy(x.view(np.ndarray))
-        
-        self.assertIsInstance(y, torch.Tensor)
-        self.assertNotIsInstance(y, TracedTensor)
+        # After compile, x is inactive but still carries its source context.
+        y = torch.from_numpy(x)
+
+        self.assertIsInstance(y, TracedTensor)
+        self.assertFalse(y.is_tracing)
+        self.assertIs(y.context_obj, ctx)
 
 
 class TestConversionFXGraphCompilation(unittest.TestCase):

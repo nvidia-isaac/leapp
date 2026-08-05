@@ -487,9 +487,10 @@ class TracedTensorNode(LeappNode):
             return type(data)(new_data)
         
         elif is_tracable_tensor_type(data):
-            is_traced = False
-            if isinstance(data, TracedData) and data.is_tracing:
-                is_traced = True # is already a traced tensor that is currently tracing AND the context is the same as the current node
+            is_traced = isinstance(data, TracedData)
+            is_active_traced = is_traced and data.is_tracing
+            if is_active_traced:
+                # The value is actively tracing in a node context.
                 # Check if the traced tensor is from the same context (node)
                 if data.context_obj is not self:
                     # Different context: error - cannot use traced tensor from another node
@@ -501,10 +502,7 @@ class TracedTensorNode(LeappNode):
                         error_type=Exception)
 
             if to=="traced":
-                if self.dry_run:
-                    return data
-
-                if is_traced:
+                if is_active_traced:
                     # Same context: allow override with warning
                     _get_logger().warning(
                         f"Input '{name}' for node '{self.name}' is an active TracedTensor "
@@ -512,8 +510,10 @@ class TracedTensorNode(LeappNode):
                         f"(previous trace will be discarded for this branch)."
                     )
 
-                node = self.graph.create_node("placeholder", name, (), {})
-                proxy = Proxy(node, self.tracer)
+                proxy = None
+                if self.is_tracing and not self.dry_run:
+                    node = self.graph.create_node("placeholder", name, (), {})
+                    proxy = Proxy(node, self.tracer)
                 return as_traced(data, name, self, proxy)
 
             elif to=="tensor":

@@ -6,10 +6,11 @@
 import unittest
 import os
 import torch
+import numpy as np
 import leapp
 from leapp.leapp import _MANAGER as annotate
 from .base import LEAPPFunctionalTestBase
-from leapp.leapp_graph.datatypes import TracedTensor
+from leapp.leapp_graph.datatypes import TracedTensor, TracedNpArray
 
 
 class TestPassthrough(LEAPPFunctionalTestBase):
@@ -96,10 +97,42 @@ class TestPassthrough(LEAPPFunctionalTestBase):
         self.assertEqual(len(annotate.nodes), 0, "No nodes should be created outside start/stop")
 
 
+class TestPersistentCarrier(LEAPPFunctionalTestBase):
+
+    def test_numpy_output_crosses_node_boundary(self):
+        leapp.start(name=self.TEST_GRAPH_NAME)
+
+        source_input = annotate.input_tensors(
+            "numpy_source",
+            {"x": np.array([1.0, 2.0, 3.0], dtype=np.float32)},
+        )
+        source_output = source_input * 2.0
+        annotate.output_tensors("numpy_source", {"y": source_output})
+
+        self.assertIsInstance(source_output, TracedNpArray)
+        self.assertFalse(source_output.is_tracing)
+        self.assertTrue(hasattr(source_output, "leapp_tag"))
+
+        consumer_input = annotate.input_tensors(
+            "numpy_consumer", {"y": source_output}
+        )
+        self.assertIsInstance(consumer_input, TracedNpArray)
+        self.assertIsNot(consumer_input, source_output)
+        self.assertTrue(consumer_input.is_tracing)
+        self.assertEqual(consumer_input.context, "numpy_consumer")
+        self.assertEqual(source_output.context, "numpy_source")
+        self.assertTrue(np.shares_memory(consumer_input.data, source_output.data))
+
+        annotate.output_tensors(
+            "numpy_consumer", {"z": consumer_input + 1.0}
+        )
+        leapp.stop()
+
+
 class TestDryrun(LEAPPFunctionalTestBase):
 
-    def test_complex_nested_input_and_state_tensors_dryrun_passthrough(self):
-        """dry_run should preserve nested inputs, but nested states are rejected."""
+    def test_complex_nested_input_and_state_tensors_dryrun_carriers(self):
+        """dry_run should promote nested inputs, while nested states are rejected."""
         leapp.start(name=self.TEST_GRAPH_NAME, dry_run=True)
 
         nested_cases = [
@@ -115,16 +148,14 @@ class TestDryrun(LEAPPFunctionalTestBase):
         ]
 
         def _assert_nested_passthrough(original, returned):
-            self.assertTrue(self.verify_data_exact_match(original, returned))
             original_tensors = self._flatten_to_tensors(original)
             returned_tensors = self._flatten_to_tensors(returned)
             self.assertEqual(len(original_tensors), len(returned_tensors))
             for original_tensor, returned_tensor in zip(original_tensors, returned_tensors):
-                self.assertIs(
-                    original_tensor, returned_tensor,
-                    "dry_run should pass through the exact same tensor objects",
-                )
-                self.assertNotIsInstance(returned_tensor, TracedTensor)
+                self.assertIsNot(original_tensor, returned_tensor)
+                self.assertIsInstance(returned_tensor, TracedTensor)
+                self.assertFalse(returned_tensor.is_tracing)
+                self.assertTrue(torch.equal(original_tensor, returned_tensor.tensor))
 
         returned_inputs = []
         for idx, payload in enumerate(nested_cases):
@@ -146,8 +177,8 @@ class TestDryrun(LEAPPFunctionalTestBase):
         self.assertFalse(os.path.exists(os.path.join(self.TEST_GRAPH_NAME, "complex_node.pt")))
         self.assertFalse(os.path.exists(os.path.join(self.TEST_GRAPH_NAME, "complex_node.onnx")))
 
-    def test_method_dryrun_passthrough_and_yaml(self):
-        """dry_run at start should not use TracedTensor but still produce graph YAML."""
+    def test_method_dryrun_carrier_and_yaml(self):
+        """dry_run should use inactive traced carriers and still produce graph YAML."""
         seen_traced_inputs = []
 
         @annotate.method(export_with="jit")
@@ -163,8 +194,9 @@ class TestDryrun(LEAPPFunctionalTestBase):
         leapp.compile_graph(visualize=False)
 
         self.assertEqual(len(seen_traced_inputs), 1)
-        self.assertFalse(seen_traced_inputs[0], "dry_run at start should not use TracedTensor")
-        self.assertNotIsInstance(y, TracedTensor)
+        self.assertTrue(seen_traced_inputs[0])
+        self.assertIsInstance(y, TracedTensor)
+        self.assertFalse(y.is_tracing)
         self.assertTrue(hasattr(y, "leapp_tag"), "Dryrun should still tag outputs for connections")
 
         self.assertTrue(hasattr(annotate, "detected_pipeline"))
@@ -172,7 +204,7 @@ class TestDryrun(LEAPPFunctionalTestBase):
         self.assertIn("policy", annotate.detected_nodes)
         self.assertTrue(
             torch.is_tensor(y),
-            "Method output should remain a normal tensor in dryrun",
+            "Method output should remain tensor-compatible in dryrun",
         )
         self.assertTrue(
             torch.allclose(y, x * 2.0 + 1.0),
@@ -189,15 +221,18 @@ class TestDryrun(LEAPPFunctionalTestBase):
         a = torch.tensor([1.0, 2.0, 3.0])
         b = torch.tensor([0.5, 0.5, 0.5])
         traced_a, traced_b = annotate.input_tensors("node_a", {"a": a, "b": b})
-        self.assertNotIsInstance(traced_a, TracedTensor)
-        self.assertNotIsInstance(traced_b, TracedTensor)
+        self.assertIsInstance(traced_a, TracedTensor)
+        self.assertIsInstance(traced_b, TracedTensor)
+        self.assertFalse(traced_a.is_tracing)
+        self.assertFalse(traced_b.is_tracing)
 
         out = traced_a + traced_b
         returned_out = annotate.output_tensors("node_a", {"out": out}, export_with="jit")
         self.assertIs(returned_out, out)
 
         downstream_in = annotate.input_tensors("node_b", {"out": out})
-        self.assertNotIsInstance(downstream_in, TracedTensor)
+        self.assertIsInstance(downstream_in, TracedTensor)
+        self.assertFalse(downstream_in.is_tracing)
         annotate.output_tensors("node_b", {"final": downstream_in * 3.0}, export_with="jit")
 
         leapp.stop()
@@ -217,8 +252,10 @@ class TestDryrun(LEAPPFunctionalTestBase):
 
         obs = annotate.input_tensors("node_state", {"obs": torch.tensor([1.0, 2.0, 3.0])})
         state = annotate.state_tensors("node_state", {"state": torch.tensor([0.1, 0.2, 0.3])})
-        self.assertNotIsInstance(obs, TracedTensor)
-        self.assertNotIsInstance(state, TracedTensor)
+        self.assertIsInstance(obs, TracedTensor)
+        self.assertIsInstance(state, TracedTensor)
+        self.assertFalse(obs.is_tracing)
+        self.assertFalse(state.is_tracing)
 
         new_state = state + obs
         returned_state = annotate.update_state("node_state", {"state": new_state})
@@ -228,7 +265,8 @@ class TestDryrun(LEAPPFunctionalTestBase):
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
-        self.assertNotIsInstance(new_state, TracedTensor)
+        self.assertIsInstance(new_state, TracedTensor)
+        self.assertFalse(new_state.is_tracing)
         self.assertTrue(
             len(annotate.detected_pipeline["feedback_flow"]) >= 1,
             "Dryrun state path should still populate feedback_flow",
@@ -288,7 +326,8 @@ class TestDryrun(LEAPPFunctionalTestBase):
 
         x = torch.tensor([1.0, 2.0, 3.0])
         raw_x = annotate.input_tensors("raw_node", {"x": x})
-        self.assertNotIsInstance(raw_x, TracedTensor)
+        self.assertIsInstance(raw_x, TracedTensor)
+        self.assertFalse(raw_x.is_tracing)
 
         raw_y = raw_x * 2.0
         annotate.output_tensors("raw_node", {"y": raw_y}, export_with="jit")
@@ -342,8 +381,10 @@ class TestDryrun(LEAPPFunctionalTestBase):
 
         obs = annotate.input_tensors("state_node", {"obs": torch.tensor([1.0, 2.0, 3.0])})
         state = annotate.state_tensors("state_node", {"state": torch.tensor([0.1, 0.2, 0.3])})
-        self.assertNotIsInstance(obs, TracedTensor)
-        self.assertNotIsInstance(state, TracedTensor)
+        self.assertIsInstance(obs, TracedTensor)
+        self.assertIsInstance(state, TracedTensor)
+        self.assertFalse(obs.is_tracing)
+        self.assertFalse(state.is_tracing)
 
         new_state = state + obs
         annotate.update_state("state_node", {"state": new_state})
@@ -359,10 +400,10 @@ class TestDryrun(LEAPPFunctionalTestBase):
         self.assertFalse(os.path.exists(os.path.join(self.TEST_GRAPH_NAME, "state_node.onnx")))
 
     # ------------------------------------------------------------------
-    # Expected-fail specs for future dry_run(start=...) semantics
+    # Persistent carrier behavior for start-time dry_run
     # ------------------------------------------------------------------
-    def test_expected_fail_start_dryrun_method_uses_raw_tensors(self):
-        """Desired behavior: start(dry_run=True) should not route TracedTensor through method()."""
+    def test_start_dryrun_method_uses_inactive_carriers(self):
+        """start(dry_run=True) routes inactive traced carriers through method()."""
         seen_traced_inputs = []
 
         @annotate.method(export_with="jit")
@@ -376,14 +417,12 @@ class TestDryrun(LEAPPFunctionalTestBase):
         leapp.compile_graph(visualize=False)
 
         self.assertEqual(len(seen_traced_inputs), 1)
-        self.assertFalse(
-            seen_traced_inputs[0],
-            "Future intent: method input should remain raw tensor in start-time dry_run",
-        )
-        self.assertNotIsInstance(out, TracedTensor)
+        self.assertTrue(seen_traced_inputs[0])
+        self.assertIsInstance(out, TracedTensor)
+        self.assertFalse(out.is_tracing)
 
-    def test_expected_fail_start_dryrun_input_tensors_returns_raw(self):
-        """Desired behavior: start(dry_run=True) input_tensors should return raw tensors."""
+    def test_start_dryrun_input_tensors_returns_inactive_carriers(self):
+        """start(dry_run=True) input_tensors returns inactive traced carriers."""
         leapp.start(name=self.TEST_GRAPH_NAME, dry_run=True)
         a, b = annotate.input_tensors(
             "node_a",
@@ -394,9 +433,12 @@ class TestDryrun(LEAPPFunctionalTestBase):
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
-        self.assertNotIsInstance(a, TracedTensor)
-        self.assertNotIsInstance(b, TracedTensor)
-        self.assertNotIsInstance(out, TracedTensor)
+        self.assertIsInstance(a, TracedTensor)
+        self.assertIsInstance(b, TracedTensor)
+        self.assertIsInstance(out, TracedTensor)
+        self.assertFalse(a.is_tracing)
+        self.assertFalse(b.is_tracing)
+        self.assertFalse(out.is_tracing)
         self.assertTrue(hasattr(out, "leapp_tag"))
 
     def test_expected_fail_start_dryrun_module_does_not_replace_buffers(self):

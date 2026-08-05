@@ -57,9 +57,9 @@ class TorchPatchBackend:
         def patched(data, *args, **kwargs):
             from leapp.leapp_graph.datatypes import as_traced, is_traced_type
 
-            is_traced_and_tracing = is_traced_type(data) and data.is_tracing
+            is_traced = is_traced_type(data)
 
-            if is_traced_and_tracing:
+            if is_traced:
                 name, context, proxy = data.name, data.context_obj, data.proxy
                 raw_data = data.data
             else:
@@ -67,7 +67,7 @@ class TorchPatchBackend:
 
             result = original_func(raw_data, *args, **kwargs)
 
-            if is_traced_and_tracing:
+            if is_traced:
                 if result is raw_data:
                     return data
                 result = as_traced(result, name, context, proxy)
