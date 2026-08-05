@@ -346,6 +346,16 @@ class TracedData(ABC):
         return TracedData._map_structure(key, convert)
 
     @staticmethod
+    def _slice_needs_narrow(item):
+        """Whether a slice carries tensor bounds that no Python slice can hold."""
+        if not isinstance(item, slice):
+            return False
+        return any(
+            isinstance(bound, (TracedData, torch.Tensor))
+            for bound in (item.start, item.stop, item.step)
+        )
+
+    @staticmethod
     def _is_supported_index_key(key):
         """Return whether key can be lowered through the flat-index pipeline."""
         if isinstance(key, TracedData):
@@ -353,7 +363,13 @@ class TracedData(ABC):
         if isinstance(key, torch.Tensor):
             return key.dtype in (torch.bool, torch.int32, torch.int64)
         if isinstance(key, (list, tuple)):
-            return all(TracedData._is_supported_index_key(item) for item in key)
+            if not all(TracedData._is_supported_index_key(item) for item in key):
+                return False
+            if any(TracedData._slice_needs_narrow(item) for item in key):
+                # Tensor bounds are lowered per dimension, so the remaining key
+                # must keep dimensions in place.
+                return all(isinstance(item, (slice, int)) for item in key)
+            return True
         if isinstance(key, slice):
             for bound in (key.start, key.stop, key.step):
                 if bound is None or isinstance(bound, int):
@@ -366,17 +382,70 @@ class TracedData(ABC):
                     operator.index(bound)
                 except TypeError:
                     return False
+            if TracedData._slice_needs_narrow(key):
+                # narrow() cannot express a stride.
+                return not isinstance(
+                    key.step, (TracedData, torch.Tensor)
+                ) and key.step in (None, 1)
             return True
         return key is None or key is Ellipsis or isinstance(key, int)
+
+    def _narrow_bound(self, bound, default, size):
+        """Resolve one slice bound to an integer or a graph value."""
+        if bound is None:
+            return default
+        if isinstance(bound, TracedData):
+            return self._context.tracer.create_proxy(
+                "call_method", "item", (bound.proxy,), {}
+            )
+        value = operator.index(bound)
+        if value < 0:
+            value += size
+        return min(max(value, 0), size)
+
+    def _lower_index_key(self, proxy, key):
+        """Record the selection described by key against proxy.
+
+        Slices with tensor bounds become ``narrow`` calls, because Python
+        slicing needs concrete integers and so cannot hold a bound that is only
+        known at runtime. Whatever is left of the key is recorded as one
+        getitem. Runtime bounds are used as given, so out-of-range values fail
+        the way ``narrow`` does rather than being clamped the way slicing would.
+        """
+        elements = key if isinstance(key, tuple) else (key,)
+        shape = tuple(self.tensor.shape)
+        residual = list(elements)
+        narrowed = False
+        for dim, item in enumerate(elements):
+            if not self._slice_needs_narrow(item):
+                continue
+            start = self._narrow_bound(item.start, 0, shape[dim])
+            stop = self._narrow_bound(item.stop, shape[dim], shape[dim])
+            if isinstance(start, Proxy) or isinstance(stop, Proxy):
+                length = self._context.tracer.create_proxy(
+                    "call_function", operator.sub, (stop, start), {}
+                )
+            else:
+                length = max(stop - start, 0)
+            proxy = self._context.tracer.create_proxy(
+                "call_function", torch.narrow, (proxy, dim, start, length), {}
+            )
+            residual[dim] = slice(None)
+            narrowed = True
+
+        if narrowed and all(item == slice(None) for item in residual):
+            return proxy
+        residual_key = tuple(residual) if isinstance(key, tuple) else residual[0]
+        return self._context.tracer.create_proxy(
+            "call_function", operator.getitem,
+            (proxy, self._proxy_index_key(residual_key)), {}
+        )
 
     def _create_getitem_proxy(self, key):
         """Create a functional getitem proxy for a supported index key."""
         if not self._is_supported_index_key(key):
             return None
-        return self._context.tracer.create_proxy(
-            "call_function", operator.getitem,
-            (self._proxy, self._proxy_index_key(key)), {}
-        )
+        return self._lower_index_key(self._proxy, key)
 
     def _create_setitem_proxy(self, key, value_proxy, real_value=None):
         """Lower indexed assignment to one functional flat ``index_put``.
@@ -405,10 +474,7 @@ class TracedData(ABC):
             positions_proxy = self._register_setitem_tensor(
                 flat_positions, "_setitem_positions"
             )
-            selected_proxy = self._context.tracer.create_proxy(
-                "call_function", operator.getitem,
-                (positions_proxy, self._proxy_index_key(key)), {}
-            )
+            selected_proxy = self._lower_index_key(positions_proxy, key)
             indices_proxy = self._context.tracer.create_proxy(
                 "call_method", "reshape", (selected_proxy, (-1,)), {}
             )
