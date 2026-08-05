@@ -73,7 +73,7 @@ test = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/nvidia-isaac/leapp"
+Homepage = "https://nvidia-isaac.github.io/leapp/"
 Repository = "https://github.com/nvidia-isaac/leapp"
 Issues = "https://github.com/nvidia-isaac/leapp/issues"
 

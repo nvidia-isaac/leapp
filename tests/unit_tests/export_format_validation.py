@@ -98,6 +98,49 @@ def verify_onnx(
         testcase.fail(f"{test_name}: ONNX export/execution failed: {exc}")
 
 
+def verify_onnx_dynamo(
+    testcase,
+    graph_module,
+    inputs,
+    expected,
+    *,
+    test_name: str = "test",
+    atol: float = 1e-5,
+    input_names: Sequence[str] | None = None,
+    output_names: Sequence[str] | None = None,
+    onnx_opset: int | None = None,
+) -> None:
+    inputs = _as_input_tuple(inputs)
+    if input_names is None:
+        input_names = [f"input_{i}" for i in range(len(inputs))]
+    if output_names is None:
+        output_names = ["output"]
+
+    export_kwargs = {}
+    if onnx_opset is not None:
+        export_kwargs["opset_version"] = onnx_opset
+
+    try:
+        onnx_program = torch.onnx.export(
+            graph_module,
+            _clone_for_export(inputs),
+            None,
+            dynamo=True,
+            export_params=True,
+            input_names=list(input_names),
+            output_names=list(output_names),
+            **export_kwargs,
+        )
+        actual = onnx_program(*inputs)[0]
+        comparable_expected = _align_expected_dtype(actual, expected)
+        testcase.assertTrue(
+            torch.allclose(actual, comparable_expected, atol=atol),
+            f"{test_name}: ONNX dynamo output doesn't match expected",
+        )
+    except Exception as exc:
+        testcase.fail(f"{test_name}: ONNX dynamo export/execution failed: {exc}")
+
+
 def _align_expected_dtype(actual, expected):
     if isinstance(actual, torch.Tensor) and isinstance(expected, torch.Tensor):
         if actual.dtype != expected.dtype:

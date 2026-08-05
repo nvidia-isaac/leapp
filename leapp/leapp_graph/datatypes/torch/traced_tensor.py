@@ -11,7 +11,6 @@ and graph recording.
 """
 
 import operator
-import warnings
 from abc import ABCMeta
 
 import torch
@@ -185,41 +184,30 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
     @staticmethod
     def find_traced_tensor(obj):
-        """Find the first TracedTensor in obj (including nested in lists/tuples)."""
-        if isinstance(obj, TracedTensor):
-            return obj
-        elif isinstance(obj, (list, tuple)):
-            for item in obj:
-                result = TracedTensor.find_traced_tensor(item)
-                if result is not None:
-                    return result
-        return None
+        """Find the first TracedTensor in a supported nested structure."""
+        found = None
+
+        def visit(item):
+            nonlocal found
+            if found is None and isinstance(item, TracedTensor):
+                found = item
+            return item
+
+        TracedData._map_structure(obj, visit)
+        return found
 
     @staticmethod
     def unwrap_traced_tensor(obj):
         """Recursively unwrap TracedTensors to get raw tensors."""
-        if isinstance(obj, TracedTensor):
-            return obj.tensor
-        elif isinstance(obj, (list, tuple)):
-            return type(obj)(TracedTensor.unwrap_traced_tensor(item) for item in obj)
-        elif isinstance(obj, dict):
-            return {k: TracedTensor.unwrap_traced_tensor(v) for k, v in obj.items()}
-        return obj
+        return TracedData._map_structure(
+            obj,
+            lambda item: item.tensor if isinstance(item, TracedTensor) else item,
+        )
 
     @staticmethod
     def find_all_contexts(obj, contexts=None):
         """Recursively find all unique context names."""
-        if contexts is None:
-            contexts = set()
-        if isinstance(obj, TracedData) and obj.is_tracing:
-            contexts.add(obj.context)
-        elif isinstance(obj, (list, tuple)):
-            for item in obj:
-                TracedTensor.find_all_contexts(item, contexts)
-        elif isinstance(obj, dict):
-            for v in obj.values():
-                TracedTensor.find_all_contexts(v, contexts)
-        return contexts
+        return TracedData.find_all_contexts(obj, contexts)
 
     @staticmethod
     def copy_into(target: torch.Tensor, source: "TracedTensor") -> "TracedTensor":
@@ -343,47 +331,95 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     # Torch Function Interception
     # =========================================================================
 
+    @staticmethod
+    def _is_complete_slice(key):
+        """Return whether key is an open ``slice(None)`` without comparing tensors."""
+        return (
+            isinstance(key, slice)
+            and key.start is None
+            and key.stop is None
+            and key.step is None
+        )
+
+    @staticmethod
+    def _is_full_assignment_key(key):
+        """Return whether an index covers the complete destination tensor."""
+        if key is Ellipsis:
+            return True
+        if isinstance(key, slice):
+            return TracedTensor._is_complete_slice(key)
+        return (
+            isinstance(key, tuple)
+            and key
+            and all(TracedTensor._is_complete_slice(item) for item in key)
+        )
+
     @classmethod
-    def _handle_class_swap(cls, func, args=(), kwargs=None):
-        """Upgrade plain tensor targets to TracedTensor for full-copy mutations.
+    def _promote_plain_tensor(cls, target, anchor, proxy):
+        """Attach tracing state to an existing plain tensor object."""
+        target.__class__ = cls
+        target._init_tracing_state(anchor.name, anchor.context_obj, proxy)
+        return target
 
-        Returns:
-            tuple[bool, object]: (handled, result). When handled is True, result
-            should be returned directly from __torch_function__.
+    def _record_assignment(self, key, value, real_value):
+        """Record one functional assignment and update this object's proxy."""
+        # Plain full replacement may already have promoted with the source proxy.
+        if (
+            isinstance(value, TracedTensor)
+            and self._proxy is value.proxy
+            and self._is_full_assignment_key(key)
+        ):
+            return True
+
+        value_proxy = value.proxy if isinstance(value, TracedTensor) else value
+        return self._update_setitem_proxy(
+            key, value_proxy, real_value=real_value
+        )
+
+    @classmethod
+    def _handle_plain_assignment(cls, func, args=(), kwargs=None):
+        """Promote a plain destination, then re-enter ``__setitem__`` / ``copy_``.
+
+        Full replacement with a matching traced source reuses that source's
+        proxy. Partial writes register the pre-write destination as a graph
+        constant and use it as the promoted proxy.
         """
-        if kwargs is None:
-            kwargs = {}
+        kwargs = kwargs or {}
+        func_name = getattr(func, "__name__", "")
+        is_setitem = func_name == "__setitem__" and len(args) >= 3
+        is_copy = func_name == "copy_" and len(args) >= 2
+        if not (is_setitem or is_copy):
+            return False, None
 
-        original_func_name = getattr(func, '__name__', '')
+        target = args[0]
+        if type(target) is not torch.Tensor:
+            return False, None
 
-        if original_func_name == '__setitem__' and len(args) >= 3:
-            target, key, value = args[0], args[1], args[2]
-            if type(target) is torch.Tensor and isinstance(value, TracedTensor):
-                is_full_copy = (
-                    (isinstance(key, slice) and key == slice(None))
-                    or key is Ellipsis
-                )
-                if is_full_copy:
-                    target.__class__ = TracedTensor
-                    target._init_tracing_state(value.name, value.context_obj, value.proxy)
-                    return True, None
+        key = args[1] if is_setitem else Ellipsis
+        value = args[2] if is_setitem else args[1]
+        anchor = TracedTensor.find_traced_tensor((key, value))
+        if anchor is None or not cls._is_supported_index_key(key):
+            return False, None
+        anchor.validate_status((key, value))
 
-                _get_logger().warning(
-                    f"Partial-slice assignment (plain_tensor[{key}] = TracedTensor) "
-                    "copies data but does NOT propagate tracing to the target tensor. "
-                    "Subsequent operations on the target will be untraced. "
-                    "Use full-slice assignment (target[:] = source) or "
-                    "reassign the variable (target = source) instead."
-                )
-
-        elif original_func_name == 'copy_' and len(args) >= 2:
-            target, source = args[0], args[1]
-            if type(target) is torch.Tensor and isinstance(source, TracedTensor):
-                target.__class__ = TracedTensor
-                target._init_tracing_state(source.name, source.context_obj, source.proxy)
-                return True, target
-
-        return False, None
+        if (
+            isinstance(value, TracedTensor)
+            and cls._is_full_assignment_key(key)
+            and tuple(target.shape) == tuple(value.shape)
+            and target.dtype == value.dtype
+        ):
+            dest_proxy = value.proxy
+        else:
+            dest_proxy = anchor._register_setitem_tensor(
+                target.clone().detach(), "_setitem_destination"
+            )
+        cls._promote_plain_tensor(target, anchor, dest_proxy)
+        if is_copy:
+            return True, target.copy_(
+                value, non_blocking=kwargs.get("non_blocking", False)
+            )
+        target[key] = value
+        return True, None
 
     @classmethod
     def _handle_scripted_call(
@@ -462,6 +498,17 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             # Fallback to default behavior if no TracedTensor found
             return NotImplemented
 
+
+        # Handles situations where the destination is a plain tensor but a traced object 
+        # is in the key or value.
+        # Example:
+        #   torch_tensor[0:3] = traced_tensor
+        #   torch_tensor[traced_tensor] = plain_tensor
+
+        handled, result = cls._handle_plain_assignment(func, args, kwargs)
+        if handled:
+            return result
+
         # Extract real tensors for actual computation
         real_args = tuple(TracedTensor.unwrap_traced_tensor(arg) for arg in args)
         real_kwargs = {k: TracedTensor.unwrap_traced_tensor(v) for k, v in kwargs.items()}
@@ -482,10 +529,6 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             return tensor_out
 
         # ================== SPECIAL CASES IN HANDLING ==================
-        handled, result = cls._handle_class_swap(func, args, kwargs)
-        if handled:
-            return result
-
         handled, result = cls._handle_scripted_call(
             func,
             traced_tensor,
@@ -500,23 +543,17 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
         # ================== SPECIAL CASES IN HANDLING ==================
 
-        # Helper to recursively extract proxies
-        def extract_proxy(obj):
-            if isinstance(obj, TracedTensor):
-                return obj.proxy
-            elif isinstance(obj, torch.nn.Parameter):
-                # Convert Parameter to regular tensor so fx inlines it as constant
-                # This is safe when exporting to ONNX/JIT freeze where weights are baked in
-                return obj.data
-            elif isinstance(obj, (list, tuple)):
-                return type(obj)(extract_proxy(item) for item in obj)
-            elif isinstance(obj, dict):
-                return {k: extract_proxy(v) for k, v in obj.items()}
-            return obj
+        def extract_proxy_leaf(item):
+            if isinstance(item, TracedTensor):
+                return item.proxy
+            if isinstance(item, torch.nn.Parameter):
+                # Inline parameters as constants for ONNX/JIT freezing.
+                return item.data
+            return item
 
-        # Extract proxies for graph recording
-        proxy_args = tuple(extract_proxy(arg) for arg in args)
-        proxy_kwargs = {k: extract_proxy(v) for k, v in kwargs.items()}
+        # Extract proxies for graph recording.
+        proxy_args = TracedData._map_structure(args, extract_proxy_leaf)
+        proxy_kwargs = TracedData._map_structure(kwargs, extract_proxy_leaf)
 
         # Record the operation in the graph
         proxy_out = traced_tensor._context.tracer.create_proxy(
@@ -910,19 +947,25 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         return self
 
     def copy_(self, src, non_blocking=False):
-        """In-place copy method."""
-        if not self.is_tracing:
-            unwrapped = TracedData.unwrap_traced_data(src)
-            underlying = self.as_subclass(torch.Tensor)
-            underlying.copy_(unwrapped, non_blocking=non_blocking)
-            return underlying
+        """Copy ``src`` into this tensor and record a full functional write."""
+        real_value = TracedTensor.unwrap_traced_tensor(src)
+        self.tensor.copy_(real_value, non_blocking=non_blocking)
 
-        return type(self).__torch_function__(
-            torch.Tensor.copy_,
-            (type(self),),
-            (self, src),
-            {"non_blocking": non_blocking},
-        )
+        if not self.validate_status((Ellipsis, src)):
+            return self
+
+        if not self._record_assignment(Ellipsis, src, real_value):
+            _get_logger().warning(
+                "TracedTensor.copy_ cannot be lowered functionally; "
+                "recording raw __setitem__, which may not export."
+            )
+            value_proxy = src.proxy if isinstance(src, TracedTensor) else src
+            self._proxy = self._context.tracer.create_proxy(
+                "call_method", "__setitem__",
+                (self._proxy, Ellipsis, value_proxy), {},
+            )
+        return self
+
 
     # =========================================================================
     # Comparison Operators
@@ -962,10 +1005,9 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         Supports all Python indexing operations: slicing, integer indexing,
         tensor indexing, etc. The operation is recorded in the computation graph.
 
-        Whole-key traced masks/indices are lowered to torch.masked_select and
-        torch.index_select respectively. Tuple/mixed traced indexing remains
-        unsupported because FX cannot serialize TracedTensor objects as
-        indexing arguments directly.
+        Whole-key traced masks/indices retain their specialized lowerings.
+        Tuple/mixed traced indices are converted to FX proxies and recorded as
+        operator.getitem so augmented assignment can write the result back.
         """
         # Check for boolean mask indexing with TracedTensor
         if isinstance(key, TracedTensor):
@@ -1003,22 +1045,19 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                 )
             return self._new(result_tensor, proxy_out)
 
-        # Check for tuple containing TracedTensor
-        if isinstance(key, tuple):
-            for item in key:
-                if isinstance(item, TracedTensor):
-                    if item.dtype == torch.bool:
-                        raise NotImplementedError(
-                            "Boolean/mask indexing with TracedTensor is not supported. "
-                            "The FX tracer cannot serialize TracedTensor objects as indexing arguments.\n"
-                            "Use torch.masked_select() or convert mask to regular tensor."
-                        )
-                    else:
-                        raise NotImplementedError(
-                            "Advanced indexing with TracedTensor indices is not supported. "
-                            "The FX tracer cannot serialize TracedTensor objects as indexing arguments.\n"
-                            "Use torch.index_select() when selecting along a dimension with traced indices"
-                        )
+        if TracedData.find_traced_data(key) is not None:
+            if not self._is_supported_index_key(key):
+                _get_logger().fatal(
+                    "Mixed traced indexing supports boolean and integer "
+                    "tensor indices combined with basic Python indices.",
+                    error_type=NotImplementedError,
+                )
+            real_key = TracedData.unwrap_traced_data(key)
+            result_tensor = self.tensor[real_key]
+            if not self.validate_status(args=(key,)):
+                return result_tensor
+            proxy_out = self._create_getitem_proxy(key)
+            return self._new(result_tensor, proxy_out)
 
         result_tensor = self.tensor[key]
 
@@ -1034,64 +1073,28 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         return result_tensor
 
     def __setitem__(self, key, value):
-        """Indexed assignment using functional operations for graph compatibility.
-        
-        Uses the shared _create_setitem_proxy helper from TracedData to convert
-        __setitem__ to torch.index_put for FX/TorchScript/ONNX compatibility.
+        """Indexed assignment with functional ``index_put`` lowering.
+
+        Plain destinations may re-enter here after
+        ``_handle_plain_assignment`` promotes them and installs a destination
+        constant as this tensor's proxy.
         """
-        # Unwrap value if it's a TracedTensor
+        real_key = TracedData.unwrap_traced_data(key)
         real_value = TracedTensor.unwrap_traced_tensor(value)
+        self.tensor[real_key] = real_value
 
-        # Perform the actual assignment on the underlying tensor
-        self.tensor[key] = real_value
-
-        # Skip tracing if context is not tracing
-        if not self.validate_status():
+        if not self.validate_status((key, value)):
             return
 
-        # Extract proxy from value if it's a TracedTensor
-        value_proxy = value.proxy if isinstance(value, TracedTensor) else value
-
-        # Use shared helper to create the proxy
-        proxy_out = self._create_setitem_proxy(key, value_proxy)
-        
-        if proxy_out is not None:
-            self._proxy = proxy_out
-            return
-        
-        # Handle unsupported cases with warnings
-        has_slice = isinstance(key, tuple) and any(isinstance(k, slice) for k in key)
-        if has_slice:
-            warnings.warn(
-                f"TracedTensor setitem with multi-dimensional slice key {key} "
-                "cannot be lowered to a functional op. The exported graph will "
-                "contain a raw __setitem__ node that is invalid for FX execution, "
-                "TorchScript, and ONNX export.\n"
-                "To fix this, replace the slice assignment with functional ops:\n"
-                "  - torch.slice_scatter (one call per dimension)\n"
-                "  - torch.index_put with explicit index tensors\n"
-                "  - Functional assembly with torch.cat / torch.stack",
-                stacklevel=2,
+        if not self._record_assignment(key, value, real_value):
+            _get_logger().warning(
+                f"TracedTensor assignment with key {key!r} cannot be lowered "
+                "functionally; recording raw __setitem__, which may not export."
             )
-        elif isinstance(key, tuple):
-            warnings.warn(
-                f"TracedTensor setitem with multi-dimensional key {key} "
-                "may produce an invalid graph for export. "
-                "Consider using torch.index_put directly.",
-                stacklevel=2,
+            value_proxy = value.proxy if isinstance(value, TracedTensor) else value
+            self._proxy = self._context.tracer.create_proxy(
+                "call_method", "__setitem__", (self._proxy, key, value_proxy), {}
             )
-        else:
-            warnings.warn(
-                f"TracedTensor setitem with {type(key).__name__} key "
-                "may produce an invalid graph for export. "
-                "Consider using torch.index_put or torch.masked_scatter directly.",
-                stacklevel=2,
-            )
-        
-        # Fallback: record __setitem__ directly (may not export)
-        self._proxy = self._context.tracer.create_proxy(
-            "call_method", "__setitem__", (self._proxy, key, value_proxy), {}
-        )
 
     # =========================================================================
     # Magic Methods
