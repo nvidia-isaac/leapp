@@ -123,7 +123,12 @@ class TracedData(ABC):
             A new TracedData instance of the same type
         """
         pass
-    
+
+    def _promote_inactive_result(self, result):
+        """Promote tensor-valued results while retaining this object's state."""
+        from leapp.leapp_graph.datatypes import promote_traced_result
+        return promote_traced_result(result, self)
+
     # =========================================================================
     # Common Static Methods
     # =========================================================================
@@ -159,9 +164,14 @@ class TracedData(ABC):
                 TracedData._map_structure(obj.step, leaf_fn),
             )
         if isinstance(obj, (list, tuple)):
-            return type(obj)(
+            mapped = tuple(
                 TracedData._map_structure(item, leaf_fn) for item in obj
             )
+            if hasattr(obj, "_fields"):
+                # namedtuples take their fields positionally. Plain sequences and
+                # torch's structseq return types instead take a single sequence.
+                return type(obj)(*mapped)
+            return type(obj)(mapped)
         if isinstance(obj, dict):
             return {
                 key: TracedData._map_structure(value, leaf_fn)

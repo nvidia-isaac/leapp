@@ -19,7 +19,7 @@ import torch
 from torch.fx.proxy import Proxy
 
 from leapp.utils.logging import _get_logger
-from leapp.utils.dtype import DtypeCodec, register_dtype_codec
+from leapp.utils.dtype import DtypeCodec, dtype_to_name, register_dtype_codec
 from ..traced_data import TracedData
 
 
@@ -48,6 +48,14 @@ register_dtype_codec(DtypeCodec(
     value_dtype=lambda v: v.dtype,
     dtype_to_name=_NUMPY_DTYPE_TO_NAME,
 ))
+
+
+def _torch_dtype_for(dtype):
+    """Map a numpy dtype to its torch counterpart, or None if unsupported."""
+    try:
+        return getattr(torch, dtype_to_name(np.dtype(dtype)))
+    except (ValueError, TypeError):
+        return None
 
 
 # =============================================================================
@@ -342,31 +350,23 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         intermediate_name = self._name_from_proxy(proxy)
         return TracedNpArray(array, intermediate_name, self._context, proxy)
 
-    def _promote_inactive_result(self, result):
-        from leapp.leapp_graph.datatypes import promote_traced_result
-        return promote_traced_result(result, self)
-
-    @staticmethod
-    def unwrap_traced_array(obj):
-        """Recursively unwrap traced data to native values."""
-        return TracedData.unwrap_traced_data(obj)
-
     @staticmethod
     def find_traced_array(obj):
-        """Find first TracedNpArray in args."""
-        if isinstance(obj, TracedNpArray):
-            return obj
-        elif isinstance(obj, (list, tuple)):
-            for item in obj:
-                result = TracedNpArray.find_traced_array(item)
-                if result is not None:
-                    return result
-        elif isinstance(obj, dict):
-            for value in obj.values():
-                result = TracedNpArray.find_traced_array(value)
-                if result is not None:
-                    return result
-        return None
+        """Find the first TracedNpArray in a supported nested structure.
+
+        NumPy dispatch must anchor on a NumPy carrier specifically, so this
+        cannot use the backend-agnostic ``find_traced_data``.
+        """
+        found = None
+
+        def visit(item):
+            nonlocal found
+            if found is None and isinstance(item, TracedNpArray):
+                found = item
+            return item
+
+        TracedData._map_structure(obj, visit)
+        return found
 
     @staticmethod
     def find_all_contexts(obj, contexts=None):
@@ -471,10 +471,10 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         """Execute NumPy ufuncs and record them only while the source is active."""
         traced_array = TracedNpArray.find_traced_array([inputs, kwargs])
         unwrapped_inputs = tuple(
-            TracedNpArray.unwrap_traced_array(inp) for inp in inputs
+            TracedData.unwrap_traced_data(inp) for inp in inputs
         )
         unwrapped_kwargs = {
-            key: TracedNpArray.unwrap_traced_array(value)
+            key: TracedData.unwrap_traced_data(value)
             for key, value in kwargs.items()
         }
 
@@ -558,10 +558,10 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         """Execute NumPy functions and record them only while the source is active."""
         traced_array = TracedNpArray.find_traced_array([args, kwargs])
         unwrapped_args = tuple(
-            TracedNpArray.unwrap_traced_array(arg) for arg in args
+            TracedData.unwrap_traced_data(arg) for arg in args
         )
         unwrapped_kwargs = {
-            key: TracedNpArray.unwrap_traced_array(value)
+            key: TracedData.unwrap_traced_data(value)
             for key, value in kwargs.items()
         }
         result_array = func(*unwrapped_args, **unwrapped_kwargs)
@@ -837,7 +837,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         ``TracedNpArray``; the destination must already be traced.
         """
         real_key = TracedData.unwrap_traced_data(key)
-        real_value = TracedNpArray.unwrap_traced_array(value)
+        real_value = TracedData.unwrap_traced_data(value)
         self.view(np.ndarray)[real_key] = real_value
 
         if not self.validate_status(args=(key, value)):
@@ -920,13 +920,21 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         return np.round(self, decimals)
 
     def astype(self, dtype):
-        """Type conversion - executes but may not trace correctly."""
+        """Type conversion, recorded as a dtype cast in the graph."""
         result = self.view(np.ndarray).astype(dtype)
         if not self.validate_status():
             return self._promote_inactive_result(result)
-        # Note: torch equivalent would be .to(dtype), but dtype mapping is complex
-        _get_logger().warning(f"astype({dtype}) may not trace correctly to torch equivalent")
-        return self._new(result, self.proxy)
+        torch_dtype = _torch_dtype_for(dtype)
+        if torch_dtype is None:
+            _get_logger().warning(
+                f"astype({dtype}) has no torch equivalent and cannot be recorded; "
+                f"the exported graph will keep {self.dtype}"
+            )
+            return self._new(result, self.proxy)
+        proxy_out = self._context.tracer.create_proxy(
+            "call_method", "to", (self.proxy, torch_dtype), {}
+        )
+        return self._new(result, proxy_out)
 
     def copy(self):
         """Return a copy of the array."""
@@ -972,7 +980,9 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         result = self
         if needs_dtype_copy:
             result = result.astype(dtype)
-        if copy is True:
+        # astype() already allocated, so an extra copy would only add a
+        # redundant clone to the graph.
+        if copy is True and not needs_dtype_copy:
             result = result.copy()
         return result
 

@@ -26,7 +26,10 @@ class NumpyPatchBackend:
             original = getattr(module, name)
             key = (module, name)
             self._originals[key] = original
-            self._patches[key] = self._create_patch(original)
+            # np.array copies by default; np.asarray copies only when needed.
+            self._patches[key] = self._create_patch(
+                original, copy_default=True if name == "array" else None
+            )
 
     @property
     def installed(self) -> bool:
@@ -47,20 +50,18 @@ class NumpyPatchBackend:
         self._installed = False
 
     @staticmethod
-    def _create_patch(original_func):
+    def _create_patch(original_func, *, copy_default):
         """Create a patched numpy array function that preserves tracing."""
 
         @functools.wraps(original_func)
         def patched(data, *args, **kwargs):
             from leapp.leapp_graph.datatypes import is_traced_type
 
-            is_traced = is_traced_type(data)
+            if not is_traced_type(data):
+                return original_func(data, *args, **kwargs)
 
-            if is_traced:
-                dtype = kwargs.get("dtype")
-                copy = kwargs.get("copy")
-                return data.__array__(dtype=dtype, copy=copy)
-
-            return original_func(data, *args, **kwargs)
+            # dtype is the only positional argument np.array and np.asarray share.
+            dtype = args[0] if args else kwargs.get("dtype")
+            return data.__array__(dtype=dtype, copy=kwargs.get("copy", copy_default))
 
         return patched

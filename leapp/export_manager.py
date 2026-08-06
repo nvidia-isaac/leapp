@@ -299,11 +299,13 @@ class ExportManager:
                     f"New call site:\n{format_caller_identity(_caller_identity)}")
                 traced_tensors_node._caller_identities.add(_caller_identity)
             traced_tensors_node.reentry_validate_inputs(tensors)
-            rebound_tensors = [
-                traced_tensors_node._create_io_helper(tensor, tensor_name, to="traced")
+            rebound_tensors = {
+                tensor_name: traced_tensors_node._create_io_helper(
+                    tensor, tensor_name, to="traced"
+                )
                 for tensor_name, tensor in tensors.items()
-            ]
-            return rebound_tensors[0] if len(rebound_tensors) == 1 else tuple(rebound_tensors)
+            }
+            return self._passthrough_dict_values(rebound_tensors)
 
         traced_tensors_node._caller_identities.add(_caller_identity)
 
