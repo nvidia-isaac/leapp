@@ -86,7 +86,7 @@ class TracedData(ABC):
         """Get the tracing status of the context that owns this data."""
         if self._context is None:
             return False
-        return self._context.is_tracing and not getattr(self._context, "dry_run", False)
+        return self._context.is_tracing
     
     @property
     @abstractmethod
@@ -123,11 +123,6 @@ class TracedData(ABC):
             A new TracedData instance of the same type
         """
         pass
-
-    def _promote_inactive_result(self, result):
-        """Promote tensor-valued results while retaining this object's state."""
-        from leapp.leapp_graph.datatypes import promote_traced_result
-        return promote_traced_result(result, self)
 
     # =========================================================================
     # Common Static Methods

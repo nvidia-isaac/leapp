@@ -111,9 +111,12 @@ def stop():
         manager.patcher.uninstall()
 
 
-def compile_graph(visualize=True, verbose=None, validate=True, dry_run=False,
+def compile_graph(visualize=True, verbose=None, validate=True,
                   rtol=1e-3, atol=1e-5, strict=True, graph_configs=None):
     """Compile and save the computational graph from traced nodes.
+
+    Dry run is declared once via ``leapp.start(dry_run=True)``; when it is
+    active this call skips compile, save, and validation.
 
     When ``visualize`` is ``True`` on Python 3.11 or later, LEAPP writes
     a static ``.png`` graph artifact to the graph output
@@ -129,9 +132,6 @@ def compile_graph(visualize=True, verbose=None, validate=True, dry_run=False,
 
     if verbose is not None:
         _get_logger().set_verbose(verbose)
-
-    if dry_run:
-        manager.set_dry_run_and_non_traced(dry_run, [])
 
     manager.validate_nodes_ready_for_compile()
 

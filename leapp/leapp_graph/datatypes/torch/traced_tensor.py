@@ -524,12 +524,13 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             and cls._safe_tensor_version(real_receiver) != receiver_version
         )
 
-        # Inactive contexts keep tensor-valued results promoted without
-        # recording additional FX operations.
+        # Inactive contexts execute eagerly. A mutated receiver is returned as
+        # itself so in-place calls keep their identity; derived results are new
+        # data and stay native.
         if not traced_tensor.validate_status(args, kwargs):
             if receiver_was_mutated and receiver is not None:
                 return receiver
-            return traced_tensor._promote_inactive_result(tensor_out)
+            return tensor_out
 
         # ================== SPECIAL CASES IN HANDLING ==================
         handled, result = cls._handle_scripted_call(
@@ -667,7 +668,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                     # If result is a tensor, wrap it in TracedTensor
                     if isinstance(result, torch.Tensor):
                         if not self.validate_status():
-                            return self._promote_inactive_result(result)
+                            return result
                         # Create a proxy node for this operation
                         proxy = self._proxy._tracer.create_proxy(
                             'call_method', name, (self._proxy,) + args, kwargs)
@@ -913,7 +914,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             result_tensor = self.tensor[key.tensor]
 
             if not self.validate_status(args=(key,)):
-                return self._promote_inactive_result(result_tensor)
+                return result_tensor
 
             # Check if it's a boolean tensor (mask)
             if key.dtype == torch.bool:
@@ -960,7 +961,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         result_tensor = self.tensor[key]
 
         if not self.validate_status():
-            return self._promote_inactive_result(result_tensor)
+            return result_tensor
 
         proxy_out = self._context.tracer.create_proxy(
             "call_function", operator.getitem, (self._proxy, key), {}
@@ -1026,7 +1027,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         result_tensor = self.tensor.to(*args, **kwargs)
 
         if not self.validate_status():
-            return self._promote_inactive_result(result_tensor)
+            return result_tensor
 
         # For type conversions, we track it as an operation
         proxy_out = self._context.tracer.create_proxy(

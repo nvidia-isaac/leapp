@@ -46,10 +46,10 @@ class _LeappFXGraph(fx.Graph):
 
 
 class TracedTensorNode(LeappNode):
-    def __init__(self, name, *args, dry_run=False, **kwargs):
+    def __init__(self, name, *args, **kwargs):
         if args or kwargs:
             _get_logger().warning(f"{name} received unexpected arguments on initialization. these arguments will be ignored.")
-        super().__init__(name, dry_run=dry_run)
+        super().__init__(name)
         self.graph = _LeappFXGraph()
         self.tracer = fx.Tracer()
         self.tracer.graph = self.graph
@@ -113,7 +113,7 @@ class TracedTensorNode(LeappNode):
                 f"[{self.name}] Captured Warp regions out of discovery order.",
                 error_type=RuntimeError,
             )
-        if segment.apic_graph is None:
+        if self.exports_model and segment.apic_graph is None:
             _get_logger().fatal(
                 f"[{self.name}] Captured Warp segment has no APIC graph.",
                 error_type=RuntimeError,
@@ -147,22 +147,6 @@ class TracedTensorNode(LeappNode):
         if state_outputs:
             _get_logger().info(f"Adding {len(state_outputs)} state outputs: {list(state_outputs.keys())}")
             tensors = {**tensors, **state_outputs}
-
-        if self.dry_run:
-            for name, tensor in tensors.items():
-                self.tag_data(tensor, name)
-                self.add_output(name, name, tensor, semantics=(semantics_map or {}).get(name))
-                if name in self._state_tensors:
-                    self._state_tensors[name]["output_desc"] = self._get_required_io_description(
-                        name, self.outputs, "output"
-                    )
-            if static_tensors:
-                for name, tensor in static_tensors.items():
-                    self.tag_data(tensor, name)
-                    self.add_output(name, name, tensor, semantics=(static_semantics_map or {}).get(name))
-            self._apply_state_tags()
-            values = list(tensors.values())
-            return values[0] if len(values) == 1 else tuple(values)
 
         unwrapped_tensors = []
         for name, tensor in tensors.items():
@@ -511,7 +495,7 @@ class TracedTensorNode(LeappNode):
                     )
 
                 proxy = None
-                if self.is_tracing and not self.dry_run:
+                if self.is_tracing:
                     node = self.graph.create_node("placeholder", name, (), {})
                     proxy = Proxy(node, self.tracer)
                 return as_traced(data, name, self, proxy)

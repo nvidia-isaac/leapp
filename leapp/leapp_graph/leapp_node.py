@@ -60,10 +60,9 @@ class LeappNode():
 
     UNSET_NODE_INDEX = -1
 
-    def __init__(self, name, dry_run=False):
+    def __init__(self, name):
         self.name = name
         self._node_index = self.UNSET_NODE_INDEX
-        self.dry_run = dry_run
         
         # Attributes expected by export backends (subclasses may override)
         self.register_buffers = set()
@@ -115,6 +114,16 @@ class LeappNode():
     @property
     def has_pending_warp_segments(self) -> bool:
         return False
+
+    @property
+    def exports_model(self) -> bool:
+        """Whether this node compiles and saves a model artifact.
+
+        ``False`` covers ``export_with=None`` as well as the dry-run and
+        ``non_traced`` cases, which are both routed to ``export_with=None``.
+        Work that only feeds export can be skipped when this is ``False``.
+        """
+        return self.backend not in (None, "None")
     
     @property
     def compiled_model(self):
@@ -220,7 +229,7 @@ class LeappNode():
 
     def compile_model(self):
         try:
-            if self.backend not in (None, "None"):
+            if self.exports_model:
                 prepare_and_validate(self.m, self.backend)
             self.export_backend.compile(self.m)
         except Exception as e:

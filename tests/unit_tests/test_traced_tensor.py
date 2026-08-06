@@ -767,8 +767,8 @@ class TestTracedTensor(unittest.TestCase):
 
     # ==================== is_tracing=False Tests ====================
 
-    def test_operations_after_compile_preserve_traced_tensors(self):
-        """Test that inactive operations preserve traced carriers."""
+    def test_operations_after_compile_return_native_tensors(self):
+        """A value derived from a finished node is new data, so it stays native."""
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
         y = x * 2
@@ -779,13 +779,16 @@ class TestTracedTensor(unittest.TestCase):
         self.assertFalse(ctx.is_tracing)
 
         z = x + 1
-        self.assertIsInstance(z, TracedTensor)
-        self.assertFalse(z.is_tracing)
-        self.assertIs(z.context_obj, ctx)
-        self.assertTrue(torch.allclose(z.tensor, torch.tensor([2.0, 3.0, 4.0])))
+        self.assertNotIsInstance(z, TracedTensor)
+        self.assertIsInstance(z, torch.Tensor)
+        self.assertTrue(torch.allclose(z, torch.tensor([2.0, 3.0, 4.0])))
 
-    def test_getitem_after_compile_preserves_traced_tensor(self):
-        """Test that inactive indexing preserves a traced carrier."""
+        # The boundary value itself is untouched and still carries its node.
+        self.assertIsInstance(x, TracedTensor)
+        self.assertIs(x.context_obj, ctx)
+
+    def test_getitem_after_compile_returns_native_tensor(self):
+        """Inactive indexing produces new data, so it stays native."""
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
         y = x[0]
@@ -793,13 +796,13 @@ class TestTracedTensor(unittest.TestCase):
         ctx.compile_trace({'y': y})
 
         z = x[1]
-        self.assertIsInstance(z, TracedTensor)
-        self.assertFalse(z.is_tracing)
-        self.assertIs(z.context_obj, ctx)
-        self.assertTrue(torch.allclose(z.tensor, torch.tensor(2.0)))
+        self.assertNotIsInstance(z, TracedTensor)
+        self.assertIsInstance(z, torch.Tensor)
+        self.assertTrue(torch.allclose(z, torch.tensor(2.0)))
+        self.assertIsInstance(x, TracedTensor)
 
-    def test_to_after_compile_preserves_traced_tensor(self):
-        """Test that inactive .to() preserves a traced carrier."""
+    def test_to_after_compile_returns_native_tensor(self):
+        """Inactive .to() produces new data, so it stays native."""
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
         y = x.to(torch.float64)
@@ -807,10 +810,10 @@ class TestTracedTensor(unittest.TestCase):
         ctx.compile_trace({'y': y})
 
         z = x.to(torch.float32)
-        self.assertIsInstance(z, TracedTensor)
-        self.assertFalse(z.is_tracing)
-        self.assertIs(z.context_obj, ctx)
-        self.assertEqual(z.tensor.dtype, torch.float32)
+        self.assertNotIsInstance(z, TracedTensor)
+        self.assertIsInstance(z, torch.Tensor)
+        self.assertEqual(z.dtype, torch.float32)
+        self.assertIsInstance(x, TracedTensor)
 
     # ==================== Clone and Contiguous Tests ====================
 

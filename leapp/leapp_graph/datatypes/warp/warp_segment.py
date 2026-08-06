@@ -119,10 +119,6 @@ class WarpSegment:
         return self.status == "open"
 
     @property
-    def is_pending_capture(self) -> bool:
-        return self.apic_graph is None
-
-    @property
     def is_empty(self) -> bool:
         return not (
             self.events

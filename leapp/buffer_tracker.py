@@ -111,9 +111,6 @@ class BufferTracker:
         if traced_node is None or not traced_node.is_tracing:
             return
 
-        if getattr(traced_node, 'dry_run', False):
-            return
-
         # Collect buffers to track
         buffers_to_track: dict[str, tuple[torch.Tensor, nn.Module, str]] = {}
         for name, buf in self._model.named_buffers():

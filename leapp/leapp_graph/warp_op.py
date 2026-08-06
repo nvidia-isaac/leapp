@@ -339,6 +339,11 @@ else:
                 owner_token=owner_token,
                 close_call_stack=call_stack,
             )
+            # Only the export path consumes the APIC bundle. Without an export
+            # backend, skip the capture scope and let the kernels run eagerly;
+            # the second pass is still required so divergence is still reported.
+            if not self.node_ref.exports_model:
+                return
             with self._session.pause():
                 self._scope = wp.ScopedCapture(
                     device=self.device,
@@ -452,20 +457,30 @@ else:
                     )
             self._validate_capture_close(close_call_stack)
             if exc_type is None and self._segment is not None:
-                graph = self._capture.graph
-                self._segment.apic_graph = graph
                 self._finalize_capture()
-                # Save before replay so formal inputs and closure buffers are
-                # snapshotted at the capture boundary, not after execution.
-                with self._session.pause():
-                    wrp_archive = _save_warp_bundle(self.node_name, self._segment)
-                    _insert_warp_marker(
-                        self.node_ref,
-                        self._segment,
-                        wrp_archive=wrp_archive,
-                    )
-                    wp.capture_launch(graph)
-                    wp.synchronize()
+                if self._capture is None:
+                    # Nothing captured, so the marker carries placeholder bytes
+                    # like the discovery pass and there is nothing to replay.
+                    with self._session.pause():
+                        _insert_warp_marker(
+                            self.node_ref,
+                            self._segment,
+                            wrp_archive=b"\0",
+                        )
+                else:
+                    graph = self._capture.graph
+                    self._segment.apic_graph = graph
+                    # Save before replay so formal inputs and closure buffers are
+                    # snapshotted at the capture boundary, not after execution.
+                    with self._session.pause():
+                        wrp_archive = _save_warp_bundle(self.node_name, self._segment)
+                        _insert_warp_marker(
+                            self.node_ref,
+                            self._segment,
+                            wrp_archive=wrp_archive,
+                        )
+                        wp.capture_launch(graph)
+                        wp.synchronize()
                 self.node_ref.complete_warp_segment(self._segment)
 
             return scope_result

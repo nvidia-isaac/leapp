@@ -54,8 +54,8 @@ Parameters
 * ``dry_run`` (bool, optional): Skip model compilation and export.
   Useful to verify graph structure without paying export cost. Defaults
   to ``False``.
-* ``non_traced`` (list[str], optional): Node names to exclude from
-  tracing/export. They still capture I/O, contribute to graph
+* ``non_traced`` (list[str], optional): Node names to exclude from export.
+  They are still traced, still capture I/O, contribute to graph
   connectivity, and appear in the YAML. Defaults to ``None``.
 * ``max_cached_io`` (int, optional): How many re-entry I/O examples
   LEAPP caches per node for multi-example validation. Defaults to ``5``.
@@ -122,7 +122,6 @@ Signature
        visualize: bool = True,
        verbose: bool | None = None,
        validate: bool = True,
-       dry_run: bool = False,
        rtol: float = 1e-3,
        atol: float = 1e-5,
        strict: bool = True,
@@ -140,9 +139,6 @@ Parameters
   compile step. ``None`` leaves the current setting unchanged.
 * ``validate`` (bool, optional): Validate exported models against
   captured traced outputs. Defaults to ``True``.
-* ``dry_run`` (bool, optional): Skip model compile/save/validate while
-  still tracing graph structure and generating YAML. Defaults to
-  ``False``.
 * ``rtol`` (float, optional): Relative tolerance for
   ``torch.allclose()``. Defaults to ``1e-3``.
 * ``atol`` (float, optional): Absolute tolerance for
