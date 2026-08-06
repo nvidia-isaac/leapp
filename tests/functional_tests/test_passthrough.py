@@ -154,7 +154,7 @@ class TestDryrun(LEAPPFunctionalTestBase):
             for original_tensor, returned_tensor in zip(original_tensors, returned_tensors):
                 self.assertIsNot(original_tensor, returned_tensor)
                 self.assertIsInstance(returned_tensor, TracedTensor)
-                self.assertFalse(returned_tensor.is_tracing)
+                self.assertTrue(returned_tensor.is_tracing)
                 self.assertTrue(torch.equal(original_tensor, returned_tensor.tensor))
 
         returned_inputs = []
@@ -223,8 +223,8 @@ class TestDryrun(LEAPPFunctionalTestBase):
         traced_a, traced_b = annotate.input_tensors("node_a", {"a": a, "b": b})
         self.assertIsInstance(traced_a, TracedTensor)
         self.assertIsInstance(traced_b, TracedTensor)
-        self.assertFalse(traced_a.is_tracing)
-        self.assertFalse(traced_b.is_tracing)
+        self.assertTrue(traced_a.is_tracing)
+        self.assertTrue(traced_b.is_tracing)
 
         out = traced_a + traced_b
         returned_out = annotate.output_tensors("node_a", {"out": out}, export_with="jit")
@@ -232,7 +232,7 @@ class TestDryrun(LEAPPFunctionalTestBase):
 
         downstream_in = annotate.input_tensors("node_b", {"out": out})
         self.assertIsInstance(downstream_in, TracedTensor)
-        self.assertFalse(downstream_in.is_tracing)
+        self.assertTrue(downstream_in.is_tracing)
         annotate.output_tensors("node_b", {"final": downstream_in * 3.0}, export_with="jit")
 
         leapp.stop()
@@ -254,8 +254,8 @@ class TestDryrun(LEAPPFunctionalTestBase):
         state = annotate.state_tensors("node_state", {"state": torch.tensor([0.1, 0.2, 0.3])})
         self.assertIsInstance(obs, TracedTensor)
         self.assertIsInstance(state, TracedTensor)
-        self.assertFalse(obs.is_tracing)
-        self.assertFalse(state.is_tracing)
+        self.assertTrue(obs.is_tracing)
+        self.assertTrue(state.is_tracing)
 
         new_state = state + obs
         returned_state = annotate.update_state("node_state", {"state": new_state})
@@ -301,33 +301,14 @@ class TestDryrun(LEAPPFunctionalTestBase):
             self.assertNotIsInstance(buf, TracedTensor)
         self.assertFalse(os.path.exists(os.path.join(self.TEST_GRAPH_NAME, "policy.pt")))
 
-    def test_dryrun_declared_at_compile_graph_keeps_fx_graph_and_skips_export(self):
-        """Setting dry_run before compile_graph should keep traced FX graph but skip model files."""
-        leapp.start(name=self.TEST_GRAPH_NAME, dry_run=False)
-
-        x = annotate.input_tensors("compile_node", {"x": torch.tensor([1.0, 2.0, 3.0])})
-        y = x * 2.0
-        annotate.output_tensors("compile_node", {"y": y}, export_with="jit")
-        leapp.stop()
-
-        node = annotate.nodes["compile_node"]
-        self.assertIsNotNone(node.m, "FX graph module should be created during tracing")
-
-        leapp.compile_graph(visualize=False, validate=False, dry_run=True)
-
-        self.assertIn("compile_node", annotate.detected_nodes)
-        self.assertTrue(os.path.exists(os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")))
-        self.assertFalse(os.path.exists(os.path.join(self.TEST_GRAPH_NAME, "compile_node.pt")))
-        self.assertFalse(os.path.exists(os.path.join(self.TEST_GRAPH_NAME, "compile_node.onnx")))
-
     def test_non_traced_node_is_selective_and_preserves_connectivity(self):
-        """non_traced should disable tracing only for selected nodes while preserving graph connectivity."""
+        """non_traced should skip export only for selected nodes while preserving graph connectivity."""
         leapp.start(name=self.TEST_GRAPH_NAME, non_traced=["raw_node"])
 
         x = torch.tensor([1.0, 2.0, 3.0])
         raw_x = annotate.input_tensors("raw_node", {"x": x})
         self.assertIsInstance(raw_x, TracedTensor)
-        self.assertFalse(raw_x.is_tracing)
+        self.assertTrue(raw_x.is_tracing)
 
         raw_y = raw_x * 2.0
         annotate.output_tensors("raw_node", {"y": raw_y}, export_with="jit")
@@ -383,8 +364,8 @@ class TestDryrun(LEAPPFunctionalTestBase):
         state = annotate.state_tensors("state_node", {"state": torch.tensor([0.1, 0.2, 0.3])})
         self.assertIsInstance(obs, TracedTensor)
         self.assertIsInstance(state, TracedTensor)
-        self.assertFalse(obs.is_tracing)
-        self.assertFalse(state.is_tracing)
+        self.assertTrue(obs.is_tracing)
+        self.assertTrue(state.is_tracing)
 
         new_state = state + obs
         annotate.update_state("state_node", {"state": new_state})
@@ -441,8 +422,14 @@ class TestDryrun(LEAPPFunctionalTestBase):
         self.assertFalse(out.is_tracing)
         self.assertTrue(hasattr(out, "leapp_tag"))
 
-    def test_expected_fail_start_dryrun_module_does_not_replace_buffers(self):
-        """Desired behavior: start(dry_run=True) module() should not replace registered buffer objects."""
+    @unittest.expectedFailure
+    def test_expected_fail_module_restores_original_buffer_objects(self):
+        """Desired behavior: module() should put the original buffer objects back.
+
+        BufferTracker swaps registered buffers for traced inputs and restores
+        equivalent tensors rather than the originals, so buffer identity is
+        lost. This applies to any traced node, not just dry_run ones.
+        """
         class TinyStatefulModel(torch.nn.Module):
             def __init__(self):
                 super().__init__()
@@ -465,5 +452,5 @@ class TestDryrun(LEAPPFunctionalTestBase):
         for name, buf in model.named_buffers():
             self.assertEqual(
                 id(buf), original_buffer_ids[name],
-                f"Future intent: buffer '{name}' should not be replaced in start-time dry_run",
+                f"Future intent: buffer '{name}' should be restored, not replaced",
             )

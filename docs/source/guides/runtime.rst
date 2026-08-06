@@ -47,7 +47,7 @@ node, LEAPP compares:
 * NaN / Inf presence in exported and traced outputs
 
 If a node has no compiled model, validation is skipped and treated as
-successful. This is expected for metadata-only nodes such as ``non_traced``
+successful. This is expected for non-exported nodes such as ``non_traced``
 or dry-run cases.
 
 Multi-example validation with cached inputs

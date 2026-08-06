@@ -39,8 +39,8 @@ class FunctionDecoratorNode(LeappNode):
 
     def __init__(self, name, backend=None,
                  backend_params=None, inputs=None, outputs=None,
-                 environment_constants=None, register_buffers=None, dry_run=False):
-        super().__init__(name, dry_run=dry_run)
+                 environment_constants=None, register_buffers=None):
+        super().__init__(name)
 
         if inputs is not None:
             self._declared_inputs = list(dict.fromkeys(inputs))
