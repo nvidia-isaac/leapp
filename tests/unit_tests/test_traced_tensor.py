@@ -767,8 +767,8 @@ class TestTracedTensor(unittest.TestCase):
 
     # ==================== is_tracing=False Tests ====================
 
-    def test_operations_after_compile_return_tensors(self):
-        """Test that operations return raw tensors after compile_trace."""
+    def test_operations_after_compile_preserve_traced_tensors(self):
+        """Test that inactive operations preserve traced carriers."""
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
         y = x * 2
@@ -778,36 +778,39 @@ class TestTracedTensor(unittest.TestCase):
         # After compilation, is_tracing should be False
         self.assertFalse(ctx.is_tracing)
 
-        # Operations on traced tensor should now return regular tensors
         z = x + 1
-        self.assertIsInstance(z, torch.Tensor)
-        self.assertNotIsInstance(z, TracedTensor)
+        self.assertIsInstance(z, TracedTensor)
+        self.assertFalse(z.is_tracing)
+        self.assertIs(z.context_obj, ctx)
+        self.assertTrue(torch.allclose(z.tensor, torch.tensor([2.0, 3.0, 4.0])))
 
-    def test_getitem_after_compile_returns_tensor(self):
-        """Test that indexing returns raw tensor after compile."""
+    def test_getitem_after_compile_preserves_traced_tensor(self):
+        """Test that inactive indexing preserves a traced carrier."""
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
         y = x[0]
 
         ctx.compile_trace({'y': y})
 
-        # Indexing after compile should return regular tensor
         z = x[1]
-        self.assertIsInstance(z, torch.Tensor)
-        self.assertNotIsInstance(z, TracedTensor)
+        self.assertIsInstance(z, TracedTensor)
+        self.assertFalse(z.is_tracing)
+        self.assertIs(z.context_obj, ctx)
+        self.assertTrue(torch.allclose(z.tensor, torch.tensor(2.0)))
 
-    def test_to_after_compile_returns_tensor(self):
-        """Test that .to() returns raw tensor after compile."""
+    def test_to_after_compile_preserves_traced_tensor(self):
+        """Test that inactive .to() preserves a traced carrier."""
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
         y = x.to(torch.float64)
 
         ctx.compile_trace({'y': y})
 
-        # .to() after compile should return regular tensor
         z = x.to(torch.float32)
-        self.assertIsInstance(z, torch.Tensor)
-        self.assertNotIsInstance(z, TracedTensor)
+        self.assertIsInstance(z, TracedTensor)
+        self.assertFalse(z.is_tracing)
+        self.assertIs(z.context_obj, ctx)
+        self.assertEqual(z.tensor.dtype, torch.float32)
 
     # ==================== Clone and Contiguous Tests ====================
 
@@ -1296,12 +1299,11 @@ class TestTracedTensor(unittest.TestCase):
         result = ctx.m(torch.tensor([1.0, 2.0, 3.0]))
         self.assertTrue(torch.allclose(result, expected))
 
-    def test_inplace_after_compile_returns_raw_tensor(self):
-        """Test that in-place operations return raw tensor after compile.
+    def test_inplace_after_compile_preserves_traced_tensor(self):
+        """Test that in-place operations keep the carrier after compile.
 
-        After compilation (when tracing stops), operations on TracedTensor
-        should return raw torch.Tensor so downstream code doesn't know
-        it was ever traced.
+        After compilation the carrier stays traced so its provenance survives
+        into the next node; it simply stops recording.
         """
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
@@ -1309,59 +1311,59 @@ class TestTracedTensor(unittest.TestCase):
 
         ctx.compile_trace({'y': y})
 
-        # After compilation, in-place ops should return raw tensor
         result = x
         result += 1
 
-        # Should return a raw torch.Tensor, not TracedTensor
-        self.assertIsInstance(result, torch.Tensor)
-        self.assertNotIsInstance(result, TracedTensor)
+        # In-place operations mutate and return the same carrier
+        self.assertIs(result, x)
+        self.assertIsInstance(result, TracedTensor)
+        self.assertFalse(result.is_tracing)
+        self.assertIs(result.context_obj, ctx)
 
-        # Should have correct computed value
         expected = torch.tensor([2.0, 3.0, 4.0])
-        self.assertTrue(torch.allclose(result, expected))
+        self.assertTrue(torch.allclose(result.tensor, expected))
 
     def test_inplace_after_compile_all_operators(self):
-        """Test all in-place operators return raw tensor with correct values after compile."""
+        """Test all in-place operators keep the carrier with correct values."""
         # Test +=
         ctx = TracedTensorNode(name="test_add", node_index=0)
         x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
         ctx.compile_trace({'y': x * 2})
         x += 10
-        self.assertNotIsInstance(x, TracedTensor)
-        self.assertTrue(torch.allclose(x, torch.tensor([11.0, 12.0, 13.0])))
+        self.assertIsInstance(x, TracedTensor)
+        self.assertTrue(torch.allclose(x.tensor, torch.tensor([11.0, 12.0, 13.0])))
 
         # Test -=
         ctx = TracedTensorNode(name="test_sub", node_index=0)
         x = ctx.create_input(torch.tensor([10.0, 20.0, 30.0]), name="x")
         ctx.compile_trace({'y': x * 2})
         x -= 5
-        self.assertNotIsInstance(x, TracedTensor)
-        self.assertTrue(torch.allclose(x, torch.tensor([5.0, 15.0, 25.0])))
+        self.assertIsInstance(x, TracedTensor)
+        self.assertTrue(torch.allclose(x.tensor, torch.tensor([5.0, 15.0, 25.0])))
 
         # Test *=
         ctx = TracedTensorNode(name="test_mul", node_index=0)
         x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
         ctx.compile_trace({'y': x + 1})
         x *= 3
-        self.assertNotIsInstance(x, TracedTensor)
-        self.assertTrue(torch.allclose(x, torch.tensor([3.0, 6.0, 9.0])))
+        self.assertIsInstance(x, TracedTensor)
+        self.assertTrue(torch.allclose(x.tensor, torch.tensor([3.0, 6.0, 9.0])))
 
         # Test /=
         ctx = TracedTensorNode(name="test_div", node_index=0)
         x = ctx.create_input(torch.tensor([10.0, 20.0, 30.0]), name="x")
         ctx.compile_trace({'y': x + 1})
         x /= 2
-        self.assertNotIsInstance(x, TracedTensor)
-        self.assertTrue(torch.allclose(x, torch.tensor([5.0, 10.0, 15.0])))
+        self.assertIsInstance(x, TracedTensor)
+        self.assertTrue(torch.allclose(x.tensor, torch.tensor([5.0, 10.0, 15.0])))
 
         # Test **=
         ctx = TracedTensorNode(name="test_pow", node_index=0)
         x = ctx.create_input(torch.tensor([2.0, 3.0, 4.0]), name="x")
         ctx.compile_trace({'y': x + 1})
         x **= 2
-        self.assertNotIsInstance(x, TracedTensor)
-        self.assertTrue(torch.allclose(x, torch.tensor([4.0, 9.0, 16.0])))
+        self.assertIsInstance(x, TracedTensor)
+        self.assertTrue(torch.allclose(x.tensor, torch.tensor([4.0, 9.0, 16.0])))
 
     def test_inplace_after_compile_chained(self):
         """Test chained in-place operations after compile."""
@@ -1375,57 +1377,59 @@ class TestTracedTensor(unittest.TestCase):
         x -= 3   # [1, 3, 5]
         x /= 2   # [0.5, 1.5, 2.5]
 
-        self.assertNotIsInstance(x, TracedTensor)
-        self.assertTrue(torch.allclose(x, torch.tensor([0.5, 1.5, 2.5])))
+        self.assertIsInstance(x, TracedTensor)
+        self.assertFalse(x.is_tracing)
+        self.assertTrue(torch.allclose(x.tensor, torch.tensor([0.5, 1.5, 2.5])))
 
     def test_inplace_methods_after_compile(self):
-        """Test all in-place methods return raw tensor with correct values after compile."""
+        """Test all in-place methods keep the carrier with correct values."""
         # Test add_()
         ctx = TracedTensorNode(name="test_add", node_index=0)
         x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
         ctx.compile_trace({'y': x * 2})
         result = x.add_(10)
-        self.assertNotIsInstance(result, TracedTensor)
-        self.assertTrue(torch.allclose(result, torch.tensor([11.0, 12.0, 13.0])))
+        self.assertIs(result, x)
+        self.assertTrue(torch.allclose(result.tensor, torch.tensor([11.0, 12.0, 13.0])))
 
         # Test sub_()
         ctx = TracedTensorNode(name="test_sub", node_index=0)
         x = ctx.create_input(torch.tensor([10.0, 20.0, 30.0]), name="x")
         ctx.compile_trace({'y': x * 2})
         result = x.sub_(5)
-        self.assertNotIsInstance(result, TracedTensor)
-        self.assertTrue(torch.allclose(result, torch.tensor([5.0, 15.0, 25.0])))
+        self.assertIs(result, x)
+        self.assertTrue(torch.allclose(result.tensor, torch.tensor([5.0, 15.0, 25.0])))
 
         # Test mul_()
         ctx = TracedTensorNode(name="test_mul", node_index=0)
         x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
         ctx.compile_trace({'y': x + 1})
         result = x.mul_(5)
-        self.assertNotIsInstance(result, TracedTensor)
-        self.assertTrue(torch.allclose(result, torch.tensor([5.0, 10.0, 15.0])))
+        self.assertIs(result, x)
+        self.assertTrue(torch.allclose(result.tensor, torch.tensor([5.0, 10.0, 15.0])))
 
         # Test div_()
         ctx = TracedTensorNode(name="test_div", node_index=0)
         x = ctx.create_input(torch.tensor([10.0, 20.0, 30.0]), name="x")
         ctx.compile_trace({'y': x + 1})
         result = x.div_(2)
-        self.assertNotIsInstance(result, TracedTensor)
-        self.assertTrue(torch.allclose(result, torch.tensor([5.0, 10.0, 15.0])))
+        self.assertIs(result, x)
+        self.assertTrue(torch.allclose(result.tensor, torch.tensor([5.0, 10.0, 15.0])))
 
         # Test pow_()
         ctx = TracedTensorNode(name="test_pow", node_index=0)
         x = ctx.create_input(torch.tensor([2.0, 3.0, 4.0]), name="x")
         ctx.compile_trace({'y': x + 1})
         result = x.pow_(2)
-        self.assertNotIsInstance(result, TracedTensor)
-        self.assertTrue(torch.allclose(result, torch.tensor([4.0, 9.0, 16.0])))
+        self.assertIs(result, x)
+        self.assertTrue(torch.allclose(result.tensor, torch.tensor([4.0, 9.0, 16.0])))
 
         # Test copy_()
         ctx = TracedTensorNode(name="test_copy", node_index=0)
         x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
         ctx.compile_trace({'y': x * 2})
         x.copy_(torch.tensor([100.0, 200.0, 300.0]))
-        self.assertTrue(torch.allclose(x, torch.tensor([100.0, 200.0, 300.0])))
+        self.assertIsInstance(x, TracedTensor)
+        self.assertTrue(torch.allclose(x.tensor, torch.tensor([100.0, 200.0, 300.0])))
 
     def test_inplace_with_broadcasting(self):
         """Test in-place operations with broadcasting (2D tensor + 1D tensor)."""

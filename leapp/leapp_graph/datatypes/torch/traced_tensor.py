@@ -130,10 +130,6 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         intermediate_name = self._name_from_proxy(proxy)
         return TracedTensor(tensor, intermediate_name, self._context, proxy)
 
-    def _promote_inactive_result(self, result):
-        from leapp.leapp_graph.datatypes import promote_traced_result
-        return promote_traced_result(result, self)
-
     # =========================================================================
     # Static Methods
     # =========================================================================
@@ -775,103 +771,54 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     # In-place Arithmetic Operators (for +=, -=, etc.)
     # =========================================================================
 
-    def __iadd__(self, other):
-        """In-place addition (+=)."""
+    def _apply_inplace(self, functional, inplace_name, other, **kwargs):
+        """Mutate this tensor in place, recording the operation functionally.
+
+        While tracing, the graph records the functional form and the proxy is
+        rebound, since FX cannot express a mutation. Otherwise the eager
+        in-place method is called on the unwrapped tensor, which stops
+        ``__torch_function__`` from rewriting it into its allocating form.
+        ``inplace_name`` is None for operations torch has no in-place form for.
+        """
         if not self.is_tracing:
-            # Get underlying tensor and call add_ directly on it
-            # This bypasses __torch_function__ which would convert add_ to torch.add (non-in-place)
             unwrapped = TracedData.unwrap_traced_data(other)
             underlying = self.as_subclass(torch.Tensor)
-            underlying.add_(unwrapped)
+            if inplace_name is None:
+                underlying.copy_(functional(underlying, unwrapped, **kwargs))
+            else:
+                getattr(underlying, inplace_name)(unwrapped, **kwargs)
             return self
 
-        # Record as functional operation in graph
-        result = torch.add(self, other)
-
-        # Update internal state to maintain in-place semantics
+        result = functional(self, other, **kwargs)
         with torch.no_grad():
             torch.Tensor.copy_(self, result.tensor if isinstance(result, TracedTensor) else result)
         if isinstance(result, TracedTensor):
             self._proxy = result.proxy
-
         return self
+
+    def __iadd__(self, other):
+        """In-place addition (+=)."""
+        return self._apply_inplace(torch.add, "add_", other)
 
     def __isub__(self, other):
         """In-place subtraction (-=)."""
-        if not self.is_tracing:
-            unwrapped = TracedData.unwrap_traced_data(other)
-            underlying = self.as_subclass(torch.Tensor)
-            underlying.sub_(unwrapped)
-            return self
-
-        result = torch.sub(self, other)
-        with torch.no_grad():
-            torch.Tensor.copy_(self, result.tensor if isinstance(result, TracedTensor) else result)
-        if isinstance(result, TracedTensor):
-            self._proxy = result.proxy
-        return self
+        return self._apply_inplace(torch.sub, "sub_", other)
 
     def __imul__(self, other):
         """In-place multiplication (*=)."""
-        if not self.is_tracing:
-            unwrapped = TracedData.unwrap_traced_data(other)
-            underlying = self.as_subclass(torch.Tensor)
-            underlying.mul_(unwrapped)
-            return self
-
-        result = torch.mul(self, other)
-        with torch.no_grad():
-            torch.Tensor.copy_(self, result.tensor if isinstance(result, TracedTensor) else result)
-        if isinstance(result, TracedTensor):
-            self._proxy = result.proxy
-        return self
+        return self._apply_inplace(torch.mul, "mul_", other)
 
     def __itruediv__(self, other):
         """In-place division (/=)."""
-        if not self.is_tracing:
-            unwrapped = TracedData.unwrap_traced_data(other)
-            underlying = self.as_subclass(torch.Tensor)
-            underlying.div_(unwrapped)
-            return self
-
-        result = torch.div(self, other)
-        with torch.no_grad():
-            torch.Tensor.copy_(self, result.tensor if isinstance(result, TracedTensor) else result)
-        if isinstance(result, TracedTensor):
-            self._proxy = result.proxy
-        return self
+        return self._apply_inplace(torch.div, "div_", other)
 
     def __ipow__(self, other):
         """In-place power (**=)."""
-        if not self.is_tracing:
-            unwrapped = TracedData.unwrap_traced_data(other)
-            underlying = self.as_subclass(torch.Tensor)
-            underlying.pow_(unwrapped)
-            return self
-
-        result = torch.pow(self, other)
-        with torch.no_grad():
-            torch.Tensor.copy_(self, result.tensor if isinstance(result, TracedTensor) else result)
-        if isinstance(result, TracedTensor):
-            self._proxy = result.proxy
-        return self
+        return self._apply_inplace(torch.pow, "pow_", other)
 
     def __imatmul__(self, other):
         """In-place matrix multiplication (@=)."""
-        if not self.is_tracing:
-            # matmul doesn't have a direct in-place version, compute and copy
-            unwrapped = TracedData.unwrap_traced_data(other)
-            underlying = self.as_subclass(torch.Tensor)
-            result_data = torch.matmul(underlying, unwrapped)
-            underlying.copy_(result_data)
-            return self
-
-        result = torch.matmul(self, other)
-        with torch.no_grad():
-            torch.Tensor.copy_(self, result.tensor if isinstance(result, TracedTensor) else result)
-        if isinstance(result, TracedTensor):
-            self._proxy = result.proxy
-        return self
+        return self._apply_inplace(torch.matmul, None, other)
 
     # =========================================================================
     # In-place Methods (add_, mul_, etc.) - Must override since inherited from torch.Tensor
@@ -879,78 +826,25 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
     def add_(self, other, *, alpha=1):
         """In-place addition method."""
-        if not self.is_tracing:
-            unwrapped = TracedData.unwrap_traced_data(other)
-            underlying = self.as_subclass(torch.Tensor)
-            underlying.add_(unwrapped, alpha=alpha)
-            return self
-        # Record as functional operation
-        result = torch.add(self, other, alpha=alpha)
-        with torch.no_grad():
-            torch.Tensor.copy_(self, result.tensor if isinstance(result, TracedTensor) else result)
-        if isinstance(result, TracedTensor):
-            self._proxy = result.proxy
-        return self
+        return self._apply_inplace(torch.add, "add_", other, alpha=alpha)
 
     def sub_(self, other, *, alpha=1):
         """In-place subtraction method."""
-        if not self.is_tracing:
-            unwrapped = TracedData.unwrap_traced_data(other)
-            underlying = self.as_subclass(torch.Tensor)
-            underlying.sub_(unwrapped, alpha=alpha)
-            return self
-
-        result = torch.sub(self, other, alpha=alpha)
-        with torch.no_grad():
-            torch.Tensor.copy_(self, result.tensor if isinstance(result, TracedTensor) else result)
-        if isinstance(result, TracedTensor):
-            self._proxy = result.proxy
-        return self
+        return self._apply_inplace(torch.sub, "sub_", other, alpha=alpha)
 
     def mul_(self, other):
         """In-place multiplication method."""
-        if not self.is_tracing:
-            unwrapped = TracedData.unwrap_traced_data(other)
-            underlying = self.as_subclass(torch.Tensor)
-            underlying.mul_(unwrapped)
-            return self
-
-        result = torch.mul(self, other)
-        with torch.no_grad():
-            torch.Tensor.copy_(self, result.tensor if isinstance(result, TracedTensor) else result)
-        if isinstance(result, TracedTensor):
-            self._proxy = result.proxy
-        return self
+        return self._apply_inplace(torch.mul, "mul_", other)
 
     def div_(self, other, *, rounding_mode=None):
         """In-place division method."""
-        if not self.is_tracing:
-            unwrapped = TracedData.unwrap_traced_data(other)
-            underlying = self.as_subclass(torch.Tensor)
-            underlying.div_(unwrapped, rounding_mode=rounding_mode)
-            return self
-
-        result = torch.div(self, other, rounding_mode=rounding_mode)
-        with torch.no_grad():
-            torch.Tensor.copy_(self, result.tensor if isinstance(result, TracedTensor) else result)
-        if isinstance(result, TracedTensor):
-            self._proxy = result.proxy
-        return self
+        return self._apply_inplace(
+            torch.div, "div_", other, rounding_mode=rounding_mode
+        )
 
     def pow_(self, exponent):
         """In-place power method."""
-        if not self.is_tracing:
-            unwrapped = TracedData.unwrap_traced_data(exponent)
-            underlying = self.as_subclass(torch.Tensor)
-            underlying.pow_(unwrapped)
-            return self
-
-        result = torch.pow(self, exponent)
-        with torch.no_grad():
-            torch.Tensor.copy_(self, result.tensor if isinstance(result, TracedTensor) else result)
-        if isinstance(result, TracedTensor):
-            self._proxy = result.proxy
-        return self
+        return self._apply_inplace(torch.pow, "pow_", exponent)
 
     def copy_(self, src, non_blocking=False):
         """Copy ``src`` into this tensor and record a full functional write."""

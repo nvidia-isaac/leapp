@@ -11,7 +11,6 @@ This module provides:
 - NumPy-to-PyTorch compatibility utilities
 """
 
-from collections.abc import Mapping
 from typing import Type, Union, Optional
 
 import numpy as np
@@ -177,27 +176,14 @@ def as_traced(
     return traced_class(data, name, context, proxy)
 
 
-def promote_traced_result(data, source: TracedData, *, name: str | None = None,
-                          proxy=None):
+def promote_traced_result(data, source: TracedData):
     """Promote tensor-valued results using the source tracing state."""
-    result_name = source.name if name is None else name
-    result_proxy = source.proxy if proxy is None else proxy
+    def promote(value):
+        if is_tracable_tensor_type(value):
+            return as_traced(value, source.name, source.context_obj, source.proxy)
+        return value
 
-    if isinstance(data, Mapping):
-        return type(data)(
-            (key, promote_traced_result(value, source,
-                                        name=result_name, proxy=result_proxy))
-            for key, value in data.items()
-        )
-    if isinstance(data, (list, tuple)):
-        return type(data)(
-            promote_traced_result(value, source,
-                                  name=result_name, proxy=result_proxy)
-            for value in data
-        )
-    if is_tracable_tensor_type(data):
-        return as_traced(data, result_name, source.context_obj, result_proxy)
-    return data
+    return TracedData._map_structure(data, promote)
 
 
 def to_export_torch_tensor(data) -> _torch.Tensor:
