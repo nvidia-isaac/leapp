@@ -154,7 +154,7 @@ class TracedWpArray(wp.array):
         context = getattr(self, "_context", None)
         if context is None:
             return False
-        return context.is_tracing and not getattr(context, "dry_run", False)
+        return context.is_tracing
 
     def _new(self, value: Any, proxy: Proxy = None) -> "TracedWpArray":
         name = TracedData._name_from_proxy(proxy)

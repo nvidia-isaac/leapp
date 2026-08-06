@@ -791,38 +791,41 @@ class TestTracedNpArray(unittest.TestCase):
 
     # ==================== Operations After Compile Tests ====================
 
-    def test_operations_after_compile_preserve_traced_arrays(self):
-        """Test that inactive NumPy operations preserve traced carriers."""
+    def test_operations_after_compile_return_native_arrays(self):
+        """A value derived from a finished node is new data, so it stays native."""
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
         y = x * 2
-        
+
         ctx.compile_trace({'y': y})
-        
+
         # After compilation, is_tracing should be False
         self.assertFalse(ctx.is_tracing)
-        
-        # np.asarray() strips ndarray subclasses, so it only preserves the
-        # carrier through the session patch. np.asanyarray() preserves
-        # subclasses on its own and needs no patch.
+
         patcher = TracingPatcher()
         patcher.install()
         try:
-            results = [
+            derived = [
                 x + 1,
                 x.copy(),
                 x.astype(np.float32),
-                np.asarray(x),
-                np.asanyarray(x),
                 np.array(x),
             ]
+            # These alias the boundary value rather than producing new data.
+            aliases = [np.asarray(x), np.asanyarray(x)]
         finally:
             patcher.uninstall()
 
-        for result in results:
-            self.assertIsInstance(result, TracedNpArray)
-            self.assertFalse(result.is_tracing)
-            self.assertIs(result.context_obj, ctx)
+        for result in derived:
+            self.assertNotIsInstance(result, TracedNpArray)
+            self.assertIsInstance(result, np.ndarray)
+
+        for result in aliases:
+            self.assertIs(result, x)
+
+        # The boundary value itself is untouched and still carries its node.
+        self.assertIsInstance(x, TracedNpArray)
+        self.assertIs(x.context_obj, ctx)
 
     # ==================== Conversion Patch Tests ====================
 
@@ -897,8 +900,8 @@ class TestTracedNpArray(unittest.TestCase):
         self.assertEqual(float_out.dtype, torch.float32)
         self.assertEqual(int_out.dtype, torch.int64)
 
-    def test_getitem_after_compile_preserves_traced_array(self):
-        """Test that array-valued indexing preserves an inactive carrier."""
+    def test_getitem_after_compile_returns_native_array(self):
+        """Inactive indexing produces new data, so it stays native."""
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(np.array([1.0, 2.0, 3.0, 4.0, 5.0]), name="x")
         # Use slice to get array output (scalar indexing returns np.float64, not array)
@@ -907,9 +910,9 @@ class TestTracedNpArray(unittest.TestCase):
         ctx.compile_trace({'y': y})
         
         z = x[2:4]
-        self.assertIsInstance(z, TracedNpArray)
-        self.assertFalse(z.is_tracing)
-        self.assertIs(z.context_obj, ctx)
+        self.assertNotIsInstance(z, TracedNpArray)
+        self.assertIsInstance(z, np.ndarray)
+        self.assertIsInstance(x, TracedNpArray)
 
     # ==================== Context Validation Tests ====================
 

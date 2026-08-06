@@ -105,13 +105,10 @@ class ExportManager:
         _get_logger().configure(self.SAVE_PATH, verbose=verbose)
 
     def set_dry_run_and_non_traced(self, dry_run: bool, non_traced):
-        self.set_dry_run(dry_run)
+        self.dry_run = dry_run
         if isinstance(non_traced, str):
             non_traced = [non_traced]
         self.non_traced = set(non_traced)
-
-    def set_dry_run(self, dry_run: bool):
-        self.dry_run = dry_run
 
     def is_dry_run(self, name: str = None):
         if name is None:
@@ -207,10 +204,9 @@ class ExportManager:
                           outputs=kwargs.get("outputs", None),
                           environment_constants=kwargs.get(
                               "environment_constants", None),
-                          register_buffers=kwargs.get("register_buffers", None),
-                          dry_run=self.is_dry_run(name))
+                          register_buffers=kwargs.get("register_buffers", None))
         else:
-            node = node_class(name, dry_run=self.is_dry_run(name), **kwargs)
+            node = node_class(name, **kwargs)
 
         node._max_cached_io = self._max_cached_io
         self.nodes[name] = node
@@ -367,9 +363,8 @@ class ExportManager:
         # Warn if pre-compiled ScriptFunctions are visible in the caller's scope
         warn_if_script_functions_in_scope()
 
-        if not getattr(traced_tensors_node, 'dry_run', False):
-            self._validate_initial_traced_payload(
-                "output_tensors", node_name, traced_tensors_node, flattened_tensors)
+        self._validate_initial_traced_payload(
+            "output_tensors", node_name, traced_tensors_node, flattened_tensors)
 
         # process static outputs (constant tensors that should be returned but aren't derived from inputs)
         flattened_static_outputs = None
@@ -589,9 +584,8 @@ class ExportManager:
             traced_node.reentry_validate_state_update(tensors)
             return self._passthrough_dict_values(tensors)
 
-        if not getattr(traced_node, 'dry_run', False):
-            self._validate_initial_traced_payload(
-                "update_state", node_name, traced_node, tensors)
+        self._validate_initial_traced_payload(
+            "update_state", node_name, traced_node, tensors)
         traced_node.update_state_tensors(tensors)
         return self._passthrough_dict_values(tensors)
 
@@ -735,7 +729,7 @@ class ExportManager:
         return decorator
 
     def warp_op(self, node_name: str, inputs: list[str] = None, outputs: list[str] = None, **params):
-        if not ExportManager._interpret_graph or self.is_dry_run(node_name):
+        if not ExportManager._interpret_graph:
             return nullcontext()
         warp_backend = self.patcher.warp
         if warp_backend is None:

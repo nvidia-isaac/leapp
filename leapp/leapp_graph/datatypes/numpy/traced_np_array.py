@@ -483,17 +483,16 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
             # they must remain usable after the producing node has finished.
             if traced_array is None or traced_array.validate_status(inputs, kwargs):
                 return NotImplemented
-            result = getattr(ufunc, method)(*unwrapped_inputs, **unwrapped_kwargs)
-            return traced_array._promote_inactive_result(result)
+            return getattr(ufunc, method)(*unwrapped_inputs, **unwrapped_kwargs)
 
         result_array = ufunc(*unwrapped_inputs, **unwrapped_kwargs)
         if traced_array is None:
             return result_array
 
-        # An inactive traced array is a provenance carrier. Execute eagerly and
-        # preserve the carrier on tensor-valued results without recording FX.
+        # An inactive traced array is a finished boundary value. Derived results
+        # are new data that this node never published, so they stay native.
         if not traced_array.validate_status(inputs, kwargs):
-            return traced_array._promote_inactive_result(result_array)
+            return result_array
 
         torch_func = NUMPY_UFUNC_TO_TORCH.get(ufunc)
         if torch_func is None:
@@ -570,9 +569,9 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
             return result_array
 
         # Inactive carriers use full NumPy behavior, including functions that
-        # have no Torch export mapping, and retain tracing state on arrays.
+        # have no Torch export mapping.
         if not traced_array.validate_status(args, kwargs):
-            return traced_array._promote_inactive_result(result_array)
+            return result_array
 
         torch_func = NUMPY_FUNC_TO_TORCH.get(func)
         if torch_func is None:
@@ -790,7 +789,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         result = self.view(np.ndarray)[real_key]
 
         if not self.validate_status(args=(key,)):
-            return self._promote_inactive_result(result)
+            return result
 
         proxy_out = self._create_getitem_proxy(key)
         if proxy_out is None:
@@ -923,7 +922,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         """Type conversion, recorded as a dtype cast in the graph."""
         result = self.view(np.ndarray).astype(dtype)
         if not self.validate_status():
-            return self._promote_inactive_result(result)
+            return result
         torch_dtype = _torch_dtype_for(dtype)
         if torch_dtype is None:
             _get_logger().warning(
@@ -940,7 +939,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         """Return a copy of the array."""
         result = self.view(np.ndarray).copy()
         if not self.validate_status():
-            return self._promote_inactive_result(result)
+            return result
         proxy_out = self._context.tracer.create_proxy(
             "call_function", torch.clone, (self.proxy,), {}
         )

@@ -176,16 +176,6 @@ def as_traced(
     return traced_class(data, name, context, proxy)
 
 
-def promote_traced_result(data, source: TracedData):
-    """Promote tensor-valued results using the source tracing state."""
-    def promote(value):
-        if is_tracable_tensor_type(value):
-            return as_traced(value, source.name, source.context_obj, source.proxy)
-        return value
-
-    return TracedData._map_structure(data, promote)
-
-
 def to_export_torch_tensor(data) -> _torch.Tensor:
     """Convert a traceable LEAPP value to ``torch.Tensor`` for export metadata."""
     if isinstance(data, TracedData):
@@ -218,7 +208,6 @@ __all__ = [
     "TRACED_TYPES",
     # Factory and type checking functions
     "as_traced",
-    "promote_traced_result",
     "is_tracable_tensor_type",
     "is_traced_type",
     "get_traced_class_for",

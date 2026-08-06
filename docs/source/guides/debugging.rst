@@ -67,29 +67,46 @@ the fastest way to answer questions like:
 Dry run and selective non-traced nodes
 ======================================
 
-LEAPP provides three related options for keeping graph structure without
-fully compiling every node:
+LEAPP provides two related options for building the graph without
+exporting every node, both declared on ``leapp.start()``:
 
-* ``leapp.start(..., dry_run=True)`` makes the entire trace metadata-only
-  from the start.
-* ``leapp.start(..., non_traced=[...])`` disables tracing/export for only
-  selected nodes.
-* ``leapp.compile_graph(..., dry_run=True)`` keeps an already-captured
-  trace but skips compile/save/validate.
+* ``leapp.start(..., dry_run=True)`` traces normally but skips export for
+  every node.
+* ``leapp.start(..., non_traced=[...])`` skips export for only selected
+  nodes.
 
-``start(dry_run=True)``: whole-graph metadata-only
---------------------------------------------------
+Both still trace. Tracing is what produces the traced values that carry
+graph connectivity, so it cannot be skipped while still producing a graph.
+
+.. note::
+
+   Earlier versions of ``dry_run`` and ``non_traced`` also disabled
+   tracing, which let a node whose internals could not be traced still
+   appear in the graph. That is no longer supported, and a tracing failure
+   is now reported instead of being silently skipped.
+
+``start(dry_run=True)``: skip export for the whole graph
+--------------------------------------------------------
 
 Use this when you want to explore graph boundaries, graph I/O, and
-connectivity without paying export cost.
+connectivity without paying export cost. Export is normally the slow step
+for large models, while tracing runs the annotated code once and is
+comparatively cheap.
 
 In this mode:
 
-* ``input_tensors()`` and related APIs return normal tensors instead of
-  ``TracedTensor``
-* LEAPP still tags outputs so graph connectivity can be detected
+* ``input_tensors()`` and related APIs return ``TracedTensor`` values,
+  exactly as in a normal session
+* FX graphs are still built, so connectivity is detected the same way
 * YAML and graph structure are still produced
 * model files are not exported
+
+Warp graphs still require you to run the annotated path a second time, and
+still report a segment that diverges between the two runs. Only the APIC
+capture itself is skipped, because nothing consumes the captured bundle when
+the node is not exported. Keeping the second run means a dry run tells you
+whether your code would satisfy Warp export requirements. Nodes that reach
+``export_with=None`` any other way behave the same.
 
 .. code-block:: python
 
@@ -104,22 +121,15 @@ Useful for:
 * checking graph I/O quickly
 * validating connectivity before expensive export
 
-``non_traced=[...]``: selective non-compiled nodes
+``non_traced=[...]``: selective non-exported nodes
 --------------------------------------------------
 
 Use this when only some nodes should stay in the graph but should not be
-traced through or compiled. This is especially useful because traced-tensor
-nodes normally try to trace through the computation inside the node, which
-can be problematic when:
+exported, for example while iterating on one node and not wanting to pay
+export cost for its neighbours.
 
-* the code calls into functionality that is not trace-friendly
-* the node intentionally acts as a placeholder or opaque stage
-* tracing through that node raises errors even though you still want it
-  represented in the graph
-
-With ``non_traced=[...]``, LEAPP lets that node run on normal tensors,
-skips export for it, but still tags its outputs so downstream traced nodes
-can connect to it.
+With ``non_traced=[...]``, LEAPP still traces the listed node and still
+connects it to its neighbours; it simply produces no model artifact.
 
 .. code-block:: python
 
@@ -152,32 +162,13 @@ Result:
 * ``raw_node`` does not produce a compiled model artifact
 * ``traced_node`` is still traced and exported normally
 
-``compile_graph(dry_run=True)``: skip export after tracing
-----------------------------------------------------------
-
-Use this when you want a normal trace session first but want to skip
-compile/save/validate at the final export step.
-
-.. code-block:: python
-
-   leapp.start("captured_graph")
-   # ... normal tracing ...
-   leapp.stop()
-   leapp.compile_graph(dry_run=True, validate=False)
-
-This differs from ``start(dry_run=True)``:
-
-* tracing still happens normally during the session
-* FX graphs and node traces are still built
-* compile/save/validate are skipped only at the end
-
 Choosing the right option
 -------------------------
 
-* Use ``start(dry_run=True)`` when the whole graph should be metadata-only.
-* Use ``non_traced=[...]`` when only specific nodes should stay uncompiled.
-* Use ``compile_graph(dry_run=True)`` when you already did a real trace and
-  only want to skip final export work.
+* Use ``start(dry_run=True)`` when no node should be exported.
+* Use ``non_traced=[...]`` when only specific nodes should skip export.
+* Use ``export_with=None`` on a single ``output_tensors()`` call when only
+  that node should skip export.
 
 Related debugging tools
 =======================
