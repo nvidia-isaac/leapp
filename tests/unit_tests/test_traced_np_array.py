@@ -18,6 +18,7 @@ import torch
 
 from leapp.leapp_graph.traced_node import TracedTensorNode
 from leapp.leapp_graph.datatypes import TracedNpArray
+from leapp.leapp_graph.datatypes.patching import TracingPatcher
 
 from tests.unit_tests.export_format_validation import (
     verify_exported_program,
@@ -801,11 +802,100 @@ class TestTracedNpArray(unittest.TestCase):
         # After compilation, is_tracing should be False
         self.assertFalse(ctx.is_tracing)
         
-        results = [x + 1, x.copy(), x.astype(np.float32), np.asarray(x)]
+        # np.asarray() strips ndarray subclasses, so it only preserves the
+        # carrier through the session patch. np.asanyarray() preserves
+        # subclasses on its own and needs no patch.
+        patcher = TracingPatcher()
+        patcher.install()
+        try:
+            results = [
+                x + 1,
+                x.copy(),
+                x.astype(np.float32),
+                np.asarray(x),
+                np.asanyarray(x),
+                np.array(x),
+            ]
+        finally:
+            patcher.uninstall()
+
         for result in results:
             self.assertIsInstance(result, TracedNpArray)
             self.assertFalse(result.is_tracing)
             self.assertIs(result.context_obj, ctx)
+
+    # ==================== Conversion Patch Tests ====================
+
+    def test_conversion_copy_property(self):
+        """Test that np.array copies and np.asarray aliases, in eager and graph."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
+
+        patcher = TracingPatcher()
+        patcher.install()
+        try:
+            aliased = np.asarray(x)
+            never_copy = np.asarray(x, copy=False)
+            copied = np.array(x)
+            forced = np.asarray(x, copy=True)
+        finally:
+            patcher.uninstall()
+
+        # np.asarray copies only when needed, so an unchanged request aliases
+        self.assertIs(aliased, x)
+        self.assertIs(never_copy, x)
+
+        # np.array copies by default, and copy=True forces one either way
+        for result in (copied, forced):
+            self.assertIsInstance(result, TracedNpArray)
+            self.assertIsNot(result, x)
+            self.assertFalse(
+                np.shares_memory(result.view(np.ndarray), x.view(np.ndarray))
+            )
+            self.assertTrue(np.array_equal(result.view(np.ndarray), [1.0, 2.0, 3.0]))
+
+        ctx.compile_trace({'aliased': aliased, 'copied': copied})
+
+        # Each copy is recorded, while the alias reuses its source proxy
+        targets = [node.target for node in ctx.graph.nodes]
+        self.assertEqual(targets.count(torch.clone), 1)
+
+        alias_out, copy_out = ctx.m(torch.tensor([1.0, 2.0, 3.0]))
+        self.assertFalse(alias_out.data_ptr() == copy_out.data_ptr())
+
+    def test_conversion_dtype_swap_property(self):
+        """Test that a dtype swap casts eagerly and is recorded in the graph."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
+
+        patcher = TracingPatcher()
+        patcher.install()
+        try:
+            # dtype is accepted positionally as well as by keyword
+            positional = np.asarray(x, np.float32)
+            keyword = np.asarray(x, dtype=np.float32)
+            widened = np.asarray(x, dtype=np.int64)
+        finally:
+            patcher.uninstall()
+
+        for result, expected in ((positional, np.float32),
+                                 (keyword, np.float32),
+                                 (widened, np.int64)):
+            self.assertIsInstance(result, TracedNpArray)
+            self.assertEqual(result.dtype, expected)
+
+        ctx.compile_trace({'positional': positional, 'widened': widened})
+
+        # Each output cast is a real node rather than a reuse of the source proxy
+        casts = [node for node in ctx.graph.nodes if node.target == "to"]
+        self.assertEqual([node.args[1] for node in casts],
+                         [torch.float32, torch.int64])
+
+        # A float64 input proves the recorded cast changes dtype rather than
+        # coincidentally matching torch's float32 default.
+        float_out, int_out = ctx.m(torch.tensor([1.0, 2.0, 3.0], dtype=torch.float64))
+        self.assertEqual(float_out.dtype, torch.float32)
+        self.assertEqual(int_out.dtype, torch.int64)
 
     def test_getitem_after_compile_preserves_traced_array(self):
         """Test that array-valued indexing preserves an inactive carrier."""
