@@ -11,6 +11,11 @@ import numpy as np
 import torch
 import warp as wp
 from leapp.leapp import _MANAGER as annotate
+from leapp.leapp_graph.custom_operator_registry.warp_operator.metadata import (
+    build_runtime_metadata,
+)
+from leapp.leapp_graph.datatypes.warp.warp_segment import WarpTensorRef
+from leapp.utils.tensor_description import TensorDescription
 
 
 from .base import LEAPPFunctionalTestBase
@@ -18,7 +23,9 @@ from tests.warp_support import WarpTestCase
 
 
 
+
 class TestWarpOp(WarpTestCase, LEAPPFunctionalTestBase):
+
     def _run_torch_to_warp_to_torch_node(self, device):
         leapp.start(name=self.TEST_GRAPH_NAME)
         source = torch.tensor([1.0, 2.0, 3.0], device=device)
@@ -399,6 +406,198 @@ class TestWarpOp(WarpTestCase, LEAPPFunctionalTestBase):
 
         with self.assertRaisesRegex(Exception, "executed a second time"):
             leapp.compile_graph(visualize=False)
+
+
+class TestWarpCompoundType(WarpTestCase, LEAPPFunctionalTestBase):
+    def test_compound_storage_layout_is_derived_from_warp_dtype(self):
+        vec5 = wp.types.vector(length=5, dtype=wp.float32)
+        cases = (
+            (wp.float32, (), (2, 4)),
+            (wp.vec3, (3,), (2, 4, 3)),
+            (wp.quat, (4,), (2, 4, 4)),
+            (wp.mat33, (3, 3), (2, 4, 3, 3)),
+            (vec5, (5,), (2, 4, 5)),
+        )
+
+        for dtype, component_shape, storage_shape in cases:
+            with self.subTest(dtype=dtype):
+                value = wp.zeros((2, 4), dtype=dtype, device="cpu")
+                ref = WarpTensorRef.from_value("value", value)
+
+                self.assertEqual(ref.shape, (2, 4))
+                self.assertEqual(ref.component_shape, component_shape)
+                self.assertEqual(ref.storage_shape, storage_shape)
+                self.assertEqual(ref.storage_dtype, "float32")
+
+    def test_runtime_metadata_contains_storage_and_logical_layouts(self):
+        value = wp.zeros((2, 4), dtype=wp.vec3, device="cpu")
+        ref = WarpTensorRef.from_value("positions", value)
+
+        metadata = build_runtime_metadata(
+            segment=None,
+            input_refs=[ref],
+            output_refs=[ref],
+            output_shapes=[list(ref.storage_shape)],
+            output_dtypes=[ref.storage_dtype],
+            output_mask=[True],
+        )
+
+        self.assertNotIn("schema_version", metadata)
+        for spec in (metadata["inputs"][0], metadata["outputs"][0]):
+            self.assertEqual(spec["dtype"], "float32")
+            self.assertEqual(spec["shape"], [2, 4, 3])
+            self.assertEqual(spec["num_bytes"], 2 * 4 * 3 * 4)
+            self.assertEqual(spec["warp_dtype"], "vec3f")
+            self.assertEqual(spec["warp_shape"], [2, 4])
+            self.assertEqual(spec["component_shape"], [3])
+
+    def test_tensor_description_uses_expanded_torch_storage_layout(self):
+        value = wp.zeros((2, 4), dtype=wp.vec3, device="cpu")
+
+        description = TensorDescription("positions", value)
+
+        self.assertEqual(description.dtype, "float32")
+        self.assertEqual(tuple(description.shape), (2, 4, 3))
+        self.assertEqual(tuple(description.value.shape), (2, 4, 3))
+
+    def test_compound_warp_array_is_accepted_by_input_tensors(self):
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        value = wp.zeros((2, 4), dtype=wp.vec3, device="cpu")
+
+        try:
+            traced = annotate.input_tensors("node_a", {"positions": value})
+            node = annotate.get_nodes()["node_a"]
+
+            self.assertEqual(traced.shape, (2, 4))
+            self.assertEqual(traced.dtype, wp.vec3)
+            self.assertEqual(node.inputs[0].dtype, "float32")
+            self.assertEqual(tuple(node.inputs[0].shape), (2, 4, 3))
+
+            annotate.output_tensors(
+                "node_a",
+                {"positions": traced},
+                export_with=None,
+            )
+        finally:
+            leapp.stop()
+
+    def test_compound_warp_array_crosses_annotation_boundaries(self):
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        source = wp.zeros((2, 4), dtype=wp.vec3, device=self.DEVICE)
+
+        for _ in range(2):
+            array = annotate.input_tensors("node_a", {"positions": source})
+            self.assertEqual(array.shape, (2, 4))
+            self.assertEqual(array.dtype, wp.vec3)
+
+            with annotate.warp_op("node_a"):
+                output = wp.empty_like(array)
+                wp.copy(output, array)
+
+            annotate.output_tensors(
+                "node_a",
+                {"positions_next": output},
+                export_with="onnx",
+            )
+
+        node = annotate.get_nodes()["node_a"]
+        segment = node.warp_segments[0]
+        input_ref = next(iter(segment.input_refs.values()))
+        output_ref = next(iter(segment.output_refs.values()))
+
+        self.assertEqual(tuple(node.inputs[0].shape), (2, 4, 3))
+        self.assertEqual(node.inputs[0].dtype, "float32")
+        self.assertEqual(tuple(node.outputs[0].shape), (2, 4, 3))
+        self.assertEqual(node.outputs[0].dtype, "float32")
+        self.assertEqual(input_ref.storage_shape, (2, 4, 3))
+        self.assertEqual(output_ref.storage_shape, (2, 4, 3))
+        self.assertEqual(input_ref.storage_dtype, "float32")
+        self.assertEqual(output_ref.storage_dtype, "float32")
+
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        self.assertFalse(node.has_pending_warp_segments)
+        self.verify_node_io(node, inputs=1, outputs=1)
+        self.verify_all_models_exist("node_a")
+
+    def test_multiple_compound_warp_arrays_cross_annotation_boundaries(self):
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        positions_source = wp.zeros((2, 4), dtype=wp.vec3, device=self.DEVICE)
+        rotations_source = wp.zeros((2, 4), dtype=wp.quat, device=self.DEVICE)
+        frames_source = wp.zeros((2, 4), dtype=wp.mat33, device=self.DEVICE)
+
+        try:
+            positions = annotate.input_tensors(
+                "node_a", {"positions": positions_source}
+            )
+            rotations = annotate.input_tensors(
+                "node_a", {"rotations": rotations_source}
+            )
+            frames = annotate.input_tensors("node_a", {"frames": frames_source})
+
+            annotate.output_tensors(
+                "node_a",
+                {
+                    "positions_next": positions,
+                    "rotations_next": rotations,
+                    "frames_next": frames,
+                },
+                export_with=None,
+            )
+        finally:
+            leapp.stop()
+
+        node = annotate.get_nodes()["node_a"]
+
+        self.assertEqual(
+            [tuple(description.shape) for description in node.inputs],
+            [(2, 4, 3), (2, 4, 4), (2, 4, 3, 3)],
+        )
+        self.assertEqual(
+            [tuple(description.shape) for description in node.outputs],
+            [(2, 4, 3), (2, 4, 4), (2, 4, 3, 3)],
+        )
+        self.assertEqual(
+            [description.dtype for description in node.inputs],
+            ["float32", "float32", "float32"],
+        )
+        self.assertEqual(
+            [description.dtype for description in node.outputs],
+            ["float32", "float32", "float32"],
+        )
+        self.verify_node_io(node, inputs=3, outputs=3)
+
+    def test_torch_input_can_be_viewed_as_compound_warp_dtype(self):
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        source = torch.zeros((2, 4, 3), dtype=torch.float32, device=self.DEVICE)
+
+        for _ in range(2):
+            tensor = annotate.input_tensors("node_a", {"positions": source})
+            array = wp.from_torch(tensor, dtype=wp.vec3)
+
+            with annotate.warp_op("node_a"):
+                output = wp.empty_like(array)
+                wp.copy(output, array)
+
+            annotate.output_tensors(
+                "node_a",
+                {"positions_next": output},
+                export_with="onnx",
+            )
+
+        node = annotate.get_nodes()["node_a"]
+        output_ref = next(iter(node.warp_segments[0].output_refs.values()))
+        self.assertEqual(output_ref.storage_shape, (2, 4, 3))
+        self.assertEqual(output_ref.storage_dtype, "float32")
+
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        self.assertFalse(node.has_pending_warp_segments)
+        self.verify_node_io(node, inputs=1, outputs=1)
+        self.verify_all_models_exist("node_a")
+
 
 
 class TestWarpAutomaticSegmentDetection(WarpTestCase, LEAPPFunctionalTestBase):

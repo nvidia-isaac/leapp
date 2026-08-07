@@ -89,7 +89,25 @@ def value_to_name_and_shape(value) -> Tuple[str, tuple]:
     """Map a backend value to its (common dtype name, shape)."""
     for codec in _DTYPE_CODECS:
         if codec.matches(value):
-            return codec.dtype_to_name[codec.value_dtype(value)], value.shape
+            dtype = codec.value_dtype(value)
+            try:
+                return codec.dtype_to_name[dtype], value.shape
+            except KeyError:
+                if not (
+                    codec.backend == "warp"
+                    and hasattr(dtype, "_wp_scalar_type_")
+                    and hasattr(dtype, "_shape_")
+                ):
+                    raise
+
+                scalar_dtype = dtype._wp_scalar_type_
+                component_shape = tuple(dtype._shape_)
+                if scalar_dtype in codec.dtype_to_name and component_shape:
+                    return (
+                        codec.dtype_to_name[scalar_dtype],
+                        (*value.shape, *component_shape),
+                    )
+                raise
     raise ValueError(f"Unsupported type: {type(value)}")
 
 
