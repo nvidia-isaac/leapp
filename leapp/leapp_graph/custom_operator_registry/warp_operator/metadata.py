@@ -21,8 +21,6 @@ from leapp.utils.logging import _get_logger
 
 from .schema import QUALIFIED_NAME
 
-RUNTIME_METADATA_VERSION = 1
-
 
 def encode_runtime_metadata(metadata: dict[str, Any]) -> str:
     """Serialize runtime metadata deterministically."""
@@ -47,13 +45,6 @@ def decode_runtime_metadata(encoded: str) -> dict[str, Any]:
     if not isinstance(metadata, dict):
         _get_logger().fatal(
             f"{QUALIFIED_NAME}: runtime_metadata must decode to an object",
-            error_type=ValueError,
-        )
-    version = metadata.get("schema_version")
-    if version != RUNTIME_METADATA_VERSION:
-        _get_logger().fatal(
-            f"{QUALIFIED_NAME}: unsupported runtime_metadata schema_version "
-            f"{version!r}; expected {RUNTIME_METADATA_VERSION}",
             error_type=ValueError,
         )
     return metadata
@@ -104,21 +95,29 @@ def _num_bytes(shape: list[int], dtype: str) -> int:
     return _numel(shape) * itemsize
 
 
-def _output_spec(
+def _tensor_spec(
     index: int,
     ref: Any,
-    shape: list[int],
+    shape: Any,
     dtype: str,
-    mask: bool,
+    *,
+    mask: bool | None = None,
 ) -> dict[str, Any]:
-    return {
+    shape = _shape_to_list(shape)
+    dtype = _normalize_dtype_name(dtype or "")
+    spec = {
         "logical_index": int(index),
-        "mask": bool(mask),
-        "param_name": ref.name if mask else None,
+        "param_name": ref.name if mask is not False else None,
         "dtype": dtype,
         "shape": shape,
         "num_bytes": _num_bytes(shape, dtype),
+        "warp_dtype": ref.dtype,
+        "warp_shape": _shape_to_list(ref.shape),
+        "component_shape": _shape_to_list(ref.component_shape),
     }
+    if mask is not None:
+        spec["mask"] = bool(mask)
+    return spec
 
 
 def build_runtime_metadata(
@@ -152,27 +151,15 @@ def build_runtime_metadata(
 
     inputs = []
     for index, ref in enumerate(input_refs):
-        shape = _shape_to_list(ref.shape)
-        dtype = _normalize_dtype_name(ref.dtype or "")
-        inputs.append(
-            {
-                "logical_index": int(index),
-                "param_name": ref.name,
-                "dtype": dtype,
-                "shape": shape,
-                "num_bytes": _num_bytes(shape, dtype),
-            }
-        )
+        inputs.append(_tensor_spec(index, ref, ref.storage_shape, ref.storage_dtype))
 
-    outputs = [
-        _output_spec(index, ref, shape, dtype, keep)
-        for index, (ref, shape, dtype, keep) in enumerate(
-            zip(output_refs, output_shapes, output_dtypes, output_mask)
-        )
-    ]
+    outputs = []
+    for index, (ref, shape, dtype, keep) in enumerate(
+        zip(output_refs, output_shapes, output_dtypes, output_mask)
+    ):
+        outputs.append(_tensor_spec(index, ref, shape, dtype, mask=keep))
 
     return {
-        "schema_version": RUNTIME_METADATA_VERSION,
         "inputs": inputs,
         "outputs": outputs,
     }

@@ -250,11 +250,12 @@ Automatic routing follows these rules:
   exported Warp runtime.
 - **Two identical passes:** discovery and capture must encounter the same Warp
   regions, calls, and boundaries in the same order.
-- **Primitive boundary dtypes only:** inputs and outputs crossing a Warp region
-  boundary must use primitive scalar dtypes such as integers, floats, or
-  booleans. Composite Warp dtypes such as vectors (`wp.vec3`), quaternions
-  (`wp.quat`), matrices, and transforms are not currently supported at region
-  boundaries.
+- **Homogeneous boundary dtypes:** primitive scalar and densely packed,
+  homogeneous compound dtypes such as vectors (`wp.vec3`), quaternions, and
+  matrices can cross Warp region and LEAPP node boundaries. Node and runtime
+  metadata use the expanded scalar Torch layout, for example `(B, N, 3)` and
+  `float32` for a logical `(B, N)` `wp.vec3` array. Heterogeneous `@wp.struct`
+  arrays are not supported.
 - **Conversion inside an open segment:** converting a newly written Warp
   output with `wp.to_torch()` before its segment closes can retain a stale
   tracing proxy. Close the segment before converting the output.

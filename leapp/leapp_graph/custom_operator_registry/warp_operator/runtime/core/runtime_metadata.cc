@@ -101,10 +101,6 @@ std::vector<std::string> ExtractObjectArray(const std::string& json, const std::
 
 RuntimeMetadata ParseRuntimeMetadata(const std::string& json) {
     RuntimeMetadata metadata;
-    metadata.schema_version = static_cast<int>(ExtractInt(json, "schema_version"));
-    if (metadata.schema_version != 1) {
-        throw std::runtime_error("Unsupported runtime_metadata schema_version: " + std::to_string(metadata.schema_version));
-    }
     metadata.device_kind = ExtractString(json, "device_kind", false);
     metadata.device_index = static_cast<int>(ExtractInt(json, "device_index", 0, false));
     metadata.bundle_num_bytes = static_cast<std::size_t>(ExtractInt(json, "num_bytes", 0, false));

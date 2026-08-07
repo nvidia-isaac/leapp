@@ -31,7 +31,6 @@ from leapp.leapp_graph.custom_operator_registry.warp_operator.bundle import (
     WRP_FILENAME,
     pack_bundle,
 )
-from leapp.utils.tensor_description import warp_dtype_to_torch_name
 from leapp.utils.logging import _get_logger
 
 try:
@@ -129,18 +128,14 @@ else:
         output_shapes: list[list[int]] = []
         output_dtypes: list[str] = []
         for ref in output_refs:
-            if ref.shape is None:
+            if ref.storage_shape is None or ref.storage_dtype is None:
                 _get_logger().fatal(
-                    f"Warp segment output '{ref.name}' has no observed shape; "
+                    f"Warp segment output '{ref.name}' has no Torch storage layout; "
                     f"cannot emit {warp_operator.QUALIFIED_NAME}.",
                     error_type=RuntimeError,
                 )
-            output_shapes.append([int(dim) for dim in ref.shape])
-            output_dtypes.append(
-                warp_dtype_to_torch_name(
-                    getattr(ref.array, "dtype", None), text=ref.dtype
-                )
-            )
+            output_shapes.append([int(dim) for dim in ref.storage_shape])
+            output_dtypes.append(ref.storage_dtype)
 
         output_mask = [True] * len(output_refs)
         runtime_metadata = warp_operator.build_runtime_metadata(

@@ -23,8 +23,9 @@ from typing import Any, Literal
 
 from torch.fx.proxy import Proxy
 
+from leapp.utils.dtype import value_to_name_and_shape
 
-# TODO: this is where we implement the conversion algorithm from special warp types to primary tensor types
+
 @dataclass
 class WarpTensorRef:
     # Segment-local canonical name used for APIC params / FX output labels.
@@ -37,6 +38,12 @@ class WarpTensorRef:
     shape: tuple | None = None
     # Runtime dtype observed during tracing, stored as text for lightweight metadata.
     dtype: str | None = None
+    # Fixed scalar dimensions belonging to one Warp element, e.g. (3,) for vec3.
+    component_shape: tuple = ()
+    # Torch-facing scalar storage shape, including compound component dimensions.
+    storage_shape: tuple | None = None
+    # Torch-facing scalar dtype name used by FX/export/runtime metadata.
+    storage_dtype: str | None = None
     # Device/host pointer when available; helps dedupe view-like wp.array objects.
     ptr: int | None = None
 
@@ -60,13 +67,22 @@ class WarpTensorRef:
                 pass
 
         dtype = getattr(value, "dtype", None)
+        dtype_name = getattr(dtype, "__name__", None)
+        storage_dtype, storage_shape = value_to_name_and_shape(value)
+        storage_shape = tuple(storage_shape)
+        component_shape = ()
+        if isinstance(shape, tuple) and storage_shape[:len(shape)] == shape:
+            component_shape = storage_shape[len(shape):]
 
         return cls(
             name=name,
             array=value,
             proxy=getattr(value, "proxy", None),
             shape=shape,
-            dtype=str(dtype) if dtype is not None else None,
+            dtype=dtype_name or (str(dtype) if dtype is not None else None),
+            component_shape=component_shape,
+            storage_shape=storage_shape,
+            storage_dtype=storage_dtype,
             ptr=ptr,
         )
 

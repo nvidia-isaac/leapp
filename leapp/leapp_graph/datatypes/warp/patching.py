@@ -42,19 +42,6 @@ rebind those aliases when ``_insert_warp_marker`` assigns output proxies.
 Fail-closed validation should also reject a Warp-derived declared output that
 still points at a pre-segment input proxy.
 
-Shaped Warp dtype limitation
-----------------------------
-``_validate_boundary_dtype`` currently rejects vector and matrix dtypes such
-as ``wp.vec3``.  Scalar-only examples do not need shaped-dtype support, and the
-proxy lifecycle bug above reproduces with ``wp.float32`` alone.  Existing
-fabrics-sim collision code does need ``wp.vec3`` because it reinterprets a
-Torch ``(..., 3)`` tensor as a logical Warp vector array.  Kinematics also
-returns ``wp.transform``/``wp.vec3`` arrays.  Supporting those boundaries
-requires recording both the scalar Torch dtype and the expanded Torch storage
-shape (for example, logical Warp shape ``(B, N)`` becomes Torch shape
-``(B, N, 3)`` for ``wp.vec3``).  Alternatively, callers must change their
-kernels to scalar arrays and construct vectors explicitly.
-
 Standalone regression reproducer
 ---------------------------------
 From ``leapp_repo`` run:
@@ -62,8 +49,8 @@ From ``leapp_repo`` run:
 ``.venv/bin/python reproduce_autograd_warp_segment.py all``
 
 It demonstrates the stale-proxy pruning failure, the successful conversion
-after segment close, and the current ``wp.vec3`` boundary rejection.  Keep
-those three cases when changing boundary propagation or segment finalization.
+after segment close. Keep those cases when changing boundary propagation or
+segment finalization.
 """
 
 from typing import Any, Callable
@@ -527,8 +514,6 @@ class WarpPatchBackend:
                 return True, None
             return False, None
 
-        self._validate_boundary_dtype(kwargs)
-
         # Host conversion/readback ends the current Warp segment before the
         # CUDA copy/sync happens under pause (which CUPTI would otherwise miss).
         if id(original) in self._readback_boundary_function_ids:
@@ -578,16 +563,6 @@ class WarpPatchBackend:
         if src is None or not src.is_tracing:
             return None
         return src
-
-    def _validate_boundary_dtype(self, kwargs: dict[str, Any]) -> None:
-        dtype = kwargs.get("dtype")
-        if dtype is not None and getattr(dtype, "_shape_", None):
-            # TODO: location to look into dtypes
-            raise NotImplementedError(
-                "LEAPP warp boundary tracing does not yet support vector/matrix "
-                f"warp dtypes (got {dtype}). Reshape in torch/numpy first or use a "
-                "scalar warp dtype."
-            )
 
     def _normalize_and_collect(
         self, args: tuple[Any, ...], kwargs: dict[str, Any]
