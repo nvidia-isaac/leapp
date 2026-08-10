@@ -25,7 +25,6 @@ class FakeTensorDescription:
     name_str: str
     dtype: str
     shape: tuple[int, ...]
-    tag: str | None = None
     semantics: dict | None = None
 
     def get_semantics(self):
@@ -45,14 +44,14 @@ def test_build_visual_graph_preserves_ports_semantics_and_external_io():
     policy = FakeNode(
         name="policy",
         inputs=[FakeTensorDescription("obs", "float32", (1, 12), semantics={"kind": "state"})],
-        outputs=[FakeTensorDescription("action", "float32", (1, 4), tag="policy/action", semantics={"kind": "command"})],
+        outputs=[FakeTensorDescription("action", "float32", (1, 4), semantics={"kind": "command"})],
         backend="onnx-dynamo",
         node_index=0,
     )
     clamp = FakeNode(
         name="clamp",
-        inputs=[FakeTensorDescription("raw_action", "float32", (1, 4), tag="policy/action")],
-        outputs=[FakeTensorDescription("action", "float32", (1, 4), tag="clamp/action")],
+        inputs=[FakeTensorDescription("raw_action", "float32", (1, 4))],
+        outputs=[FakeTensorDescription("action", "float32", (1, 4))],
         backend="jit-script",
         node_index=1,
     )
@@ -94,14 +93,14 @@ def test_build_visual_graph_preserves_ports_semantics_and_external_io():
 def test_build_visual_graph_marks_feedback_edges_without_adding_them_to_forward_flow():
     first = FakeNode(
         name="first",
-        inputs=[FakeTensorDescription("state", "float32", (2,), tag="second/state_next")],
-        outputs=[FakeTensorDescription("hidden", "float32", (2,), tag="first/hidden")],
+        inputs=[FakeTensorDescription("state", "float32", (2,))],
+        outputs=[FakeTensorDescription("hidden", "float32", (2,))],
         node_index=0,
     )
     second = FakeNode(
         name="second",
-        inputs=[FakeTensorDescription("hidden", "float32", (2,), tag="first/hidden")],
-        outputs=[FakeTensorDescription("state_next", "float32", (2,), tag="second/state_next")],
+        inputs=[FakeTensorDescription("hidden", "float32", (2,))],
+        outputs=[FakeTensorDescription("state_next", "float32", (2,))],
         node_index=1,
     )
 
