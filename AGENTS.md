@@ -70,7 +70,7 @@ For `TracedTensorNode` workflows (`input_tensors` / `output_tensors`), agents mu
   - For raw tensors, always pass a top-level dict of named tensors. Bare tensors are not supported; use `TensorSemantics(...)` if you want a single named semantic input without a dict.
 - `annotate.output_tensors("node_name", ...)` is the node finalization declaration and should be done once for the initial trace of that node.
   - After this, the node is compiled/finalized.
-  - Any later calls in re-entry loops are validation/tag-update behavior, not a second independent output declaration.
+  - Any later calls in re-entry loops are validation/source-update behavior, not a second independent output declaration.
 
 
 Example:
@@ -328,7 +328,8 @@ out = im(sample_inputs)  # same as im.run_policy(sample_inputs)
 - Prefer one node at a time while tracing:
   - complete `output_tensors()` for a node before starting another traced context.
 - Handle copied tensors:
-  - if data is copied in non-standard ways, call `annotate.mirror_leapp_tags(source, target)`.
+  - a node output carries the producing node and output port that build the graph edge; a copy does not.
+  - if data is copied between nodes, call `annotate.mirror_leapp_tags(source, target)` and use its return value for NumPy targets.
 - Understand state choices:
   - `state_tensors` = input+output feedback state.
   - `register_buffer` = frozen constant in exported model.

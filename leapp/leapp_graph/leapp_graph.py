@@ -56,10 +56,10 @@ class LeappGraph:
     def __init__(self, nodes, graph_name="combined_node"):
         self.nodes = nodes
         self.graph_name = graph_name
-        self.node_name_map = {node.name: node.name for node in nodes.values()}
 
         # process graph connections
-        _get_logger().section("Processing Node Connections Using Tagged Values")
+        _get_logger().section(
+            "Processing Node Connections Using Traced Output Ports")
         self.connections, self.feedback_connections = self._build_connections(
             self.nodes)
 
@@ -164,59 +164,115 @@ class LeappGraph:
             processed_connections[source_port] = target_ports
         return processed_connections
 
+    def _resolve_source_output(self, node, input_desc):
+        """Return the source node's output index for an input, or None if unusable.
+
+        An unresolvable source means the input behaves as a dangling graph
+        input, so this reports the problem and lets the caller continue.
+        """
+        source_node = input_desc.source_node
+        if self.nodes.get(source_node.name) is not source_node:
+            _get_logger().error(
+                f"Error: input {node.name}/{input_desc.name_str} came from node "
+                f"'{source_node.name}', which is not part of this graph.\n"
+                f"Treating it as a dangling input.")
+            return None
+
+        for out_idx, output in enumerate(source_node.outputs):
+            if output.port == input_desc.port:
+                return out_idx
+
+        _get_logger().error(
+            f"Error: input {node.name}/{input_desc.name_str} expects output "
+            f"'{input_desc.port}' from node '{source_node.name}', "
+            f"which does not produce it.\n"
+            f"Available outputs: {[o.port for o in source_node.outputs]}\n"
+            f"Treating it as a dangling input.")
+        return None
+
+    def _build_state_connections(self, nodes, feedback_connections):
+        """Wire declared state pairs and report which inputs they claim.
+
+        A state pair says the node feeds one of its own outputs back into one of
+        its own inputs, so it is always a feedback edge and never depends on
+        what value happened to cross the boundary.
+        """
+        def index_of(descriptions, description):
+            for idx, candidate in enumerate(descriptions):
+                if candidate is description:
+                    return idx
+            return None
+
+        claimed = set()
+        for node in nodes.values():
+            for input_desc, output_desc in node.state_feedback_pairs():
+                in_idx = index_of(node.inputs, input_desc)
+                out_idx = index_of(node.outputs, output_desc)
+                if in_idx is None or out_idx is None:
+                    _get_logger().error(
+                        f"Error: state pair '{input_desc.name_str}' of node "
+                        f"'{node.name}' is not registered on the node, so its "
+                        f"feedback edge cannot be built.")
+                    continue
+                claimed.add(id(input_desc))
+                key = (node, output_desc.port)
+                bucket = feedback_connections.setdefault(key, {
+                    'source': {'node': node, 'idx': out_idx},
+                    'targets': []
+                })
+                bucket['targets'].append({'node': node, 'idx': in_idx})
+                _get_logger().info(
+                    f"Found state feedback connection: "
+                    f"{node.name}/{output_desc.name_str} "
+                    f" -> {node.name}/{input_desc.name_str}")
+        return claimed
+
     def _build_connections(self, nodes):
         connections = {}
         feedback_connections = {}
+        state_inputs = self._build_state_connections(nodes, feedback_connections)
         for node in nodes.values():
-            # first check if any duplicate tags. duplicates are not suppported
-            tags = [input.tag for input in node.inputs if input.tag is not None]
-            tag_counts = Counter(tags)
-            duplicates = {tag for tag, count in tag_counts.items() if count > 1}
+            # A node cannot receive the same source output on two of its inputs,
+            # because the runtime has one value to deliver and two places to put it.
+            sources = [(input.source_node, input.port)
+                       for input in node.inputs
+                       if input.has_source and id(input) not in state_inputs]
+            duplicates = {source for source,
+                          count in Counter(sources).items() if count > 1}
             if duplicates:
-                duplicate_list = ", ".join(sorted(duplicates))
+                duplicate_list = ", ".join(
+                    sorted(f"{source.name}/{port}" for source, port in duplicates))
                 _get_logger().fatal(
                     f"Error: unsupported use of sending the same tensor multiple times to the same node. "
-                    f"Duplicate input tags in node {node.name}: {duplicate_list}",
+                    f"Duplicate input sources in node {node.name}: {duplicate_list}",
                     error_type=Exception)
 
             for in_idx, input in enumerate(node.inputs):
-                if input.tag is None:  # case where the input is dangling
-                    pass
-                else:
-                    source_node_name = input.tag.split('/')[0]
+                if id(input) in state_inputs:  # already wired from its declaration
+                    continue
+                if not input.has_source:  # case where the input is dangling
+                    continue
 
-                    source_node = nodes[self.node_name_map[source_node_name]]
-                    source_node_output_ports = [
-                        output.tag for output in source_node.outputs]
-                    if input.tag not in source_node_output_ports:
-                        _get_logger().fatal(
-                            f"Error: {source_node.name} does not produce tag {input.tag}",
-                            error_type=Exception)
+                source_node = input.source_node
+                out_idx = self._resolve_source_output(node, input)
+                if out_idx is None:
+                    continue
 
-                    out_idx = source_node_output_ports.index(input.tag)
-
-                    if source_node.node_index < node.node_index:
-                        if input.tag not in connections:
-                            connections[input.tag] = {
-                                'source': {'node': source_node, 'idx': out_idx},
-                                'targets': []
-                            }
-                        connections[input.tag]['targets'].append(
-                            {'node': node, 'idx': in_idx})
-                        _get_logger().info("Found connection: "
-                                         f"{source_node.name}/{source_node.outputs[out_idx].name_str} "
-                                         f" -> {node.name}/{node.inputs[in_idx].name_str}")
-                    else:
-                        if input.tag not in feedback_connections:
-                            feedback_connections[input.tag] = {
-                                'source': {'node': source_node, 'idx': out_idx},
-                                'targets': []
-                            }
-                        feedback_connections[input.tag]['targets'].append(
-                            {'node': node, 'idx': in_idx})
-                        _get_logger().info("Found feedback connection: "
-                                         f"{source_node.name}/{source_node.outputs[out_idx].name_str} "
-                                         f" -> {node.name}/{node.inputs[in_idx].name_str}")
+                # A source that has not completed before this node closes the
+                # loop, so it is a feedback edge rather than a forward one.
+                is_forward = source_node.node_index < node.node_index
+                bucket = connections if is_forward else feedback_connections
+                key = (source_node, input.port)
+                if key not in bucket:
+                    bucket[key] = {
+                        'source': {'node': source_node, 'idx': out_idx},
+                        'targets': []
+                    }
+                bucket[key]['targets'].append({'node': node, 'idx': in_idx})
+                _get_logger().info(
+                    f"Found {'connection' if is_forward else 'feedback connection'}: "
+                    f"{source_node.name}/{source_node.outputs[out_idx].name_str} "
+                    f" -> {node.name}/{node.inputs[in_idx].name_str}")
 
         return list(connections.values()), list(feedback_connections.values())
 

@@ -51,6 +51,9 @@ class TracedData(ABC):
         self._name = name
         self._context = context
         self._proxy = proxy
+        # A value only earns an output port by being registered as an output of
+        # its own node, so entering a node always starts without one.
+        self._output_port = None
 
     @staticmethod
     def _name_from_proxy(proxy: Proxy) -> str:
@@ -80,6 +83,20 @@ class TracedData(ABC):
     def context_obj(self):
         """Get the TraceContext that owns this data."""
         return self._context
+
+    @property
+    def output_port(self) -> Optional[str]:
+        """Name of this node's output that published this value, if any.
+
+        Together with ``context_obj`` this is the complete connection identity
+        of a node boundary value. ``None`` means the value was never registered
+        as an output of its node.
+        """
+        return self._output_port
+
+    @output_port.setter
+    def output_port(self, port: Optional[str]) -> None:
+        self._output_port = port
     
     @property
     def is_tracing(self) -> bool:

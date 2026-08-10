@@ -14,12 +14,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-import collections
 import functools
 import torch
-from leapp.utils.tensor_description import describe_io, TensorSemantics
-from leapp.utils.utils import tag_tensor
-from leapp.leapp_graph.datatypes import is_tracable_tensor_type
+from leapp.utils.tensor_description import (
+    describe_io,
+    flatten_io_structure,
+    TensorSemantics,
+)
+from leapp.leapp_graph.datatypes import is_traced_type
 from leapp.backends.export_backend import NoneExportBackend
 from leapp.leapp_graph.custom_operator_registry import prepare_and_validate
 from leapp.leapp_graph.custom_operator_registry.warp_operator.bundle import (
@@ -241,24 +243,53 @@ class LeappNode():
     def get_backend(self):
         return self.export_backend.get_backend_model_type()
 
-    def tag_data(self, tensor, tag):
-        # the tag is the name of the tensor, with the node name prepended
-        tag = self.name + '/' + tag + '/'
+    @property
+    def is_tracing(self) -> bool:
+        """Whether this node is currently recording operations.
+        """
+        return False
 
-        if is_tracable_tensor_type(tensor):
-            # Tag the tensor directly (works for both TracedTensor and regular tensors)
-            # For TracedTensor, we tag it directly so the tag is preserved through operations
-            tag_tensor(tensor, tag)
-        elif isinstance(tensor, collections.abc.Mapping):
-            for key, value in tensor.items():
-                self.tag_data(value, tag + "[" + key + "]")
-        elif isinstance(tensor, collections.abc.Iterable) and not isinstance(tensor, (str, bytes)) and not hasattr(tensor, '__array__'):
-            # This catches lists, tuples, sets, etc. but excludes strings, bytes, and numpy arrays
-            for idx, item in enumerate(tensor):
-                self.tag_data(item, tag + "[" + str(idx) + "]")
-        else:
-            _get_logger().warning(
-                f"\033[93mWarning: Untaggable datatype in i/o: {type(tensor)}\033[0m")
+    def publish_output_port(self, value, port: str):
+        """Record that ``value`` is this node's output named ``port``.
+
+        A traced value already carries the node that owns it, so the port name
+        completes the connection identity that consuming nodes read back. Raw
+        values cannot carry state and are connected through this node's own
+        descriptions instead.
+        """
+        if not is_traced_type(value):
+            return value
+        existing = value.output_port
+        if existing is not None and existing != port:
+            # One value can legitimately be several outputs, most commonly a
+            # state update that is also published for downstream use. Each port
+            # delivers the same data, so any of them is a correct edge and the
+            # first stays as this value's identity. Both are still exported,
+            # and state feedback is wired from the descriptions regardless.
+            _get_logger().debug(
+                f"Node '{self.name}' publishes one value as both output "
+                f"'{existing}' and output '{port}'; consumers of it will "
+                f"connect through '{existing}'.")
+            return value
+        value.output_port = port
+        return value
+
+    def publish_output_ports(self, value, name: str, descriptions):
+        """Assign final output-port names across a possibly nested output value.
+
+        ``descriptions`` come from ``describe_io``, which flattens the value in
+        the same order as ``flatten_io_structure``, so the two line up leaf by
+        leaf even after semantics rename a description.
+        """
+        leaves = list(flatten_io_structure(value, name).values())
+        if len(leaves) != len(descriptions):
+            _get_logger().error(
+                f"Error: output '{name}' of node '{self.name}' flattened to "
+                f"{len(leaves)} values but {len(descriptions)} descriptions; "
+                "skipping output-port registration for it.")
+            return
+        for leaf, description in zip(leaves, descriptions):
+            self.publish_output_port(leaf, description.port)
 
     @staticmethod
     def _validate_and_add_to_list(descriptions, current_io_list, node_name):
@@ -297,8 +328,14 @@ class LeappNode():
             desc.cached_values = [torch.zeros_like(desc.value) for _ in range(self._max_cached_io)]
         self._validate_and_add_to_list(
             io_descriptions, self.outputs, self.name)
+        for desc in io_descriptions:
+            # An output is its own source. The name was just proven unique on
+            # this node, which is what makes it usable as the port identity.
+            desc.source_node = self
+            desc.port = desc.name_str
         # used to rebuild the nested i/o
         self.output_formats.append(output_format)
+        return io_descriptions
 
     def add_input(self, input_name, raw_input_name, input_value, semantics=None):
         io_descriptions, input_format = describe_io(
@@ -309,6 +346,16 @@ class LeappNode():
         self._validate_and_add_to_list(io_descriptions, self.inputs, self.name)
         # used to rebuild the nested i/o
         self.input_formats.append(input_format)
+        return io_descriptions
+
+    def state_feedback_pairs(self):
+        """Input/output description pairs this node feeds back into itself.
+
+        State tensors are declared as pairs rather than discovered from the
+        values crossing a node boundary, so their edges are built from the
+        declaration and never depend on what a fed-back value carries.
+        """
+        return ()
 
     @staticmethod
     def get_io_description_by_name(name, io_list):
@@ -317,11 +364,12 @@ class LeappNode():
                 return io_description
         return None
 
-    def validate_io_and_update_tags(self, io_name, raw_io_name, io_value, current_io_list):
+    def validate_io_and_update_sources(self, io_name, raw_io_name, io_value, current_io_list):
         '''
-        this is used for rerunning the the tracing. each time we run it we 
+        this is used for rerunning the the tracing. each time we run it we
         we want to validate that the inputs are consistent with the previous run
-        and also update tags for feedback detection.   
+        and also resolve sources that only appear on a later pass, which is how
+        feedback edges are discovered.
         '''
         io_descriptions, _ = describe_io(io_name, raw_io_name, io_value)
         for io_description in io_descriptions:
@@ -335,15 +383,13 @@ class LeappNode():
                     f"Error: Reentering {self.name} with new i/o {io_description.name_str} but failed to find it in the current i/o list.\n"
                     f"available i/o names: {[io.name_str for io in current_io_list]}",
                     error_type=Exception)
-            elif existing_io_description.tag is None:
-                # THIS STEP UPDATES THE TAG FOR FEEDBACK DETECTION
-                existing_io_description.tag = io_description.tag
-            elif io_description.tag is not None and existing_io_description.tag != io_description.tag:
-                _get_logger().fatal(
-                    f"Error: Reentering {self.name} with new i/o {io_description.name_str} \n"
-                    f"but the tag has changed from {existing_io_description.tag} to {io_description.tag}.\n"
-                    f"This can happen if some dynamic behavior is not captured by the annotations",
-                    error_type=Exception)
+            elif current_io_list is self.inputs and not existing_io_description.has_source:
+                # A previously dangling input may acquire its source on a later
+                # pass; this is how feedback edges become visible. Only an input
+                # can gain a source this way, because an output is its own
+                # source from the moment it was registered.
+                existing_io_description.source_node = io_description.source_node
+                existing_io_description.port = io_description.port
 
             existing_io_description_dict = existing_io_description.dict()
             current_io_description_dict = io_description.dict()
@@ -489,33 +535,41 @@ class LeappNode():
                 f"  [PASS] {self.name} passed validation ({num_examples} example{'s' if num_examples > 1 else ''})")
         return all_match, error_hint
 
-    def validate_input_and_update_tags(self, input_name, raw_input_name, input_value):
-        self.validate_io_and_update_tags(
+    def validate_input_and_update_sources(self, input_name, raw_input_name, input_value):
+        self.validate_io_and_update_sources(
             input_name, raw_input_name, input_value, self.inputs)
 
-    def validate_output_and_update_tags(self, output_name, raw_output_name, output_value):
-        self.validate_io_and_update_tags(
+    def validate_output_and_update_sources(self, output_name, raw_output_name, output_value):
+        self.validate_io_and_update_sources(
             output_name, raw_output_name, output_value, self.outputs)
 
     def reentry_validate_inputs(self, tensors: dict):
         """Validate input tensors on re-entry (node already compiled)."""
         for tensor_name, tensor in tensors.items():
-            self.validate_input_and_update_tags(tensor_name, tensor_name, tensor)
+            self.validate_input_and_update_sources(
+                tensor_name, tensor_name, tensor)
 
-    def reentry_validate_and_tag_outputs(self, tensors: dict,
-                                         static_tensors: dict | None = None):
-        """Tag and validate output tensors on re-entry, then advance the cache index."""
+    def reentry_validate_outputs(self, tensors: dict,
+                                 static_tensors: dict | None = None):
+        """Validate output tensors on re-entry, then advance the cache index.
+
+        Ports are not re-published here. The descriptions registered on the
+        first pass already own this node's side of every edge, so a later pass
+        only has to prove the data still looks the same.
+
+        The tensors arrive already flattened, so each one is a single leaf.
+        """
         all_tensors = {**tensors, **(static_tensors or {})}
         for tensor_name, tensor in all_tensors.items():
-            self.tag_data(tensor, tensor_name)
-            self.validate_output_and_update_tags(tensor_name, tensor_name, tensor)
+            self.validate_output_and_update_sources(
+                tensor_name, tensor_name, tensor)
 
         self.increment_cache_idx()
 
     def reentry_validate_state_update(self, tensors: dict):
         """Validate state tensor updates on re-entry."""
         for tensor_name, tensor in tensors.items():
-            self.validate_output_and_update_tags(
+            self.validate_output_and_update_sources(
                 tensor_name, tensor_name, tensor)
 
     def change_input_name(self, old_name, new_name):

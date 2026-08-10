@@ -168,10 +168,6 @@ class TracedTensorNode(LeappNode):
                 )
                 tensors[name] = wrapped
 
-        # Apply state tags after buffer collection (which may remove placeholder
-        # nodes for non-mutated buffers) but before build_graph_module.
-        self._apply_state_tags()
-
         self.build_graph_module(list(tensors.values()))
 
         self.m = fx.GraphModule(
@@ -193,22 +189,19 @@ class TracedTensorNode(LeappNode):
 
         return unwrapped_tensors[0] if len(unwrapped_tensors) == 1 else tuple(unwrapped_tensors)
 
-    def _apply_state_tags(self):
-        """Mirror each registered state output tag onto its paired state input.
+    def state_feedback_pairs(self):
+        """State tensors are an eager form of feedback.
 
-        State tensors are an eager form of feedback: the state output from one
-        execution is guaranteed to be fed back into the matching state input on
-        the next execution. By copying the already-registered output tag onto
-        the input description, both ends of that feedback edge share one
-        internal identity without inferring a second "canonical" tag name.
+        The state output from one execution is fed back into the matching state
+        input on the next, which the user declared by pairing the two names, so
+        a pair only becomes an edge once both halves exist.
         """
-        for state_name in self._state_tensors:
-            input_desc = self._state_tensors[state_name].get("input_desc")
-            output_desc = self._state_tensors[state_name].get("output_desc")
-            if input_desc is None or output_desc is None or output_desc.tag is None:
-                continue
-
-            input_desc.tag = output_desc.tag
+        return tuple(
+            (state_info["input_desc"], state_info["output_desc"])
+            for state_info in self._state_tensors.values()
+            if state_info.get("input_desc") is not None
+            and state_info.get("output_desc") is not None
+        )
 
     @staticmethod
     def _rewrite_method_descriptors(graph: fx.Graph):
@@ -493,6 +486,22 @@ class TracedTensorNode(LeappNode):
                         f"from the same node. Creating fresh input placeholder "
                         f"(previous trace will be discarded for this branch)."
                     )
+                elif (self.is_tracing and is_traced
+                        and data.context_obj is not self
+                        and data.output_port is None):
+                    # Came out of a previous node but was never registered as one
+                    # of that node's outputs, so there is no edge to connect to.
+                    # Only the first pass can say this, because a re-entry pass
+                    # rebuilds its values without ports and reuses the sources
+                    # its descriptions already hold.
+                    # This can be deliberate, so keep going and treat it as a
+                    # dangling graph input.
+                    _get_logger().error(
+                        f"Error: input '{name}' for node '{self.name}' was derived from "
+                        f"node '{data.context}' but is not one of its registered outputs.\n"
+                        f"Add it to that node's output_tensors() to connect the two nodes, "
+                        f"or ignore this if '{name}' is meant to enter the graph from outside.\n"
+                        f"Treating '{name}' as a dangling input.")
 
                 proxy = None
                 if self.is_tracing:
@@ -544,7 +553,7 @@ class TracedTensorNode(LeappNode):
             for node in self.graph.nodes
         )
         if existing is not None and not has_placeholder:
-            self.validate_input_and_update_tags(name, name, data)
+            self.validate_input_and_update_sources(name, name, data)
             return self._create_io_helper(data, name, to="traced")
         self.add_input(name, name, data, semantics=semantics)
         traced_data = self._create_io_helper(data, name, to="traced")
@@ -554,20 +563,27 @@ class TracedTensorNode(LeappNode):
         existing = self.get_io_description_by_name(name, self.outputs)
         if static:
             self._validate_static_tensor(data, name)
+            # A static output is raw, so the traced wrapper built here is the
+            # value that carries the port downstream.
             wrapped = self._create_io_helper(data, name, to="static")
-            self.tag_data(data, name)
             if existing is not None:
-                self.validate_output_and_update_tags(name, name, data)
+                self.publish_output_port(wrapped, existing.port)
+                self.validate_output_and_update_sources(name, name, data)
                 return wrapped
-            self.add_output(name, name, data, semantics=semantics)
+            descriptions = self.add_output(
+                name, name, data, semantics=semantics)
+            self.publish_output_ports(wrapped, name, descriptions)
             return wrapped
         else:
             unwrapped_data = self._create_io_helper(data, name, to="tensor")
-            self.tag_data(unwrapped_data, name)
             if existing is not None:
-                self.validate_output_and_update_tags(name, name, unwrapped_data)
+                self.publish_output_port(unwrapped_data, existing.port)
+                self.validate_output_and_update_sources(
+                    name, name, unwrapped_data)
                 return unwrapped_data
-            self.add_output(name, name, unwrapped_data, semantics=semantics)
+            descriptions = self.add_output(
+                name, name, unwrapped_data, semantics=semantics)
+            self.publish_output_ports(unwrapped_data, name, descriptions)
             return unwrapped_data
 
     def _validate_static_tensor(self, tensor, name: str):
@@ -587,8 +603,8 @@ class TracedTensorNode(LeappNode):
     def create_static_tensors(self, static_outputs):
         """Wrap raw tensors as static graph nodes (for register_buffer).
 
-        Unlike create_output(static=True), this does NOT tag or register
-        outputs — it only validates and wraps.
+        Unlike create_output(static=True), this does NOT publish an output port
+        or register outputs — it only validates and wraps.
         Returns data in the same nested structure as the input payload.
         """
         flattened_static_outputs = flatten_io_structure(static_outputs, '')

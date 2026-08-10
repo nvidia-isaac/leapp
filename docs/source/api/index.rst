@@ -638,7 +638,7 @@ Notes
 ``annotate.mirror_leapp_tags()``
 --------------------------------
 
-Transfer LEAPP's internal tracing tags from one tensor to another when
+Transfer LEAPP's internal port representation from one value to another when
 data is duplicated without using standard PyTorch operations.
 
 Signature
@@ -646,24 +646,29 @@ Signature
 
 .. code-block:: python
 
-   annotate.mirror_leapp_tags(source, target)
+   target = annotate.mirror_leapp_tags(source, target)
 
 Parameters
 ~~~~~~~~~~
 
-* ``source`` (Tensor, required): Original tensor with LEAPP tags.
-* ``target`` (Tensor, required): Tensor that receives the tags. Must
-  contain exactly the same values as ``source``.
+* ``source`` (required): A value that was registered as a node output, so it
+  carries the producing node and output port.
+* ``target`` (required): Value that receives the traced state. Must contain
+  exactly the same values as ``source``.
 
 Behavior
 ~~~~~~~~
 
 #. Verifies that ``source`` and ``target`` contain exactly the same
    values.
-#. If verification passes, copies all LEAPP internal tracking tags from
-   ``source`` to ``target``.
+#. If verification passes, copies the producing node, output port, and
+   tracing proxy from ``source`` to ``target``.
 #. If data does not match, logs an error and raises rather than copying
    incorrect tracing metadata.
+#. Returns the target. Torch and Warp targets are upgraded in place, so the
+   return value can be ignored. A raw ``np.ndarray`` cannot be upgraded in
+   place, so NumPy callers must assign the returned value.
+#. Outside graph interpretation, returns the target unchanged.
 
 See :doc:`/guides/buffers` for between-node copy examples.
 

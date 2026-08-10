@@ -40,7 +40,7 @@ from leapp.utils.caller_identity import (get_caller_stack_identity,
                                          caller_identity_has_same_anchor,
                                          format_caller_identity)
 from leapp.utils.utils import (get_relative_path,
-                               mirror_all_tensor_tags,
+                               mirror_all_traced_state,
                                extract_return_names,
                                frame_to_namespace)
 from contextlib import nullcontext
@@ -356,7 +356,7 @@ class ExportManager:
             flattened_static = {}
             if normalized_static_outputs is not None:
                 flattened_static = flatten_io_structure(normalized_static_outputs, '')
-            traced_tensors_node.reentry_validate_and_tag_outputs(
+            traced_tensors_node.reentry_validate_outputs(
                 flattened_tensors, flattened_static)
             return self._passthrough_dict_values(tensors)
 
@@ -840,19 +840,13 @@ class ExportManager:
 
     def mirror_leapp_tags(self, source, target):
         if not ExportManager._interpret_graph:
-            return
-        try:
-            if not verify_data_exact_match(source, target):
-                _get_logger().fatal(
-                    f"Error: source and target do not match: {source} != {target}",
-                    error_type=Exception,
-                )
-            mirror_all_tensor_tags(source, target)
-        except Exception as e:
+            return target
+        if not verify_data_exact_match(source, target):
             _get_logger().fatal(
-                f"Error: unexpected error mirroring LEAPP tags: {e}",
-                error_type=type(e),
-                cause=e)
+                f"Error: source and target do not match: {source} != {target}",
+                error_type=Exception,
+            )
+        return mirror_all_traced_state(source, target)
 
     def get_io_descriptions(self):
         _get_logger().section(
