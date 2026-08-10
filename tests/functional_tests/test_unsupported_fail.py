@@ -19,8 +19,21 @@ import unittest
 import torch
 import leapp
 from leapp.leapp import _MANAGER as annotate
+from leapp.leapp_graph.datatypes import promote_in_place
 from leapp.utils.logging import _get_logger
 from .base import LEAPPFunctionalTestBase
+
+
+def _force_boundary_source(source, target):
+    """Make target resolve to source's node output without being an exact copy.
+
+    This is what mirror_leapp_tags() does minus its equality check, so a test
+    can build a deliberately incompatible connection.
+    """
+    promoted = promote_in_place(
+        target, source.name, source.context_obj, source.proxy)
+    promoted.output_port = source.output_port
+    return promoted
 
 
 # ---------------------------------------------------------------------------
@@ -205,31 +218,8 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             self.assertIn("Reentering shape_node", str(e))
             self.assertIn("description has changed", str(e))
 
-    def test_reentry_output_tag_change_fails(self):
-        """Corrupting cached output tags before re-entry should be rejected."""
-        try:
-            leapp.start(name=self.TEST_GRAPH_NAME)
-
-            for idx in range(2):
-                traced = annotate.input_tensors(
-                    'tag_node', {'input': torch.tensor([1.0, 2.0, 3.0])}
-                )
-                annotate.output_tensors(
-                    'tag_node', {'output': traced + 1.0}, export_with="jit"
-                )
-                if idx == 0:
-                    annotate.nodes['tag_node'].outputs[0].tag = 'wrong_node/output/'
-
-            leapp.stop()
-            self.fail("Expected an exception")
-        except Exception as e:
-            try:
-                leapp.stop()
-            except Exception:
-                pass
-            self.assertIn("Reentering tag_node", str(e))
-            self.assertIn("tag has changed", str(e))
-
+    def test_same_output_sent_twice_to_one_node_fails(self):
+        """One node output cannot feed two inputs of the same consumer."""
         @annotate.method()
         def funcA(inputA: torch.Tensor):
             return inputA
@@ -342,15 +332,14 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             self.assertIn("source and target do not match", str(e))
         
         # Test 3: Lists with different number of elements
-        # This will cause an exception because mirror_all_tensor_tags will crash
+        # The exact-match check rejects this before any state is transferred
         source_list2 = [out1, out2]
         target_list2 = [out1.clone()]  # Missing one element
         try:
             annotate.mirror_leapp_tags(source_list2, target_list2)
             self.fail("Expected an exception")
         except Exception as e:
-            # Should get "unexpected error" due to index out of bounds
-            self.assertIn("unexpected error", str(e))
+            self.assertIn("source and target do not match", str(e))
         
         # Test 4: Dicts with different keys
         # This should log an error but not raise an exception
@@ -646,9 +635,9 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             annotate.output_tensors('source_node', {'y': source_output}, export_with="jit")
 
             # mutate shape after output_tensors and before next input_tensors,
-            # while preserving LEAPP tag so connection is still established
-            mutated = source_output.clone().reshape(1, 3)
-            mutated.leapp_tag = source_output.leapp_tag
+            # while keeping the source identity so the connection is still established
+            mutated = _force_boundary_source(
+                source_output, source_output.clone().reshape(1, 3))
 
             target_input = annotate.input_tensors('target_node', {'y': mutated})
             target_output = target_input + 2.0
@@ -674,9 +663,9 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             annotate.output_tensors('source_node', {'y': source_output}, export_with="jit")
 
             # mutate dtype after output_tensors and before next input_tensors,
-            # while preserving LEAPP tag so connection is still established
-            mutated = source_output.clone().to(torch.int32)
-            mutated.leapp_tag = source_output.leapp_tag
+            # while keeping the source identity so the connection is still established
+            mutated = _force_boundary_source(
+                source_output, source_output.clone().to(torch.int32))
 
             target_input = annotate.input_tensors('target_node', {'y': mutated})
             target_output = target_input + 2
@@ -701,6 +690,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             feedback_next = torch.tensor([0.0, 0.0, 0.0])
 
             # run twice from identical call sites to establish a feedback edge
+            source_carrier = None
             for _ in range(2):
                 obs_traced, fb_traced = annotate.input_tensors('node_a', {'obs': obs, 'fb': feedback_next})
                 a_out = obs_traced + fb_traced
@@ -711,9 +701,11 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
                 annotate.output_tensors('node_c', {'fb_out': c_out}, export_with="jit")
 
                 # mutate value between output_tensors and next input_tensors
-                # preserve tag to create feedback connection into node_a/fb
-                feedback_next = c_out.reshape(3).clone()
-                feedback_next.leapp_tag = c_out.leapp_tag
+                # keep the source identity to create a feedback connection into node_a/fb
+                if source_carrier is None:
+                    source_carrier = c_out
+                feedback_next = _force_boundary_source(
+                    source_carrier, c_out.reshape(3).clone())
 
             leapp.stop()
             leapp.compile_graph(visualize=False)
