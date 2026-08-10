@@ -355,10 +355,10 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         )
 
     @classmethod
-    def _promote_plain_tensor(cls, target, anchor, proxy):
+    def _promote_plain_tensor(cls, target, name, context, proxy):
         """Attach tracing state to an existing plain tensor object."""
         target.__class__ = cls
-        target._init_tracing_state(anchor.name, anchor.context_obj, proxy)
+        target._init_tracing_state(name, context, proxy)
         return target
 
     def _record_assignment(self, key, value, real_value):
@@ -413,7 +413,8 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             dest_proxy = anchor._register_setitem_tensor(
                 target.clone().detach(), "_setitem_destination"
             )
-        cls._promote_plain_tensor(target, anchor, dest_proxy)
+        cls._promote_plain_tensor(
+            target, anchor.name, anchor.context_obj, dest_proxy)
         if is_copy:
             return True, target.copy_(
                 value, non_blocking=kwargs.get("non_blocking", False)
@@ -610,7 +611,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         For attributes that don't have corresponding torch functions,
         we forward to the underlying tensor's attribute.
         """
-        # Check __dict__ first for dynamically added attributes (e.g., leapp_tag)
+        # Check __dict__ first for instance attributes such as the tracing state.
         # This is needed because torch.Tensor subclasses may not follow normal
         # attribute lookup for custom attributes
         if name in self.__dict__:

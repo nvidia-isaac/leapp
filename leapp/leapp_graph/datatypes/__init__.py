@@ -176,6 +176,31 @@ def as_traced(
     return traced_class(data, name, context, proxy)
 
 
+def promote_in_place(data, name: str, context, proxy) -> TracedData:
+    """Bind tracing state onto ``data`` itself rather than a fresh carrier.
+
+    This is the counterpart to :func:`as_traced`: where ``as_traced`` hands a
+    consumer its own carrier so a producer can fan out, this rebinds the exact
+    object the caller already holds, which is what boundary values written into
+    a preallocated buffer need.
+
+    Torch and Warp values are upgraded in place, so callers see the change
+    without reassigning. A raw ``np.ndarray`` cannot be class-swapped, so NumPy
+    returns a zero-copy view and callers must use the return value.
+    """
+    if isinstance(data, TracedData):
+        data._init_tracing_state(name, context, proxy)
+        return data
+
+    if wp is not None and TracedWpArray is not None and isinstance(data, wp.array):
+        return TracedWpArray.make_traced_in_place(data, name, context, proxy)
+
+    if type(data) is _torch.Tensor:
+        return TracedTensor._promote_plain_tensor(data, name, context, proxy)
+
+    return as_traced(data, name, context, proxy)
+
+
 def to_export_torch_tensor(data) -> _torch.Tensor:
     """Convert a traceable LEAPP value to ``torch.Tensor`` for export metadata."""
     if isinstance(data, TracedData):
@@ -208,6 +233,7 @@ __all__ = [
     "TRACED_TYPES",
     # Factory and type checking functions
     "as_traced",
+    "promote_in_place",
     "is_tracable_tensor_type",
     "is_traced_type",
     "get_traced_class_for",
