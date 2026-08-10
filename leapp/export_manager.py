@@ -415,7 +415,7 @@ class ExportManager:
             ```
         """
         if not ExportManager._interpret_graph:
-            if isinstance(tensors, torch.Tensor):
+            if is_tracable_tensor_type(tensors):
                 return tensors
             if isinstance(tensors, dict):
                 values = list(tensors.values())
@@ -457,7 +457,7 @@ class ExportManager:
         if isinstance(tensors, dict):
             return tensors, len(tensors) == 1
 
-        is_single = isinstance(tensors, torch.Tensor)
+        is_single = is_tracable_tensor_type(tensors)
         items = [tensors] if is_single else list(tensors)
 
         node = self.nodes.get(node_name)

@@ -19,6 +19,8 @@ from leapp.leapp_graph.datatypes import (
     TracedTensor,
     as_traced,
     is_tracable_tensor_type,
+    is_traced_type,
+    to_export_torch_tensor,
 )
 from leapp.leapp_graph.datatypes.patching import get_warp_backend
 from leapp.utils.tensor_description import (
@@ -519,13 +521,15 @@ class TracedTensorNode(LeappNode):
             elif to=="static":
                 if is_traced:
                     _get_logger().fatal(
-                        f"Cannot create static output from TracedTensor '{name}'. "
+                        f"Cannot create static output from traced "
+                        f"{type(data).__name__} '{name}'. "
                         "Static outputs must be raw tensors.",
                         error_type=Exception)
 
                 # Create unique attribute name and store on root module
                 attr_name = f"_static_{name}".replace(".", "_")
-                self.tracer.root.register_buffer(attr_name, data.clone())
+                self.tracer.root.register_buffer(
+                    attr_name, to_export_torch_tensor(data).clone())
                 # Create get_attr node that retrieves the stored constant
                 node = self.graph.create_node("get_attr", attr_name, (), {})
                 proxy = Proxy(node, self.tracer)
@@ -563,8 +567,6 @@ class TracedTensorNode(LeappNode):
         existing = self.get_io_description_by_name(name, self.outputs)
         if static:
             self._validate_static_tensor(data, name)
-            # A static output is raw, so the traced wrapper built here is the
-            # value that carries the port downstream.
             wrapped = self._create_io_helper(data, name, to="static")
             if existing is not None:
                 self.publish_output_port(wrapped, existing.port)
@@ -587,16 +589,17 @@ class TracedTensorNode(LeappNode):
             return unwrapped_data
 
     def _validate_static_tensor(self, tensor, name: str):
-        if not isinstance(tensor, torch.Tensor):
+        if not is_tracable_tensor_type(tensor):
             _get_logger().fatal(
                 f"Error: static output '{name}' has type {type(tensor).__name__} "
-                "but expected torch.Tensor.\n"
+                "but expected a raw tracable data type.\n"
                 "**Static outputs must be raw tensors, not derived from input tensors.**\n"
                 "If this value depends on inputs, use it as a regular output tensor instead.",
                 error_type=Exception)
-        if isinstance(tensor, TracedTensor):
+        if is_traced_type(tensor):
             _get_logger().fatal(
-                f"Error: static output '{name}' is a TracedTensor. "
+                f"Error: static output '{name}' is a traced "
+                f"{type(tensor).__name__}. "
                 "Static outputs should be constant tensors, not traced computations.",
                 error_type=Exception)
 
@@ -789,8 +792,11 @@ class TracedTensorNode(LeappNode):
 
             # Validate shape and dtype match the input state
             input_tensor = self._state_tensors[name]["input"]
-            input_underlying = input_tensor.tensor if isinstance(input_tensor, TracedTensor) else input_tensor
-            value_underlying = value.tensor if isinstance(value, TracedTensor) else value
+            input_underlying = (
+                input_tensor.tensor if isinstance(input_tensor, TracedData)
+                else input_tensor)
+            value_underlying = (
+                value.tensor if isinstance(value, TracedData) else value)
             if input_underlying.shape != value_underlying.shape:
                 _get_logger().fatal(
                     f"Error: update_state for '{name}' has shape {value_underlying.shape} "

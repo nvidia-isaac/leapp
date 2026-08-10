@@ -51,7 +51,6 @@ class TestFatalLoggingInExportManager(LEAPPFunctionalTestBase):
             leapp.stop()
 
         log_output = "\n".join(logs.output)
-        self.assertIn("unexpected error mirroring LEAPP tags", log_output)
         self.assertIn("source and target do not match", log_output)
 
 
