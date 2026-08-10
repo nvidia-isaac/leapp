@@ -85,6 +85,7 @@ class TracedWpArray(wp.array):
         self._name = name
         self._context = context
         self._proxy = proxy
+        self._output_port = None
 
     def rebind_tracing_proxy(self, name: str, context, proxy: Proxy) -> None:
         """Rebind this traced array to the canonical FX proxy for its value."""
@@ -146,6 +147,14 @@ class TracedWpArray(wp.array):
     @property
     def context_obj(self):
         return self._context
+
+    @property
+    def output_port(self):
+        return self._output_port
+
+    @output_port.setter
+    def output_port(self, port) -> None:
+        self._output_port = port
 
     @property
     def is_tracing(self) -> bool:

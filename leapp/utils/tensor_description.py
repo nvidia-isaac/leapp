@@ -268,11 +268,14 @@ class TensorDescription:
     or in bulk via get_semantics()/set_semantics().
     """
 
-    def __init__(self, name: str, value: Any, tag: Optional[str] = None,
+    def __init__(self, name: str, value: Any,
                  semantics: Optional[TensorSemantics] = None):
-        # extract tag from the input if not overridden
-        if tag is None and hasattr(value, 'leapp_tag'):
-            tag = value.leapp_tag
+        # Capture where the value came from before unwrapping loses that state.
+        source_node = None
+        port = None
+        if isinstance(value, TracedData):
+            source_node = value.context_obj
+            port = value.output_port
 
         # unwrap TracedData to the underlying tensor
         if isinstance(value, TracedData):
@@ -285,9 +288,19 @@ class TensorDescription:
         self.dtype = dtype
         self.shape = CompactYamlList(shape)
         self.type = "tensor"
-        self.tag = tag
+        self.source_node = source_node
+        # The port on ``source_node`` that identifies this data. An input takes
+        # it from the value it received; an output is its own source, so its
+        # node stamps both at registration. Unlike ``name``, which export
+        # backends may rewrite, a port is set once and never changes.
+        self.port = port
         self.cached_values = []
         self.init_semantics(semantics)
+
+    @property
+    def has_source(self) -> bool:
+        """Whether this description resolves to a specific node output."""
+        return self.source_node is not None and self.port is not None
 
     # --- Semantic field access ---
 
@@ -320,7 +333,7 @@ class TensorDescription:
 
         return dtype, shape
 
-    def dict(self, ignore_tag=True, ignore_value=True) -> Dict[str, Any]:
+    def dict(self, ignore_value=True) -> Dict[str, Any]:
         """Convert to a dictionary for YAML serialization."""
         result = {
             "name": self.name,
@@ -328,8 +341,6 @@ class TensorDescription:
             "shape": self.shape,
             "type": self.type
         }
-        if self.tag is not None and not ignore_tag:
-            result["tag"] = self.tag
         if self.value is not None and not ignore_value:
             result["value"] = self.value
         # Merge in all non-None semantic fields
@@ -783,151 +794,3 @@ def resolve_tensor_descriptions_to_values(io_format):
         If a ParameterFormat is passed, returns the resolved formatting from within it.
     """
     return _resolve_tensor_descriptions(io_format, lambda td: td.value)
-
-
-def reconstruct_from_named_dict(named_dict, io_format, use_tag_first=True):
-    """
-    Reverse of describe_io_helper: reconstruct data structure from named dict and format.
-
-    Takes a dictionary mapping names/tags to actual data values and an io_format structure,
-    and reconstructs the original nested data structure.
-
-    Args:
-        named_dict: Dictionary mapping names or tags to actual data values
-        io_format: The format structure (can be ParameterFormat, TensorDescription objects or strings)
-        use_tag_first: If True, try to lookup by tag first, then by name. If False, use name only.
-
-    Returns:
-        The reconstructed data structure with the same shape as the original
-
-    Example:
-        # Original data
-        data = {'a': tensor1, 'b': [tensor2, tensor3]}
-
-        # Describe it
-        desc, fmt = describe_io_helper(data, "root", "python")
-
-        # Later reconstruct from a named dict
-        named = {'root.a': new_tensor1, 'root.b.0': new_tensor2, 'root.b.1': new_tensor3}
-        reconstructed = reconstruct_from_named_dict(named, fmt)
-        # reconstructed = {'a': new_tensor1, 'b': [new_tensor2, new_tensor3]}
-    """
-    def resolve(item):
-        if isinstance(item, ParameterFormat):
-            # For ParameterFormat, extract the formatting attribute
-            return resolve(item.formatting)
-        elif isinstance(item, TensorDescription):
-            # Try to find the value in named_dict
-            # First try by tag if it exists
-            if item.tag is not None and item.tag in named_dict:
-                return named_dict[item.tag]
-
-            # Then try by name
-            if item.name in named_dict:
-                return named_dict[item.name]
-
-            _get_logger().fatal(
-                f"Could not find data for TensorDescription with name='{item.name}' and tag='{item.tag}' in named_dict",
-                error_type=KeyError,
-            )
-        elif isinstance(item, str):
-            # If it's a string, look it up directly in named_dict
-            if item in named_dict:
-                return named_dict[item]
-            _get_logger().fatal(
-                f"Could not find data for key '{item}' in named_dict",
-                error_type=KeyError,
-            )
-        elif isinstance(item, collections.abc.Sequence) and not isinstance(item, (str, bytes, torch.Tensor)):
-            return [resolve(sub_item) for sub_item in item]
-        elif isinstance(item, collections.abc.Mapping):
-            return {key: resolve(value) for key, value in item.items()}
-        else:
-            # Return as-is for other types
-            return item
-
-    return resolve(io_format)
-
-
-def flatten_to_named_dict(data, io_format, use_tag_first=True):
-    """
-    Flatten a nested data structure to a dictionary using io_format as a guide.
-
-    This is the inverse of reconstruct_from_named_dict: given a nested data structure
-    and its corresponding format, it creates a flat dictionary mapping tags/names to values.
-
-    Args:
-        data: The nested data structure (can be tensor, list, dict, etc.)
-        io_format: The format structure (can be ParameterFormat or containing TensorDescription objects)
-        use_tag_first: If True, use tag as key if available, otherwise use name
-
-    Returns:
-        Dictionary mapping tags/names to actual values
-
-    Example:
-        # Original data
-        data = {'a': tensor1, 'b': [tensor2, tensor3]}
-
-        # Describe it to get format
-        desc, fmt = describe_io_helper(data, "root", "python")
-
-        # Flatten it back
-        flat = flatten_to_named_dict(data, fmt)
-        # flat = {'root.a': tensor1, 'root.b.0': tensor2, 'root.b.1': tensor3}
-    """
-    result = {}
-
-    def flatten(data_item, format_item):
-        if isinstance(format_item, ParameterFormat):
-            # For ParameterFormat, extract the formatting attribute
-            flatten(data_item, format_item.formatting)
-        elif isinstance(format_item, TensorDescription):
-            # Extract the key (tag or name)
-            if use_tag_first and format_item.tag is not None:
-                key = format_item.tag
-            else:
-                key = format_item.name
-
-            # Store the value
-            result[key] = data_item
-
-        elif isinstance(format_item, collections.abc.Sequence) and not isinstance(format_item, (str, bytes, torch.Tensor)):
-            # Both should be lists or list-like
-            if not (isinstance(data_item, collections.abc.Sequence) and not isinstance(data_item, (str, bytes, torch.Tensor))):
-                _get_logger().fatal(
-                    f"Format expects a list but data is {type(data_item)}",
-                    error_type=TypeError,
-                )
-            if len(data_item) != len(format_item):
-                _get_logger().fatal(
-                    f"List length mismatch: data has {len(data_item)} items, "
-                    f"format expects {len(format_item)}",
-                    error_type=ValueError,
-                )
-
-            for data_sub, format_sub in zip(data_item, format_item):
-                flatten(data_sub, format_sub)
-
-        elif isinstance(format_item, collections.abc.Mapping):
-            # Both should be dicts or dict-like
-            if not isinstance(data_item, collections.abc.Mapping):
-                _get_logger().fatal(
-                    f"Format expects a dict but data is {type(data_item)}",
-                    error_type=TypeError,
-                )
-            if set(data_item.keys()) != set(format_item.keys()):
-                _get_logger().fatal(
-                    f"Dict keys mismatch: data has {set(data_item.keys())}, "
-                    f"format expects {set(format_item.keys())}",
-                    error_type=ValueError,
-                )
-
-            for key in format_item.keys():
-                flatten(data_item[key], format_item[key])
-        else:
-            # For other types, we don't have a good way to extract a key
-            # This shouldn't normally happen if format was created by describe_io_helper
-            pass
-
-    flatten(data, io_format)
-    return result
