@@ -126,10 +126,10 @@ Useful for:
 
 Use this when only some nodes should stay in the graph but should not be
 exported, for example while iterating on one node and not wanting to pay
-export cost for its neighbours.
+export cost for its neighbors.
 
 With ``non_traced=[...]``, LEAPP still traces the listed node and still
-connects it to its neighbours; it simply produces no model artifact.
+connects it to its neighbors; it simply produces no model artifact.
 
 .. code-block:: python
 
