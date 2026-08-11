@@ -721,6 +721,12 @@ class WarpPatchBackend:
         *,
         depth: int,
     ) -> None:
+        # needs to lazy import to avoid circular import
+        from leapp.leapp_graph.datatypes import (
+            as_traced,
+            is_tracable_tensor_type,
+            promote_in_place,
+        )
         if depth > _MAX_PARAM_SCAN_DEPTH:
             return
 
@@ -729,12 +735,20 @@ class WarpPatchBackend:
             return
         seen.add(obj_id)
 
-        # needs to lazy import to avoid circular import
-        from leapp.leapp_graph.datatypes import as_traced, is_tracable_tensor_type
-
         if is_tracable_tensor_type(obj):
             if trace_state is not None and isinstance(obj, wp.array):
-                traced_array = as_traced(
+                owner = getattr(obj, "context_obj", None)
+                published = getattr(obj, "output_port", None) is not None
+                if not published and (owner is None or owner is trace_state.context):
+                    # The caller keeps using this exact array after the call, so
+                    # its tracing state has to live on the object itself for the
+                    # segment close to rebind it to the segment output proxy.
+                    wrap = promote_in_place
+                else:
+                    # A value another node already published stays untouched, so
+                    # it can still fan out; this call only gets an alias of it.
+                    wrap = as_traced
+                traced_array = wrap(
                     obj,
                     trace_state.name,
                     trace_state.context,
