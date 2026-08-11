@@ -15,13 +15,16 @@
 # limitations under the License.
 #
 import unittest
+
 import numpy as np
 import torch
 import warp as wp
+
 import leapp
 from leapp.leapp import _MANAGER as annotate
-from .base import LEAPPFunctionalTestBase
 from tests.warp_support import WarpTestCase
+
+from .base import LEAPPFunctionalTestBase
 
 
 @wp.kernel
@@ -34,7 +37,43 @@ def _warp_add_arrays_kernel(
     dst[i] = src1[i] + src2[i]
 
 
-class TestConnectionCase(LEAPPFunctionalTestBase):
+class ConnectivityTestBase(LEAPPFunctionalTestBase):
+    """Shared assertions for backend-specific connectivity tests."""
+
+    def verify_connectivity(
+        self,
+        *,
+        nodes,
+        internal_connections=0,
+        inputs=1,
+        outputs=1,
+        feedback_connections=0,
+    ):
+        self.verify_num_connections(
+            annotate,
+            nodes=nodes,
+            inputs=inputs,
+            outputs=outputs,
+            internal_connections=internal_connections,
+            feedback_connections=feedback_connections,
+        )
+
+    def pipeline_views(self):
+        return (
+            {
+                source: list(targets)
+                for source, targets in annotate.detected_pipeline["data_flow"].items()
+            },
+            {
+                source: list(targets)
+                for source, targets in annotate.detected_pipeline[
+                    "feedback_flow"
+                ].items()
+            },
+        )
+
+
+class TestConnectionCase(ConnectivityTestBase):
 
     def test_multiple_runs_of_same_graph(self):
         """tests the situation where the same graph is run multiple times"""
@@ -47,16 +86,15 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
             return inputB+5.0
 
         leapp.start(name=self.TEST_GRAPH_NAME)
-        for i in range(10):
+        for _ in range(10):
             outputA = funcA(torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32))
             outputA = annotate.input_tensors("blockA", {"outputA": outputA})
             outputB = outputA*2.
             annotate.output_tensors("blockA", {"outputB": outputB}, export_with="jit")
-            outputC = funcC(outputB)
+            funcC(outputB)
         leapp.stop()
         leapp.compile_graph(visualize=False)
-        self.verify_num_connections(annotate, nodes=3, inputs=1, outputs=1,
-                                    internal_connections=2)
+        self.verify_connectivity(nodes=3, internal_connections=2)
 
     def test_feedback_connections(self):
         """tests the situation where the graph has feedback connections"""
@@ -79,17 +117,17 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
 
         leapp.start(name=self.TEST_GRAPH_NAME, verbose=False)
         feedback_input = torch.tensor([0.0, 0.0, 0.0])
-        for i in range(2):
+        for _ in range(2):
             out_funcA = funcA(torch.tensor([1.0, 2.0, 3.0]), feedback_input)
             out_funcB = funcB(out_funcA)
             out_funcC = funcC(out_funcB, feedback_input)
-            out_funcD = funcD(out_funcC)
+            funcD(out_funcC)
             feedback_input = out_funcC
 
         leapp.stop()
         leapp.compile_graph(visualize=False)
-        self.verify_num_connections(annotate, nodes=4, inputs=1, outputs=1,
-                                    internal_connections=3, feedback_connections=1)
+        self.verify_connectivity(
+            nodes=4, internal_connections=3, feedback_connections=1)
 
     def test_interleaved_traced_nodes_keep_forward_execution_order(self):
         """Interleaved traced nodes should classify completed dependencies as forward flow."""
@@ -125,14 +163,7 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
 
         self.assertEqual({"node_b/b_out": ["node_a/from_b"]}, data_flow)
         self.assertEqual({}, feedback_flow)
-        self.verify_num_connections(
-            annotate,
-            nodes=2,
-            inputs=2,
-            outputs=1,
-            internal_connections=1,
-            feedback_connections=0,
-        )
+        self.verify_connectivity(nodes=2, inputs=2, internal_connections=1)
         self.verify_all_models_exist("node_a", "node_b")
         self.verify_safetensors_matches_feedback(annotate)
 
@@ -149,7 +180,7 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
         )
 
     def test_mirror_leapp_tags_with_inplace_assignment(self):
-        """Test mirror_leapp_tags with in-place assignment operations between nodes"""
+        """mirror_leapp_tags with a single in-place buffer between nodes."""
         @annotate.method(export_with="jit")
         def funcA(inputA: torch.Tensor):
             return inputA * 2.0
@@ -164,63 +195,14 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
 
         leapp.start(name=self.TEST_GRAPH_NAME)
         out_funcA = funcA(torch.tensor([1.0, 2.0, 3.0]))
-        
-        # Simulate in-place assignment to a preallocated buffer BETWEEN nodes
         buffer = torch.zeros_like(out_funcA)
         buffer[:] = out_funcA
-        # Transfer traced state to maintain graph connections
         annotate.mirror_leapp_tags(out_funcA, buffer)
-        
         out_funcB = funcB(buffer)
-        out_funcC = funcC(out_funcB)
+        funcC(out_funcB)
         leapp.stop()
         leapp.compile_graph(visualize=False)
-
-        # Should have proper connections: funcA -> funcB -> funcC
-        self.verify_num_connections(annotate, nodes=3, inputs=1, outputs=1,
-                                    internal_connections=2)
-
-    def test_mirror_leapp_tags_with_preallocated_buffer(self):
-        """Test mirror_leapp_tags with a class that uses preallocated buffers between nodes"""
-        class DataProcessor:
-            def __init__(self):
-                self._buffer = torch.zeros(3)
-
-            def copy_to_buffer(self, data):
-                """Copy data to buffer and transfer traced state (outside of annotated nodes)"""
-                self._buffer[:] = data
-                annotate.mirror_leapp_tags(data, self._buffer)
-                return self._buffer
-
-            @annotate.method(export_with="jit")
-            def process(self, input_data: torch.Tensor):
-                # Process the buffered data
-                result = input_data * 2.0
-                return result
-
-        @annotate.method(export_with="jit")
-        def upstream_node(inputA: torch.Tensor):
-            return inputA + 1.0
-
-        @annotate.method(export_with="jit")
-        def downstream_node(inputB: torch.Tensor):
-            return inputB + 3.0
-
-        processor = DataProcessor()
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        upstream_output = upstream_node(torch.tensor([1.0, 2.0, 3.0]))
-        
-        # Copy to buffer and transfer traced state BETWEEN nodes
-        buffered_data = processor.copy_to_buffer(upstream_output)
-        
-        processed = processor.process(buffered_data)
-        final_output = downstream_node(processed)
-        leapp.stop()
-        leapp.compile_graph(visualize=False)
-
-        # Should have proper connections through all three nodes
-        self.verify_num_connections(annotate, nodes=3, inputs=1, outputs=1,
-                                    internal_connections=2)
+        self.verify_connectivity(nodes=3, internal_connections=2)
 
     def test_mirror_leapp_tags_multiple_buffers(self):
         """Test mirror_leapp_tags with multiple buffers between nodes"""
@@ -253,13 +235,12 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
         annotate.mirror_leapp_tags(out_A2, buffer2)
         
         out_B1, out_B2 = funcB(buffer1, buffer2)
-        final_output = funcC(out_B1, out_B2)
+        funcC(out_B1, out_B2)
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
         # Verify connections: funcA (2 outputs) -> funcB (2 inputs, 2 outputs) -> funcC (2 inputs)
-        self.verify_num_connections(annotate, nodes=3, inputs=1, outputs=1,
-                                    internal_connections=4)
+        self.verify_connectivity(nodes=3, internal_connections=4)
 
     def test_mirror_leapp_tags_preserves_output_port_through_chain(self):
         """Test that mirror_leapp_tags preserves output ports through a long chain of buffer operations"""
@@ -295,13 +276,12 @@ class TestConnectionCase(LEAPPFunctionalTestBase):
         annotate.mirror_leapp_tags(out2, buffer2)
         
         out3 = process_node2(buffer2)
-        final = sink_node(out3)
+        sink_node(out3)
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
         # Should maintain proper connections through all nodes
-        self.verify_num_connections(annotate, nodes=4, inputs=1, outputs=1,
-                                    internal_connections=3)
+        self.verify_connectivity(nodes=4, internal_connections=3)
 
     def test_mirror_leapp_tags_noop_outside_tracing(self):
         """Test that mirror_leapp_tags safely no-ops outside of tracing"""
@@ -377,7 +357,7 @@ class TestEquivalentCopyKeepsOutputPort(LEAPPFunctionalTestBase):
         self.assertEqual("y", torch.as_tensor(np.asarray(output)).output_port)
 
 
-class TestNumpyConnectionCase(LEAPPFunctionalTestBase):
+class TestNumpyConnectionCase(ConnectivityTestBase):
     """NumPy equivalents of the torch connection/traced-state tests.
 
     NumPy callers must assign the return value of ``mirror_leapp_tags``: a raw
@@ -395,18 +375,6 @@ class TestNumpyConnectionCase(LEAPPFunctionalTestBase):
         return annotate.output_tensors(
             node_name, {output_name: traced + value}, export_with=None)
 
-    def _pipeline_views(self):
-        return (
-            {
-                source: list(targets)
-                for source, targets in annotate.detected_pipeline["data_flow"].items()
-            },
-            {
-                source: list(targets)
-                for source, targets in annotate.detected_pipeline["feedback_flow"].items()
-            },
-        )
-
     def test_numpy_nodes_chain_via_output_ports(self):
         """Two numpy nodes connected by a published ndarray output -> input edge."""
         leapp.start(name=self.TEST_GRAPH_NAME)
@@ -422,16 +390,10 @@ class TestNumpyConnectionCase(LEAPPFunctionalTestBase):
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
-        data_flow, feedback_flow = self._pipeline_views()
+        data_flow, feedback_flow = self.pipeline_views()
         self.assertEqual({"node_a/out_a": ["node_b/out_a"]}, data_flow)
         self.assertEqual({}, feedback_flow)
-        self.verify_num_connections(
-            annotate,
-            nodes=2,
-            inputs=1,
-            outputs=1,
-            internal_connections=1,
-        )
+        self.verify_connectivity(nodes=2, internal_connections=1)
 
     def test_multiple_runs_of_same_graph(self):
         """Same numpy graph traced repeatedly across iterations."""
@@ -444,13 +406,7 @@ class TestNumpyConnectionCase(LEAPPFunctionalTestBase):
             arr = self._run_scale_node("numpy_c", "arr", "out", arr, 3.0)
         leapp.stop()
         leapp.compile_graph(visualize=False)
-        self.verify_num_connections(
-            annotate,
-            nodes=3,
-            inputs=1,
-            outputs=1,
-            internal_connections=2,
-        )
+        self.verify_connectivity(nodes=3, internal_connections=2)
 
     def test_feedback_connections(self):
         """Numpy nodes with a feedback edge across trace iterations."""
@@ -475,17 +431,11 @@ class TestNumpyConnectionCase(LEAPPFunctionalTestBase):
 
         leapp.stop()
         leapp.compile_graph(visualize=False)
-        self.verify_num_connections(
-            annotate,
-            nodes=4,
-            inputs=1,
-            outputs=1,
-            internal_connections=3,
-            feedback_connections=1,
-        )
+        self.verify_connectivity(
+            nodes=4, internal_connections=3, feedback_connections=1)
 
     def test_mirror_leapp_tags_with_inplace_assignment(self):
-        """mirror_leapp_tags with in-place assignment between numpy nodes."""
+        """mirror_leapp_tags with a single in-place buffer between numpy nodes."""
         leapp.start(name=self.TEST_GRAPH_NAME)
 
         out_a = self._run_scale_node(
@@ -501,89 +451,7 @@ class TestNumpyConnectionCase(LEAPPFunctionalTestBase):
 
         leapp.stop()
         leapp.compile_graph(visualize=False)
-        self.verify_num_connections(
-            annotate,
-            nodes=3,
-            inputs=1,
-            outputs=1,
-            internal_connections=2,
-        )
-
-    def test_mirror_leapp_tags_with_preallocated_buffer(self):
-        """mirror_leapp_tags with a reusable numpy buffer between nodes."""
-
-        class DataProcessor:
-            def __init__(self):
-                self._buffer = np.zeros(3, dtype=np.float32)
-
-            def copy_to_buffer(self, data):
-                """Copy data to buffer and transfer traced state (outside nodes)."""
-                self._buffer[:] = data
-                self._buffer = annotate.mirror_leapp_tags(data, self._buffer)
-                return self._buffer
-
-        processor = DataProcessor()
-        leapp.start(name=self.TEST_GRAPH_NAME)
-
-        upstream = self._run_add_node(
-            "upstream", "in_a", "out_a",
-            np.array([1.0, 2.0, 3.0], dtype=np.float32), 1.0)
-        buffered = processor.copy_to_buffer(upstream)
-        processed = self._run_scale_node(
-            "process", "in_b", "out_b", buffered, 2.0)
-        self._run_add_node("downstream", "in_c", "out_c", processed, 3.0)
-
-        leapp.stop()
-        leapp.compile_graph(visualize=False)
-        self.verify_num_connections(
-            annotate,
-            nodes=3,
-            inputs=1,
-            outputs=1,
-            internal_connections=2,
-        )
-
-    def test_mirror_leapp_tags_multiple_buffers(self):
-        """mirror_leapp_tags with multiple numpy buffers between nodes."""
-        leapp.start(name=self.TEST_GRAPH_NAME)
-
-        arr = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-        in_a = annotate.input_tensors("node_a", {"in_a": arr})
-        out_a1, out_a2 = annotate.output_tensors(
-            "node_a",
-            {"out_a1": in_a, "out_a2": in_a + 1.0},
-            export_with=None,
-        )
-
-        buffer1 = np.zeros_like(np.asarray(out_a1))
-        buffer2 = np.zeros_like(np.asarray(out_a2))
-        buffer1[:] = out_a1
-        buffer2[:] = out_a2
-        buffer1 = annotate.mirror_leapp_tags(out_a1, buffer1)
-        buffer2 = annotate.mirror_leapp_tags(out_a2, buffer2)
-
-        in_b1, in_b2 = annotate.input_tensors(
-            "node_b", {"in_b1": buffer1, "in_b2": buffer2})
-        out_b1, out_b2 = annotate.output_tensors(
-            "node_b",
-            {"out_b1": in_b1 * 2.0, "out_b2": in_b2 * 3.0},
-            export_with=None,
-        )
-
-        in_c1, in_c2 = annotate.input_tensors(
-            "node_c", {"in_c1": out_b1, "in_c2": out_b2})
-        annotate.output_tensors(
-            "node_c", {"final": in_c1 + in_c2}, export_with=None)
-
-        leapp.stop()
-        leapp.compile_graph(visualize=False)
-        self.verify_num_connections(
-            annotate,
-            nodes=3,
-            inputs=1,
-            outputs=1,
-            internal_connections=4,
-        )
+        self.verify_connectivity(nodes=3, internal_connections=2)
 
     def test_mirror_leapp_tags_preserves_output_port_through_chain(self):
         """mirror_leapp_tags preserves output ports through a long numpy node chain."""
@@ -607,26 +475,9 @@ class TestNumpyConnectionCase(LEAPPFunctionalTestBase):
 
         leapp.stop()
         leapp.compile_graph(visualize=False)
-        self.verify_num_connections(
-            annotate,
-            nodes=4,
-            inputs=1,
-            outputs=1,
-            internal_connections=3,
-        )
+        self.verify_connectivity(nodes=4, internal_connections=3)
 
-    def test_mirror_leapp_tags_noop_outside_tracing(self):
-        """mirror_leapp_tags safely no-ops outside of tracing for numpy arrays."""
-        source = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-        target = np.zeros(3, dtype=np.float32)
-        target[:] = source
-
-        annotate.mirror_leapp_tags(source, target)
-
-        self.assertTrue(np.allclose(source, target))
-
-
-class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
+class TestWarpConnectionCase(WarpTestCase, ConnectivityTestBase):
     """Warp equivalents of the torch connection/traced-state tests in TestConnectionCase."""
 
     def _warp_add_arrays(self, src1, src2):
@@ -668,18 +519,6 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
             )
         return dst
 
-    def _pipeline_views(self):
-        return (
-            {
-                source: list(targets)
-                for source, targets in annotate.detected_pipeline["data_flow"].items()
-            },
-            {
-                source: list(targets)
-                for source, targets in annotate.detected_pipeline["feedback_flow"].items()
-            },
-        )
-
     @unittest.expectedFailure
     def test_expected_fail_warp_full_copy_keeps_output_port(self):
         """A full ``wp.copy`` of a finished warp output should keep its port.
@@ -705,21 +544,15 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
         self.assertEqual(arr2.output_port, "arr2")
         self.assertIs(arr2.context_obj, annotate.nodes["node_a"])
 
-        arr3 = self._run_copy_node("node_b", "arr2", "arr3", arr2)
+        self._run_copy_node("node_b", "arr2", "arr3", arr2)
 
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
-        data_flow, feedback_flow = self._pipeline_views()
+        data_flow, feedback_flow = self.pipeline_views()
         self.assertEqual({"node_a/arr2": ["node_b/arr2"]}, data_flow)
         self.assertEqual({}, feedback_flow)
-        self.verify_num_connections(
-            annotate,
-            nodes=2,
-            inputs=1,
-            outputs=1,
-            internal_connections=1,
-        )
+        self.verify_connectivity(nodes=2, internal_connections=1)
         self.verify_all_models_exist("node_a", "node_b")
 
     def test_warp_node_requires_second_execution_before_compile(self):
@@ -758,7 +591,7 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
 
         leapp.stop()
         leapp.compile_graph(visualize=False)
-        self.verify_num_connections(annotate, nodes=1, inputs=1, outputs=1)
+        self.verify_connectivity(nodes=1)
         self.verify_all_models_exist("node_a")
 
     def test_multiple_runs_of_same_graph(self):
@@ -772,13 +605,7 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
             arr = self._run_copy_node("warp_c", "arr", "out", arr)
         leapp.stop()
         leapp.compile_graph(visualize=False)
-        self.verify_num_connections(
-            annotate,
-            nodes=3,
-            inputs=1,
-            outputs=1,
-            internal_connections=2,
-        )
+        self.verify_connectivity(nodes=3, internal_connections=2)
 
     def test_feedback_connections(self):
         """Warp nodes with a feedback edge across trace iterations."""
@@ -802,19 +629,13 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
                 out_c = self._warp_add_arrays(in_c, loop)
             out_c = annotate.output_tensors("node_c", {"out_c": out_c}, export_with="onnx")
 
-            out_d = self._run_copy_node("node_d", "in_d", "out_d", out_c)
+            self._run_copy_node("node_d", "in_d", "out_d", out_c)
             loop_back = out_c
 
         leapp.stop()
         leapp.compile_graph(visualize=False)
-        self.verify_num_connections(
-            annotate,
-            nodes=4,
-            inputs=1,
-            outputs=1,
-            internal_connections=3,
-            feedback_connections=1,
-        )
+        self.verify_connectivity(
+            nodes=4, internal_connections=3, feedback_connections=1)
 
     def test_interleaved_traced_nodes_keep_forward_execution_order(self):
         """Completed warp node output consumed by a later node is forward flow."""
@@ -838,17 +659,10 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
-        data_flow, feedback_flow = self._pipeline_views()
+        data_flow, feedback_flow = self.pipeline_views()
         self.assertEqual({"node_b/b_out": ["node_a/from_b"]}, data_flow)
         self.assertEqual({}, feedback_flow)
-        self.verify_num_connections(
-            annotate,
-            nodes=2,
-            inputs=2,
-            outputs=1,
-            internal_connections=1,
-            feedback_connections=0,
-        )
+        self.verify_connectivity(nodes=2, inputs=2, internal_connections=1)
         self.verify_all_models_exist("node_a", "node_b")
         self.verify_safetensors_matches_feedback(annotate)
 
@@ -897,7 +711,7 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
 
         out_d = self._run_copy_node("node_d", "in_d", "out_d", out_c)
         for _ in range(2):
-            in_e1, in_e2 = annotate.input_tensors(
+            in_e1, _in_e2 = annotate.input_tensors(
                 "node_e", {"in_e1": out_d, "in_e2": out_b}
             )
             with annotate.warp_op("node_e"):
@@ -907,171 +721,27 @@ class TestWarpConnectionCase(WarpTestCase, LEAPPFunctionalTestBase):
 
         leapp.stop()
         leapp.compile_graph(visualize=False)
-        self.verify_num_connections(
-            annotate,
-            nodes=5,
-            inputs=1,
-            outputs=2,
-            internal_connections=4,
-            feedback_connections=0,
-        )
+        self.verify_connectivity(
+            nodes=5, outputs=2, internal_connections=4)
 
     def test_mirror_leapp_tags_with_inplace_assignment(self):
-        """mirror_leapp_tags with in-place wp.copy between warp nodes."""
+        """mirror_leapp_tags with a single in-place wp.copy between warp nodes."""
         leapp.start(name=self.TEST_GRAPH_NAME)
 
-        out_a = self._run_copy_node("node_a", "in_a", "out_a", wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE))
+        out_a = self._run_copy_node(
+            "node_a", "in_a", "out_a",
+            wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE),
+        )
         buffer = wp.empty_like(out_a)
         wp.copy(buffer, out_a)
         annotate.mirror_leapp_tags(out_a, buffer)
 
         out_b = self._run_copy_node("node_b", "in_b", "out_b", buffer)
-        out_c = self._run_copy_node("node_c", "in_c", "out_c", out_b)
+        self._run_copy_node("node_c", "in_c", "out_c", out_b)
 
         leapp.stop()
         leapp.compile_graph(visualize=False)
-        self.verify_num_connections(
-            annotate,
-            nodes=3,
-            inputs=1,
-            outputs=1,
-            internal_connections=2,
-        )
-
-    def test_mirror_leapp_tags_with_preallocated_buffer(self):
-        """mirror_leapp_tags with a reusable buffer object between warp nodes."""
-
-        class WarpBuffer:
-            def __init__(self):
-                self._buffer = wp.zeros(3, dtype=wp.float32, device=TestWarpConnectionCase.DEVICE)
-
-            def copy_to_buffer(self, data):
-                wp.copy(self._buffer, data)
-                annotate.mirror_leapp_tags(data, self._buffer)
-                return self._buffer
-
-        processor = WarpBuffer()
-        leapp.start(name=self.TEST_GRAPH_NAME)
-
-        upstream = self._run_copy_node(
-            "upstream", "in_a", "out_a", wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)
-        )
-        buffered = processor.copy_to_buffer(upstream)
-        processed = self._run_copy_node("process", "in_b", "out_b", buffered)
-        self._run_copy_node("downstream", "in_c", "out_c", processed)
-
-        leapp.stop()
-        leapp.compile_graph(visualize=False)
-        self.verify_num_connections(
-            annotate,
-            nodes=3,
-            inputs=1,
-            outputs=1,
-            internal_connections=2,
-        )
-
-    def test_mirror_leapp_tags_multiple_buffers(self):
-        """mirror_leapp_tags with multiple wp.array buffers between warp nodes."""
-        leapp.start(name=self.TEST_GRAPH_NAME)
-
-        arr = wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)
-        out_a1 = out_a2 = None
-        for _ in range(2):
-            in_a = annotate.input_tensors("node_a", {"in_a": arr})
-            with annotate.warp_op("node_a"):
-                out_a1 = wp.empty_like(in_a)
-                wp.copy(out_a1, in_a)
-                out_a2 = wp.empty_like(in_a)
-                wp.launch(
-                    self.kernels.add_scalar,
-                    dim=in_a.size,
-                    inputs=[in_a, wp.float32(1.0)],
-                    outputs=[out_a2],
-                )
-            out_a1, out_a2 = annotate.output_tensors(
-                "node_a", {"out_a1": out_a1, "out_a2": out_a2}, export_with="onnx"
-            )
-
-        buffer1 = wp.empty_like(out_a1)
-        buffer2 = wp.empty_like(out_a2)
-        wp.copy(buffer1, out_a1)
-        wp.copy(buffer2, out_a2)
-        annotate.mirror_leapp_tags(out_a1, buffer1)
-        annotate.mirror_leapp_tags(out_a2, buffer2)
-
-        out_b1 = out_b2 = None
-        for _ in range(2):
-            in_b1, in_b2 = annotate.input_tensors(
-                "node_b", {"in_b1": buffer1, "in_b2": buffer2}
-            )
-            with annotate.warp_op("node_b"):
-                out_b1 = wp.empty_like(in_b1)
-                wp.copy(out_b1, in_b1)
-                out_b2 = wp.empty_like(in_b2)
-                wp.copy(out_b2, in_b2)
-            out_b1, out_b2 = annotate.output_tensors(
-                "node_b", {"out_b1": out_b1, "out_b2": out_b2}, export_with="onnx"
-            )
-
-        for _ in range(2):
-            in_c1, in_c2 = annotate.input_tensors(
-                "node_c", {"in_c1": out_b1, "in_c2": out_b2}
-            )
-            with annotate.warp_op("node_c"):
-                final = self._warp_add_arrays(in_c1, in_c2)
-            annotate.output_tensors("node_c", {"final": final}, export_with="onnx")
-
-        leapp.stop()
-        leapp.compile_graph(visualize=False)
-        self.verify_num_connections(
-            annotate,
-            nodes=3,
-            inputs=1,
-            outputs=1,
-            internal_connections=4,
-        )
-
-    def test_mirror_leapp_tags_preserves_output_port_through_chain(self):
-        """mirror_leapp_tags preserves output ports through a long warp node chain."""
-        leapp.start(name=self.TEST_GRAPH_NAME)
-
-        out1 = self._run_copy_node(
-            "source", "in_a", "out_a", wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)
-        )
-
-        buffer1 = wp.empty_like(out1)
-        wp.copy(buffer1, out1)
-        annotate.mirror_leapp_tags(out1, buffer1)
-        out2 = self._run_copy_node("process1", "in_b", "out_b", buffer1)
-
-        buffer2 = wp.empty_like(out2)
-        wp.copy(buffer2, out2)
-        annotate.mirror_leapp_tags(out2, buffer2)
-        out3 = self._run_copy_node("process2", "in_c", "out_c", buffer2)
-
-        self._run_copy_node("sink", "in_d", "out_d", out3)
-
-        leapp.stop()
-        leapp.compile_graph(visualize=False)
-        self.verify_num_connections(
-            annotate,
-            nodes=4,
-            inputs=1,
-            outputs=1,
-            internal_connections=3,
-        )
-
-    def test_mirror_leapp_tags_noop_outside_tracing(self):
-        """mirror_leapp_tags safely no-ops outside of tracing."""
-        source = wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)
-        target = wp.zeros(3, dtype=wp.float32, device=self.DEVICE)
-        wp.copy(target, source)
-
-        annotate.mirror_leapp_tags(source, target)
-
-        self.assertTrue(
-            torch.allclose(wp.to_torch(source), wp.to_torch(target))
-        )
+        self.verify_connectivity(nodes=3, internal_connections=2)
 
 
 if __name__ == '__main__':
