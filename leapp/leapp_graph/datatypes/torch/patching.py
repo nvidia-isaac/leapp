@@ -71,6 +71,13 @@ class TorchPatchBackend:
                 if result is raw_data:
                     return data
                 result = as_traced(result, name, context, proxy)
+                # A conversion that keeps shape and dtype presents the same
+                # data, so it also presents the source's boundary identity.
+                if (
+                    tuple(result.shape) == tuple(data.shape)
+                    and result.get_dtype_name() == data.get_dtype_name()
+                ):
+                    return data.preserve_port(result)
 
             return result
 

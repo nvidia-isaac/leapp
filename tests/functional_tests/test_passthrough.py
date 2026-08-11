@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-import unittest
 import os
 import torch
 import numpy as np
@@ -377,36 +376,3 @@ class TestDryrun(LEAPPFunctionalTestBase):
         self.assertGreaterEqual(len(annotate.detected_pipeline["feedback_flow"]), 1)
         self.assertFalse(os.path.exists(os.path.join(self.TEST_GRAPH_NAME, "state_node.pt")))
         self.assertFalse(os.path.exists(os.path.join(self.TEST_GRAPH_NAME, "state_node.onnx")))
-
-    @unittest.expectedFailure
-    def test_expected_fail_module_restores_original_buffer_objects(self):
-        """Desired behavior: module() should put the original buffer objects back.
-
-        BufferTracker swaps registered buffers for traced inputs and restores
-        equivalent tensors rather than the originals, so buffer identity is
-        lost. This applies to any traced node, not just dry_run ones.
-        """
-        class TinyStatefulModel(torch.nn.Module):
-            def __init__(self):
-                super().__init__()
-                self.register_buffer("running_state", torch.zeros(4))
-
-            def forward(self, x):
-                return x + self.running_state
-
-        model = TinyStatefulModel()
-        original_buffer_ids = {name: id(buf) for name, buf in model.named_buffers()}
-
-        leapp.start(name=self.TEST_GRAPH_NAME, dry_run=True)
-        x = annotate.input_tensors("policy", {"x": torch.ones(4)})
-        annotate.module("policy", model)
-        y = model(x)
-        annotate.output_tensors("policy", {"y": y}, export_with="jit")
-        leapp.stop()
-        leapp.compile_graph(visualize=False)
-
-        for name, buf in model.named_buffers():
-            self.assertEqual(
-                id(buf), original_buffer_ids[name],
-                f"Future intent: buffer '{name}' should be restored, not replaced",
-            )

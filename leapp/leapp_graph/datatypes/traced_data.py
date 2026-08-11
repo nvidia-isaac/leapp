@@ -289,7 +289,94 @@ class TracedData(ABC):
                 "2. combine both nodes into a single node by calling input_tensors() with the same node name",
                 error_type=Exception)
         return True
-    
+
+    # =========================================================================
+    # Transit State
+    # =========================================================================
+
+    # Subclasses override these to name the allocating / relocating ops whose
+    # results still hold the published boundary values, plus the native type of
+    # those results. Empty means no inactive-source function preserves a port.
+    _EQUIVALENT_COPY_NAMES: frozenset = frozenset()
+    _NATIVE_TYPE = None
+
+    @classmethod
+    def _is_equivalent_copy(cls, func, source, result, args) -> bool:
+        """Return whether ``func`` produced a value-identical copy of ``source``.
+
+        Recognition is by ``func.__name__`` so torch method descriptors and
+        numpy module functions share one template. Subclasses supply the name
+        set and native result type; method-level copies that never reach
+        dispatch (e.g. ``TracedNpArray.copy``) call ``preserve_port`` directly.
+        """
+        return (
+            cls._NATIVE_TYPE is not None
+            and getattr(func, "__name__", "") in cls._EQUIVALENT_COPY_NAMES
+            and isinstance(result, cls._NATIVE_TYPE)
+            and bool(args)
+            and args[0] is source
+        )
+
+    @staticmethod
+    def _is_complete_slice(key) -> bool:
+        """Return whether key is an open ``slice(None)`` without comparing tensors."""
+        return (
+            isinstance(key, slice)
+            and key.start is None
+            and key.stop is None
+            and key.step is None
+        )
+
+    @staticmethod
+    def _is_full_assignment_key(key) -> bool:
+        """Return whether an index covers the complete destination."""
+        if key is Ellipsis:
+            return True
+        if isinstance(key, slice):
+            return TracedData._is_complete_slice(key)
+        return (
+            isinstance(key, tuple)
+            and key
+            and all(TracedData._is_complete_slice(item) for item in key)
+        )
+
+    def preserve_port(self, result):
+        """Give ``result`` this carrier's published output port, if any.
+
+        ``result`` may already be a traced carrier (e.g. after an explicit
+        ``as_traced`` conversion) or a native value. A native value is promoted
+        first. With no published port, ``result`` is returned unchanged so
+        callers can always promote-then-preserve without a special case.
+        """
+        if self._output_port is None:
+            return result
+
+        if not isinstance(result, TracedData):
+            from leapp.leapp_graph.datatypes import as_traced
+
+            result = as_traced(result, self._name, self._context, self._proxy)
+        result.output_port = self._output_port
+        return result
+
+    def overwrite_port(self, key, value) -> None:
+        """Update this carrier's boundary identity after a write made in transit.
+
+        A full overwrite from a published output leaves this carrier holding
+        that output's data, so it adopts the whole boundary identity. Any other
+        write makes the data differ from whatever this carrier published, so it
+        drops its own port and stops being a usable edge source.
+        """
+        if (
+            getattr(value, "output_port", None) is not None
+            and self._is_full_assignment_key(key)
+            and tuple(value.shape) == tuple(self.shape)
+            and value.dtype == self.dtype
+        ):
+            self._init_tracing_state(value.name, value.context_obj, value.proxy)
+            self._output_port = value.output_port
+            return
+        self._output_port = None
+
     # =========================================================================
     # Common Magic Methods
     # =========================================================================

@@ -278,6 +278,12 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
     TracedNpArrays must be created via TraceContext.create_input().
     """
 
+    # ``np.copy`` is the allocating form that reaches ``__array_function__``.
+    # ``.copy()`` calls ``preserve_port`` on the method itself; ``np.asanyarray``
+    # returns this carrier without dispatch.
+    _EQUIVALENT_COPY_NAMES = frozenset({"copy"})
+    _NATIVE_TYPE = np.ndarray
+
     def __new__(cls, array: np.ndarray, name: str, context, proxy: Proxy):
         """Create a new TracedNpArray instance.
 
@@ -571,6 +577,8 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         # Inactive carriers use full NumPy behavior, including functions that
         # have no Torch export mapping.
         if not traced_array.validate_status(args, kwargs):
+            if self._is_equivalent_copy(func, traced_array, result_array, args):
+                return traced_array.preserve_port(result_array)
             return result_array
 
         torch_func = NUMPY_FUNC_TO_TORCH.get(func)
@@ -840,6 +848,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         self.view(np.ndarray)[real_key] = real_value
 
         if not self.validate_status(args=(key, value)):
+            self.overwrite_port(key, value)
             return
 
         if not self._record_assignment(key, value, real_value):
@@ -939,7 +948,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         """Return a copy of the array."""
         result = self.view(np.ndarray).copy()
         if not self.validate_status():
-            return result
+            return self.preserve_port(result)
         proxy_out = self._context.tracer.create_proxy(
             "call_function", torch.clone, (self.proxy,), {}
         )

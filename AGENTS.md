@@ -328,8 +328,10 @@ out = im(sample_inputs)  # same as im.run_policy(sample_inputs)
 - Prefer one node at a time while tracing:
   - complete `output_tensors()` for a node before starting another traced context.
 - Handle copied tensors:
-  - a node output carries the producing node and output port that build the graph edge; a copy does not.
-  - if data is copied between nodes, call `annotate.mirror_leapp_tags(source, target)` and use its return value for NumPy targets.
+  - a node output carries the producing node and output port that build the graph edge.
+  - copies that keep the values, shape and dtype carry it automatically: torch `clone`/`detach`/`contiguous`/`cpu`/`cuda`/device-only `to`/full buffer overwrite, numpy `np.copy`/`.copy()`/`np.asanyarray`, and full-range `wp.copy`.
+  - any other operation deliberately drops the port, so the next node reports a dangling input instead of a false edge.
+  - for a preallocated raw `np.ndarray` destination, call `annotate.mirror_leapp_tags(source, target)` and use its return value.
 - Understand state choices:
   - `state_tensors` = input+output feedback state.
   - `register_buffer` = frozen constant in exported model.
@@ -351,6 +353,8 @@ out = im(sample_inputs)  # same as im.run_policy(sample_inputs)
   - forgot to use returned values from `input_tensors()`.
 - context mismatch / mixed tracing contexts:
   - tensors from one node were used in another node before finalization.
+- a node reports a dangling input when you expected an edge:
+  - the value reaching it was derived from a node output rather than being an equivalent copy of one, so it carries no output port. Pass the output itself, use one of the copies listed above, or mirror the state onto the value.
 - stop() errors about active tracing:
   - ensure wrapped function exited and no active legacy `_method` trace.
 - ONNX export fails on recurrent models:
