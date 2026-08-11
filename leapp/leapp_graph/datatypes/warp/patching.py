@@ -112,6 +112,7 @@ class WarpPatchBackend:
         self._sync_boundary_function_ids: set[int] = set()
         self._readback_boundary_function_ids: set[int] = set()
         self._boundary_array_init_id: int | None = None
+        self._full_copy_function_id: int | None = None
         self._cuda_oracle: WarpCudaOracle | None = None
     #########################################################
     # Properties
@@ -447,6 +448,7 @@ class WarpPatchBackend:
             self._process_post_call_arrays(
                 segment, args, kwargs, result, trace_state
             )
+            self._carry_full_copy_port(original, args, kwargs)
 
             return result
 
@@ -463,6 +465,9 @@ class WarpPatchBackend:
         self._sync_boundary_function_ids = set()
         self._readback_boundary_function_ids = set()
         self._boundary_array_init_id = None
+
+        full_copy = getattr(wp, "copy", None)
+        self._full_copy_function_id = id(full_copy) if callable(full_copy) else None
 
         array_init = getattr(wp.array, "__init__", None)
         to_torch = getattr(wp, "to_torch", None)
@@ -690,6 +695,37 @@ class WarpPatchBackend:
             )
             if not is_current_segment_output:
                 segment.add_input_ref(array)
+
+    def _carry_full_copy_port(
+        self, original: Callable, args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> None:
+        """Give a full ``wp.copy`` destination the boundary identity of its source.
+
+        The post-call traversal has already upgraded a raw destination into a
+        traced array bound to the source's node. A copy covering the whole array
+        leaves that destination holding the published data, so it also takes the
+        port that connects it onward. Offsets or a partial count make it a
+        different value, which keeps the default portless carrier.
+        """
+        if (
+            id(original) != self._full_copy_function_id
+            or len(args) < 2
+            or any(args[2:])
+            or kwargs.get("dest_offset")
+            or kwargs.get("src_offset")
+            or kwargs.get("count")
+        ):
+            return
+
+        dest, src = args[0], args[1]
+        if (
+            getattr(src, "output_port", None) is None
+            or not isinstance(dest, TracedWpArray)
+            or dest.shape != src.shape
+            or dest.dtype != src.dtype
+        ):
+            return
+        src.preserve_port(dest)
 
     def _process_post_call_arrays(
         self,

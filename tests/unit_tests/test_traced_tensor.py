@@ -2246,59 +2246,24 @@ class TestTracedTensor(unittest.TestCase):
         self.assertIsInstance(x, TracedTensor)
         self.assertTrue(torch.allclose(x.tensor[1], torch.tensor([1.0, 2.0, 3.0, 4.0])))
 
-    def test_copy_into_basic(self):
-        """Test TracedTensor.copy_into static method."""
+    def test_full_assignment_into_raw_buffer_keeps_buffer_memory(self):
+        """A raw buffer written in full is promoted without being reallocated."""
         ctx = TracedTensorNode(name="test", node_index=0)
         source = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="source")
+        traced_result = source * 2
 
-        # Create a traced result
-        traced_result = source * 2  # [2.0, 4.0, 6.0]
-
-        # Create a regular tensor buffer
-        buffer = torch.zeros(3)
-
-        # Use copy_into to copy traced values to buffer
-        result = TracedTensor.copy_into(buffer, traced_result)
-
-        # Result should be a TracedTensor
-        self.assertIsInstance(result, TracedTensor)
-        # Buffer should be updated in-place
-        expected = torch.tensor([2.0, 4.0, 6.0])
-        self.assertTrue(torch.allclose(buffer, expected))
-        # Result should wrap the same buffer
-        self.assertTrue(torch.allclose(result.tensor, expected))
-
-        # Test compilation
-        ctx.compile_trace({'result': result})
-        output = ctx.m(torch.tensor([1.0, 2.0, 3.0]))
-        self.assertTrue(torch.allclose(output, expected))
-
-    def test_copy_into_preserves_buffer_reference(self):
-        """Test that copy_into preserves the buffer memory location."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        source = ctx.create_input(torch.tensor([5.0, 6.0, 7.0]), name="source")
-
-        # Create a buffer and keep a reference to its data
         buffer = torch.zeros(3)
         buffer_data_ptr = buffer.data_ptr()
+        buffer[:] = traced_result
 
-        # Use copy_into
-        result = TracedTensor.copy_into(buffer, source)
-
-        # The buffer's data pointer should be unchanged (same memory)
+        expected = torch.tensor([2.0, 4.0, 6.0])
+        self.assertIsInstance(buffer, TracedTensor)
         self.assertEqual(buffer.data_ptr(), buffer_data_ptr)
-        # Result should wrap the same tensor
-        self.assertEqual(result.tensor.data_ptr(), buffer_data_ptr)
+        self.assertTrue(torch.allclose(buffer.tensor, expected))
 
-    def test_copy_into_type_error(self):
-        """Test that copy_into raises TypeError for non-TracedTensor source."""
-        buffer = torch.zeros(3)
-        regular_tensor = torch.tensor([1.0, 2.0, 3.0])
-
-        with self.assertRaises(TypeError) as context:
-            TracedTensor.copy_into(buffer, regular_tensor)
-
-        self.assertIn("TracedTensor", str(context.exception))
+        ctx.compile_trace({'result': buffer})
+        output = ctx.m(torch.tensor([1.0, 2.0, 3.0]))
+        self.assertTrue(torch.allclose(output, expected))
 
     def test_setitem_after_compile_no_trace(self):
         """Test that setitem doesn't trace after compile."""

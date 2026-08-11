@@ -63,8 +63,31 @@ Preserving traced state across nonstandard copies
 =================================================
 
 Between nodes, LEAPP wires ``pipeline.data_flow`` from the producing node and
-output port that a finished output value carries. If you copy such a value into
-another tensor, the data moves but that state does not, so the next node looks
+output port that a finished output value carries.
+
+Copies that keep the values, shape and dtype of a finished output carry that
+state automatically, so the next node connects without any extra call:
+
+* Torch: ``clone()``, ``detach()``, ``contiguous()``, ``cpu()``, ``cuda()``, a
+  device-only ``to()``, and a full overwrite of a preallocated buffer with
+  ``buffer[:] = out``, ``buffer[...] = out``, or ``buffer.copy_(out)``.
+* NumPy: ``np.copy()``, ``.copy()``, and ``np.asanyarray()``.
+* Warp: a full-range ``wp.copy()``.
+* Conversions between backends that keep shape and dtype, such as
+  ``torch.as_tensor()`` and ``.numpy()``.
+
+Anything that changes the values --- arithmetic, slicing, a reshape, a dtype
+cast, or a partial write --- deliberately yields a value with no output port.
+The next node reports it as a dangling input rather than inventing an edge to
+data it never received.
+
+Two cases still need an explicit call, because the destination cannot be
+upgraded in place or the values were produced some other way:
+
+* a preallocated raw ``np.ndarray`` destination, and
+* any copy performed outside the operations listed above.
+
+In both cases the data moves but the state does not, so the next node looks
 disconnected.
 
 :func:`~leapp.annotate.mirror_leapp_tags` copies the traced state from the
@@ -112,8 +135,3 @@ assign the return value instead:
    ``mirror_leapp_tags`` requires source and target values to match exactly. It
    is for preserving graph wiring after equivalent copies, not for marking a
    newly computed tensor as if it came directly from another tensor.
-
-Copies made with ``clone()``, ``detach()``, ``contiguous()``, ``cpu()``, or
-``cuda()`` currently need ``mirror_leapp_tags`` as well. If a node looks
-disconnected after such a copy, either pass the original output to the next node
-or mirror the state onto the copy.
