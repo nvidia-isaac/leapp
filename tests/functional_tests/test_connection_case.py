@@ -297,64 +297,239 @@ class TestConnectionCase(ConnectivityTestBase):
 
 
 class TestEquivalentCopyKeepsOutputPort(LEAPPFunctionalTestBase):
-    """Specifications for copies between nodes that should keep the output port.
+    """Copies between nodes that keep, or deliberately drop, the output port.
 
     A finished output carries its producing node and output port, which is what
     builds the graph edge. An equivalent copy of that value holds the same data
-    and so should present the same port, letting the next node connect without
-    ``mirror_leapp_tags``. Every case here currently loses the port, which is the
-    work Phase 3 takes on.
+    and so presents the same port, letting the next node connect without
+    ``mirror_leapp_tags``. Anything that changes the values instead yields a
+    value with no port, which surfaces as a dangling input rather than a false
+    connection.
     """
 
-    def _finished_output(self, value):
+    def _finished_output(self, value, name="producer", port="y"):
         """Trace one node that publishes ``value * 2`` and return its output."""
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        traced = annotate.input_tensors("producer", {"x": value})
+        traced = annotate.input_tensors(name, {"x": value})
         output = traced * 2.0
-        annotate.output_tensors("producer", {"y": output}, export_with=None)
+        annotate.output_tensors(name, {port: output}, export_with=None)
         return output
 
-    @unittest.expectedFailure
-    def test_expected_fail_torch_equivalent_ops_keep_output_port(self):
+    def setUp(self):
+        super().setUp()
+        leapp.start(name=self.TEST_GRAPH_NAME)
+
+    def test_torch_equivalent_ops_keep_output_port(self):
         """``clone``/``detach``/``contiguous``/``cpu`` on a finished torch output."""
         output = self._finished_output(torch.tensor([1.0, 2.0, 3.0]))
         # .cuda() is left out because the CI machine has no GPU.
         for op in ("clone", "detach", "contiguous", "cpu"):
             with self.subTest(op=op):
-                self.assertEqual("y", getattr(output, op)().output_port)
+                copy = getattr(output, op)()
+                self.assertEqual("y", copy.output_port)
+                self.assertIs(output.context_obj, copy.context_obj)
 
-    @unittest.expectedFailure
-    def test_expected_fail_torch_raw_buffer_assignment_keeps_output_port(self):
+    def test_torch_device_move_keeps_output_port_but_cast_does_not(self):
+        """``to()`` carries the port only when it leaves the dtype alone."""
+        output = self._finished_output(torch.tensor([1.0, 2.0, 3.0]))
+        self.assertEqual("y", output.to(torch.float32).output_port)
+        self.assertIsNone(getattr(output.to(torch.float64), "output_port", None))
+
+    def test_torch_raw_buffer_assignment_keeps_output_port(self):
         """Full-slice assignment into a raw preallocated torch buffer."""
         output = self._finished_output(torch.tensor([1.0, 2.0, 3.0]))
         buffer = torch.zeros_like(output)
         buffer[:] = output
         self.assertEqual("y", buffer.output_port)
 
-    @unittest.expectedFailure
-    def test_expected_fail_numpy_allocating_copy_keeps_output_port(self):
-        """An allocating numpy copy of a finished numpy output."""
-        output = self._finished_output(np.array([1.0, 2.0, 3.0], dtype=np.float32))
-        self.assertEqual("y", np.copy(output).output_port)
-
-    @unittest.expectedFailure
-    def test_expected_fail_numpy_traced_buffer_assignment_keeps_output_port(self):
-        """Full-slice assignment into a numpy buffer that is already traced.
-
-        A raw ``np.ndarray`` destination cannot be class-swapped, so only a
-        destination that already carries traced state can take the port over.
-        """
-        output = self._finished_output(np.array([1.0, 2.0, 3.0], dtype=np.float32))
-        buffer = annotate.mirror_leapp_tags(
-            output, np.zeros_like(np.asarray(output)))
-        buffer[:] = output
+    def test_torch_raw_buffer_copy_keeps_output_port(self):
+        """``copy_`` into a raw preallocated torch buffer."""
+        output = self._finished_output(torch.tensor([1.0, 2.0, 3.0]))
+        buffer = torch.zeros_like(output)
+        buffer.copy_(output)
         self.assertEqual("y", buffer.output_port)
 
-    @unittest.expectedFailure
-    def test_expected_fail_cross_backend_copy_keeps_output_port(self):
-        """A finished numpy output handed to torch without changing its values."""
+    def test_numpy_allocating_copy_keeps_output_port(self):
+        """Allocating numpy copies of a finished numpy output."""
         output = self._finished_output(np.array([1.0, 2.0, 3.0], dtype=np.float32))
-        self.assertEqual("y", torch.as_tensor(np.asarray(output)).output_port)
+        self.assertEqual("y", np.copy(output).output_port)
+        self.assertEqual("y", output.copy().output_port)
+        self.assertEqual("y", np.asanyarray(output).output_port)
+
+    def test_numpy_traced_buffer_assignment_adopts_new_source(self):
+        """A traced numpy buffer takes over the identity it was overwritten with."""
+        out_a = self._finished_output(
+            np.array([1.0, 2.0, 3.0], dtype=np.float32), "node_a", "out_a")
+        out_b = self._finished_output(
+            np.array([4.0, 5.0, 6.0], dtype=np.float32), "node_b", "out_b")
+
+        buffer = np.copy(out_a)
+        self.assertEqual("out_a", buffer.output_port)
+
+        buffer[:] = out_b
+        self.assertEqual("out_b", buffer.output_port)
+        self.assertIs(out_b.context_obj, buffer.context_obj)
+
+    def test_numpy_raw_buffer_assignment_stays_raw(self):
+        """A raw ``np.ndarray`` destination cannot be class-swapped.
+
+        NumPy offers no way to promote an exact ``np.ndarray`` in place, so a
+        preallocated raw buffer stays raw and callers must assign the return
+        value of ``mirror_leapp_tags`` instead.
+        """
+        output = self._finished_output(np.array([1.0, 2.0, 3.0], dtype=np.float32))
+        buffer = np.zeros_like(np.asarray(output))
+        buffer[:] = output
+
+        self.assertIs(np.ndarray, type(buffer))
+        self.assertEqual("y", annotate.mirror_leapp_tags(output, buffer).output_port)
+
+    def test_cross_backend_copy_keeps_output_port(self):
+        """A finished output handed to the other backend without changing values."""
+        np_output = self._finished_output(
+            np.array([1.0, 2.0, 3.0], dtype=np.float32), "np_node", "y")
+        self.assertEqual("y", torch.as_tensor(np.asarray(np_output)).output_port)
+
+        torch_output = self._finished_output(
+            torch.tensor([1.0, 2.0, 3.0]), "torch_node", "z")
+        self.assertEqual("z", torch_output.numpy().output_port)
+
+    def test_transformed_copy_reports_no_output_port(self):
+        """A value-changing operation yields no port, so it cannot fake an edge."""
+        output = self._finished_output(torch.tensor([1.0, 2.0, 3.0]))
+        for label, derived in (
+            ("add", output + 1.0),
+            ("slice", output[0:2]),
+            ("reshape", output.reshape(3, 1)),
+        ):
+            with self.subTest(op=label):
+                self.assertIsNone(getattr(derived, "output_port", None))
+
+    def test_mutating_a_published_value_drops_its_output_port(self):
+        """Writing new values into a finished output retires its boundary identity."""
+        output = self._finished_output(torch.tensor([1.0, 2.0, 3.0]))
+        output[0] = 9.0
+        self.assertIsNone(output.output_port)
+
+
+class TestAutomaticCopyConnectivity(ConnectivityTestBase):
+    """Graphs wired through equivalent copies alone, with no compatibility API."""
+
+    def test_buffer_chain_connects_without_mirroring(self):
+        """Preallocated buffers between four nodes carry the edges themselves."""
+        @annotate.method(export_with="jit")
+        def source_node(value: torch.Tensor):
+            return value * 2.0
+
+        @annotate.method(export_with="jit")
+        def process_node1(value: torch.Tensor):
+            return value * 3.0
+
+        @annotate.method(export_with="jit")
+        def process_node2(value: torch.Tensor):
+            return value * 4.0
+
+        @annotate.method(export_with="jit")
+        def sink_node(value: torch.Tensor):
+            return value * 5.0
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        out1 = source_node(torch.tensor([1.0, 2.0, 3.0]))
+
+        buffer1 = torch.empty_like(out1)
+        buffer1[:] = out1
+        out2 = process_node1(buffer1)
+
+        buffer2 = torch.empty_like(out2)
+        buffer2.copy_(out2)
+        out3 = process_node2(buffer2)
+
+        sink_node(out3)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+        self.verify_connectivity(nodes=4, internal_connections=3)
+
+    def test_clone_fans_out_to_multiple_consumers(self):
+        """One output cloned separately for two consumers keeps both edges."""
+        @annotate.method(export_with="jit")
+        def source_node(value: torch.Tensor):
+            return value * 2.0
+
+        @annotate.method(export_with="jit")
+        def consumer_a(value: torch.Tensor):
+            return value * 3.0
+
+        @annotate.method(export_with="jit")
+        def consumer_b(value: torch.Tensor):
+            return value * 4.0
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        out = source_node(torch.tensor([1.0, 2.0, 3.0]))
+        consumer_a(out.clone())
+        consumer_b(out.detach())
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+        self.verify_connectivity(
+            nodes=3, internal_connections=2, outputs=2)
+
+    def test_clone_carries_a_feedback_edge(self):
+        """A cloned output closes a feedback loop across iterations."""
+        @annotate.method()
+        def funcA(inputA: torch.Tensor, loop_back: torch.Tensor):
+            return inputA + loop_back
+
+        @annotate.method()
+        def funcB(inputB: torch.Tensor):
+            return inputB * 2.0
+
+        leapp.start(name=self.TEST_GRAPH_NAME, verbose=False)
+        feedback_input = torch.tensor([0.0, 0.0, 0.0])
+        for _ in range(2):
+            out_funcA = funcA(torch.tensor([1.0, 2.0, 3.0]), feedback_input)
+            out_funcB = funcB(out_funcA.clone())
+            feedback_input = out_funcB.clone()
+
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+        self.verify_connectivity(
+            nodes=2, internal_connections=1, feedback_connections=1, outputs=0)
+
+    def test_repeated_reentry_through_buffers(self):
+        """Re-tracing the same buffered graph does not accumulate edges."""
+        @annotate.method(export_with="jit")
+        def source_node(value: torch.Tensor):
+            return value * 2.0
+
+        @annotate.method(export_with="jit")
+        def sink_node(value: torch.Tensor):
+            return value * 3.0
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        for _ in range(10):
+            out = source_node(torch.tensor([1.0, 2.0, 3.0]))
+            buffer = torch.empty_like(out)
+            buffer[:] = out
+            sink_node(buffer)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+        self.verify_connectivity(nodes=2, internal_connections=1)
+
+    def test_transformed_copy_does_not_create_a_connection(self):
+        """A value-changing copy leaves the consumer dangling, not falsely wired."""
+        @annotate.method(export_with="jit")
+        def source_node(value: torch.Tensor):
+            return value * 2.0
+
+        @annotate.method(export_with="jit")
+        def sink_node(value: torch.Tensor):
+            return value * 3.0
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        out = source_node(torch.tensor([1.0, 2.0, 3.0]))
+        sink_node(out + 1.0)
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+        self.verify_connectivity(
+            nodes=2, internal_connections=0, inputs=2, outputs=2)
 
 
 class TestNumpyConnectionCase(ConnectivityTestBase):
@@ -519,12 +694,11 @@ class TestWarpConnectionCase(WarpTestCase, ConnectivityTestBase):
             )
         return dst
 
-    @unittest.expectedFailure
-    def test_expected_fail_warp_full_copy_keeps_output_port(self):
-        """A full ``wp.copy`` of a finished warp output should keep its port.
+    def test_warp_full_copy_keeps_output_port(self):
+        """A full ``wp.copy`` of a finished warp output keeps its port.
 
-        Losing the port here disconnects the next warp node, which is the work
-        Phase 3 takes on.
+        A partial copy holds different data, so it must not present the port
+        and cannot become the source of an edge.
         """
         leapp.start(name=self.TEST_GRAPH_NAME)
         arr1 = wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)
@@ -533,6 +707,10 @@ class TestWarpConnectionCase(WarpTestCase, ConnectivityTestBase):
         copied = wp.empty_like(arr2)
         wp.copy(copied, arr2)
         self.assertEqual("arr2", copied.output_port)
+
+        partial = wp.empty_like(arr2)
+        wp.copy(partial, arr2, 0, 0, 2)
+        self.assertIsNone(partial.output_port)
 
     def test_warp_nodes_chain_via_output_ports(self):
         """Two warp nodes connected by a published wp.array output -> input edge."""

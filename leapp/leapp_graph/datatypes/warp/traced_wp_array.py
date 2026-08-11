@@ -172,6 +172,12 @@ class TracedWpArray(wp.array):
     def validate_status(self, args=None, kwargs=None) -> bool:
         return TracedData.validate_status(self, args=args, kwargs=kwargs)
 
+    def preserve_port(self, result):
+        return TracedData.preserve_port(self, result)
+
+    def overwrite_port(self, key, value) -> None:
+        return TracedData.overwrite_port(self, key, value)
+
 
 ###############################################################################
 # Registration

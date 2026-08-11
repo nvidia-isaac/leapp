@@ -66,6 +66,14 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     TracedTensors must be created via TraceContext.create_input().
     """
 
+    # Torch ops whose result holds the same values, shape, and dtype as their
+    # source, so a finished boundary value survives them intact. ``to`` is
+    # handled separately because device moves and dtype casts share one method.
+    _EQUIVALENT_COPY_NAMES = frozenset(
+        {"clone", "detach", "contiguous", "cpu", "cuda"}
+    )
+    _NATIVE_TYPE = torch.Tensor
+
     @staticmethod
     def __new__(cls, tensor: torch.Tensor, name: str, context, proxy: Proxy):
         """Create a new TracedTensor instance.
@@ -210,43 +218,6 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         return TracedData.find_all_contexts(obj, contexts)
 
     @staticmethod
-    def copy_into(target: torch.Tensor, source: "TracedTensor") -> "TracedTensor":
-        """Copy values from a TracedTensor into a regular tensor, returning a TracedTensor.
-
-        This is useful when you have a pre-allocated buffer (regular tensor) and want
-        to copy traced values into it while maintaining the trace. The returned
-        TracedTensor wraps the target tensor but inherits the tracing graph from source.
-
-        Usage:
-            # Instead of: self._action[:] = action.to(self.device)
-            # Use:        self._action = TracedTensor.copy_into(self._action, action.to(self.device))
-
-        Args:
-            target: The destination tensor (regular torch.Tensor) to copy into
-            source: The source TracedTensor whose values and trace to use
-
-        Returns:
-            A TracedTensor wrapping the target tensor with source's proxy
-        """
-        if not isinstance(source, TracedTensor):
-            _get_logger().fatal(
-                f"source must be a TracedTensor, got {type(source)}",
-                error_type=TypeError,
-            )
-
-        # Copy the actual data
-        target.copy_(source.tensor)
-
-        # Return a new TracedTensor that wraps target but uses source's proxy
-        # This effectively makes target "become" traced
-        return TracedTensor(
-            target,
-            source.name,
-            source._context,
-            source.proxy
-        )
-    
-    @staticmethod
     def _handle_TS_decomposition(func, real_args, real_kwargs):
         """Handle TorchScript decomposition."""
         # Decompose the TorchScript module into individual aten ops via
@@ -331,29 +302,6 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     # Torch Function Interception
     # =========================================================================
 
-    @staticmethod
-    def _is_complete_slice(key):
-        """Return whether key is an open ``slice(None)`` without comparing tensors."""
-        return (
-            isinstance(key, slice)
-            and key.start is None
-            and key.stop is None
-            and key.step is None
-        )
-
-    @staticmethod
-    def _is_full_assignment_key(key):
-        """Return whether an index covers the complete destination tensor."""
-        if key is Ellipsis:
-            return True
-        if isinstance(key, slice):
-            return TracedTensor._is_complete_slice(key)
-        return (
-            isinstance(key, tuple)
-            and key
-            and all(TracedTensor._is_complete_slice(item) for item in key)
-        )
-
     @classmethod
     def _promote_plain_tensor(cls, target, name, context, proxy):
         """Attach tracing state to an existing plain tensor object."""
@@ -402,12 +350,13 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             return False, None
         anchor.validate_status((key, value))
 
-        if (
+        full_replacement = (
             isinstance(value, TracedTensor)
             and cls._is_full_assignment_key(key)
             and tuple(target.shape) == tuple(value.shape)
             and target.dtype == value.dtype
-        ):
+        )
+        if full_replacement:
             dest_proxy = value.proxy
         else:
             dest_proxy = anchor._register_setitem_tensor(
@@ -415,6 +364,10 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             )
         cls._promote_plain_tensor(
             target, anchor.name, anchor.context_obj, dest_proxy)
+        if full_replacement:
+            # The destination now holds exactly the source's data, so it also
+            # presents the source's boundary identity to the next node.
+            target.output_port = value.output_port
         if is_copy:
             return True, target.copy_(
                 value, non_blocking=kwargs.get("non_blocking", False)
@@ -530,7 +483,10 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         # data and stay native.
         if not traced_tensor.validate_status(args, kwargs):
             if receiver_was_mutated and receiver is not None:
+                receiver.output_port = None
                 return receiver
+            if cls._is_equivalent_copy(func, traced_tensor, tensor_out, args):
+                return traced_tensor.preserve_port(tensor_out)
             return tensor_out
 
         # ================== SPECIAL CASES IN HANDLING ==================
@@ -630,6 +586,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                         method = getattr(underlying, name, None)
                         if method is not None:
                             method(*TracedData.unwrap_traced_data(args), **TracedData.unwrap_traced_data(kwargs))
+                        self._output_port = None
                         return self
 
                     # Record as functional operation
@@ -789,6 +746,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                 underlying.copy_(functional(underlying, unwrapped, **kwargs))
             else:
                 getattr(underlying, inplace_name)(unwrapped, **kwargs)
+            self._output_port = None
             return self
 
         result = functional(self, other, **kwargs)
@@ -854,6 +812,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         self.tensor.copy_(real_value, non_blocking=non_blocking)
 
         if not self.validate_status((Ellipsis, src)):
+            self.overwrite_port(Ellipsis, src)
             return self
 
         if not self._record_assignment(Ellipsis, src, real_value):
@@ -983,6 +942,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         self.tensor[real_key] = real_value
 
         if not self.validate_status((key, value)):
+            self.overwrite_port(key, value)
             return
 
         if not self._record_assignment(key, value, real_value):
@@ -1028,6 +988,9 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         result_tensor = self.tensor.to(*args, **kwargs)
 
         if not self.validate_status():
+            # A device or memory-format move keeps the values; a cast does not.
+            if result_tensor.dtype == self.dtype:
+                return self.preserve_port(result_tensor)
             return result_tensor
 
         # For type conversions, we track it as an operation
@@ -1048,11 +1011,13 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             TracedNpArray if tracing, else np.ndarray
         """
         np_data = self.as_subclass(torch.Tensor).detach().cpu().numpy()
-        
+
         # Conversion is representation-only, so both active and inactive
         # sources forward their complete tracing state.
         from leapp.leapp_graph.datatypes import as_traced
-        return as_traced(np_data, self.name, self.context_obj, self.proxy)
+        return self.preserve_port(
+            as_traced(np_data, self.name, self.context_obj, self.proxy)
+        )
 
     def __array__(self, dtype=None, copy=None):
         """NumPy array protocol - called by np.array(), np.asarray(), etc.
