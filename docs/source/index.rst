@@ -139,6 +139,8 @@ Documentation Map
 * Learn how to run an exported bundle in :doc:`generated_configs` and
   :doc:`leapp_runtime`.
 * Browse the full :doc:`api/index`.
+* If you are changing the tracer itself, read
+  :doc:`internals/traced_value_provenance`.
 
 
 .. toctree::
@@ -183,3 +185,10 @@ Documentation Map
    :maxdepth: 2
 
    api/index
+
+.. toctree::
+   :caption: Internals
+   :hidden:
+   :maxdepth: 2
+
+   internals/traced_value_provenance

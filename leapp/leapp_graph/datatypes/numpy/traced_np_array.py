@@ -311,11 +311,12 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         if obj is None:
             # Called from __new__, attributes already set
             return
-        # Copy tracing state from the source array
+        # Copy tracing state from the source array. ``getattr`` covers a plain
+        # ndarray source and a source still mid-construction.
         self._init_tracing_state(
             getattr(obj, '_name', 'derived'),
             getattr(obj, '_context', None),
-            getattr(obj, '_proxy', None),
+            getattr(obj, 'proxy', None),
         )
 
     # =========================================================================
@@ -686,7 +687,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         if isinstance(result, TracedNpArray):
             # Copy data in-place since self IS the array
             np.copyto(self.view(np.ndarray), result.view(np.ndarray))
-            self._proxy = result._proxy
+            self._proxy_view.proxy = result.proxy
             return self
         return result
 
@@ -694,7 +695,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         result = np.subtract(self, other)
         if isinstance(result, TracedNpArray):
             np.copyto(self.view(np.ndarray), result.view(np.ndarray))
-            self._proxy = result._proxy
+            self._proxy_view.proxy = result.proxy
             return self
         return result
 
@@ -702,7 +703,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         result = np.multiply(self, other)
         if isinstance(result, TracedNpArray):
             np.copyto(self.view(np.ndarray), result.view(np.ndarray))
-            self._proxy = result._proxy
+            self._proxy_view.proxy = result.proxy
             return self
         return result
 
@@ -710,7 +711,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         result = np.divide(self, other)
         if isinstance(result, TracedNpArray):
             np.copyto(self.view(np.ndarray), result.view(np.ndarray))
-            self._proxy = result._proxy
+            self._proxy_view.proxy = result.proxy
             return self
         return result
 
@@ -718,7 +719,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         result = np.floor_divide(self, other)
         if isinstance(result, TracedNpArray):
             np.copyto(self.view(np.ndarray), result.view(np.ndarray))
-            self._proxy = result._proxy
+            self._proxy_view.proxy = result.proxy
             return self
         return result
 
@@ -726,7 +727,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         result = np.power(self, other)
         if isinstance(result, TracedNpArray):
             np.copyto(self.view(np.ndarray), result.view(np.ndarray))
-            self._proxy = result._proxy
+            self._proxy_view.proxy = result.proxy
             return self
         return result
 
@@ -853,8 +854,8 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
 
         if not self._record_assignment(key, value, real_value):
             value_proxy = value.proxy if isinstance(value, TracedData) else value
-            self._proxy = self._context.tracer.create_proxy(
-                "call_method", "__setitem__", (self._proxy, key, value_proxy), {}
+            self._proxy_view.proxy = self._context.tracer.create_proxy(
+                "call_method", "__setitem__", (self.proxy, key, value_proxy), {}
             )
 
     # =========================================================================
