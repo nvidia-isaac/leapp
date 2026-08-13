@@ -13,6 +13,8 @@ from torch.fx.proxy import Proxy
 from leapp.utils.logging import _get_logger
 from leapp.utils.dtype import dtype_to_name
 
+from .proxy_view import ProxyView
+
 import torch
 
 
@@ -47,10 +49,15 @@ class TracedData(ABC):
     # =========================================================================
 
     def _init_tracing_state(self, name: str, context, proxy: Proxy) -> None:
-        """Initialize common tracing metadata for TracedData subclasses."""
+        """Initialize common tracing metadata for TracedData subclasses.
+
+        This starts a new root ``ProxyView``. Use it for a fresh carrier, an
+        out-of-place result, or a boundary rewrap; an in-place mutation instead
+        replaces the root of the existing view.
+        """
         self._name = name
         self._context = context
-        self._proxy = proxy
+        self._proxy_view = ProxyView(proxy)
         # A value only earns an output port by being registered as an output of
         # its own node, so entering a node always starts without one.
         self._output_port = None
@@ -65,7 +72,7 @@ class TracedData(ABC):
     @property
     def proxy(self) -> Proxy:
         """Get the fx.Proxy for graph recording."""
-        return self._proxy
+        return self._proxy_view.proxy
     
     @property
     def name(self) -> str:
@@ -354,7 +361,7 @@ class TracedData(ABC):
         if not isinstance(result, TracedData):
             from leapp.leapp_graph.datatypes import as_traced
 
-            result = as_traced(result, self._name, self._context, self._proxy)
+            result = as_traced(result, self._name, self._context, self.proxy)
         result.output_port = self._output_port
         return result
 
@@ -563,7 +570,7 @@ class TracedData(ABC):
         """Create a functional getitem proxy for a supported index key."""
         if not self._is_supported_index_key(key):
             return None
-        return self._lower_index_key(self._proxy, key)
+        return self._lower_index_key(self.proxy, key)
 
     def _create_setitem_proxy(self, key, value_proxy, real_value=None):
         """Lower indexed assignment to one functional flat ``index_put``.
@@ -617,14 +624,15 @@ class TracedData(ABC):
                     (source_proxy, target_shape), {}
                 )
 
+        destination_proxy = self.proxy
         source_proxy = self._context.tracer.create_proxy(
-            "call_method", "to", (source_proxy, self._proxy), {}
+            "call_method", "to", (source_proxy, destination_proxy), {}
         )
         flat_source_proxy = self._context.tracer.create_proxy(
             "call_method", "reshape", (source_proxy, (-1,)), {}
         )
         flat_destination_proxy = self._context.tracer.create_proxy(
-            "call_method", "reshape", (self._proxy, (-1,)), {}
+            "call_method", "reshape", (destination_proxy, (-1,)), {}
         )
         updated_proxy = self._context.tracer.create_proxy(
             "call_function", torch.index_put,
@@ -641,5 +649,5 @@ class TracedData(ABC):
         )
         if proxy_out is None:
             return False
-        self._proxy = proxy_out
+        self._proxy_view.proxy = proxy_out
         return True

@@ -7,6 +7,7 @@ from torch.fx.proxy import Proxy
 
 import warp as wp
 
+from ..proxy_view import ProxyView
 from ..traced_data import TracedData
 from leapp.utils.dtype import DtypeCodec, register_dtype_codec
 from leapp.utils.logging import _get_logger
@@ -84,7 +85,7 @@ class TracedWpArray(wp.array):
     def _init_tracing_state(self, name: str, context, proxy: Proxy) -> None:
         self._name = name
         self._context = context
-        self._proxy = proxy
+        self._proxy_view = ProxyView(proxy)
         self._output_port = None
 
     def rebind_tracing_proxy(self, name: str, context, proxy: Proxy) -> None:
@@ -132,7 +133,7 @@ class TracedWpArray(wp.array):
 
     @property
     def proxy(self) -> Proxy:
-        return self._proxy
+        return self._proxy_view.proxy
 
     @property
     def name(self) -> str:

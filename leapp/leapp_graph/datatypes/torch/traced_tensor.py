@@ -314,7 +314,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         # Plain full replacement may already have promoted with the source proxy.
         if (
             isinstance(value, TracedTensor)
-            and self._proxy is value.proxy
+            and self.proxy is value.proxy
             and self._is_full_assignment_key(key)
         ):
             return True
@@ -596,7 +596,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                     if isinstance(result, TracedTensor):
                         with torch.no_grad():
                             self.copy_(result.tensor)
-                        self._proxy = result.proxy
+                        self._proxy_view.proxy = result.proxy
 
                     return self
 
@@ -628,8 +628,9 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                         if not self.validate_status():
                             return result
                         # Create a proxy node for this operation
-                        proxy = self._proxy._tracer.create_proxy(
-                            'call_method', name, (self._proxy,) + args, kwargs)
+                        self_proxy = self.proxy
+                        proxy = self_proxy._tracer.create_proxy(
+                            'call_method', name, (self_proxy,) + args, kwargs)
                         return self._new(result, proxy)
                     return result
                 return wrapped_method
@@ -753,7 +754,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         with torch.no_grad():
             torch.Tensor.copy_(self, result.tensor if isinstance(result, TracedTensor) else result)
         if isinstance(result, TracedTensor):
-            self._proxy = result.proxy
+            self._proxy_view.proxy = result.proxy
         return self
 
     def __iadd__(self, other):
@@ -821,9 +822,9 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                 "recording raw __setitem__, which may not export."
             )
             value_proxy = src.proxy if isinstance(src, TracedTensor) else src
-            self._proxy = self._context.tracer.create_proxy(
+            self._proxy_view.proxy = self._context.tracer.create_proxy(
                 "call_method", "__setitem__",
-                (self._proxy, Ellipsis, value_proxy), {},
+                (self.proxy, Ellipsis, value_proxy), {},
             )
         return self
 
@@ -879,7 +880,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             # Check if it's a boolean tensor (mask)
             if key.dtype == torch.bool:
                 proxy_out = self._context.tracer.create_proxy(
-                    "call_function", torch.masked_select, (self._proxy, key.proxy), {}
+                    "call_function", torch.masked_select, (self.proxy, key.proxy), {}
                 )
                 return self._new(result_tensor, proxy_out)
 
@@ -894,7 +895,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                 "call_method", "reshape", (key.proxy, (-1,)), {}
             )
             proxy_out = self._context.tracer.create_proxy(
-                "call_function", torch.index_select, (self._proxy, 0, flat_index_proxy), {}
+                "call_function", torch.index_select, (self.proxy, 0, flat_index_proxy), {}
             )
 
             if key.ndim > 1:
@@ -924,7 +925,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             return result_tensor
 
         proxy_out = self._context.tracer.create_proxy(
-            "call_function", operator.getitem, (self._proxy, key), {}
+            "call_function", operator.getitem, (self.proxy, key), {}
         )
         if isinstance(result_tensor, torch.Tensor):
             return self._new(result_tensor, proxy_out)
@@ -951,8 +952,8 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                 "functionally; recording raw __setitem__, which may not export."
             )
             value_proxy = value.proxy if isinstance(value, TracedTensor) else value
-            self._proxy = self._context.tracer.create_proxy(
-                "call_method", "__setitem__", (self._proxy, key, value_proxy), {}
+            self._proxy_view.proxy = self._context.tracer.create_proxy(
+                "call_method", "__setitem__", (self.proxy, key, value_proxy), {}
             )
 
     # =========================================================================
@@ -995,7 +996,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
         # For type conversions, we track it as an operation
         proxy_out = self._context.tracer.create_proxy(
-            "call_method", "to", (self._proxy,) + args, kwargs
+            "call_method", "to", (self.proxy,) + args, kwargs
         )
         return self._new(result_tensor, proxy_out)
 
