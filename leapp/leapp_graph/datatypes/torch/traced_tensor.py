@@ -138,6 +138,69 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         intermediate_name = self._name_from_proxy(proxy)
         return TracedTensor(tensor, intermediate_name, self._context, proxy)
 
+    def _new_alias(self, tensor: torch.Tensor) -> "TracedTensor":
+        """Wrap ``tensor`` as a second carrier for this exact value.
+
+        The result shares this carrier's ``ProxyView`` rather than owning one,
+        so an in-place mutation through either object is visible through both.
+        Callers must have established that ``tensor`` is an identical-layout
+        alias; see :meth:`_is_identical_layout_alias`.
+        """
+        alias = TracedTensor(tensor, self._name, self._context, None)
+        alias._adopt_tracing_state(self)
+        return alias
+
+    # =========================================================================
+    # Alias classification
+    # =========================================================================
+
+    @staticmethod
+    def _is_identical_layout_alias(source: torch.Tensor, result) -> bool:
+        """Whether ``result`` occupies exactly ``source``'s memory and layout.
+
+        Sharing storage is not enough. ``view`` and storage-sharing ``reshape``
+        keep the pointer and change the shape, and letting those share a root
+        would leave a carrier reporting a proxy of the wrong shape, so the shape
+        and stride comparisons are what keep them out.
+
+        Both arguments must be unwrapped tensors. Reading layout off a traced
+        carrier would route through ``__torch_function__`` and record nodes.
+        """
+        if not isinstance(result, torch.Tensor):
+            return False
+        if result.dtype != source.dtype or result.device != source.device:
+            return False
+        if tuple(result.shape) != tuple(source.shape):
+            return False
+        # An empty tensor has no bytes to describe and no dependable address:
+        # an allocator may report null or hand the same pointer to several
+        # zero-byte requests, either of which makes unrelated empties compare
+        # equal. The null check below covers the same hazard for a buffer that
+        # was never allocated.
+        if result.numel() == 0:
+            return False
+        try:
+            if result.stride() != source.stride():
+                return False
+            # An element pointer already accounts for its tensor's storage
+            # offset, so equal pointers under an equal layout mean equal bytes.
+            pointer = result.data_ptr()
+            return pointer != 0 and pointer == source.data_ptr()
+        except RuntimeError:
+            # Layouts without strides or an addressable buffer, e.g. sparse.
+            return False
+
+    def _may_share_view_with(self, result) -> bool:
+        """Whether ``result`` may adopt this carrier's view instead of a root.
+
+        A published value is excluded even when the layouts match: it has to
+        stay available to fan out to other nodes, and sharing would let a
+        consumer of one alias rewrite the provenance the boundary depends on.
+        """
+        if self._output_port is not None:
+            return False
+        return self._is_identical_layout_alias(self.tensor, result)
+
     # =========================================================================
     # Static Methods
     # =========================================================================
@@ -466,6 +529,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         # Extract real tensors for actual computation
         real_args = tuple(TracedTensor.unwrap_traced_tensor(arg) for arg in args)
         real_kwargs = {k: TracedTensor.unwrap_traced_tensor(v) for k, v in kwargs.items()}
+        # Only args[0]: donor/mutation tracking is receiver-only; out=/foreach stay as today.
         receiver = args[0] if args and isinstance(args[0], TracedTensor) else None
         real_receiver = real_args[0] if receiver is not None else None
         receiver_version = cls._safe_tensor_version(real_receiver)
@@ -504,6 +568,21 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
         # ================== SPECIAL CASES IN HANDLING ==================
 
+        # A result that is an identical-layout alias of the receiver is the same
+        # value, so it adopts the receiver's view and records nothing; the node
+        # would be a no-op with no consumers. Only the receiver may donate, and
+        # only when nothing was mutated: an operation writing through an alias
+        # belongs to the mutated-receiver path below, and adopting the view of
+        # an argument the result merely happens to alias -- an ``out=``
+        # destination -- would drop the operation in favor of that argument's
+        # pre-call proxy.
+        if (
+            receiver is not None
+            and not receiver_was_mutated
+            and receiver._may_share_view_with(tensor_out)
+        ):
+            return receiver._new_alias(tensor_out)
+
         def extract_proxy_leaf(item):
             if isinstance(item, TracedTensor):
                 return item.proxy
@@ -526,7 +605,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             and isinstance(tensor_out, torch.Tensor)
             and tensor_out is real_receiver
         ):
-            receiver._init_tracing_state(
+            receiver._replace_tracing_state(
                 receiver._name_from_proxy(proxy_out),
                 receiver.context_obj,
                 proxy_out,
@@ -924,6 +1003,11 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         if not self.validate_status():
             return result_tensor
 
+        # A key covering the whole tensor, such as ``[:]``, selects nothing and
+        # yields the same value. A narrowing key does not and keeps its node.
+        if self._may_share_view_with(result_tensor):
+            return self._new_alias(result_tensor)
+
         proxy_out = self._context.tracer.create_proxy(
             "call_function", operator.getitem, (self.proxy, key), {}
         )
@@ -993,6 +1077,11 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             if result_tensor.dtype == self.dtype:
                 return self.preserve_port(result_tensor)
             return result_tensor
+
+        # A no-op conversion hands back this exact buffer, so it is the same
+        # value rather than a new one. A cast or a device move allocates.
+        if self._may_share_view_with(result_tensor):
+            return self._new_alias(result_tensor)
 
         # For type conversions, we track it as an operation
         proxy_out = self._context.tracer.create_proxy(
