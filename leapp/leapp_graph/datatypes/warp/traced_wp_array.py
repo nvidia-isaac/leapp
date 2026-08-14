@@ -88,6 +88,14 @@ class TracedWpArray(wp.array):
         self._proxy_view = ProxyView(proxy)
         self._output_port = None
 
+    def _replace_tracing_state(self, name: str, context, proxy: Proxy) -> None:
+        # Mirrors TracedData's; see the registration note at the bottom of this
+        # file for why these are duplicated instead of inherited.
+        self._name = name
+        self._context = context
+        self._proxy_view.proxy = proxy
+        self._output_port = None
+
     def rebind_tracing_proxy(self, name: str, context, proxy: Proxy) -> None:
         """Rebind this traced array to the canonical FX proxy for its value."""
         self._init_tracing_state(name, context, proxy)

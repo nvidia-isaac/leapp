@@ -52,14 +52,41 @@ class TracedData(ABC):
         """Initialize common tracing metadata for TracedData subclasses.
 
         This starts a new root ``ProxyView``. Use it for a fresh carrier, an
-        out-of-place result, or a boundary rewrap; an in-place mutation instead
-        replaces the root of the existing view.
+        out-of-place result, or a boundary rewrap. The two alternatives are
+        :meth:`_replace_tracing_state` for a value mutated in place and
+        :meth:`_adopt_tracing_state` for a second handle onto one value.
         """
         self._name = name
         self._context = context
         self._proxy_view = ProxyView(proxy)
         # A value only earns an output port by being registered as an output of
         # its own node, so entering a node always starts without one.
+        self._output_port = None
+
+    def _replace_tracing_state(self, name: str, context, proxy: Proxy) -> None:
+        """Rebind this value's existing view after its data changed in place.
+
+        The value keeps its identity and only its graph representation changes,
+        so the view object is reused and every carrier sharing it observes the
+        new proxy. Building a view here instead would strand those carriers on
+        the old proxy while the memory they describe has already moved on.
+        """
+        self._name = name
+        self._context = context
+        self._proxy_view.proxy = proxy
+        self._output_port = None
+
+    def _adopt_tracing_state(self, source: "TracedData") -> None:
+        """Share ``source``'s view so both carriers describe one value.
+
+        For a result that occupies exactly ``source``'s memory and layout, both
+        projections between the two are the identity, so they need no view edge
+        and can hold one root between them. A mutation through either then
+        replaces the single root both of them read.
+        """
+        self._name = source.name
+        self._context = source.context_obj
+        self._proxy_view = source._proxy_view
         self._output_port = None
 
     @staticmethod
@@ -379,7 +406,9 @@ class TracedData(ABC):
             and tuple(value.shape) == tuple(self.shape)
             and value.dtype == self.dtype
         ):
-            self._init_tracing_state(value.name, value.context_obj, value.proxy)
+            self._replace_tracing_state(
+                value.name, value.context_obj, value.proxy
+            )
             self._output_port = value.output_port
             return
         self._output_port = None
