@@ -61,7 +61,7 @@ else:
         capture_inputs = {
             ref.name: _as_raw_warp_array(ref.array)
             for ref in segment.input_refs.values()
-            if ref.proxy is not None and ref.array is not None
+            if getattr(ref.array, "proxy", None) is not None and ref.array is not None
         }
         capture_outputs = {
             ref.name: _as_raw_warp_array(ref.array)
@@ -88,8 +88,37 @@ else:
     def _update_output_ref_proxy(
         node_ref: Any, ref, proxy
     ) -> None:
+        """Point this segment output's value at the runner output that produced it.
+
+        Updates the traced array's shared view so every Torch or NumPy alias of
+        that buffer follows the runner output too.
+        """
         if isinstance(ref.array, TracedWpArray):
             ref.array.rebind_tracing_proxy(ref.name, node_ref, proxy)
+
+    def _verify_output_refs_unmerged(segment: WarpSegment, output_refs: list) -> None:
+        """Fail if two distinct buffers were left sharing one view.
+
+        Output refs are already deduped by buffer, so any two of them describe
+        different memory and must own different roots. Sharing one would make the
+        assignment loop below write both runner outputs into the same place:
+        the last write wins, the other buffer silently keeps the wrong
+        provenance, and its unused output gets pruned away.
+        """
+        owner_by_view: dict[int, Any] = {}
+        for ref in output_refs:
+            view = getattr(ref.array, "proxy_view", None)
+            if view is None:
+                continue
+            owner = owner_by_view.setdefault(id(view), ref)
+            if owner is not ref:
+                _get_logger().fatal(
+                    f"Warp segment '{segment.proxy_name or segment.node_name}' "
+                    f"outputs '{owner.name}' and '{ref.name}' describe different "
+                    "buffers but share one proxy view; refusing to emit a "
+                    "segment that would lose one of them.",
+                    error_type=RuntimeError,
+                )
 
 
     def _insert_warp_marker(
@@ -118,10 +147,13 @@ else:
             return segment
 
         input_refs = [
-            ref for ref in segment.input_refs.values() if ref.proxy is not None
+            ref
+            for ref in segment.input_refs.values()
+            if getattr(ref.array, "proxy", None) is not None
         ]
-        input_proxies = [ref.proxy for ref in input_refs]
+        input_proxies = [ref.array.proxy for ref in input_refs]
         output_refs = list(segment.output_refs.values())
+        _verify_output_refs_unmerged(segment, output_refs)
 
         # ``output_mask`` starts all-True; the post-prune pass rewrites it to
         # mark only surviving outputs and zeroes unused shapes.
@@ -167,7 +199,6 @@ else:
         warp_runner.node.meta["leapp_warp_segment"] = segment
 
         for ref, proxy in zip(output_refs, output_proxies):
-            ref.proxy = proxy
             proxy.node.meta["leapp_warp_segment"] = segment
             proxy.node.meta["leapp_warp_output_ref"] = ref
             _update_output_ref_proxy(node_ref, ref, proxy)

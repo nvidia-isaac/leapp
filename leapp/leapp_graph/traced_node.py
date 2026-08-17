@@ -741,7 +741,9 @@ class TracedTensorNode(LeappNode):
                 continue
             shapes = [shapes[i] if mask[i] else [0] for i in range(width)]
             input_refs = [
-                ref for ref in segment.input_refs.values() if ref.proxy is not None
+                ref
+                for ref in segment.input_refs.values()
+                if getattr(ref.array, "proxy", None) is not None
             ]
             output_refs = list(segment.output_refs.values())
             runtime_metadata = warp_operator.build_runtime_metadata(

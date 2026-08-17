@@ -21,6 +21,14 @@ from leapp.utils.logging import _get_logger
 from .traced_data import TracedData
 from .torch.traced_tensor import TracedTensor
 from .numpy.traced_np_array import TracedNpArray
+from .proxy_view import (
+    ProxyView,
+    bind_new_view,
+    bind_shared_view,
+    may_adopt_view,
+    share_view,
+    update_view_proxy,
+)
 from .warp import TracedWpArray, WarpPatchBackend, wp
 
 
@@ -119,36 +127,36 @@ def as_traced(
     data,
     name: str,
     context,
-    proxy,
+    proxy=None,
+    *,
+    view: Optional[ProxyView] = None,
 ) -> TracedData:
     """Create a TracedData instance from a tensor or array.
-    
-    This is a factory function that automatically selects the appropriate
-    TracedData subclass based on the input data type.
-    
+
+    Pass exactly one of ``proxy`` or ``view``:
+
+    - ``proxy``: bind a **new** ``ProxyView`` around that FX value (private cell).
+    - ``view``: attach that **existing** ``ProxyView`` (shared cell / zero-copy alias).
+
     Args:
         data: The tensor/array to wrap (torch.Tensor or np.ndarray)
         name: Name for the traced data (used in export and graph)
         context: The TraceContext that owns this data
-        proxy: The fx.Proxy for graph recording
-        
+        proxy: FX proxy for a private root (mutually exclusive with ``view``)
+        view: Existing view to share (mutually exclusive with ``proxy``)
+
     Returns:
         A TracedData instance (TracedTensor or TracedNpArray)
-        
+
     Raises:
         TypeError: If data is not a supported type
-        
-    Examples:
-        >>> tensor = torch.randn(3)
-        >>> traced = as_traced(tensor, "input", context, proxy)
-        >>> type(traced)
-        <class 'TracedTensor'>
-        
-        >>> array = np.array([1, 2, 3])
-        >>> traced = as_traced(array, "input", context, proxy)
-        >>> type(traced)
-        <class 'TracedNpArray'>
     """
+    if view is not None and proxy is not None:
+        _get_logger().fatal(
+            "as_traced accepts proxy= or view=, not both",
+            error_type=ValueError,
+        )
+
     # Rewrapping an existing traced value must not rebind the producer object.
     # Consumers receive a fresh traced carrier for their own node context so the
     # original value can still fan out to other nodes.
@@ -160,20 +168,28 @@ def as_traced(
     # were unwrapped above and must instead get a fresh non-owning traced alias.
     if wp is not None and TracedWpArray is not None and isinstance(data, wp.array):
         if was_traced:
-            return TracedWpArray(data, name, context, proxy)
-        return TracedWpArray.make_traced_in_place(data, name, context, proxy)
-    
+            return TracedWpArray(data, name, context, proxy, view=view)
+        return TracedWpArray.make_traced_in_place(
+            data, name, context, proxy, view=view
+        )
+
     # Find the appropriate traced class
     traced_class = get_traced_class_for(data)
-    
+
     if traced_class is None:
         _get_logger().fatal(
             f"Cannot create traced data from type {type(data).__name__}. "
             f"Supported types: {', '.join(t.__name__ for t in TRACABLE_BASE_TYPES)}",
             error_type=TypeError,
         )
-    
-    return traced_class(data, name, context, proxy)
+
+    # Constructors always bind a private root; overwrite with the shared view
+    # when the caller asked to alias an existing cell.
+    seed_proxy = proxy if view is None else view.proxy
+    result = traced_class(data, name, context, seed_proxy)
+    if view is not None:
+        bind_shared_view(result, name, context, view)
+    return result
 
 
 def promote_in_place(data, name: str, context, proxy) -> TracedData:
@@ -187,9 +203,14 @@ def promote_in_place(data, name: str, context, proxy) -> TracedData:
     Torch and Warp values are upgraded in place, so callers see the change
     without reassigning. A raw ``np.ndarray`` cannot be class-swapped, so NumPy
     returns a zero-copy view and callers must use the return value.
+
+    A carrier that already holds tracing state keeps its own view and only has
+    the proxy inside it replaced. Rebinding the object is the point of this
+    function, so discarding its view would orphan every alias of the same buffer
+    while leaving the object itself looking correct.
     """
     if isinstance(data, TracedData):
-        data._init_tracing_state(name, context, proxy)
+        update_view_proxy(data, name, context, proxy)
         return data
 
     if wp is not None and TracedWpArray is not None and isinstance(data, wp.array):
@@ -227,6 +248,13 @@ __all__ = [
     "TracedNpArray",
     "TracedWpArray",
     "WarpPatchBackend",
+    "ProxyView",
+    # View binding / alias classification
+    "bind_new_view",
+    "bind_shared_view",
+    "update_view_proxy",
+    "share_view",
+    "may_adopt_view",
     # Type registry
     "TRACED_TYPE_REGISTRY",
     "TRACABLE_BASE_TYPES",
