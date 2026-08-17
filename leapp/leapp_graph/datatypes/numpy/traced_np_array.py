@@ -20,7 +20,7 @@ from torch.fx.proxy import Proxy
 
 from leapp.utils.logging import _get_logger
 from leapp.utils.dtype import DtypeCodec, dtype_to_name, register_dtype_codec
-from ..proxy_view import bind_new_view
+from ..proxy_view import bind_new_view, may_adopt_view, share_view
 from ..traced_data import TracedData
 
 
@@ -311,6 +311,15 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         """
         if obj is None:
             # Called from __new__, attributes already set
+            return
+        # A view covering exactly the source's bytes is a second handle on one
+        # value, so it shares that cell and a mutation through either is visible
+        # through both. A slice covers fewer bytes and a freshly allocated ufunc
+        # result covers different bytes, so both fail the comparison and keep a
+        # root of their own. The view guard covers a source still
+        # mid-construction, which has no cell to share yet.
+        if getattr(obj, "_proxy_view", None) is not None and may_adopt_view(obj, self):
+            share_view(self, obj)
             return
         # Copy tracing state from the source array. ``getattr`` covers a plain
         # ndarray source and a source still mid-construction.

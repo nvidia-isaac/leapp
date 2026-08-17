@@ -1058,11 +1058,20 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         """
         np_data = self.as_subclass(torch.Tensor).detach().cpu().numpy()
 
+        # A CPU tensor's ``.numpy()`` hands back its own bytes, so the result is
+        # a second handle on this value and shares the cell. A CUDA source is
+        # copied by the ``cpu()`` above and keeps an independent root, which the
+        # pointer comparison establishes without a device test here.
+        #
         # Conversion is representation-only, so both active and inactive
         # sources forward their complete tracing state.
         from leapp.leapp_graph.datatypes import as_traced
+        if may_adopt_view(self, np_data):
+            view, proxy = self.proxy_view, None
+        else:
+            view, proxy = None, self.proxy
         return self.preserve_port(
-            as_traced(np_data, self.name, self.context_obj, self.proxy)
+            as_traced(np_data, self.name, self.context_obj, proxy, view=view)
         )
 
     def __array__(self, dtype=None, copy=None):

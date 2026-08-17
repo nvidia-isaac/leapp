@@ -17,6 +17,7 @@
 """Tests for several traced carriers over one shared allocation."""
 
 import unittest
+import numpy as np
 import torch
 import warp as wp
 import leapp
@@ -470,6 +471,105 @@ class TestWarpSharedMemory(WarpTestCase, LEAPPFunctionalTestBase):
         self.assertIsNot(
             host.proxy_view, returned.proxy_view,
             "a host-to-device copy shared a root with its host source")
+
+
+class TestNumpySharedMemory(LEAPPFunctionalTestBase):
+    """Provenance when a Torch carrier and a NumPy array describe one buffer.
+
+    A CPU tensor's ``.numpy()`` hands back the tensor's own bytes, so the two
+    carriers name one value. NumPy views that cover different bytes -- a slice,
+    a freshly allocated ufunc result -- must keep independent roots, because
+    sharing there would report a mutation eager NumPy never applied.
+    """
+
+    def test_cpu_numpy_conversion_shares_a_root(self):
+        """``.numpy()`` on a CPU tensor is a second handle, not a copy."""
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        obs = annotate.input_tensors("policy", {"obs": torch.tensor([1.0, 2.0])})
+
+        self.assertIs(
+            obs.proxy_view, obs.numpy().proxy_view,
+            "a zero-copy .numpy() did not share the tensor's root")
+
+    def test_identical_layout_numpy_view_shares_a_root(self):
+        """A view cast covers the same bytes at the same layout."""
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        arr = annotate.input_tensors(
+            "policy", {"obs": np.array([1.0, 2.0, 3.0], dtype=np.float32)})
+
+        self.assertIs(
+            arr.proxy_view, arr.view(type(arr)).proxy_view,
+            "an identical-layout view did not share its source's root")
+
+    def test_narrowing_and_allocating_results_are_separate_values(self):
+        """A slice covers fewer bytes and a ufunc result covers other bytes.
+
+        Neither is the same value as its source, so each needs a root of its
+        own; sharing would make the source report a value it never held.
+        """
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        arr = annotate.input_tensors(
+            "policy", {"obs": np.array([1.0, 2.0, 3.0], dtype=np.float32)})
+
+        self.assertIsNot(
+            arr.proxy_view, arr[0:2].proxy_view,
+            "a narrowing slice shared its source's root")
+        self.assertIsNot(
+            arr.proxy_view, np.add(arr, 1.0).proxy_view,
+            "a freshly allocated ufunc result shared its source's root")
+
+    def test_numpy_mutation_reaches_the_torch_carrier(self):
+        """A write through the NumPy carrier moves the Torch carrier with it.
+
+        The mutation and the read are on opposite carriers, so the exported
+        graph reproduces eager NumPy only if the two share provenance. Driven to
+        InferenceManager because a stale proxy still exports a graph that runs
+        and returns plausible-looking numbers rather than raising.
+        """
+        obs_value = torch.tensor([1.0, 2.0, 3.0])
+        expected = (obs_value + 1.0) * 2.0
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        obs = annotate.input_tensors("policy", {"obs": obs_value.clone()})
+
+        np_view = obs.numpy()
+        np_view += 1.0
+        action = obs * 2.0
+
+        self.assertTrue(
+            torch.equal(action.tensor, expected),
+            f"eager value diverged: got {action.tensor}, expected {expected}")
+
+        annotate.output_tensors("policy", {"action": action}, export_with="jit")
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        self.verify_inference_manager(
+            source_inputs={"policy/obs": obs_value},
+            source_outputs={"policy/action": expected},
+        )
+
+    def test_torch_mutation_reaches_the_numpy_carrier(self):
+        """The reverse direction: a Torch write is visible through NumPy.
+
+        Asserted on provenance rather than through an export, because reading
+        the mutated value back out of the NumPy carrier is the same shared-cell
+        property the test above already drives end to end.
+        """
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        obs = annotate.input_tensors(
+            "policy", {"obs": torch.tensor([-1.0, 2.0, -3.0])})
+
+        np_view = obs.numpy()
+        placeholder_proxy = obs.proxy
+        torch.relu_(obs)
+
+        self.assertIs(
+            obs.proxy_view, np_view.proxy_view,
+            "the Torch mutation replaced the root instead of its proxy")
+        self.assertIsNot(
+            placeholder_proxy, np_view.proxy,
+            "the NumPy carrier still reports the pre-mutation proxy")
 
 
 if __name__ == "__main__":
