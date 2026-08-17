@@ -281,6 +281,52 @@ class TestWarpSharedMemory(WarpTestCase, LEAPPFunctionalTestBase):
             source_outputs={"node_a/action": expected},
         )
 
+    def test_second_warp_handle_on_one_buffer_follows_the_segment(self):
+        """A launch writing one buffer through a second Warp handle moves it too.
+
+        ``array[:]`` selects everything, so Warp hands back another wp.array over
+        the same bytes at the same layout. The launch writes the buffer through
+        that second handle and the node's output is read back through it, so the
+        exported graph reproduces eager Warp only if the handle ends up on a
+        segment output. Folding it into the original's output leaves it on the
+        pre-segment proxy, which prunes the runner and exports the input
+        unchanged.
+        """
+        source_value = torch.tensor([1.0, 2.0, 3.0], device=self.DEVICE)
+        expected = (source_value + 1.0) * 2.0
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        for _ in range(2):
+            array = annotate.input_tensors(
+                "node_a",
+                {"in_a": wp.from_torch(source_value.clone())},
+            )
+            with annotate.warp_op("node_a", device=self.DEVICE):
+                alias = array[:]
+                wp.launch(
+                    self.kernels.add_scalar,
+                    dim=array.size,
+                    inputs=[array, wp.float32(1.0)],
+                    outputs=[alias],
+                    device=self.DEVICE,
+                )
+                tensor = wp.to_torch(alias)
+            action = tensor * 2.0
+
+            self.assertTrue(
+                torch.equal(action.tensor, expected),
+                f"eager value diverged: got {action.tensor}, expected {expected}")
+            annotate.output_tensors(
+                "node_a", {"action": action}, export_with="onnx")
+
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        self.verify_inference_manager(
+            source_inputs={"node_a/in_a": source_value},
+            source_outputs={"node_a/action": expected},
+        )
+
     def test_launch_mutating_two_buffers_keeps_them_separate(self):
         """One launch writing two arrays gives each its own segment output.
 

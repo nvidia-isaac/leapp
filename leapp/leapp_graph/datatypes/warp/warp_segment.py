@@ -17,7 +17,6 @@
 
 from __future__ import annotations
 
-import collections.abc
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -42,8 +41,6 @@ class WarpTensorRef:
     storage_shape: tuple | None = None
     # Torch-facing scalar dtype name used by FX/export/runtime metadata.
     storage_dtype: str | None = None
-    # Device/host pointer when available; helps dedupe view-like wp.array objects.
-    ptr: int | None = None
 
     @classmethod
     def from_value(
@@ -51,12 +48,6 @@ class WarpTensorRef:
         name: str,
         value: Any,
     ) -> WarpTensorRef:
-        ptr = getattr(value, "ptr", None)
-        try:
-            ptr = int(ptr) if ptr else None
-        except Exception:
-            ptr = None
-
         shape = getattr(value, "shape", None)
         if shape is not None:
             try:
@@ -80,7 +71,6 @@ class WarpTensorRef:
             component_shape=component_shape,
             storage_shape=storage_shape,
             storage_dtype=storage_dtype,
-            ptr=ptr,
         )
 
 
@@ -130,14 +120,17 @@ class WarpSegment:
         self,
         value: Any,
     ) -> WarpTensorRef:
+        """Register one carrier as a segment input.
+
+        Registration is per carrier, not per buffer. Two handles onto one
+        allocation get a ref each: the runner reads that memory once and hands
+        the same bytes to both, which is what eager Warp does, and collapsing
+        them would leave one handle with no place in the runner's signature.
+        """
         ref = self._coerce_ref(
             value,
             name=self._default_ref_name("input", len(self.input_refs)),
         )
-        existing = self._find_ref(ref, self.input_refs.values())
-        if existing is not None:
-            return existing
-
         self.input_refs[ref.name] = ref
         return ref
 
@@ -145,14 +138,17 @@ class WarpSegment:
         self,
         value: Any,
     ) -> WarpTensorRef:
+        """Register one carrier as a segment output.
+
+        Per carrier for the same reason as inputs, and the close depends on it:
+        it walks the output refs to move each carrier onto the runner output that
+        produced it. A carrier folded into another's ref never gets rebound, so
+        it keeps reading the value from before the segment ran.
+        """
         ref = self._coerce_ref(
             value,
             name=self._default_ref_name("output", len(self.output_refs)),
         )
-        existing = self._find_ref(ref, self.output_refs.values())
-        if existing is not None:
-            return existing
-
         self.output_refs[ref.name] = ref
         return ref
 
@@ -172,27 +168,6 @@ class WarpSegment:
     @staticmethod
     def _default_ref_name(prefix: str, index: int) -> str:
         return f"{prefix}_{index}"
-
-    @staticmethod
-    def _ref_key(ref: WarpTensorRef) -> tuple:
-        """Identity of the buffer a ref describes: its address plus its layout.
-
-        Keyed on the buffer rather than the Python object so two handles on one
-        allocation collapse to a single ref. Two ``wp.from_torch`` views of one
-        tensor hold the same bytes and share one root, so giving them separate
-        segment outputs would make the close write two proxies where one value
-        exists.
-        """
-        return (ref.ptr, ref.storage_shape, ref.storage_dtype)
-
-    def _find_ref(
-        self, ref: WarpTensorRef, existing_refs: collections.abc.Iterable
-    ) -> WarpTensorRef | None:
-        ref_key = self._ref_key(ref)
-        for existing in existing_refs:
-            if self._ref_key(existing) == ref_key:
-                return existing
-        return None
 
     def invalidate(self) -> None:
         self.status = "invalid"
