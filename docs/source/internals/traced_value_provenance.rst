@@ -50,26 +50,33 @@ so proxy readers do not have to know about aliasing.
 Today every ``ProxyView`` is a root: it owns a proxy directly, reading it is a
 plain attribute access, and no two carriers share one.
 
-Creating versus replacing
-=========================
+Creating, updating, and sharing
+===============================
 
-There are two ways to give a carrier a proxy, and they are not
+There are three ways to give a carrier a proxy, and they are not
 interchangeable.
 
-**Create a new view** with ``_init_tracing_state()`` when the value itself is
-new: a fresh carrier, an out-of-place operation result, or a value re-wrapped at
-a node boundary. This also resets the carrier's name and clears its output port,
-since a new value has not been published by any node.
+**Bind a new view** with ``bind_new_view()`` when the value itself is new: a
+fresh carrier, an out-of-place operation result, or a value re-wrapped at a
+node boundary. This allocates a new ``ProxyView``, resets the carrier's name,
+and clears its output port, since a new value has not been published by any
+node.
 
-**Replace the root** by assigning ``self._proxy_view.proxy`` when an existing
+**Update the shared proxy** with ``update_view_proxy()`` when an existing
 value was mutated in place: augmented arithmetic, an ``add_``-style method,
-``copy_()``, the functional lowering of indexed assignment, or the
-mutated-receiver path in ``__torch_function__``. The value keeps its identity and
-only its representation changes, so nothing else about the carrier is touched.
+``copy_()``, the functional lowering of indexed assignment, the
+mutated-receiver path in ``__torch_function__``, or a Warp segment-output
+rebind. The view object is reused so every carrier sharing it observes the new
+proxy.
 
-Picking the wrong one is not currently observable, because no view is shared.
-It becomes observable as soon as aliases share a view, so treat the distinction
-as load-bearing.
+**Share a view** with ``bind_shared_view()`` / ``share_view()`` when a second
+carrier describes exactly the same bytes and layout as an existing one (for
+example a zero-copy ``wp.from_torch``). Factories take ``view=`` for that case
+and ``proxy=`` when the carrier needs a private cell. Both then read and update
+one cell when sharing.
+
+Picking the wrong one is load-bearing once aliases share a view: binding a new
+view where an update was needed strands those aliases on a stale proxy.
 
 Current limitations
 ===================

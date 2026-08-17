@@ -32,8 +32,6 @@ class WarpTensorRef:
     name: str
     # Live trace-time object, usually a wp.array, kept for capture/replay work.
     array: Any
-    # FX proxy that represents this value in the owning TracedTensorNode graph.
-    proxy: Proxy | None = None
     # Runtime array shape observed during tracing, used for validation/export metadata.
     shape: tuple | None = None
     # Runtime dtype observed during tracing, stored as text for lightweight metadata.
@@ -77,7 +75,6 @@ class WarpTensorRef:
         return cls(
             name=name,
             array=value,
-            proxy=getattr(value, "proxy", None),
             shape=shape,
             dtype=dtype_name or (str(dtype) if dtype is not None else None),
             component_shape=component_shape,
@@ -139,7 +136,7 @@ class WarpSegment:
         )
         existing = self._find_ref(ref, self.input_refs.values())
         if existing is not None:
-            return self._merge_ref(existing, ref)
+            return existing
 
         self.input_refs[ref.name] = ref
         return ref
@@ -154,7 +151,7 @@ class WarpSegment:
         )
         existing = self._find_ref(ref, self.output_refs.values())
         if existing is not None:
-            return self._merge_ref(existing, ref)
+            return existing
 
         self.output_refs[ref.name] = ref
         return ref
@@ -177,8 +174,16 @@ class WarpSegment:
         return f"{prefix}_{index}"
 
     @staticmethod
-    def _ref_key(ref: WarpTensorRef) -> tuple[int, int | None]:
-        return (id(ref.array), ref.ptr)
+    def _ref_key(ref: WarpTensorRef) -> tuple:
+        """Identity of the buffer a ref describes: its address plus its layout.
+
+        Keyed on the buffer rather than the Python object so two handles on one
+        allocation collapse to a single ref. Two ``wp.from_torch`` views of one
+        tensor hold the same bytes and share one root, so giving them separate
+        segment outputs would make the close write two proxies where one value
+        exists.
+        """
+        return (ref.ptr, ref.storage_shape, ref.storage_dtype)
 
     def _find_ref(
         self, ref: WarpTensorRef, existing_refs: collections.abc.Iterable
@@ -188,15 +193,6 @@ class WarpSegment:
             if self._ref_key(existing) == ref_key:
                 return existing
         return None
-
-    @staticmethod
-    def _merge_ref(
-        existing: WarpTensorRef,
-        incoming: WarpTensorRef,
-    ) -> WarpTensorRef:
-        if existing.proxy is None:
-            existing.proxy = incoming.proxy
-        return existing
 
     def invalidate(self) -> None:
         self.status = "invalid"

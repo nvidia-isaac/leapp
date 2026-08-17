@@ -20,6 +20,7 @@ from torch.fx.proxy import Proxy
 
 from leapp.utils.logging import _get_logger
 from leapp.utils.dtype import DtypeCodec, dtype_to_name, register_dtype_codec
+from ..proxy_view import bind_new_view
 from ..traced_data import TracedData
 
 
@@ -298,7 +299,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         """
         # Create a view of the input array as our subclass
         obj = np.asarray(array).view(cls)
-        obj._init_tracing_state(name, context, proxy)
+        bind_new_view(obj, name, context, proxy)
         return obj
 
     def __array_finalize__(self, obj):
@@ -313,7 +314,8 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
             return
         # Copy tracing state from the source array. ``getattr`` covers a plain
         # ndarray source and a source still mid-construction.
-        self._init_tracing_state(
+        bind_new_view(
+            self,
             getattr(obj, '_name', 'derived'),
             getattr(obj, '_context', None),
             getattr(obj, 'proxy', None),

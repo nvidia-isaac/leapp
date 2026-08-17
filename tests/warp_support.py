@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import gc
 import os
 import subprocess
 import sys
@@ -147,6 +148,17 @@ class WarpTestCase(unittest.TestCase):
             data[i] = data[i] + 1.0
 
         @wp.kernel
+        def mutate_both_in_place(
+            a: wp.array(dtype=wp.float32),
+            b: wp.array(dtype=wp.float32),
+        ):
+            # Two independently allocated arguments written by one launch, so
+            # each has to receive its own segment output.
+            i = wp.tid()
+            a[i] = a[i] + 1.0
+            b[i] = b[i] * 2.0
+
+        @wp.kernel
         def average_three(
             a: wp.array(dtype=wp.float32),
             b: wp.array(dtype=wp.float32),
@@ -173,3 +185,18 @@ class WarpTestCase(unittest.TestCase):
     def setUpClass(cls):
         lib_path = ensure_warp_onnx_custom_op_library()
         os.environ["LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY"] = lib_path
+        # Most Warp entry points initialize the runtime on first use, but the
+        # Torch conversions read it directly, so a test whose first Warp call is
+        # ``wp.from_torch`` would fail on an uninitialized runtime.
+        wp.init()
+
+    def setUp(self):
+        # Reclaim earlier tests' garbage here, while freeing device memory is
+        # still legal. CUDA rejects a free once a stream is capturing, and the
+        # Warp backend turns Torch's caching allocator off, so a CUDA tensor
+        # collected inside a capture region frees for real and terminates the
+        # process from a destructor. Nothing a Warp test allocates itself is
+        # reclaimed that way; the garbage arrives from whichever tests ran
+        # before, which is why the failures move around with test order.
+        gc.collect()
+        super().setUp()

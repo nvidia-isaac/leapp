@@ -16,31 +16,29 @@ mechanism.  ``torch.autograd.Function.forward`` still executes eagerly with a
 ``annotate.warp_op`` context or trigger automatic ``WarpOp`` placement when
 they first touch actively traced Warp data.
 
-Important lifecycle limitation: ``wp.to_torch`` inside an open segment
------------------------------------------------------------------------
-The boundary overload below correctly preserves the *current* proxy of its
-source ``TracedWpArray``.  For an output array, however, the final Warp output
-proxy does not exist until ``WarpOp.__exit__`` inserts the runner node.  This
-creates the following sequence for a Torch-style Warp autograd function:
+``wp.to_torch`` inside an open segment
+---------------------------------------
+A zero-copy conversion does not copy a proxy, it shares the source's
+``ProxyView``, which is what lets a Torch alias of a Warp buffer stay correct
+across a segment it was created inside:
 
 1. A traced Torch input is converted to Warp and gives the segment trace state.
 2. A kernel writes a preallocated Warp output.  Until segment close, that
-   output temporarily carries the input-derived proxy.
-3. ``wp.to_torch(output_wp)`` runs inside ``forward`` and creates a
-   ``TracedTensor`` alias using that temporary proxy.
-4. Segment close rebinds the ``TracedWpArray`` to the new runner-output proxy,
-   but currently does not rebind Torch aliases that were already returned.
-5. ``annotate.output_tensors`` therefore sees the result as the original input.
-   The runner has no live FX consumers and normal dead-code pruning removes it.
+   output temporarily carries the donor's proxy.
+3. ``wp.to_torch(output_wp)`` runs inside ``forward``.  The layouts match, so
+   the resulting ``TracedTensor`` adopts ``output_wp``'s view rather than
+   snapshotting its temporary proxy.
+4. Segment close replaces the proxy inside that one view, so the Warp array and
+   the Torch alias both move to the runner output together.
+5. ``annotate.output_tensors`` sees the runner output, which keeps it alive
+   through pruning.
 
-The eager numerical result is still correct, which makes this a particularly
-dangerous silent tracing failure.  Conversion after the segment closes works:
-the source Warp array has already been rebound, so the existing ``to_torch``
-overload propagates the runner-output proxy.  A complete fix should register
-Torch/NumPy aliases created from segment outputs while the segment is open and
-rebind those aliases when ``_insert_warp_marker`` assigns output proxies.
-Fail-closed validation should also reject a Warp-derived declared output that
-still points at a pre-segment input proxy.
+Before view sharing, step 3 copied the temporary proxy and step 4 rebound only
+the Warp array, so the declared output still resolved to the pre-segment input
+and the runner was pruned for having no consumers.  The eager numbers were
+right either way, which is what made it a silent tracing failure.  Conversions
+that genuinely copy -- a CUDA readback, a device move -- still get an
+independent root, so the same hazard would return for them.
 
 Standalone regression reproducer
 ---------------------------------
@@ -48,9 +46,8 @@ From ``leapp_repo`` run:
 
 ``.venv/bin/python reproduce_autograd_warp_segment.py all``
 
-It demonstrates the stale-proxy pruning failure, the successful conversion
-after segment close. Keep those cases when changing boundary propagation or
-segment finalization.
+It covers conversion inside an open segment and after it closes. Keep those
+cases when changing boundary propagation or segment finalization.
 """
 
 from typing import Any, Callable
@@ -68,6 +65,7 @@ from warp._src.context import Function as WarpKernelLanguageFunction
 from leapp.utils.caller_identity import caller_identity_has_same_anchor, get_caller_stack_identity
 from leapp.utils.logging import _get_logger
 
+from ..proxy_view import ProxyView, may_adopt_view
 from .cupti_oracle import WarpCudaOracle
 from .session import WarpTraceSession
 from .traced_wp_array import TracedWpArray
@@ -91,7 +89,7 @@ class _WarpTraceState:
     # this is the simplification of the traced state provided by the proxies
     name: str
     context: Any
-    proxy: Any
+    view: ProxyView
 
 
 
@@ -507,11 +505,13 @@ class WarpPatchBackend:
         from leapp.leapp_graph.datatypes.traced_data import TracedData
 
         is_init = id(original) == self._boundary_array_init_id
+        # ``__init__`` with no args has no ``self`` to promote; fall through.
         if is_init and not args:
             return False, None
 
         search_args = args[1:] if is_init else args
         src = self._find_single_traced_data(search_args, kwargs)
+        # earlly exit path if no traced data is involved.
         if src is None:
             if is_init:
                 with self._pause_context():
@@ -531,18 +531,23 @@ class WarpPatchBackend:
             raw = original(*call_args, **call_kwargs)
 
         if is_init:
+            if may_adopt_view(src, args[0]):
+                view, proxy = src.proxy_view, None
+            else:
+                view, proxy = None, src.proxy
             TracedWpArray.make_traced_in_place(
-                args[0], src.name, src.context_obj, src.proxy
+                args[0], src.name, src.context_obj, proxy, view=view
             )
             return True, None
         if raw is src.data:
             return True, src
         if is_tracable_tensor_type(raw):
+            if may_adopt_view(src, raw):
+                view, proxy = src.proxy_view, None
+            else:
+                view, proxy = None, src.proxy
             traced_raw = as_traced(
-                raw,
-                src.name,
-                src.context_obj,
-                src.proxy,
+                raw, src.name, src.context_obj, proxy, view=view
             )
             return True, traced_raw
         return True, raw
@@ -605,7 +610,11 @@ class WarpPatchBackend:
         self, obj: Any, traced: list[TracedWpArray], *, depth: int
     ) -> Any:
         if depth > _MAX_PARAM_SCAN_DEPTH:
-            return obj
+            _get_logger().fatal(
+                "When traversing a nested structure in a Warp function call, "
+                f"exceeded LEAPP's max traversal depth ({_MAX_PARAM_SCAN_DEPTH}).",
+                error_type=RuntimeError,
+            )
 
         if isinstance(obj, TracedWpArray):
             # Always hand Warp an exact ``wp.array`` view. Active carriers
@@ -643,7 +652,7 @@ class WarpPatchBackend:
                     error_type=ValueError,
                 )
 
-        return _WarpTraceState(source.name, source.context_obj, source.proxy)
+        return _WarpTraceState(source.name, source.context_obj, source.proxy_view)
 
     def _resolve_or_begin_warp_segment(
         self,
@@ -764,7 +773,11 @@ class WarpPatchBackend:
             promote_in_place,
         )
         if depth > _MAX_PARAM_SCAN_DEPTH:
-            return
+            _get_logger().fatal(
+                "When traversing a nested structure in a Warp function call, "
+                f"exceeded LEAPP's max traversal depth ({_MAX_PARAM_SCAN_DEPTH}).",
+                error_type=RuntimeError,
+            )
 
         obj_id = id(obj)
         if obj_id in seen:
@@ -775,21 +788,35 @@ class WarpPatchBackend:
             if trace_state is not None and isinstance(obj, wp.array):
                 owner = getattr(obj, "context_obj", None)
                 published = getattr(obj, "output_port", None) is not None
-                if not published and (owner is None or owner is trace_state.context):
-                    # The caller keeps using this exact array after the call, so
-                    # its tracing state has to live on the object itself for the
-                    # segment close to rebind it to the segment output proxy.
-                    wrap = promote_in_place
-                else:
+                if published or (owner is not None and owner is not trace_state.context):
                     # A value another node already published stays untouched, so
                     # it can still fan out; this call only gets an alias of it.
-                    wrap = as_traced
-                traced_array = wrap(
-                    obj,
-                    trace_state.name,
-                    trace_state.context,
-                    trace_state.proxy,
-                )
+                    traced_array = as_traced(
+                        obj,
+                        trace_state.name,
+                        trace_state.context,
+                        trace_state.view.proxy,
+                    )
+                elif owner is not None:
+                    # Already carries provenance for this node, so leave both its
+                    # view and its proxy alone. Writing a neighbouring argument's
+                    # proxy over it would discard whatever produced this buffer,
+                    # and the close assigns this argument's own runner output
+                    # regardless.
+                    traced_array = obj
+                else:
+                    # The caller keeps using this exact array after the call, so
+                    # its tracing state has to live on the object itself for the
+                    # segment close to rebind it to the segment output proxy. It
+                    # gets its own view and only borrows the donor's proxy as
+                    # placeholder provenance until then: a kernel writing two
+                    # arrays must leave them on two roots to receive two outputs.
+                    traced_array = promote_in_place(
+                        obj,
+                        trace_state.name,
+                        trace_state.context,
+                        trace_state.view.proxy,
+                    )
                 if segment is not None:
                     segment.add_output_ref(traced_array)
                     traced_array.warp_segment = segment
