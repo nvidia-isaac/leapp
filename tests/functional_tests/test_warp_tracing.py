@@ -751,6 +751,43 @@ class TestWarpAutomaticSegmentDetection(WarpTestCase, LEAPPFunctionalTestBase):
         finally:
             leapp.stop()
 
+    def test_one_array_read_by_three_launches_is_one_segment_input(self):
+        """A buffer several launches read is one runner argument, not several.
+
+        Inputs are recorded per launch, so this only holds because a launch
+        skips an allocation the segment already stands for. The first launch's
+        post-call walk registers every array it touched, which is what the
+        later launches recognize.
+        """
+        def operation(values):
+            first = self._launch_add(values, 1.0)
+            second = self._launch_add(values, 2.0)
+            output = wp.empty_like(values)
+            wp.launch(
+                self.kernels.average_three,
+                dim=values.size,
+                inputs=[first, second, values],
+                outputs=[output],
+                device=values.device,
+            )
+            return output
+
+        node = self._run_single_node_operation(operation)
+        leapp.compile_graph(visualize=False)
+        self._assert_compiled_segments(node, 1)
+
+        segment = node.warp_segments[0]
+        self.assertEqual(
+            len(segment.input_refs), 1,
+            "one buffer read by three launches produced "
+            f"{len(segment.input_refs)} segment inputs")
+        self.verify_inference_manager(
+            source_inputs={f"{self.NODE_NAME}/in_a": torch.tensor(
+                [1.0, 2.0, 3.0], device=self.DEVICE)},
+            source_outputs={f"{self.NODE_NAME}/out_a": torch.tensor(
+                [2.0, 3.0, 4.0], device=self.DEVICE)},
+        )
+
     def test_sync_device_boundary_creates_two_segments(self):
         def operation(values):
             values = self._launch_add(values, 1.0)

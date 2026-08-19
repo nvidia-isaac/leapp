@@ -23,6 +23,10 @@ Binding primitives
     ``bind_shared_view`` using ``source``'s name, context, and view.
 ``may_adopt_view``
     Whether two values cover the same bytes and policy allows sharing.
+``layout_key``
+    Framework-neutral description of the bytes a value covers, used both by
+    ``may_adopt_view`` and by the per-node index that finds aliases created
+    before tracing began.
 """
 
 from typing import Any, Optional, Union
@@ -113,7 +117,7 @@ def _contiguous_byte_strides(shape: tuple, dtype_name: str) -> tuple:
     return tuple(reversed(strides))
 
 
-def _layout_key(value):
+def layout_key(value):
     """Framework-neutral description of the bytes ``value`` covers.
 
     Returns ``None`` when the layout cannot be established, which callers treat
@@ -206,7 +210,7 @@ def may_adopt_view(source, result) -> bool:
         return False
     if not source.is_tracing:
         return False
-    source_key = _layout_key(source)
+    source_key = layout_key(source)
     if source_key is None:
         return False
-    return source_key == _layout_key(result)
+    return source_key == layout_key(result)

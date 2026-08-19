@@ -18,8 +18,12 @@ from leapp.leapp_graph.datatypes import (
     TracedData,
     TracedTensor,
     as_traced,
+    bind_shared_view,
     is_tracable_tensor_type,
+    promote_in_place,
     is_traced_type,
+    layout_key,
+    may_adopt_view,
     to_export_torch_tensor,
 )
 from leapp.leapp_graph.datatypes.patching import get_warp_backend
@@ -60,6 +64,11 @@ class TracedTensorNode(LeappNode):
         self._discovered_warp_segments: list["WarpSegment"] = []
         self._pending_warp_segments: deque["WarpSegment"] = deque()
         self._is_warp_capture_active = False
+
+        # Carriers declared on this pass, keyed on the bytes they cover, so a
+        # value aliasing one of them can find it. A ProxyView holds a proxy
+        # belonging to one graph, so this is rebuilt per pass.
+        self._layout_index: dict[tuple, TracedData] = {}
 
         self.m = None
 
@@ -132,6 +141,55 @@ class TracedTensorNode(LeappNode):
         self._next_buffer_idx = 0
         self.m = None
         self._model_captured = False
+        self._layout_index.clear()
+
+    def find_declared_alias(self, value):
+        """Carrier declared on this node that ``value`` may share a root with.
+
+        This is how an alias created before any tracing session began attaches:
+        the pair is invisible to the interception Phase 1 relies on, so the
+        buffer is matched by layout instead. ``may_adopt_view`` re-checks the
+        match and the sharing policy, so a stale index entry cannot promote an
+        unrelated value into a shared root.
+        """
+        key = layout_key(value)
+        if key is None:
+            return None
+        candidate = self._layout_index.get(key)
+        if candidate is None or candidate is value:
+            return None
+        return candidate if may_adopt_view(candidate, value) else None
+
+    def _validate_declared_input_aliases(self, outputs: dict) -> None:
+        """Reject an output whose bytes a surviving declared input represents differently.
+
+        This guards against a tensor in the graph sharing memory with another
+        tensor without leapp knowing about it.
+
+        Two roots over one allocation only diverge if the exported graph still
+        reads both, so this runs after pruning. A declared input nothing
+        consumed is trimmed, which leaves the output's root as the only
+        representation of those bytes, and pruning an unused input is ordinary
+        rather than an error.
+        """
+        for name, value in outputs.items():
+            if not isinstance(value, TracedData):
+                continue
+            declared = self._layout_index.get(layout_key(value))
+            if declared is None or declared.proxy_view is value.proxy_view:
+                continue
+            if self.get_io_description_by_name(declared.name, self.inputs) is None:
+                continue
+            _get_logger().fatal(
+                f"Error: output '{name}' of node '{self.name}' shares memory "
+                f"with declared input '{declared.name}', but they carry different "
+                "tracing roots.\n"
+                "Eager mutations through either alias would not be reflected in "
+                "the other alias's exported graph. Use the carrier returned by "
+                "input_tensors(), or avoid exposing both aliases at this node "
+                "boundary.",
+                error_type=Exception,
+            )
 
     def compile_trace(self, tensors: dict[str, "TracedTensor"], backend=None, backend_params={},
                        static_tensors: dict[str, torch.Tensor] | None = None,
@@ -149,6 +207,11 @@ class TracedTensorNode(LeappNode):
         if state_outputs:
             _get_logger().info(f"Adding {len(state_outputs)} state outputs: {list(state_outputs.keys())}")
             tensors = {**tensors, **state_outputs}
+
+        # Held for the post-pruning alias check below. Static outputs join
+        # `tensors` further down but are frozen into buffers at trace time, so
+        # the graph never reads the bytes a declared input could alias.
+        traced_outputs = dict(tensors)
 
         unwrapped_tensors = []
         for name, tensor in tensors.items():
@@ -171,6 +234,7 @@ class TracedTensorNode(LeappNode):
                 tensors[name] = wrapped
 
         self.build_graph_module(list(tensors.values()))
+        self._validate_declared_input_aliases(traced_outputs)
 
         self.m = fx.GraphModule(
             self.tracer.root, self.graph)
@@ -509,7 +573,22 @@ class TracedTensorNode(LeappNode):
                 if self.is_tracing:
                     node = self.graph.create_node("placeholder", name, (), {})
                     proxy = Proxy(node, self.tracer)
-                return as_traced(data, name, self, proxy)
+                if is_active_traced:
+                    # Rebind this carrier onto the new placeholder instead of
+                    # wrapping it. A value promoted in place is the object the
+                    # caller still uses, so leaving it behind would keep it on a
+                    # graph this declaration just replaced.
+                    traced = promote_in_place(data, name, self, proxy)
+                else:
+                    traced = as_traced(data, name, self, proxy)
+                if self.is_tracing:
+                    # Declaring a buffer is what lets a persistent alias of it
+                    # find this carrier later, so registration is the API and no
+                    # separate one is needed.
+                    key = layout_key(traced)
+                    if key is not None:
+                        self._layout_index.setdefault(key, traced)
+                return traced
 
             elif to=="tensor":
                 if not is_traced:
@@ -551,6 +630,33 @@ class TracedTensorNode(LeappNode):
         Returns:
             TracedTensor: A traced tensor in this context
         """
+        # An active carrier of *another* node falls through to the identity fatal
+        # in _create_io_helper, and a published value keeps a port of its own so
+        # the edge carrying it into this node survives. Everything else may share
+        # a root with a buffer this node already declared.
+        foreign_active = (
+            getattr(data, "is_tracing", False)
+            and getattr(data, "context_obj", None) is not self
+        )
+        adoptable = (
+            getattr(data, "output_port", None) is None
+            and not foreign_active
+        )
+        declared = self.find_declared_alias(data) if adoptable else None
+        if declared is not None:
+            _get_logger().info(
+                f"Input '{name}' for node '{self.name}' shares memory with declared "
+                f"input '{declared.name}'. Both names describe one graph value, so "
+                f"'{declared.name}' will be the only port in the exported node interface.")
+            if isinstance(data, TracedData):
+                # Rebind the object the caller holds rather than returning a new
+                # carrier. A buffer promoted in place stays the same object on
+                # every pass, so handing back a fresh carrier would leave the
+                # caller's own value on the previous pass's discarded graph.
+                bind_shared_view(data, declared.name, self, declared.proxy_view)
+                return data
+            return as_traced(data, declared.name, self, view=declared.proxy_view)
+
         existing = self.get_io_description_by_name(name, self.inputs)
         has_placeholder = any(
             node.op == "placeholder" and node.target == name

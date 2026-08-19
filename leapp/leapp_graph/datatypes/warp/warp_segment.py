@@ -120,13 +120,6 @@ class WarpSegment:
         self,
         value: Any,
     ) -> WarpTensorRef:
-        """Register one carrier as a segment input.
-
-        Registration is per carrier, not per buffer. Two handles onto one
-        allocation get a ref each: the runner reads that memory once and hands
-        the same bytes to both, which is what eager Warp does, and collapsing
-        them would leave one handle with no place in the runner's signature.
-        """
         ref = self._coerce_ref(
             value,
             name=self._default_ref_name("input", len(self.input_refs)),
@@ -138,19 +131,28 @@ class WarpSegment:
         self,
         value: Any,
     ) -> WarpTensorRef:
-        """Register one carrier as a segment output.
-
-        Per carrier for the same reason as inputs, and the close depends on it:
-        it walks the output refs to move each carrier onto the runner output that
-        produced it. A carrier folded into another's ref never gets rebound, so
-        it keeps reading the value from before the segment ran.
-        """
         ref = self._coerce_ref(
             value,
             name=self._default_ref_name("output", len(self.output_refs)),
         )
         self.output_refs[ref.name] = ref
         return ref
+
+    def knows_array(self, value: Any) -> bool:
+        """Whether either ref list already stands for ``value``'s buffer.
+
+        Bytes rather than object identity, because the same allocation reaches
+        a segment as several distinct carriers: an alias promoted after the
+        call, or a declared carrier the caller separately wrapped. A second ref
+        over one buffer would make the runner take an argument it already has.
+        """
+        pointer = getattr(value, "ptr", None)
+        return any(
+            ref.array is value
+            or (pointer is not None and getattr(ref.array, "ptr", None) == pointer)
+            for refs in (self.input_refs, self.output_refs)
+            for ref in refs.values()
+        )
 
     def _coerce_ref(
         self,
