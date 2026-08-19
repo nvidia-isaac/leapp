@@ -191,6 +191,97 @@ class TestTorchSharedMemory(LEAPPFunctionalTestBase):
             source_outputs={"policy/action": obs_value * 2.0},
         )
 
+    def test_two_declared_aliases_share_one_root_and_one_port(self):
+        """One allocation declared twice is one graph value, not two.
+
+        Both names are usable carriers and a mutation through either is visible
+        through the other, but only the first declared name becomes a port: a
+        second port over those bytes would make the graph accept a runtime
+        tensor it never reads.
+        """
+        obs_value = torch.tensor([1.0, 2.0, 3.0])
+        buffer = obs_value.clone()
+        alias = buffer.detach()
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        traced_buffer = annotate.input_tensors("policy", {"buffer": buffer})
+        traced_alias = annotate.input_tensors("policy", {"alias": alias})
+
+        self.assertIs(
+            traced_buffer.proxy_view, traced_alias.proxy_view,
+            "a declared alias did not adopt the declared buffer's root")
+
+        traced_buffer += 1.0
+        self.assertIs(
+            traced_alias.proxy, traced_buffer.proxy,
+            "a mutation through one declared alias was invisible to the other")
+
+        annotate.output_tensors(
+            "policy", {"action": traced_alias * 2.0}, export_with="jit")
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=1, outputs=1, internal_connections=0,
+            feedback_connections=0)
+        self.verify_inference_manager(
+            source_inputs={"policy/buffer": obs_value},
+            source_outputs={"policy/action": (obs_value + 1.0) * 2.0},
+        )
+
+    def test_output_alias_with_a_surviving_different_root_faults(self):
+        """A pre-declaration mutation cannot silently escape through an alias.
+
+        ``a.copy_(source)`` promotes the plain destination in place while
+        changing the bytes shared with plain ``b``. Declaring ``b`` afterwards
+        gives it a placeholder root, and consuming it keeps that root in the
+        graph, so the export would hold two representations of one buffer that
+        can diverge.
+        """
+        b = torch.tensor([1.0, 2.0, 3.0])
+        a = b.detach()
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        source = annotate.input_tensors(
+            "policy", {"source": torch.tensor([4.0, 5.0, 6.0])}
+        )
+        a.copy_(source)
+        traced_b = annotate.input_tensors("policy", {"b": b})
+
+        with self.assertRaisesRegex(Exception, "different tracing roots"):
+            annotate.output_tensors(
+                "policy", {"a": a, "scaled": traced_b * 2.0}, export_with="jit"
+            )
+        leapp.stop()
+
+    def test_output_alias_over_a_trimmed_declaration_exports(self):
+        """A declared alias nothing consumed is pruned rather than a fault.
+
+        The same two roots over one buffer as above, except nothing reads ``b``.
+        Its port is trimmed, which leaves ``a``'s root as the only
+        representation of those bytes in the graph, so there is nothing left to
+        diverge from.
+        """
+        b = torch.tensor([1.0, 2.0, 3.0])
+        a = b.detach()
+        source_value = torch.tensor([4.0, 5.0, 6.0])
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        source = annotate.input_tensors("policy", {"source": source_value.clone()})
+        a.copy_(source)
+        annotate.input_tensors("policy", {"b": b})
+        annotate.output_tensors("policy", {"a": a}, export_with="jit")
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=1, outputs=1, internal_connections=0,
+            feedback_connections=0)
+        self.verify_inference_manager(
+            source_inputs={"policy/source": source_value},
+            source_outputs={"policy/a": source_value},
+        )
+
 
 class TestWarpSharedMemory(WarpTestCase, LEAPPFunctionalTestBase):
     """Provenance when a Torch carrier and a Warp array describe one buffer.
@@ -471,6 +562,202 @@ class TestWarpSharedMemory(WarpTestCase, LEAPPFunctionalTestBase):
         self.assertIsNot(
             host.proxy_view, returned.proxy_view,
             "a host-to-device copy shared a root with its host source")
+
+
+class TestPersistentAliasAttachment(WarpTestCase, LEAPPFunctionalTestBase):
+    """Provenance for an alias created before any tracing session existed.
+
+    An adapter allocates a Torch buffer in ``__init__`` and keeps a Warp view of
+    it for the life of the process. LEAPP never saw that conversion, so there is
+    no call to intercept and nothing to share at the time it happened; both
+    objects were untraced. Declaring one side through ``input_tensors`` is what
+    lets the other be recognized by the bytes it covers.
+    """
+
+    def _make_persistent_pair(self, values):
+        """Allocate a Torch buffer and a Warp view of it outside any session."""
+        torch_buffer = values.clone()
+        return torch_buffer, wp.from_torch(torch_buffer)
+
+    def test_declared_persistent_alias_receives_the_segment_output(self):
+        """The fabrics-sim shape: a kernel writes a buffer declared as an input.
+
+        Nothing in the traced program converts between Torch and Warp, so the
+        only thing connecting the launch to the declared value is that both
+        aliases were declared and therefore share one root. Without that the
+        runner has no consumers, pruning deletes it, and the export returns the
+        input unchanged while eager Warp returns the incremented buffer.
+
+        Declaring the Warp side is what promotes the caller's own array, so the
+        loop is also the two-pass invariant: the same object is declared again on
+        the second pass, and it has to land on that pass's root rather than stay
+        on the graph the first pass discarded.
+        """
+        source_value = torch.tensor([1.0, 2.0, 3.0], device=self.DEVICE)
+        expected = (source_value + 1.0) * 2.0
+
+        torch_buffer, warp_buffer = self._make_persistent_pair(source_value)
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        for _ in range(2):
+            # The kernel writes the buffer in place, so each pass starts over.
+            torch_buffer.copy_(source_value)
+            obs, declared_array = annotate.input_tensors(
+                "node_a", {"obs": torch_buffer, "warp_view": warp_buffer})
+            self.assertIs(
+                declared_array, warp_buffer,
+                "declaring a raw wp.array did not promote the caller's object")
+            self.assertIs(
+                obs.proxy_view, warp_buffer.proxy_view,
+                "the declared aliases did not share one root")
+
+            with annotate.warp_op("node_a", device=self.DEVICE):
+                wp.launch(
+                    self.kernels.increment_in_place,
+                    dim=warp_buffer.size,
+                    inputs=[warp_buffer],
+                    device=self.DEVICE,
+                )
+            action = obs * 2.0
+
+            self.assertTrue(
+                torch.equal(action.tensor, expected),
+                f"eager value diverged: got {action.tensor}, expected {expected}")
+            annotate.output_tensors(
+                "node_a", {"action": action}, export_with="onnx")
+
+        node = annotate.get_nodes()["node_a"]
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        self.assertTrue(
+            any("warp_runner" in str(graph_node.target)
+                for graph_node in node.m.graph.nodes),
+            "the Warp runner did not survive pruning")
+        self.assertEqual(
+            node.trimmed_inputs, set(),
+            "a declared alias produced a port nothing consumed")
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=1, outputs=1, internal_connections=0,
+            feedback_connections=0)
+        self.verify_inference_manager(
+            source_inputs={"node_a/obs": source_value},
+            source_outputs={"node_a/action": expected},
+        )
+
+    def test_declaring_the_warp_side_first_reaches_the_same_root(self):
+        """Declaration order does not decide which alias owns the root.
+
+        The Warp array named first has no earlier declaration to adopt, so it
+        founds the root itself and the Torch buffer joins it. That reverses the
+        roles of the previous test, and the second pass is what the order used
+        to change: nothing else covered those bytes yet, so re-declaring the
+        promoted array is the only thing that can move it off the discarded
+        graph. Leaving it behind sends the launch into an orphan the export
+        never reads, which prunes the runner while eager still increments.
+        """
+        source_value = torch.tensor([1.0, 2.0, 3.0], device=self.DEVICE)
+        expected = (source_value + 1.0) * 2.0
+
+        torch_buffer, warp_buffer = self._make_persistent_pair(source_value)
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        for _ in range(2):
+            torch_buffer.copy_(source_value)
+            declared_array, obs = annotate.input_tensors(
+                "node_a", {"warp_view": warp_buffer, "obs": torch_buffer})
+            self.assertIs(
+                declared_array, warp_buffer,
+                "declaring a raw wp.array did not promote the caller's object")
+            self.assertIs(
+                obs.proxy_view, warp_buffer.proxy_view,
+                "the declared aliases did not share one root")
+
+            with annotate.warp_op("node_a", device=self.DEVICE):
+                wp.launch(
+                    self.kernels.increment_in_place,
+                    dim=warp_buffer.size,
+                    inputs=[warp_buffer],
+                    device=self.DEVICE,
+                )
+            action = obs * 2.0
+
+            self.assertTrue(
+                torch.equal(action.tensor, expected),
+                f"eager value diverged: got {action.tensor}, expected {expected}")
+            annotate.output_tensors(
+                "node_a", {"action": action}, export_with="onnx")
+
+        node = annotate.get_nodes()["node_a"]
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        self.assertTrue(
+            any("warp_runner" in str(graph_node.target)
+                for graph_node in node.m.graph.nodes),
+            "the Warp runner did not survive pruning")
+        self.assertEqual(
+            node.trimmed_inputs, set(),
+            "a declared alias produced a port nothing consumed")
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=1, outputs=1, internal_connections=0,
+            feedback_connections=0)
+        self.verify_inference_manager(
+            source_inputs={"node_a/warp_view": source_value},
+            source_outputs={"node_a/action": expected},
+        )
+
+    def test_undeclared_persistent_alias_attaches_to_nothing(self):
+        """A buffer the user never declared is left alone, by design.
+
+        Attachment is a claim the user makes by declaring the buffer. Sharing
+        memory with a declared input is not itself a claim: a buffer a kernel
+        reads is meant to go through ``input_tensors``, so nothing searches for
+        an owner on its behalf and this program is a user error rather than a
+        case LEAPP recovers.
+        """
+        obs_value = torch.tensor([1.0, 2.0, 3.0], device=self.DEVICE)
+        _, warp_buffer = self._make_persistent_pair(obs_value)
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        obs = annotate.input_tensors(
+            "node_a", {"obs": obs_value.clone()})
+        with annotate.warp_op("node_a", device=self.DEVICE):
+            wp.launch(
+                self.kernels.increment_in_place,
+                dim=warp_buffer.size,
+                inputs=[warp_buffer],
+                device=self.DEVICE,
+            )
+
+        self.assertIs(
+            type(warp_buffer), wp.array,
+            "an undeclared persistent alias was promoted")
+        self.assertIsNone(
+            getattr(warp_buffer, "_proxy_view", None),
+            "an undeclared persistent alias was given provenance")
+        self.assertIsNotNone(obs.proxy, "the declared input lost its provenance")
+
+    def test_closed_node_output_crosses_the_boundary_untouched(self):
+        """An ordinary connection matches addresses too, and must not fault.
+
+        Passing a tensor to the next node does not copy it, so every existing
+        graph has one allocation reaching two nodes. What separates that from an
+        overlap is that the producer has finished, and the consumer still gets a
+        root of its own so a mutation it records cannot rewrite the producer's.
+        """
+        obs_value = torch.tensor([1.0, 2.0, 3.0])
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        obs = annotate.input_tensors("node_a", {"obs": obs_value.clone()})
+        hidden = obs * 2.0
+        annotate.output_tensors("node_a", {"hidden": hidden}, export_with="jit")
+
+        consumed = annotate.input_tensors("node_b", {"hidden": hidden})
+
+        self.assertIsNot(
+            consumed.proxy_view, hidden.proxy_view,
+            "a boundary rewrap shared the producer's root")
 
 
 class TestNumpySharedMemory(LEAPPFunctionalTestBase):

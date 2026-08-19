@@ -25,6 +25,7 @@ from .proxy_view import (
     ProxyView,
     bind_new_view,
     bind_shared_view,
+    layout_key,
     may_adopt_view,
     share_view,
     update_view_proxy,
@@ -255,6 +256,7 @@ __all__ = [
     "update_view_proxy",
     "share_view",
     "may_adopt_view",
+    "layout_key",
     # Type registry
     "TRACED_TYPE_REGISTRY",
     "TRACABLE_BASE_TYPES",
