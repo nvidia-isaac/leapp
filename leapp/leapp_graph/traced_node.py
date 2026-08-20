@@ -545,6 +545,15 @@ class TracedTensorNode(LeappNode):
                         error_type=Exception)
 
             if to=="traced":
+                # A root that is a placeholder means the value entered its node
+                # as a declaration rather than being computed there. Declaring
+                # promotes the caller's tensor in place, so one external tensor
+                # reaching two nodes arrives here still carrying the first
+                # node's placeholder, which is an ordinary shared input and not
+                # a missing edge between the two.
+                entered_by_declaration = is_traced and getattr(
+                    getattr(data.proxy, "node", None), "op", None) == "placeholder"
+
                 if is_active_traced:
                     # Same context: allow override with warning
                     _get_logger().warning(
@@ -554,7 +563,8 @@ class TracedTensorNode(LeappNode):
                     )
                 elif (self.is_tracing and is_traced
                         and data.context_obj is not self
-                        and data.output_port is None):
+                        and data.output_port is None
+                        and not entered_by_declaration):
                     # Came out of a previous node but was never registered as one
                     # of that node's outputs, so there is no edge to connect to.
                     # Only the first pass can say this, because a re-entry pass
@@ -573,11 +583,12 @@ class TracedTensorNode(LeappNode):
                 if self.is_tracing:
                     node = self.graph.create_node("placeholder", name, (), {})
                     proxy = Proxy(node, self.tracer)
-                if is_active_traced:
-                    # Rebind this carrier onto the new placeholder instead of
-                    # wrapping it. A value promoted in place is the object the
-                    # caller still uses, so leaving it behind would keep it on a
-                    # graph this declaration just replaced.
+                if is_active_traced or type(data) is torch.Tensor:
+                    # Declaring binds the object the caller holds rather than
+                    # handing back a second one beside it: a plain tensor is
+                    # promoted in place, and a live carrier of this node is
+                    # rebound onto the new placeholder so it cannot keep
+                    # pointing at a graph this declaration just replaced.
                     traced = promote_in_place(data, name, self, proxy)
                 else:
                     traced = as_traced(data, name, self, proxy)

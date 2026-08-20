@@ -707,6 +707,58 @@ class TestPersistentAliasAttachment(WarpTestCase, LEAPPFunctionalTestBase):
             source_outputs={"node_a/action": expected},
         )
 
+    def test_declaring_the_torch_alias_promotes_the_object_the_caller_holds(self):
+        """Library code keeps reading its own attribute and still traces.
+
+        An adapter that owns the pair reads the Torch side directly, with no
+        per-step conversion for the tracer to intercept, so the return value of
+        ``input_tensors`` never reaches the code doing the reading. Declaring
+        promotes that object in place, which is what lets code that never saw
+        LEAPP observe the runner output instead of a pre-segment value.
+        """
+        source_value = torch.tensor([1.0, 2.0, 3.0], device=self.DEVICE)
+        expected = (source_value + 1.0) * 2.0
+
+        torch_buffer, warp_buffer = self._make_persistent_pair(source_value)
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        for _ in range(2):
+            torch_buffer.copy_(source_value)
+            annotate.input_tensors(
+                "node_a", {"obs": torch_buffer, "warp_view": warp_buffer})
+            self.assertTrue(
+                torch_buffer.is_tracing,
+                "declaring a Torch input did not promote the caller's object")
+
+            with annotate.warp_op("node_a", device=self.DEVICE):
+                wp.launch(
+                    self.kernels.increment_in_place,
+                    dim=warp_buffer.size,
+                    inputs=[warp_buffer],
+                    device=self.DEVICE,
+                )
+            # Deliberately ignores what input_tensors returned.
+            action = torch_buffer * 2.0
+
+            self.assertTrue(
+                torch.equal(action.tensor, expected),
+                f"eager value diverged: got {action.tensor}, expected {expected}")
+            annotate.output_tensors(
+                "node_a", {"action": action}, export_with="onnx")
+
+        node = annotate.get_nodes()["node_a"]
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        self.assertTrue(
+            any("warp_runner" in str(graph_node.target)
+                for graph_node in node.m.graph.nodes),
+            "the Warp runner did not survive pruning")
+        self.verify_inference_manager(
+            source_inputs={"node_a/obs": source_value},
+            source_outputs={"node_a/action": expected},
+        )
+
     def test_undeclared_persistent_alias_attaches_to_nothing(self):
         """A buffer the user never declared is left alone, by design.
 

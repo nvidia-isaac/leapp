@@ -146,7 +146,9 @@ class TestDryrun(LEAPPFunctionalTestBase):
             returned_tensors = self._flatten_to_tensors(returned)
             self.assertEqual(len(original_tensors), len(returned_tensors))
             for original_tensor, returned_tensor in zip(original_tensors, returned_tensors):
-                self.assertIsNot(original_tensor, returned_tensor)
+                # Declaring promotes the caller's tensor in place, so the
+                # returned carrier is that same object at every nesting depth.
+                self.assertIs(original_tensor, returned_tensor)
                 self.assertIsInstance(returned_tensor, TracedTensor)
                 self.assertTrue(returned_tensor.is_tracing)
                 self.assertTrue(torch.equal(original_tensor, returned_tensor.tensor))

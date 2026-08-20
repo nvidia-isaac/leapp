@@ -891,6 +891,10 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         """Not equal operator."""
         return torch.ne(self, other)
 
+    # Elementwise __eq__ nulls the inherited hash, which breaks any identity
+    # set a carrier lands in, including nn.Module's own member traversal.
+    __hash__ = torch.Tensor.__hash__
+
     # =========================================================================
     # Indexing Operations
     # =========================================================================
