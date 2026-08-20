@@ -31,7 +31,7 @@ from leapp.leapp_graph.datatypes import (
     is_traced_type,
     is_tracable_tensor_type,
 )
-from leapp.leapp_graph.datatypes.global_patching import warn_if_script_functions_in_scope
+from leapp.leapp_graph.datatypes.patching import TracingPatcher, warn_if_script_functions_in_scope
 from leapp.utils.tensor_description import TensorSemantics
 from leapp.utils.tensor_description import (verify_data_exact_match,
                                              flatten_io_structure,
@@ -40,10 +40,10 @@ from leapp.utils.caller_identity import (get_caller_stack_identity,
                                          caller_identity_has_same_anchor,
                                          format_caller_identity)
 from leapp.utils.utils import (get_relative_path,
-                               mirror_all_tensor_tags,
+                               mirror_all_traced_state,
                                extract_return_names,
                                frame_to_namespace)
-
+from contextlib import nullcontext
 
 class ExportManager:
     _instance = None
@@ -72,7 +72,7 @@ class ExportManager:
             self.SAVE_PATH = None
             self.dry_run = False
             self.non_traced = set()
-            self._patches_applied = False
+            self.patcher = TracingPatcher()
 
             # tracetime variables
             self.nodes = {}
@@ -105,13 +105,10 @@ class ExportManager:
         _get_logger().configure(self.SAVE_PATH, verbose=verbose)
 
     def set_dry_run_and_non_traced(self, dry_run: bool, non_traced):
-        self.set_dry_run(dry_run)
+        self.dry_run = dry_run
         if isinstance(non_traced, str):
             non_traced = [non_traced]
         self.non_traced = set(non_traced)
-
-    def set_dry_run(self, dry_run: bool):
-        self.dry_run = dry_run
 
     def is_dry_run(self, name: str = None):
         if name is None:
@@ -136,12 +133,6 @@ class ExportManager:
     @classmethod
     def is_interpret_graph_enabled(cls):
         return cls._interpret_graph
-
-    def set_patches_applied(self, is_applied: bool):
-        self._patches_applied = is_applied
-
-    def is_numpy_patches_applied(self):
-        return self._patches_applied
 
     def reset_tracing_lock(self):
         TracingLock().reset()
@@ -170,6 +161,10 @@ class ExportManager:
             name for name, node in self.nodes.items()
             if node.node_index == LeappNode.UNSET_NODE_INDEX
         ]
+        pending_warp_nodes = [
+            name for name, node in self.nodes.items()
+            if node.has_pending_warp_segments
+        ]
         if incomplete_nodes:
             incomplete_nodes.sort()
             formatted = ", ".join(incomplete_nodes)
@@ -178,6 +173,15 @@ class ExportManager:
                 f"{formatted}. Did you forget to call output_tensors() "
                 "or finish the annotated function?",
                 error_type=Exception)
+        if pending_warp_nodes:
+            pending_warp_nodes.sort()
+            formatted = ", ".join(pending_warp_nodes)
+            _get_logger().fatal(
+                "The following nodes discovered Warp segments but were "
+                f"not executed a second time for APIC capture: {formatted}. "
+                "Run the same annotated path again before compiling the graph.",
+                error_type=Exception,
+            )
 
     def _setup_new_node(self, name, node_class: LeappNode, **kwargs):
         if name in self.nodes:
@@ -200,10 +204,9 @@ class ExportManager:
                           outputs=kwargs.get("outputs", None),
                           environment_constants=kwargs.get(
                               "environment_constants", None),
-                          register_buffers=kwargs.get("register_buffers", None),
-                          dry_run=self.is_dry_run(name))
+                          register_buffers=kwargs.get("register_buffers", None))
         else:
-            node = node_class(name, dry_run=self.is_dry_run(name), **kwargs)
+            node = node_class(name, **kwargs)
 
         node._max_cached_io = self._max_cached_io
         self.nodes[name] = node
@@ -263,6 +266,10 @@ class ExportManager:
 
         _caller_identity = get_caller_stack_identity()
 
+        # Let the node advance a completed Warp discovery pass on re-entry.
+        # this will reset the tracing state of the node so that input_tensors will trace again.
+        traced_tensors_node.prepare_warp_capture()
+
         # if the node is not tracing, we validate the inputs only and return the raw tensors
         # the node is not tracing if it is already compiled.
         if not traced_tensors_node.is_tracing:
@@ -288,7 +295,13 @@ class ExportManager:
                     f"New call site:\n{format_caller_identity(_caller_identity)}")
                 traced_tensors_node._caller_identities.add(_caller_identity)
             traced_tensors_node.reentry_validate_inputs(tensors)
-            return self._passthrough_dict_values(tensors)
+            rebound_tensors = {
+                tensor_name: traced_tensors_node._create_io_helper(
+                    tensor, tensor_name, to="traced"
+                )
+                for tensor_name, tensor in tensors.items()
+            }
+            return self._passthrough_dict_values(rebound_tensors)
 
         traced_tensors_node._caller_identities.add(_caller_identity)
 
@@ -327,6 +340,9 @@ class ExportManager:
                 "Call annotate.input_tensors() before annotate.output_tensors() for the same node name.",
                 error_type=Exception)
 
+        # force the warp segment to close if any.
+        if self.patcher.warp is not None:
+            self.patcher.warp.close_warp_segment()
         # process outputs
         flattened_tensors = flatten_io_structure(tensors, '')
 
@@ -340,16 +356,15 @@ class ExportManager:
             flattened_static = {}
             if normalized_static_outputs is not None:
                 flattened_static = flatten_io_structure(normalized_static_outputs, '')
-            traced_tensors_node.reentry_validate_and_tag_outputs(
+            traced_tensors_node.reentry_validate_outputs(
                 flattened_tensors, flattened_static)
             return self._passthrough_dict_values(tensors)
 
         # Warn if pre-compiled ScriptFunctions are visible in the caller's scope
         warn_if_script_functions_in_scope()
 
-        if not getattr(traced_tensors_node, 'dry_run', False):
-            self._validate_initial_traced_payload(
-                "output_tensors", node_name, traced_tensors_node, flattened_tensors)
+        self._validate_initial_traced_payload(
+            "output_tensors", node_name, traced_tensors_node, flattened_tensors)
 
         # process static outputs (constant tensors that should be returned but aren't derived from inputs)
         flattened_static_outputs = None
@@ -400,7 +415,7 @@ class ExportManager:
             ```
         """
         if not ExportManager._interpret_graph:
-            if isinstance(tensors, torch.Tensor):
+            if is_tracable_tensor_type(tensors):
                 return tensors
             if isinstance(tensors, dict):
                 values = list(tensors.values())
@@ -442,7 +457,7 @@ class ExportManager:
         if isinstance(tensors, dict):
             return tensors, len(tensors) == 1
 
-        is_single = isinstance(tensors, torch.Tensor)
+        is_single = is_tracable_tensor_type(tensors)
         items = [tensors] if is_single else list(tensors)
 
         node = self.nodes.get(node_name)
@@ -503,7 +518,7 @@ class ExportManager:
         if not (len(context_names) == 1 and next(iter(context_names)) == traced_tensors_node.name):
             msg = (
                 f"{api_name}() for node '{node_name}' received tensors that belong to a different node: "
-                f"{context_names}. Make sure you are passing tensors derived from "
+                f"{context_names}.\n Make sure you are passing tensors derived from "
                 f"annotate.input_tensors('{node_name}', ...) to annotate.{api_name}('{node_name}', ...).")
             _get_logger().fatal(msg, error_type=Exception)
 
@@ -569,9 +584,8 @@ class ExportManager:
             traced_node.reentry_validate_state_update(tensors)
             return self._passthrough_dict_values(tensors)
 
-        if not getattr(traced_node, 'dry_run', False):
-            self._validate_initial_traced_payload(
-                "update_state", node_name, traced_node, tensors)
+        self._validate_initial_traced_payload(
+            "update_state", node_name, traced_node, tensors)
         traced_node.update_state_tensors(tensors)
         return self._passthrough_dict_values(tensors)
 
@@ -714,6 +728,30 @@ class ExportManager:
             return wrapper
         return decorator
 
+    def warp_op(self, node_name: str, inputs: list[str] = None, outputs: list[str] = None, **params):
+        if not ExportManager._interpret_graph:
+            return nullcontext()
+        warp_backend = self.patcher.warp
+        if warp_backend is None:
+            _get_logger().fatal(
+                "LEAPP: the warp backend is not installed. "
+                "Please call leapp.start(..., global_patching=True), and make sure warp-lang is installed.",
+                error_type=ImportError,
+            )
+
+        if node_name not in self.nodes:
+            _get_logger().fatal(
+                f"LEAPP: node '{node_name}' not found. "
+                "Call annotate.input_tensors() first to create the node.",
+                error_type=ValueError,
+            )
+
+        node = self.nodes[node_name]
+        if not node.is_tracing:
+            return nullcontext()
+
+        return warp_backend.create_warp_op(node)
+
     def _method(self, **params):
         """Legacy decorator for tracing functions via sys.settrace + ModuleBuilder.
 
@@ -802,17 +840,13 @@ class ExportManager:
 
     def mirror_leapp_tags(self, source, target):
         if not ExportManager._interpret_graph:
-            return
-        try:
-            if not verify_data_exact_match(source, target):
-                raise Exception(
-                    f"Error: source and target do not match: {source} != {target}")
-            mirror_all_tensor_tags(source, target)
-        except Exception as e:
+            return target
+        if not verify_data_exact_match(source, target):
             _get_logger().fatal(
-                f"Error: unexpected error mirroring LEAPP tags: {e}",
-                error_type=type(e),
-                cause=e)
+                f"Error: source and target do not match: {source} != {target}",
+                error_type=Exception,
+            )
+        return mirror_all_traced_state(source, target)
 
     def get_io_descriptions(self):
         _get_logger().section(

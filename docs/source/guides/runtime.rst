@@ -47,7 +47,7 @@ node, LEAPP compares:
 * NaN / Inf presence in exported and traced outputs
 
 If a node has no compiled model, validation is skipped and treated as
-successful. This is expected for metadata-only nodes such as ``non_traced``
+successful. This is expected for non-exported nodes such as ``non_traced``
 or dry-run cases.
 
 Multi-example validation with cached inputs
@@ -83,7 +83,7 @@ For each node, LEAPP caches:
 
 * input values
 * output values
-* updated tags needed for feedback detection across re-entry
+* updated input sources needed for feedback detection across re-entry
 
 The validation log labels examples using numeric sample indices:
 
@@ -161,7 +161,7 @@ validates:
 
 * input/output names
 * shape and dtype descriptions
-* tags used for graph connectivity
+* source node and output port used for graph connectivity
 
 These checks catch cases where later executions no longer match the
 original trace shape, dtype, or connection structure.

@@ -1,0 +1,204 @@
+"""Traced Warp array support."""
+
+from typing import Any
+
+import torch
+from torch.fx.proxy import Proxy
+
+import warp as wp
+
+from ..proxy_view import (
+    ProxyView,
+    bind_new_view,
+    bind_shared_view,
+    update_view_proxy,
+)
+from ..traced_data import TracedData
+from leapp.utils.dtype import DtypeCodec, register_dtype_codec
+from leapp.utils.logging import _get_logger
+
+
+# Register the Warp dtype codec so leapp core can convert warp dtypes to common
+# name strings without importing warp itself. Mirrors the torch/numpy entries
+# and only runs when this (warp-gated) module is imported.
+register_dtype_codec(DtypeCodec(
+    backend="warp",
+    matches=lambda v: isinstance(v, wp.array),
+    value_dtype=lambda v: v.dtype,
+    dtype_to_name={
+        wp.float16: "float16",
+        wp.float32: "float32",
+        wp.float64: "float64",
+        wp.int8: "int8",
+        wp.int16: "int16",
+        wp.int32: "int32",
+        wp.int64: "int64",
+        wp.uint8: "uint8",
+        wp.uint16: "uint16",
+        wp.uint32: "uint32",
+        wp.uint64: "uint64",
+        wp.bool: "bool",
+    },
+))
+
+
+class TracedWpArray(wp.array):
+    """A ``wp.array`` subclass that can be class-swapped in place.
+
+    Keep this as single inheritance from ``wp.array``. Directly inheriting from
+    ``TracedData`` changes the object layout and breaks ``arr.__class__`` swaps
+    from raw Warp arrays.
+    """
+
+    def __new__(cls, array, name, context, proxy=None, *, view=None):
+        if view is not None and proxy is not None:
+            _get_logger().fatal(
+                "TracedWpArray accepts proxy= or view=, not both",
+                error_type=ValueError,
+            )
+        obj = wp.array.__new__(cls)
+        wp.array.__init__(
+            obj,
+            dtype=array.dtype,
+            shape=array.shape,
+            ptr=array.ptr,
+            device=array.device,
+            copy=False,
+        )
+        # Keep the source allocation alive for non-owning consumer aliases.
+        obj._ref = array
+        if view is not None:
+            bind_shared_view(obj, name, context, view)
+        else:
+            bind_new_view(obj, name, context, proxy)
+        return obj
+
+    def __init__(self, array: wp.array, name: str, context, proxy=None, *, view=None):
+        # ``__new__`` initializes Warp storage and tracing metadata.
+        pass
+
+    @classmethod
+    def make_traced_in_place(
+        cls, array: wp.array, name: str, context, proxy=None, *, view=None
+    ) -> "TracedWpArray":
+        """Turn an existing raw ``wp.array`` into a traced array in place.
+
+        Pass ``proxy`` for a private root, or ``view`` to share an existing cell.
+        """
+        if view is not None and proxy is not None:
+            _get_logger().fatal(
+                "make_traced_in_place accepts proxy= or view=, not both",
+                error_type=ValueError,
+            )
+        if type(array) is cls:
+            if view is not None:
+                bind_shared_view(array, name, context, view)
+            else:
+                bind_new_view(array, name, context, proxy)
+            return array
+        if type(array) is not wp.array:
+            _get_logger().fatal(
+                "Can only class-swap exact raw wp.array instances into "
+                f"{cls.__name__}; got {type(array).__name__}",
+                error_type=TypeError,
+            )
+        array.__class__ = cls
+        if view is not None:
+            bind_shared_view(array, name, context, view)
+        else:
+            bind_new_view(array, name, context, proxy)
+        return array
+
+    def rebind_tracing_proxy(self, name: str, context, proxy: Proxy) -> None:
+        """Rebind this traced array to the canonical FX proxy for its value.
+
+        This updates the shared view's proxy rather than binding a new view: the
+        array still describes the same buffer, so every Torch or NumPy alias
+        sharing its view has to follow the segment output too. Binding a new
+        view here would leave those aliases on the pre-segment proxy while eager
+        Warp had already overwritten the memory they read.
+        """
+        update_view_proxy(self, name, context, proxy)
+
+    @property
+    def warp_segment(self):
+        return getattr(self, "_leapp_warp_segment", None)
+
+    @warp_segment.setter
+    def warp_segment(self, segment) -> None:
+        self._leapp_warp_segment = segment
+
+    @property
+    def data(self) -> wp.array:
+        """Return an exact ``wp.array`` aliasing this array's memory.
+
+        Warp's launch-time checks compare ``type(value)`` against the concrete
+        array class (e.g. ``type(value) is concrete_array_type(arg_type)`` in
+        ``pack_arg``, ``type(arg) in array_types`` in ``infer_argument_types``),
+        so ``wp.array`` subclasses are rejected. This returns a non-owning raw
+        ``wp.array`` over the same pointer for Warp to consume, leaving this
+        traced object untouched. Mirrors Warp's own ``flatten``/``reshape``/
+        ``view`` aliasing, including the ``_ref`` back-pointer that keeps the
+        owning allocation alive.
+        """
+        raw = wp.array(
+            ptr=self.ptr,
+            dtype=self.dtype,
+            shape=self.shape,
+            strides=self.strides,
+            device=self.device,
+            pinned=self.pinned,
+            copy=False,
+            grad=self.grad,
+        )
+        raw._ref = self
+        return raw
+
+
+    @property
+    def tensor(self) -> torch.Tensor:
+        return wp.to_torch(self)
+
+    # Reused from TracedData; assignment rather than forwarding because these
+    # are properties. ``output_port`` carries its setter along with it.
+    proxy = TracedData.proxy
+    proxy_view = TracedData.proxy_view
+    name = TracedData.name
+    context = TracedData.context
+    context_obj = TracedData.context_obj
+    output_port = TracedData.output_port
+
+    @property
+    def is_tracing(self) -> bool:
+        # ``_context`` may be missing while the object is still being built
+        # (``wp.array.__init__`` is patched and runs before tracing state is set).
+        context = getattr(self, "_context", None)
+        if context is None:
+            return False
+        return context.is_tracing
+
+    def _new(self, value: Any, proxy: Proxy = None) -> "TracedWpArray":
+        name = TracedData._name_from_proxy(proxy)
+        return type(self)(value, name, self._context, proxy)
+
+    def get_dtype_name(self) -> str:
+        return TracedData.get_dtype_name(self)
+
+    def validate_status(self, args=None, kwargs=None) -> bool:
+        return TracedData.validate_status(self, args=args, kwargs=kwargs)
+
+    def preserve_port(self, result):
+        return TracedData.preserve_port(self, result)
+
+    def overwrite_port(self, key, value) -> None:
+        return TracedData.overwrite_port(self, key, value)
+
+
+###############################################################################
+# Registration
+# this allows the TracedWpArray to be viewed as a TracedData instance. This
+# structure is required to be able to do class swapping in place. View binding
+# lives in ``proxy_view`` as free functions so this class need not forward it;
+# remaining TracedData helpers are still called unbound below.
+###############################################################################
+TracedData.register(TracedWpArray)

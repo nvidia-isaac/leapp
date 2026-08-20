@@ -3,34 +3,72 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
+from __future__ import annotations
+
+from collections import deque
 from leapp.leapp_graph.leapp_node import LeappNode
 import torch
 import torch.fx as fx
 from torch.fx.proxy import Proxy
+from typing import TYPE_CHECKING
+import operator
+
 from leapp.utils.logging import _get_logger
 from leapp.leapp_graph.datatypes import (
     TracedData,
     TracedTensor,
     as_traced,
+    bind_shared_view,
     is_tracable_tensor_type,
+    promote_in_place,
+    is_traced_type,
+    layout_key,
+    may_adopt_view,
+    to_export_torch_tensor,
 )
+from leapp.leapp_graph.datatypes.patching import get_warp_backend
 from leapp.utils.tensor_description import (
     resolve_tensor_descriptions_to_names,
     flatten_io_structure,
 )
+# Importing registers the ``leapp::warp_runner`` custom op (import side effect)
+# and exposes ``get_op``/``QUALIFIED_NAME`` used when emitting segment nodes.
+from leapp.leapp_graph.custom_operator_registry import warp_operator
 import collections
+
+if TYPE_CHECKING:
+    from leapp.leapp_graph.datatypes.warp import WarpSegment
+
+# fx graph overloads to create custom behavior when interacting with the graph.
+# keep local so that only the tracedTensorNode can create it.
+class _LeappFXGraph(fx.Graph):
+    """FX graph that notifies the Warp backend before graph mutation."""
+
+    def create_node(self, *args, **kwargs):
+        warp_backend = get_warp_backend()
+        if warp_backend is not None:
+            warp_backend.close_warp_segment()
+        return super().create_node(*args, **kwargs)
 
 
 class TracedTensorNode(LeappNode):
-    def __init__(self, name, *args, dry_run=False, **kwargs):
+    def __init__(self, name, *args, **kwargs):
         if args or kwargs:
             _get_logger().warning(f"{name} received unexpected arguments on initialization. these arguments will be ignored.")
-        super().__init__(name, dry_run=dry_run)
-        self.graph = fx.Graph()
+        super().__init__(name)
+        self.graph = _LeappFXGraph()
         self.tracer = fx.Tracer()
         self.tracer.graph = self.graph
         self.tracer.root = torch.nn.Module()
         self.tracer.tensor_attrs = {}
+        self._discovered_warp_segments: list["WarpSegment"] = []
+        self._pending_warp_segments: deque["WarpSegment"] = deque()
+        self._is_warp_capture_active = False
+
+        # Carriers declared on this pass, keyed on the bytes they cover, so a
+        # value aliasing one of them can find it. A ProxyView holds a proxy
+        # belonging to one graph, so this is rebuilt per pass.
+        self._layout_index: dict[tuple, TracedData] = {}
 
         self.m = None
 
@@ -39,20 +77,119 @@ class TracedTensorNode(LeappNode):
 
         # Buffer tracker for auto-detecting stateful buffers (set by annotate.module())
         self._buffer_tracker = None
-
         self._next_buffer_idx = 0
 
     def _get_required_io_description(self, name: str, io_list: list, io_kind: str):
         desc = self.get_io_description_by_name(name, io_list)
         if desc is None:
-            raise RuntimeError(
-                f"State tensor '{name}' in node '{self.name}' is missing its {io_kind} description."
+            _get_logger().fatal(
+                f"State tensor '{name}' in node '{self.name}' is missing its {io_kind} description.",
+                error_type=RuntimeError,
             )
         return desc
 
     @property
     def is_tracing(self) -> bool:
         return not self._model_captured
+
+    @property
+    def has_pending_warp_segments(self) -> bool:
+        return bool(self._pending_warp_segments)
+
+    @property
+    def is_warp_capture_active(self) -> bool:
+        return self._is_warp_capture_active
+
+    @property
+    def warp_segments(self) -> tuple["WarpSegment", ...]:
+        return tuple(self._discovered_warp_segments)
+
+    def prepare_warp_capture(self) -> None:
+        if not self.has_pending_warp_segments or self.is_tracing:
+            return
+        self._is_warp_capture_active = True
+        self.reset_trace_state()
+
+    def acquire_warp_segment(self) -> "WarpSegment | None":
+        return self._pending_warp_segments[0] if self._pending_warp_segments else None
+
+    def add_warp_segment(self, segment: "WarpSegment") -> None:
+        segment.runner_name = f"warp_segment_{len(self._discovered_warp_segments)}"
+        self._discovered_warp_segments.append(segment)
+        self._pending_warp_segments.append(segment)
+
+    def complete_warp_segment(self, segment: "WarpSegment") -> None:
+        if not self._pending_warp_segments or self._pending_warp_segments[0] is not segment:
+            _get_logger().fatal(
+                f"[{self.name}] Captured Warp regions out of discovery order.",
+                error_type=RuntimeError,
+            )
+        if self.exports_model and segment.apic_graph is None:
+            _get_logger().fatal(
+                f"[{self.name}] Captured Warp segment has no APIC graph.",
+                error_type=RuntimeError,
+            )
+        self._pending_warp_segments.popleft()
+
+    def reset_trace_state(self) -> None:
+        self.graph = _LeappFXGraph()
+        self.tracer = fx.Tracer()
+        self.tracer.graph = self.graph
+        self.tracer.root = torch.nn.Module()
+        self.tracer.tensor_attrs = {}
+        self.trimmed_inputs = set()
+        self._next_buffer_idx = 0
+        self.m = None
+        self._model_captured = False
+        self._layout_index.clear()
+
+    def find_declared_alias(self, value):
+        """Carrier declared on this node that ``value`` may share a root with.
+
+        This is how an alias created before any tracing session began attaches:
+        the pair is invisible to the interception Phase 1 relies on, so the
+        buffer is matched by layout instead. ``may_adopt_view`` re-checks the
+        match and the sharing policy, so a stale index entry cannot promote an
+        unrelated value into a shared root.
+        """
+        key = layout_key(value)
+        if key is None:
+            return None
+        candidate = self._layout_index.get(key)
+        if candidate is None or candidate is value:
+            return None
+        return candidate if may_adopt_view(candidate, value) else None
+
+    def _validate_declared_input_aliases(self, outputs: dict) -> None:
+        """Reject an output whose bytes a surviving declared input represents differently.
+
+        This guards against a tensor in the graph sharing memory with another
+        tensor without leapp knowing about it.
+
+        Two roots over one allocation only diverge if the exported graph still
+        reads both, so this runs after pruning. A declared input nothing
+        consumed is trimmed, which leaves the output's root as the only
+        representation of those bytes, and pruning an unused input is ordinary
+        rather than an error.
+        """
+        for name, value in outputs.items():
+            if not isinstance(value, TracedData):
+                continue
+            declared = self._layout_index.get(layout_key(value))
+            if declared is None or declared.proxy_view is value.proxy_view:
+                continue
+            if self.get_io_description_by_name(declared.name, self.inputs) is None:
+                continue
+            _get_logger().fatal(
+                f"Error: output '{name}' of node '{self.name}' shares memory "
+                f"with declared input '{declared.name}', but they carry different "
+                "tracing roots.\n"
+                "Eager mutations through either alias would not be reflected in "
+                "the other alias's exported graph. Use the carrier returned by "
+                "input_tensors(), or avoid exposing both aliases at this node "
+                "boundary.",
+                error_type=Exception,
+            )
 
     def compile_trace(self, tensors: dict[str, "TracedTensor"], backend=None, backend_params={},
                        static_tensors: dict[str, torch.Tensor] | None = None,
@@ -71,21 +208,10 @@ class TracedTensorNode(LeappNode):
             _get_logger().info(f"Adding {len(state_outputs)} state outputs: {list(state_outputs.keys())}")
             tensors = {**tensors, **state_outputs}
 
-        if self.dry_run:
-            for name, tensor in tensors.items():
-                self.tag_data(tensor, name)
-                self.add_output(name, name, tensor, semantics=(semantics_map or {}).get(name))
-                if name in self._state_tensors:
-                    self._state_tensors[name]["output_desc"] = self._get_required_io_description(
-                        name, self.outputs, "output"
-                    )
-            if static_tensors:
-                for name, tensor in static_tensors.items():
-                    self.tag_data(tensor, name)
-                    self.add_output(name, name, tensor, semantics=(static_semantics_map or {}).get(name))
-            self._apply_state_tags()
-            values = list(tensors.values())
-            return values[0] if len(values) == 1 else tuple(values)
+        # Held for the post-pruning alias check below. Static outputs join
+        # `tensors` further down but are frozen into buffers at trace time, so
+        # the graph never reads the bytes a declared input could alias.
+        traced_outputs = dict(tensors)
 
         unwrapped_tensors = []
         for name, tensor in tensors.items():
@@ -107,11 +233,8 @@ class TracedTensorNode(LeappNode):
                 )
                 tensors[name] = wrapped
 
-        # Apply state tags after buffer collection (which may remove placeholder
-        # nodes for non-mutated buffers) but before build_graph_module.
-        self._apply_state_tags()
-
         self.build_graph_module(list(tensors.values()))
+        self._validate_declared_input_aliases(traced_outputs)
 
         self.m = fx.GraphModule(
             self.tracer.root, self.graph)
@@ -132,22 +255,19 @@ class TracedTensorNode(LeappNode):
 
         return unwrapped_tensors[0] if len(unwrapped_tensors) == 1 else tuple(unwrapped_tensors)
 
-    def _apply_state_tags(self):
-        """Mirror each registered state output tag onto its paired state input.
+    def state_feedback_pairs(self):
+        """State tensors are an eager form of feedback.
 
-        State tensors are an eager form of feedback: the state output from one
-        execution is guaranteed to be fed back into the matching state input on
-        the next execution. By copying the already-registered output tag onto
-        the input description, both ends of that feedback edge share one
-        internal identity without inferring a second "canonical" tag name.
+        The state output from one execution is fed back into the matching state
+        input on the next, which the user declared by pairing the two names, so
+        a pair only becomes an edge once both halves exist.
         """
-        for state_name in self._state_tensors:
-            input_desc = self._state_tensors[state_name].get("input_desc")
-            output_desc = self._state_tensors[state_name].get("output_desc")
-            if input_desc is None or output_desc is None or output_desc.tag is None:
-                continue
-
-            input_desc.tag = output_desc.tag
+        return tuple(
+            (state_info["input_desc"], state_info["output_desc"])
+            for state_info in self._state_tensors.values()
+            if state_info.get("input_desc") is not None
+            and state_info.get("output_desc") is not None
+        )
 
     @staticmethod
     def _rewrite_method_descriptors(graph: fx.Graph):
@@ -259,12 +379,15 @@ class TracedTensorNode(LeappNode):
 
         rewritten = []
         nodes_to_erase = []
+        warp_op = warp_operator.get_op()
 
         for node in graph.nodes:
             if node.op != "call_function":
                 continue
             target = node.target
             if not isinstance(target, torch._ops.OpOverload):
+                continue
+            if target.overloadpacket is warp_op:
                 continue
             op_name = target.overloadpacket.__name__
 
@@ -407,9 +530,10 @@ class TracedTensorNode(LeappNode):
             return type(data)(new_data)
         
         elif is_tracable_tensor_type(data):
-            is_traced = False
-            if isinstance(data, TracedData) and data.is_tracing:
-                is_traced = True # is already a traced tensor that is currently tracing AND the context is the same as the current node
+            is_traced = isinstance(data, TracedData)
+            is_active_traced = is_traced and data.is_tracing
+            if is_active_traced:
+                # The value is actively tracing in a node context.
                 # Check if the traced tensor is from the same context (node)
                 if data.context_obj is not self:
                     # Different context: error - cannot use traced tensor from another node
@@ -421,20 +545,61 @@ class TracedTensorNode(LeappNode):
                         error_type=Exception)
 
             if to=="traced":
-                if self.dry_run:
-                    return data
+                # A root that is a placeholder means the value entered its node
+                # as a declaration rather than being computed there. Declaring
+                # promotes the caller's tensor in place, so one external tensor
+                # reaching two nodes arrives here still carrying the first
+                # node's placeholder, which is an ordinary shared input and not
+                # a missing edge between the two.
+                entered_by_declaration = is_traced and getattr(
+                    getattr(data.proxy, "node", None), "op", None) == "placeholder"
 
-                if is_traced:
+                if is_active_traced:
                     # Same context: allow override with warning
                     _get_logger().warning(
                         f"Input '{name}' for node '{self.name}' is an active TracedTensor "
                         f"from the same node. Creating fresh input placeholder "
                         f"(previous trace will be discarded for this branch)."
                     )
+                elif (self.is_tracing and is_traced
+                        and data.context_obj is not self
+                        and data.output_port is None
+                        and not entered_by_declaration):
+                    # Came out of a previous node but was never registered as one
+                    # of that node's outputs, so there is no edge to connect to.
+                    # Only the first pass can say this, because a re-entry pass
+                    # rebuilds its values without ports and reuses the sources
+                    # its descriptions already hold.
+                    # This can be deliberate, so keep going and treat it as a
+                    # dangling graph input.
+                    _get_logger().error(
+                        f"Error: input '{name}' for node '{self.name}' was derived from "
+                        f"node '{data.context}' but is not one of its registered outputs.\n"
+                        f"Add it to that node's output_tensors() to connect the two nodes, "
+                        f"or ignore this if '{name}' is meant to enter the graph from outside.\n"
+                        f"Treating '{name}' as a dangling input.")
 
-                node = self.graph.create_node("placeholder", name, (), {})
-                proxy = Proxy(node, self.tracer)
-                return as_traced(data, name, self, proxy)
+                proxy = None
+                if self.is_tracing:
+                    node = self.graph.create_node("placeholder", name, (), {})
+                    proxy = Proxy(node, self.tracer)
+                if is_active_traced or type(data) is torch.Tensor:
+                    # Declaring binds the object the caller holds rather than
+                    # handing back a second one beside it: a plain tensor is
+                    # promoted in place, and a live carrier of this node is
+                    # rebound onto the new placeholder so it cannot keep
+                    # pointing at a graph this declaration just replaced.
+                    traced = promote_in_place(data, name, self, proxy)
+                else:
+                    traced = as_traced(data, name, self, proxy)
+                if self.is_tracing:
+                    # Declaring a buffer is what lets a persistent alias of it
+                    # find this carrier later, so registration is the API and no
+                    # separate one is needed.
+                    key = layout_key(traced)
+                    if key is not None:
+                        self._layout_index.setdefault(key, traced)
+                return traced
 
             elif to=="tensor":
                 if not is_traced:
@@ -446,13 +611,15 @@ class TracedTensorNode(LeappNode):
             elif to=="static":
                 if is_traced:
                     _get_logger().fatal(
-                        f"Cannot create static output from TracedTensor '{name}'. "
+                        f"Cannot create static output from traced "
+                        f"{type(data).__name__} '{name}'. "
                         "Static outputs must be raw tensors.",
                         error_type=Exception)
 
                 # Create unique attribute name and store on root module
                 attr_name = f"_static_{name}".replace(".", "_")
-                self.tracer.root.register_buffer(attr_name, data.clone())
+                self.tracer.root.register_buffer(
+                    attr_name, to_export_torch_tensor(data).clone())
                 # Create get_attr node that retrieves the stored constant
                 node = self.graph.create_node("get_attr", attr_name, (), {})
                 proxy = Proxy(node, self.tracer)
@@ -474,42 +641,90 @@ class TracedTensorNode(LeappNode):
         Returns:
             TracedTensor: A traced tensor in this context
         """
+        # An active carrier of *another* node falls through to the identity fatal
+        # in _create_io_helper, and a published value keeps a port of its own so
+        # the edge carrying it into this node survives. Everything else may share
+        # a root with a buffer this node already declared.
+        foreign_active = (
+            getattr(data, "is_tracing", False)
+            and getattr(data, "context_obj", None) is not self
+        )
+        adoptable = (
+            getattr(data, "output_port", None) is None
+            and not foreign_active
+        )
+        declared = self.find_declared_alias(data) if adoptable else None
+        if declared is not None:
+            _get_logger().info(
+                f"Input '{name}' for node '{self.name}' shares memory with declared "
+                f"input '{declared.name}'. Both names describe one graph value, so "
+                f"'{declared.name}' will be the only port in the exported node interface.")
+            if isinstance(data, TracedData):
+                # Rebind the object the caller holds rather than returning a new
+                # carrier. A buffer promoted in place stays the same object on
+                # every pass, so handing back a fresh carrier would leave the
+                # caller's own value on the previous pass's discarded graph.
+                bind_shared_view(data, declared.name, self, declared.proxy_view)
+                return data
+            return as_traced(data, declared.name, self, view=declared.proxy_view)
+
+        existing = self.get_io_description_by_name(name, self.inputs)
+        has_placeholder = any(
+            node.op == "placeholder" and node.target == name
+            for node in self.graph.nodes
+        )
+        if existing is not None and not has_placeholder:
+            self.validate_input_and_update_sources(name, name, data)
+            return self._create_io_helper(data, name, to="traced")
         self.add_input(name, name, data, semantics=semantics)
         traced_data = self._create_io_helper(data, name, to="traced")
         return traced_data
 
     def create_output(self, data, name: str, static: bool = False, semantics=None):
+        existing = self.get_io_description_by_name(name, self.outputs)
         if static:
             self._validate_static_tensor(data, name)
             wrapped = self._create_io_helper(data, name, to="static")
-            self.tag_data(data, name)
-            self.add_output(name, name, data, semantics=semantics)
+            if existing is not None:
+                self.publish_output_port(wrapped, existing.port)
+                self.validate_output_and_update_sources(name, name, data)
+                return wrapped
+            descriptions = self.add_output(
+                name, name, data, semantics=semantics)
+            self.publish_output_ports(wrapped, name, descriptions)
             return wrapped
         else:
             unwrapped_data = self._create_io_helper(data, name, to="tensor")
-            self.tag_data(unwrapped_data, name)
-            self.add_output(name, name, unwrapped_data, semantics=semantics)
+            if existing is not None:
+                self.publish_output_port(unwrapped_data, existing.port)
+                self.validate_output_and_update_sources(
+                    name, name, unwrapped_data)
+                return unwrapped_data
+            descriptions = self.add_output(
+                name, name, unwrapped_data, semantics=semantics)
+            self.publish_output_ports(unwrapped_data, name, descriptions)
             return unwrapped_data
 
     def _validate_static_tensor(self, tensor, name: str):
-        if not isinstance(tensor, torch.Tensor):
+        if not is_tracable_tensor_type(tensor):
             _get_logger().fatal(
                 f"Error: static output '{name}' has type {type(tensor).__name__} "
-                "but expected torch.Tensor.\n"
+                "but expected a raw tracable data type.\n"
                 "**Static outputs must be raw tensors, not derived from input tensors.**\n"
                 "If this value depends on inputs, use it as a regular output tensor instead.",
                 error_type=Exception)
-        if isinstance(tensor, TracedTensor):
+        if is_traced_type(tensor):
             _get_logger().fatal(
-                f"Error: static output '{name}' is a TracedTensor. "
+                f"Error: static output '{name}' is a traced "
+                f"{type(tensor).__name__}. "
                 "Static outputs should be constant tensors, not traced computations.",
                 error_type=Exception)
 
     def create_static_tensors(self, static_outputs):
         """Wrap raw tensors as static graph nodes (for register_buffer).
 
-        Unlike create_output(static=True), this does NOT tag or register
-        outputs — it only validates and wraps.
+        Unlike create_output(static=True), this does NOT publish an output port
+        or register outputs — it only validates and wraps.
         Returns data in the same nested structure as the input payload.
         """
         flattened_static_outputs = flatten_io_structure(static_outputs, '')
@@ -579,6 +794,10 @@ class TracedTensorNode(LeappNode):
             self.inputs = [
                 inp for inp in self.inputs if inp.name_str not in self.trimmed_inputs]
 
+        # After pruning, record which Warp-segment outputs survived (are actually
+        # used) as a binary mask on the segment marker node's metadata.
+        self._stamp_warp_used_output_masks()
+
         # Check if graph already has an output node
         has_output = any(node.op == "output" for node in self.graph.nodes)
 
@@ -588,6 +807,72 @@ class TracedTensorNode(LeappNode):
                 self.graph.output(output_nodes[0])
             else:
                 self.graph.output(tuple(output_nodes))
+
+    def _stamp_warp_used_output_masks(self) -> None:
+        """Patch each live ``warp_runner`` node with its used-output mask.
+
+        Runs after the prune pass in ``build_graph_module``. Surviving
+        output-accessor nodes (those carrying ``leapp_warp_output_ref``) are
+        exactly the segment outputs still consumed by the graph; everything else
+        was erased. For each such segment we build a boolean mask of length
+        ``len(output_refs)`` where ``True`` marks a used output and rewrite the
+        op node's args: ``output_mask`` becomes that mask and the shapes of
+        unused outputs are zeroed to ``[0]`` so the runtime allocates/copies
+        nothing for them, while all N outputs stay in place to keep the
+        surviving ``getitem`` indices valid.
+
+        This runs before the ``GraphModule`` is (re)compiled, so the patched
+        constants are reflected in the generated forward.
+        """
+        used_by_segment: dict[int, tuple[WarpSegment, set[int]]] = {}
+        for node in self.graph.nodes:
+            ref = node.meta.get("leapp_warp_output_ref")
+            segment = node.meta.get("leapp_warp_segment")
+            # Only output-accessor (``getitem``) nodes carry both a segment and
+            # an output ref; the op node itself has the segment but no ref.
+            if segment is None or ref is None:
+                continue
+            index = node.args[1] if node.target is operator.getitem else 0
+            _, used_indices = used_by_segment.setdefault(id(segment), (segment, set()))
+            used_indices.add(index)
+
+        for segment, used_indices in used_by_segment.values():
+            op_node = (
+                segment.marker_proxy.node if segment.marker_proxy is not None else None
+            )
+            if op_node is None:
+                continue
+            width = len(segment.output_refs)
+            mask = [index in used_indices for index in range(width)]
+
+            runtime_metadata = warp_operator.decode_runtime_metadata(op_node.args[1])
+            shapes = warp_operator.runtime_output_shapes(runtime_metadata)
+            dtypes = warp_operator.runtime_output_dtypes(runtime_metadata)
+            if len(shapes) != width:
+                # Op args out of sync with the segment; skip rather than corrupt.
+                _get_logger().warning(
+                    f"[{self.name}] warp_runner output_shapes width "
+                    f"({len(shapes)}) != segment outputs ({width}); "
+                    "skipping mask patch."
+                )
+                continue
+            shapes = [shapes[i] if mask[i] else [0] for i in range(width)]
+            input_refs = [
+                ref
+                for ref in segment.input_refs.values()
+                if getattr(ref.array, "proxy", None) is not None
+            ]
+            output_refs = list(segment.output_refs.values())
+            runtime_metadata = warp_operator.build_runtime_metadata(
+                segment=segment,
+                input_refs=input_refs,
+                output_refs=output_refs,
+                output_shapes=shapes,
+                output_dtypes=dtypes,
+                output_mask=mask,
+            )
+
+            op_node.update_arg(1, warp_operator.encode_runtime_metadata(runtime_metadata))
 
     def create_state_tensors(self, tensors: dict[str, torch.Tensor]) -> dict[str, TracedTensor]:
         """Create state tensors that are both inputs and outputs."""
@@ -626,8 +911,11 @@ class TracedTensorNode(LeappNode):
 
             # Validate shape and dtype match the input state
             input_tensor = self._state_tensors[name]["input"]
-            input_underlying = input_tensor.tensor if isinstance(input_tensor, TracedTensor) else input_tensor
-            value_underlying = value.tensor if isinstance(value, TracedTensor) else value
+            input_underlying = (
+                input_tensor.tensor if isinstance(input_tensor, TracedData)
+                else input_tensor)
+            value_underlying = (
+                value.tensor if isinstance(value, TracedData) else value)
             if input_underlying.shape != value_underlying.shape:
                 _get_logger().fatal(
                     f"Error: update_state for '{name}' has shape {value_underlying.shape} "
@@ -663,6 +951,70 @@ class TracedTensorNode(LeappNode):
         for name, state_info in self._state_tensors.items():
             result[name] = state_info["output"]
         return result
+
+    def _create_warp_bundle_proxy(self, wrp_archive: bytes, runner_name: str) -> Proxy:
+        """Wire a pre-packed WRPB archive as a ``get_attr`` FX node."""
+        buffer_name = f"_{runner_name}_bundle"
+        bundle_tensor = torch.frombuffer(bytearray(wrp_archive), dtype=torch.uint8).clone()
+        self.tracer.root.register_buffer(buffer_name, bundle_tensor, persistent=True)
+        bundle_node = self.graph.create_node(
+            "get_attr",
+            buffer_name,
+            (),
+            {},
+            name=f"{runner_name}_bundle",
+        )
+        return Proxy(bundle_node, self.tracer)
+
+    def create_warp_proxy(
+        self,
+        encoded_metadata: str,
+        input_proxies: list[Proxy],
+        wrp_archive: bytes,
+        output_count: int,
+        runner_name: str,
+    ) -> tuple[Proxy, list[Proxy]]:
+        """Create the FX proxy nodes for a Warp runner op.
+
+        The caller owns Warp segment semantics and node metadata. This method
+        only mutates the FX graph: bundle ``get_attr``, one ``leapp::warp_runner``
+        call, plus one positional ``operator.getitem`` per candidate output.
+        """
+        bundle_proxy = self._create_warp_bundle_proxy(wrp_archive, runner_name)
+
+        # The op consumes only the segment's traced inputs (as a Tensor[]) and
+        # *produces* its outputs via per-output ``operator.getitem``. Segment
+        # outputs must never be fed back in as op inputs, otherwise the FX graph
+        # shows the results as get_attr constants flowing into the call instead
+        # of being derived from it.
+        #
+        # Emit the ``.default`` OpOverload: ``torch.export`` (dynamo) consumes the
+        # overload directly and the dynamo ONNX path lowers it to WrpRunner.
+        warp_runner = self.tracer.create_proxy(
+            "call_function",
+            warp_operator.get_op().default,
+            ([*input_proxies], encoded_metadata, bundle_proxy),
+            {},
+            name=runner_name,
+        )
+
+        # The op returns a Tensor[]; extract each output positionally so index i
+        # always refers to the segment's i-th output, regardless of which
+        # survive pruning. Only consumed outputs keep their getitem.
+        output_proxies = []
+        for idx in range(output_count):
+            output_proxies.append(
+                self.tracer.create_proxy(
+                    "call_function",
+                    operator.getitem,
+                    (warp_runner, idx),
+                    {},
+                    name=f"{runner_name}_output_{idx}",
+                )
+            )
+
+        return warp_runner, output_proxies
+
 
     @property
     def state_names(self) -> list[str]:

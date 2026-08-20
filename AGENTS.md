@@ -47,16 +47,14 @@ Use these to control tracing cost, validation coverage, and output artifacts.
   - Use `validate=False` only for rapid iteration or when user asks for speed over checks.
 - `leapp.start(..., dry_run=True)`:
   - Skips real model compilation/export, but still traces graph structure.
+  - Only available on `start()`, not on `compile_graph()`.
   - Useful for debugging node boundaries, names, and pipeline wiring before expensive export.
 - `leapp.start(..., non_traced=["node_a", "node_b"])`:
-  - Selectively disables tracing/export for the listed nodes while still registering them in the pipeline.
-  - Those nodes still capture inputs/outputs, contribute to graph connectivity, and appear in YAML.
+  - Selectively disables export for the listed nodes while still registering them in the pipeline.
+  - Those nodes are still traced, capture inputs/outputs, contribute to graph connectivity, and appear in YAML.
 - `leapp.compile_graph(visualize=True)`:
   - `True` emits `<graph_name>.png` graph visualization.
   - `False` is faster for CI/headless runs when the image is not needed.
-- `leapp.compile_graph(dry_run=True)`:
-  - Declares dry-run at compile time after normal tracing has already happened.
-  - Keeps traced FX graphs and YAML generation, but skips compile/save/validate of exported artifacts.
 - Also useful:
   - `leapp.start(..., verbose=True)` for detailed trace logs, including FX graph dumps for traced nodes.
   - `leapp.start(..., global_patching=False)` if numpy-related patching causes environment issues.
@@ -72,7 +70,7 @@ For `TracedTensorNode` workflows (`input_tensors` / `output_tensors`), agents mu
   - For raw tensors, always pass a top-level dict of named tensors. Bare tensors are not supported; use `TensorSemantics(...)` if you want a single named semantic input without a dict.
 - `annotate.output_tensors("node_name", ...)` is the node finalization declaration and should be done once for the initial trace of that node.
   - After this, the node is compiled/finalized.
-  - Any later calls in re-entry loops are validation/tag-update behavior, not a second independent output declaration.
+  - Any later calls in re-entry loops are validation/source-update behavior, not a second independent output declaration.
 
 
 Example:
@@ -187,9 +185,9 @@ Use this decision table:
   - `export_with=None` uses `NoneExportBackend` (no compilation/export for that node by default).
   - You can still supply your own artifact via `backend_params={"model_path": ".../model.pt"}` or `...onnx`.
   - Optional `copy_original_model=True` in `backend_params` copies the provided model into the graph output directory.
-- Selective non-tracing:
-  - `non_traced=[...]` is the preferred public API when only some nodes should behave like placeholder / metadata-only nodes.
-  - Those nodes effectively force `export_with=None` while keeping I/O capture and graph edges.
+- Selective non-export:
+  - `non_traced=[...]` is the preferred public API when only some nodes should skip export.
+  - Those nodes force `export_with=None` while still tracing and keeping I/O capture and graph edges.
 - Additional explicit names supported: `jit-script`, `jit-trace`, `onnx-dynamo`, `onnx-torchscript`, `exported-program`.
 
 ## Fast integration recipe for user projects
@@ -326,11 +324,14 @@ out = im(sample_inputs)  # same as im.run_policy(sample_inputs)
 - Keep the API split straight:
   - import `leapp` whenever you need `start()`, `stop()`, or `compile_graph()`.
   - do not assume `annotate` exposes lifecycle or internal manager state.
-- Prefer `non_traced=[...]` over global `dry_run=True` when only specific nodes should be metadata-only.
+- Prefer `non_traced=[...]` over global `dry_run=True` when only specific nodes should skip export.
 - Prefer one node at a time while tracing:
   - complete `output_tensors()` for a node before starting another traced context.
 - Handle copied tensors:
-  - if data is copied in non-standard ways, call `annotate.mirror_leapp_tags(source, target)`.
+  - a node output carries the producing node and output port that build the graph edge.
+  - copies that keep the values, shape and dtype carry it automatically: torch `clone`/`detach`/`contiguous`/`cpu`/`cuda`/device-only `to`/full buffer overwrite, numpy `np.copy`/`.copy()`/`np.asanyarray`, and full-range `wp.copy`.
+  - any other operation deliberately drops the port, so the next node reports a dangling input instead of a false edge.
+  - for a preallocated raw `np.ndarray` destination, call `annotate.mirror_leapp_tags(source, target)` and use its return value.
 - Understand state choices:
   - `state_tensors` = input+output feedback state.
   - `register_buffer` = frozen constant in exported model.
@@ -352,6 +353,8 @@ out = im(sample_inputs)  # same as im.run_policy(sample_inputs)
   - forgot to use returned values from `input_tensors()`.
 - context mismatch / mixed tracing contexts:
   - tensors from one node were used in another node before finalization.
+- a node reports a dangling input when you expected an edge:
+  - the value reaching it was derived from a node output rather than being an equivalent copy of one, so it carries no output port. Pass the output itself, use one of the copies listed above, or mirror the state onto the value.
 - stop() errors about active tracing:
   - ensure wrapped function exited and no active legacy `_method` trace.
 - ONNX export fails on recurrent models:

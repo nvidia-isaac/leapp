@@ -27,7 +27,11 @@ from leapp.utils.utils import (
 )
 from leapp.utils.logging import _get_logger
 from leapp.leapp_graph.leapp_node import LeappNode
-from leapp.leapp_graph.datatypes import TracedTensor
+from leapp.leapp_graph.datatypes import (
+    TracedTensor,
+    is_tracable_tensor_type,
+    promote_in_place,
+)
 
 
 class FunctionDecoratorNode(LeappNode):
@@ -39,8 +43,8 @@ class FunctionDecoratorNode(LeappNode):
 
     def __init__(self, name, backend=None,
                  backend_params=None, inputs=None, outputs=None,
-                 environment_constants=None, register_buffers=None, dry_run=False):
-        super().__init__(name, dry_run=dry_run)
+                 environment_constants=None, register_buffers=None):
+        super().__init__(name)
 
         if inputs is not None:
             self._declared_inputs = list(dict.fromkeys(inputs))
@@ -65,10 +69,11 @@ class FunctionDecoratorNode(LeappNode):
 
         overlap = self.register_buffers & self.environment_constants
         if overlap:
-            raise ValueError(
+            _get_logger().fatal(
                 f"FunctionDecoratorNode '{self.name}': The following names are "
                 f"present in both register_buffers and environment_constants: {overlap}. "
-                "Please ensure there is no overlap between these two lists."
+                "Please ensure there is no overlap between these two lists.",
+                error_type=ValueError,
             )
 
         self.setup_backend(backend, backend_params)
@@ -154,6 +159,20 @@ class FunctionDecoratorNode(LeappNode):
             else:
                 self.default_kwargs[param_name] = param_value
 
+    def publish_output_port(self, value, port: str):
+        """Upgrade a plain returned value in place before recording its port.
+
+        This node never traces its body, so its outputs come back as plain
+        backend values that cannot carry a node or port by themselves.
+        """
+        if not is_tracable_tensor_type(value):
+            _get_logger().warning(
+                f"\033[93mWarning: output '{port}' of node '{self.name}' has "
+                f"unconnectable type {type(value)}\033[0m")
+            return value
+        promoted = promote_in_place(value, port, self, None)
+        return super().publish_output_port(promoted, port)
+
     def inspect_function_outputs(self, func, result):
         if result is None:
             return
@@ -161,19 +180,24 @@ class FunctionDecoratorNode(LeappNode):
 
         if isinstance(result, tuple) and len(return_names) == len(result):
             for i in range(len(result)):
-                self.tag_data(result[i], return_names[i])
                 if i < len(return_names):
                     output_name = return_names[i]
                 else:
                     output_name = f"output{i+1}"
-                self.add_output(output_name, output_name, result[i])
+                descriptions = self.add_output(
+                    output_name, output_name, result[i])
+                self.publish_output_ports(
+                    result[i], output_name, descriptions)
         else:
             if not len(return_names) == 1:
-                raise Exception(
+                _get_logger().fatal(
                     f"Error: {self.name} has {len(return_names)}"
-                    " outputs, but only one output is detected")
-            self.tag_data(result, return_names[0])
-            self.add_output(return_names[0], return_names[0], result)
+                    " outputs, but only one output is detected",
+                    error_type=Exception,
+                )
+            descriptions = self.add_output(
+                return_names[0], return_names[0], result)
+            self.publish_output_ports(result, return_names[0], descriptions)
 
     # ── validation (re-entry) ────────────────────────────────────────────
 
@@ -221,7 +245,7 @@ class FunctionDecoratorNode(LeappNode):
                 param_names.index(param_name) < len(args)
             )
             if was_provided:
-                self.validate_input_and_update_tags(
+                self.validate_input_and_update_sources(
                     param_name, param_name, param_value)
 
     def validate_function_outputs(self, func, result):
@@ -232,20 +256,20 @@ class FunctionDecoratorNode(LeappNode):
 
         if isinstance(result, tuple) and len(return_names) == len(result):
             for i in range(len(result)):
-                self.tag_data(result[i], return_names[i])
                 if i < len(return_names):
                     output_name = return_names[i]
                 else:
                     output_name = f"output{i+1}"
-                self.validate_output_and_update_tags(
+                self.validate_output_and_update_sources(
                     output_name, output_name, result[i])
         else:
             if not len(return_names) == 1:
-                raise Exception(
+                _get_logger().fatal(
                     f"Error: {self.name} has {len(return_names)}"
-                    " outputs, but only one output is detected")
-            self.tag_data(result, return_names[0])
-            self.validate_output_and_update_tags(
+                    " outputs, but only one output is detected",
+                    error_type=Exception,
+                )
+            self.validate_output_and_update_sources(
                 return_names[0], return_names[0], result)
 
     # ── namespace capture / validation ───────────────────────────────────
@@ -269,13 +293,14 @@ class FunctionDecoratorNode(LeappNode):
         """Capture declared outputs from a namespace dictionary."""
         try:
             for output_name in self._declared_outputs:
+                # The namespace still holds the object the caller will use, while
+                # the captured value is a snapshot, so the port goes on the former.
                 obj, _ = get_attribute_value_from_namespace(namespace, output_name)
-                self.tag_data(obj, output_name)
-
                 final_output_name, final_output_value = self._capture_specified_value_from_namespace(
                     output_name, namespace)
-                self.add_output(final_output_name,
-                                output_name, final_output_value)
+                descriptions = self.add_output(final_output_name,
+                                               output_name, final_output_value)
+                self.publish_output_ports(obj, final_output_name, descriptions)
         except Exception as e:
             _get_logger().fatal(
                 f"Error capturing outputs from namespace: {e}",
@@ -289,7 +314,7 @@ class FunctionDecoratorNode(LeappNode):
             for input_name in self._declared_inputs:
                 final_input_name, final_input_value = self._capture_specified_value_from_namespace(
                     input_name, namespace)
-                self.validate_input_and_update_tags(
+                self.validate_input_and_update_sources(
                     final_input_name, input_name, final_input_value)
         except Exception as e:
             _get_logger().fatal(
@@ -302,11 +327,9 @@ class FunctionDecoratorNode(LeappNode):
         """Validate declared outputs against a namespace dictionary."""
         try:
             for output_name in self._declared_outputs:
-                obj, _ = get_attribute_value_from_namespace(namespace, output_name)
-                self.tag_data(obj, output_name)
                 final_output_name, final_output_value = self._capture_specified_value_from_namespace(
                     output_name, namespace)
-                self.validate_output_and_update_tags(
+                self.validate_output_and_update_sources(
                     final_output_name, output_name, final_output_value)
         except Exception as e:
             _get_logger().fatal(

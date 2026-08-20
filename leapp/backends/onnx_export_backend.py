@@ -9,10 +9,12 @@ from leapp.backends.export_backend import ExportBackend, prepare_tensors_for_exp
 from leapp.utils.logging import _get_logger
 import os
 import onnx
+from onnx import AttributeProto, TensorProto, helper
 from onnx import numpy_helper
 import tempfile
 
 from torch.onnx import _constants
+from leapp.leapp_graph.custom_operator_registry import warp_operator
 
 class ONNXExportBackend(ExportBackend):
     def get_backend_metadata(self):
@@ -57,9 +59,10 @@ class ONNXExportBackend(ExportBackend):
             new_input_name = f"{name}_in"
             new_output_name = f"{name}_out"
             if new_input_name in used_names or new_output_name in used_names:
-                raise ValueError(
+                _get_logger().fatal(
                     f"[{self.node_context.name}] Cannot resolve overlapping ONNX I/O name '{name}' "
-                    f"because '{new_input_name}' or '{new_output_name}' is already in use."
+                    f"because '{new_input_name}' or '{new_output_name}' is already in use.",
+                    error_type=ValueError,
                 )
             self.node_context.change_input_name(name, new_input_name)
             self.node_context.change_output_name(name, new_output_name)
@@ -89,13 +92,14 @@ class ONNXExportBackend(ExportBackend):
         renamed_inputs = [name for name in actual_input_names if name not in expected_input_names]
         
         if renamed_inputs:
-            raise ValueError(
+            _get_logger().fatal(
                 f"[{self.node_context.name}] ONNX export renamed inputs: {renamed_inputs}. "
                 "This typically happens with identity/passthrough functions with onnx-dynamo. "
                 "This usecase is not supported by LEAPP, please: \n"
                 "1. use the onnx-torchscript export backend instead\n"
                 "2. use a different backend, such as torch-script or torch-trace \n"
-                "3. remove the inputs that are not used in the computation or directly returned as output"
+                "3. remove the inputs that are not used in the computation or directly returned as output",
+                error_type=ValueError,
             )
         
         if removed_inputs:
@@ -155,6 +159,80 @@ class ONNXExportBackend(ExportBackend):
                 f"Fixed {num_fixed} scalar Slice initializer(s) "
                 f"(ONNX exporter bug: shared scalar initializers between Gather and Slice nodes)")
 
+    @staticmethod
+    def _set_onnx_string_attr(node: onnx.NodeProto, name: str, value: str) -> None:
+        for attr in node.attribute:
+            if attr.name == name:
+                attr.s = value.encode("utf-8")
+                attr.type = AttributeProto.STRING
+                return
+        node.attribute.append(helper.make_attribute(name, value))
+
+    def _embed_warp_bundles(self, model: onnx.ModelProto) -> int:
+        """Finalize ``WrpRunner`` ONNX nodes with live I/O metadata from segments.
+
+        WRPB bytes are embedded at trace time as ``get_attr`` bundle inputs.
+        This pass patches each node's post-prune ``runtime_metadata``.
+        """
+        from leapp.leapp_graph.custom_operator_registry.warp_operator.bundle import (
+            iter_warp_segments_from_graph,
+        )
+
+        segments = iter_warp_segments_from_graph(self.node_context.graph)
+        if not segments:
+            return 0
+
+        wrp_nodes = [
+            node
+            for node in model.graph.node
+            if node.op_type == warp_operator.ONNX_WRP_OP_TYPE
+            and node.domain == warp_operator.ONNX_WRP_DOMAIN
+        ]
+
+        if len(wrp_nodes) != len(segments):
+            _get_logger().fatal(
+                f"[{self.node_context.name}] WrpRunner node count "
+                f"({len(wrp_nodes)}) does not match saved Warp segments "
+                f"({len(segments)}); cannot correlate bundles.",
+                error_type=ValueError,
+            )
+
+        embedded = 0
+        for node, segment in zip(wrp_nodes, segments):
+            op_node = (
+                segment.marker_proxy.node if segment.marker_proxy is not None else None
+            )
+            if op_node is None:
+                _get_logger().fatal(
+                    f"[{self.node_context.name}] Saved Warp segment has no marker node; "
+                    "cannot patch runtime metadata.",
+                    error_type=ValueError,
+                )
+            runtime_metadata = op_node.args[1]
+
+            self._set_onnx_string_attr(node, "runtime_metadata", runtime_metadata)
+
+            embedded += 1
+            _get_logger().debug(
+                f"[{self.node_context.name}] Finalized Warp runner metadata "
+                f"on node '{node.name}'."
+            )
+
+        if embedded:
+            has_custom_opset = any(
+                opset.domain == warp_operator.ONNX_WRP_DOMAIN
+                for opset in model.opset_import
+            )
+            if not has_custom_opset:
+                model.opset_import.append(
+                    helper.make_opsetid(
+                        warp_operator.ONNX_WRP_DOMAIN,
+                        warp_operator.ONNX_WRP_OPSET,
+                    )
+                )
+
+        return embedded
+
     def save(self, save_path: str) -> Tuple[str, str, str]:
         onnx_path = os.path.join(save_path, f"{self.node_context.name}.onnx")
 
@@ -191,7 +269,7 @@ class ONNXTorchScriptExportBackend(ONNXExportBackend):
             m = self.module_builder()
         m = m.eval()
         self._handle_duplicate_io_names()
-        
+
         # Optionally pre-script the module before ONNX export
         # This is useful when using traced models as environment constants
         if self.backend_params.get('prescript', False):
@@ -275,6 +353,7 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
         # Fix scalar Slice initializers on the in-memory proto before saving
         # (ONNX exporter bug: shared scalar initializers between Gather and Slice nodes).
         self._fix_scalar_slice_inputs(model_proto)
+        self._embed_warp_bundles(model_proto)
 
         # Wrap in SimplifiedONNXProgram so validation uses controlled
         # ORT session options (ORT_ENABLE_BASIC avoids graph-opt corruption).

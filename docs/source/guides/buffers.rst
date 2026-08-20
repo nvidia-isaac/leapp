@@ -59,16 +59,39 @@ The exported model returns both outputs: ``computed`` (input-dependent) and
    * Static outputs are merged with the regular outputs in the compiled
      model --- downstream nodes can consume them like any other output.
 
-Preserving LEAPP tags across nonstandard copies
-===============================================
+Preserving traced state across nonstandard copies
+=================================================
 
-Between nodes, LEAPP uses internal tags on finished outputs to wire
-``pipeline.data_flow``. If you copy those values into another tensor with a
-nonstandard pattern such as ``buffer[:] = upstream_output``, the values move
-but the tags often do not, so the next node may look disconnected.
+Between nodes, LEAPP wires ``pipeline.data_flow`` from the producing node and
+output port that a finished output value carries.
 
-:func:`~leapp.annotate.mirror_leapp_tags` copies tags from the source output to
-the destination tensor after verifying that their values match.
+Copies that keep the values, shape and dtype of a finished output carry that
+state automatically, so the next node connects without any extra call:
+
+* Torch: ``clone()``, ``detach()``, ``contiguous()``, ``cpu()``, ``cuda()``, a
+  device-only ``to()``, and a full overwrite of a preallocated buffer with
+  ``buffer[:] = out``, ``buffer[...] = out``, or ``buffer.copy_(out)``.
+* NumPy: ``np.copy()``, ``.copy()``, and ``np.asanyarray()``.
+* Warp: a full-range ``wp.copy()``.
+* Conversions between backends that keep shape and dtype, such as
+  ``torch.as_tensor()`` and ``.numpy()``.
+
+Anything that changes the values --- arithmetic, slicing, a reshape, a dtype
+cast, or a partial write --- deliberately yields a value with no output port.
+The next node reports it as a dangling input rather than inventing an edge to
+data it never received.
+
+Two cases still need an explicit call, because the destination cannot be
+upgraded in place or the values were produced some other way:
+
+* a preallocated raw ``np.ndarray`` destination, and
+* any copy performed outside the operations listed above.
+
+In both cases the data moves but the state does not, so the next node looks
+disconnected.
+
+:func:`~leapp.annotate.mirror_leapp_tags` copies the traced state from the
+source output to the destination value after verifying that their values match.
 
 Use it only for copies **between** finished nodes. Inside a traced node,
 full-slice assignment and ``copy_()`` from a traced tensor are handled
@@ -88,7 +111,7 @@ automatically.
    def downstream(x: torch.Tensor):
        return x * 2.0
 
-   leapp.start(name="tag_copy_example")
+   leapp.start(name="state_copy_example")
    out = upstream(torch.tensor([1.0, 2.0, 3.0]))
 
    buffer = torch.zeros_like(out)
@@ -99,12 +122,16 @@ automatically.
    leapp.stop()
    leapp.compile_graph()
 
+Torch and Warp destinations are upgraded in place, so the return value can be
+ignored. A raw ``np.ndarray`` cannot be upgraded in place, so NumPy callers must
+assign the return value instead:
+
+.. code-block:: python
+
+   buffer = annotate.mirror_leapp_tags(out, buffer)
+
 .. warning::
 
    ``mirror_leapp_tags`` requires source and target values to match exactly. It
    is for preserving graph wiring after equivalent copies, not for marking a
    newly computed tensor as if it came directly from another tensor.
-
-You do not need ``mirror_leapp_tags`` for standard PyTorch operations such as
-``clone()``, ``detach()``, ``contiguous()``, ``cpu()``, or ``cuda()``; LEAPP tags
-are preserved through those operations automatically.

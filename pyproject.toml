@@ -55,6 +55,7 @@ dependencies = [
     "onnxruntime>=1.20.0",
     "onnxscript>=0.1.0",
     "safetensors>=0.5.0",
+    "cupti-python>=12.8,<14; sys_platform == 'linux'",
     # Visualization layout/render deps (Python 3.11+ only; skipped on 3.10).
     "fast-sugiyama>=0.5.3; python_version >= '3.11'",
     "Pillow>=10.0.0; python_version >= '3.11'",
@@ -66,6 +67,9 @@ dev = [
     "black",
     "flake8",
     "mypy",
+]
+test = [
+    "warp-lang>=1.15",
 ]
 
 [project.urls]
@@ -100,4 +104,5 @@ filterwarnings = [
     "ignore:`torch.jit.load` is deprecated:DeprecationWarning",
     "ignore:`isinstance\\(treespec, LeafSpec\\)` is deprecated:FutureWarning",
     "ignore:`torch.jit.save` is deprecated:DeprecationWarning",
+    "ignore:`torch.jit.freeze` is deprecated:DeprecationWarning",
 ]

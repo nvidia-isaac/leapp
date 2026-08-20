@@ -19,7 +19,44 @@ import torch
 from torch.fx.proxy import Proxy
 
 from leapp.utils.logging import _get_logger
-from .traced_data import TracedData
+from leapp.utils.dtype import DtypeCodec, dtype_to_name, register_dtype_codec
+from ..proxy_view import bind_new_view, may_adopt_view, share_view
+from ..traced_data import TracedData
+
+
+# numpy dtype object -> common name string. Lives with the numpy node library
+# so the backend's dtype knowledge is unified with its implementation; the
+# registry lets leapp core resolve dtypes without importing numpy directly.
+_NUMPY_DTYPE_TO_NAME = dict(
+    (dtype, name)
+    for scalar, name in {
+        np.float64: "float64",
+        np.float32: "float32",
+        np.float16: "float16",
+        np.int16: "int16",
+        np.int32: "int32",
+        np.int64: "int64",
+        np.uint8: "uint8",
+        np.int8: "int8",
+        np.bool_: "bool",
+    }.items()
+    for dtype in (scalar, np.dtype(scalar))
+)
+
+register_dtype_codec(DtypeCodec(
+    backend="numpy",
+    matches=lambda v: isinstance(v, np.ndarray),
+    value_dtype=lambda v: v.dtype,
+    dtype_to_name=_NUMPY_DTYPE_TO_NAME,
+))
+
+
+def _torch_dtype_for(dtype):
+    """Map a numpy dtype to its torch counterpart, or None if unsupported."""
+    try:
+        return getattr(torch, dtype_to_name(np.dtype(dtype)))
+    except (ValueError, TypeError):
+        return None
 
 
 # =============================================================================
@@ -242,6 +279,12 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
     TracedNpArrays must be created via TraceContext.create_input().
     """
 
+    # ``np.copy`` is the allocating form that reaches ``__array_function__``.
+    # ``.copy()`` calls ``preserve_port`` on the method itself; ``np.asanyarray``
+    # returns this carrier without dispatch.
+    _EQUIVALENT_COPY_NAMES = frozenset({"copy"})
+    _NATIVE_TYPE = np.ndarray
+
     def __new__(cls, array: np.ndarray, name: str, context, proxy: Proxy):
         """Create a new TracedNpArray instance.
 
@@ -256,7 +299,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         """
         # Create a view of the input array as our subclass
         obj = np.asarray(array).view(cls)
-        obj._init_tracing_state(name, context, proxy)
+        bind_new_view(obj, name, context, proxy)
         return obj
 
     def __array_finalize__(self, obj):
@@ -269,11 +312,22 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         if obj is None:
             # Called from __new__, attributes already set
             return
-        # Copy tracing state from the source array
-        self._init_tracing_state(
+        # A view covering exactly the source's bytes is a second handle on one
+        # value, so it shares that cell and a mutation through either is visible
+        # through both. A slice covers fewer bytes and a freshly allocated ufunc
+        # result covers different bytes, so both fail the comparison and keep a
+        # root of their own. The view guard covers a source still
+        # mid-construction, which has no cell to share yet.
+        if getattr(obj, "_proxy_view", None) is not None and may_adopt_view(obj, self):
+            share_view(self, obj)
+            return
+        # Copy tracing state from the source array. ``getattr`` covers a plain
+        # ndarray source and a source still mid-construction.
+        bind_new_view(
+            self,
             getattr(obj, '_name', 'derived'),
             getattr(obj, '_context', None),
-            getattr(obj, '_proxy', None),
+            getattr(obj, 'proxy', None),
         )
 
     # =========================================================================
@@ -315,21 +369,22 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         return TracedNpArray(array, intermediate_name, self._context, proxy)
 
     @staticmethod
-    def unwrap_traced_array(obj):
-        """Recursively unwrap traced data to native values."""
-        return TracedData.unwrap_traced_data(obj)
-
-    @staticmethod
     def find_traced_array(obj):
-        """Find first TracedNpArray in args."""
-        if isinstance(obj, TracedNpArray):
-            return obj
-        elif isinstance(obj, (list, tuple)):
-            for item in obj:
-                result = TracedNpArray.find_traced_array(item)
-                if result is not None:
-                    return result
-        return None
+        """Find the first TracedNpArray in a supported nested structure.
+
+        NumPy dispatch must anchor on a NumPy carrier specifically, so this
+        cannot use the backend-agnostic ``find_traced_data``.
+        """
+        found = None
+
+        def visit(item):
+            nonlocal found
+            if found is None and isinstance(item, TracedNpArray):
+                found = item
+            return item
+
+        TracedData._map_structure(obj, visit)
+        return found
 
     @staticmethod
     def find_all_contexts(obj, contexts=None):
@@ -431,55 +486,51 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
     # =========================================================================
 
     def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
-        """Intercept numpy ufuncs (element-wise operations).
+        """Execute NumPy ufuncs and record them only while the source is active."""
+        traced_array = TracedNpArray.find_traced_array([inputs, kwargs])
+        unwrapped_inputs = tuple(
+            TracedData.unwrap_traced_data(inp) for inp in inputs
+        )
+        unwrapped_kwargs = {
+            key: TracedData.unwrap_traced_data(value)
+            for key, value in kwargs.items()
+        }
 
-        This is called when numpy ufuncs (np.sin, np.add, etc.) are applied
-        to this TracedNpArray. We execute the numpy operation and record
-        the torch equivalent in the graph.
-        """
-        if method != '__call__':
-            # Only handle direct calls, not reduce/accumulate/etc.
-            return NotImplemented
+        if method != "__call__":
+            # Reduction/accumulation protocols are not export mappings yet, but
+            # they must remain usable after the producing node has finished.
+            if traced_array is None or traced_array.validate_status(inputs, kwargs):
+                return NotImplemented
+            return getattr(ufunc, method)(*unwrapped_inputs, **unwrapped_kwargs)
 
-        # Get the torch equivalent
+        result_array = ufunc(*unwrapped_inputs, **unwrapped_kwargs)
+        if traced_array is None:
+            return result_array
+
+        # An inactive traced array is a finished boundary value. Derived results
+        # are new data that this node never published, so they stay native.
+        if not traced_array.validate_status(inputs, kwargs):
+            return result_array
+
         torch_func = NUMPY_UFUNC_TO_TORCH.get(ufunc)
         if torch_func is None:
             _get_logger().warning(
                 f"No torch equivalent for numpy ufunc {ufunc.__name__}. "
                 f"Operation will not be traced."
             )
-            # Fall back to numpy-only execution
-            unwrapped = tuple(TracedNpArray.unwrap_traced_array(inp) for inp in inputs)
-            return ufunc(*unwrapped, **kwargs)
-
-        # Execute the numpy operation
-        unwrapped_inputs = tuple(TracedNpArray.unwrap_traced_array(inp) for inp in inputs)
-        unwrapped_kwargs = {k: TracedNpArray.unwrap_traced_array(v) for k, v in kwargs.items()}
-        result_array = ufunc(*unwrapped_inputs, **unwrapped_kwargs)
-
-        # Find a TracedNpArray for context
-        traced_array = TracedNpArray.find_traced_array(inputs)
-        if traced_array is None:
             return result_array
 
-        # Skip graph recording if not tracing
-        if not traced_array.validate_status(inputs, kwargs):
-            return result_array
-
-        # Record the torch operation in the graph
         proxy_inputs = tuple(self._extract_proxy(inp) for inp in inputs)
         proxy_kwargs = self._convert_numpy_kwargs_to_torch(
-            {k: self._extract_proxy(v) for k, v in kwargs.items()},
+            {key: self._extract_proxy(value) for key, value in kwargs.items()},
             torch_func,
             original_kwargs=kwargs,
-            args=inputs
+            args=inputs,
         )
-
         proxy_out = traced_array._context.tracer.create_proxy(
             "call_function", torch_func, proxy_inputs, proxy_kwargs
         )
 
-        # Wrap result
         if isinstance(result_array, np.ndarray):
             return traced_array._new(result_array, proxy_out)
         return result_array
@@ -521,69 +572,63 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         )
 
     def __array_function__(self, func, types, args, kwargs):
-        """Intercept numpy array functions.
+        """Execute NumPy functions and record them only while the source is active."""
+        traced_array = TracedNpArray.find_traced_array([args, kwargs])
+        unwrapped_args = tuple(
+            TracedData.unwrap_traced_data(arg) for arg in args
+        )
+        unwrapped_kwargs = {
+            key: TracedData.unwrap_traced_data(value)
+            for key, value in kwargs.items()
+        }
+        result_array = func(*unwrapped_args, **unwrapped_kwargs)
 
-        This is called when numpy functions (np.sum, np.concatenate, etc.)
-        are applied to this TracedNpArray. We execute the numpy operation
-        and record the torch equivalent in the graph.
-        """
-        # Get the torch equivalent
+        if traced_array is None:
+            return result_array
+
+        # Inactive carriers use full NumPy behavior, including functions that
+        # have no Torch export mapping.
+        if not traced_array.validate_status(args, kwargs):
+            if self._is_equivalent_copy(func, traced_array, result_array, args):
+                return traced_array.preserve_port(result_array)
+            return result_array
+
         torch_func = NUMPY_FUNC_TO_TORCH.get(func)
         if torch_func is None:
             _get_logger().warning(
                 f"No torch equivalent for numpy function {func.__name__}. "
                 f"Operation will not be traced."
             )
-            # Fall back to numpy-only execution
-            unwrapped_args = tuple(TracedNpArray.unwrap_traced_array(arg) for arg in args)
-            unwrapped_kwargs = {k: TracedNpArray.unwrap_traced_array(v) for k, v in kwargs.items()}
-            return func(*unwrapped_args, **unwrapped_kwargs)
-
-        # Execute the numpy operation
-        unwrapped_args = tuple(TracedNpArray.unwrap_traced_array(arg) for arg in args)
-        unwrapped_kwargs = {k: TracedNpArray.unwrap_traced_array(v) for k, v in kwargs.items()}
-        result_array = func(*unwrapped_args, **unwrapped_kwargs)
-
-        # Find a TracedNpArray for context
-        traced_array = TracedNpArray.find_traced_array(args)
-        if traced_array is None:
             return result_array
 
-        # Skip graph recording if not tracing
-        if not traced_array.validate_status(args, kwargs):
-            return result_array
-
-        # Record the torch operation in the graph
         proxy_args = tuple(self._extract_proxy(arg) for arg in args)
         proxy_kwargs = self._convert_numpy_kwargs_to_torch(
-            {k: self._extract_proxy(v) for k, v in kwargs.items()},
+            {key: self._extract_proxy(value) for key, value in kwargs.items()},
             torch_func,
             original_kwargs=kwargs,
-            args=args
+            args=args,
         )
 
-        # Apply sort/argsort patch if applicable, otherwise record normally
         proxy_out = self._patch_sort(torch_func, traced_array, proxy_args, args, kwargs)
         if proxy_out is None:
             proxy_out = traced_array._context.tracer.create_proxy(
                 "call_function", torch_func, proxy_args, proxy_kwargs
             )
 
-        # Handle multiple outputs (e.g., np.split returns a list)
         if isinstance(result_array, (tuple, list)):
             result = []
-            for i, arr in enumerate(result_array):
-                if isinstance(arr, np.ndarray):
+            for index, array in enumerate(result_array):
+                if isinstance(array, np.ndarray):
                     item_proxy = traced_array._context.tracer.create_proxy(
-                        "call_function", operator.getitem, (proxy_out, i), {}
+                        "call_function", operator.getitem, (proxy_out, index), {}
                     )
-                    result.append(traced_array._new(arr, item_proxy))
+                    result.append(traced_array._new(array, item_proxy))
                 else:
-                    result.append(arr)
+                    result.append(array)
             return type(result_array)(result)
-        elif isinstance(result_array, np.ndarray):
+        if isinstance(result_array, np.ndarray):
             return traced_array._new(result_array, proxy_out)
-        elif isinstance(result_array, np.generic):
+        if isinstance(result_array, np.generic):
             return traced_array._new(np.asarray(result_array), proxy_out)
         return result_array
 
@@ -653,7 +698,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         if isinstance(result, TracedNpArray):
             # Copy data in-place since self IS the array
             np.copyto(self.view(np.ndarray), result.view(np.ndarray))
-            self._proxy = result._proxy
+            self._proxy_view.proxy = result.proxy
             return self
         return result
 
@@ -661,7 +706,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         result = np.subtract(self, other)
         if isinstance(result, TracedNpArray):
             np.copyto(self.view(np.ndarray), result.view(np.ndarray))
-            self._proxy = result._proxy
+            self._proxy_view.proxy = result.proxy
             return self
         return result
 
@@ -669,7 +714,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         result = np.multiply(self, other)
         if isinstance(result, TracedNpArray):
             np.copyto(self.view(np.ndarray), result.view(np.ndarray))
-            self._proxy = result._proxy
+            self._proxy_view.proxy = result.proxy
             return self
         return result
 
@@ -677,7 +722,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         result = np.divide(self, other)
         if isinstance(result, TracedNpArray):
             np.copyto(self.view(np.ndarray), result.view(np.ndarray))
-            self._proxy = result._proxy
+            self._proxy_view.proxy = result.proxy
             return self
         return result
 
@@ -685,7 +730,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         result = np.floor_divide(self, other)
         if isinstance(result, TracedNpArray):
             np.copyto(self.view(np.ndarray), result.view(np.ndarray))
-            self._proxy = result._proxy
+            self._proxy_view.proxy = result.proxy
             return self
         return result
 
@@ -693,7 +738,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         result = np.power(self, other)
         if isinstance(result, TracedNpArray):
             np.copyto(self.view(np.ndarray), result.view(np.ndarray))
-            self._proxy = result._proxy
+            self._proxy_view.proxy = result.proxy
             return self
         return result
 
@@ -811,16 +856,17 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         ``TracedNpArray``; the destination must already be traced.
         """
         real_key = TracedData.unwrap_traced_data(key)
-        real_value = TracedNpArray.unwrap_traced_array(value)
+        real_value = TracedData.unwrap_traced_data(value)
         self.view(np.ndarray)[real_key] = real_value
 
         if not self.validate_status(args=(key, value)):
+            self.overwrite_port(key, value)
             return
 
         if not self._record_assignment(key, value, real_value):
             value_proxy = value.proxy if isinstance(value, TracedData) else value
-            self._proxy = self._context.tracer.create_proxy(
-                "call_method", "__setitem__", (self._proxy, key, value_proxy), {}
+            self._proxy_view.proxy = self._context.tracer.create_proxy(
+                "call_method", "__setitem__", (self.proxy, key, value_proxy), {}
             )
 
     # =========================================================================
@@ -894,19 +940,27 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         return np.round(self, decimals)
 
     def astype(self, dtype):
-        """Type conversion - executes but may not trace correctly."""
+        """Type conversion, recorded as a dtype cast in the graph."""
         result = self.view(np.ndarray).astype(dtype)
         if not self.validate_status():
             return result
-        # Note: torch equivalent would be .to(dtype), but dtype mapping is complex
-        _get_logger().warning(f"astype({dtype}) may not trace correctly to torch equivalent")
-        return self._new(result, self.proxy)
+        torch_dtype = _torch_dtype_for(dtype)
+        if torch_dtype is None:
+            _get_logger().warning(
+                f"astype({dtype}) has no torch equivalent and cannot be recorded; "
+                f"the exported graph will keep {self.dtype}"
+            )
+            return self._new(result, self.proxy)
+        proxy_out = self._context.tracer.create_proxy(
+            "call_method", "to", (self.proxy, torch_dtype), {}
+        )
+        return self._new(result, proxy_out)
 
     def copy(self):
         """Return a copy of the array."""
         result = self.view(np.ndarray).copy()
         if not self.validate_status():
-            return result
+            return self.preserve_port(result)
         proxy_out = self._context.tracer.create_proxy(
             "call_function", torch.clone, (self.proxy,), {}
         )
@@ -919,8 +973,8 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
     def __array__(self, dtype=None, copy=None):
         """Convert to numpy array (NumPy array protocol).
         
-        When tracing is active, returns self (or a dtype-converted TracedNpArray)
-        to preserve tracing. When not tracing, returns a plain numpy array.
+        Returns self (or a converted TracedNpArray) for both active and inactive
+        traced values so representation conversion cannot silently demote it.
         
         Args:
             dtype: Optional dtype for the resulting array
@@ -934,25 +988,21 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         
         # copy=False but copy is required → raise error (NumPy 2.0 semantics)
         if copy is False and needs_dtype_copy:
-            raise ValueError(
+            _get_logger().fatal(
                 f"Unable to avoid copy while creating an array with dtype {dtype} "
-                f"from array with dtype {self.dtype}."
+                f"from array with dtype {self.dtype}.",
+                error_type=ValueError,
             )
         
-        # If not tracing, return plain numpy array
-        if not self.validate_status():
-            arr = self.view(np.ndarray)
-            if needs_dtype_copy:
-                arr = arr.astype(dtype)
-            if copy is True:
-                arr = arr.copy()
-            return arr
-        
-        # Tracing - preserve TracedNpArray
+        # Preserve the carrier even after its source context stops tracing.
+        # astype() and copy() already retain the complete tracing state.
+
         result = self
         if needs_dtype_copy:
             result = result.astype(dtype)
-        if copy is True:
+        # astype() already allocated, so an extra copy would only add a
+        # redundant clone to the graph.
+        if copy is True and not needs_dtype_copy:
             result = result.copy()
         return result
 

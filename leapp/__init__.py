@@ -19,13 +19,16 @@
 LEAPP - Lightweight Export Annotations for Policy Pipelines
 
 A Python package for tracing and exporting computational graphs from PyTorch code.
-LEAPP is specifically designed for robotics and autonomous agent applications, allowing 
-you to trace and export complex policy pipelines with interconnected components to 
+LEAPP is specifically designed for robotics and autonomous agent applications, allowing
+you to trace and export complex policy pipelines with interconnected components to
 various formats including PyTorch JIT, ONNX, and generate visualization and YAML specifications.
 """
 
 from .export_manager import ExportManager
 from .inference_manager import InferenceManager
+# Importing this module registers the ``leapp::warp_runner`` custom op as a
+# side effect, so it is available to tracing/export without explicit setup.
+from .leapp_graph.custom_operator_registry import warp_operator  # noqa: F401
 from .leapp import annotate, start, stop, compile_graph
 from .utils.enums import InputKindEnum, OutputKindEnum
 from .utils.tensor_description import GraphConfigs, TensorSemantics, TemporalAxis
