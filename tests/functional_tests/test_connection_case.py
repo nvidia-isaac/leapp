@@ -283,6 +283,31 @@ class TestConnectionCase(ConnectivityTestBase):
         # Should maintain proper connections through all nodes
         self.verify_connectivity(nodes=4, internal_connections=3)
 
+    def test_one_external_tensor_declared_on_two_nodes(self):
+        """A tensor fed to two nodes is a shared input, not a missing edge.
+
+        Declaring promotes the caller's tensor in place, so the second node
+        receives a carrier the first node already owns. That looks identical to
+        a value computed inside the first node and never registered as an
+        output, which is a real error, so the two are told apart by whether the
+        carrier's root is a placeholder. Neither node consumes the other, so
+        this stays two independent inputs.
+        """
+        shared = torch.tensor([1.0, 2.0, 3.0])
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        first = annotate.input_tensors("node_a", {"obs": shared})
+        annotate.output_tensors(
+            "node_a", {"out_a": first * 2.0}, export_with="jit")
+        with self.assertNoLogs("leapp", level="ERROR"):
+            second = annotate.input_tensors("node_b", {"obs": shared})
+        annotate.output_tensors(
+            "node_b", {"out_b": second * 3.0}, export_with="jit")
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        self.verify_connectivity(nodes=2, inputs=2, outputs=2)
+
     def test_mirror_leapp_tags_noop_outside_tracing(self):
         """Test that mirror_leapp_tags safely no-ops outside of tracing"""
         source = torch.tensor([1.0, 2.0, 3.0])
