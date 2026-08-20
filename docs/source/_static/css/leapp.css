@@ -22,6 +22,10 @@ a.reference.external::after {
 }
 
 
+.leapp-card-sm {
+    font-size: var(--pst-font-size-milli);
+}
+
 .leapp-diagram {
     border: 1px solid rgba(118, 118, 118, 0.35);
     border-radius: 8px;

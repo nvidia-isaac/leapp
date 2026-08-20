@@ -245,7 +245,7 @@ Output YAML structure
    system information:
      python version: "3.12.9"
      torch version: "2.7.0+cu126"
-     leapp version: "0.6.0"
+     leapp version: "0.6.1"
      leapp config version: "1.3"
      cuda version: "12.6"
      os: Linux

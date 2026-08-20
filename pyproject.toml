@@ -21,7 +21,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "leapp"
-version = "0.6.0"
+version = "0.6.1"
 description = "LEAPP - Lightweight Export Annotations for Policy Pipelines: A Python package for tracing and exporting computational graphs from PyTorch code"
 readme = "README.md"
 license = "Apache-2.0"
@@ -69,7 +69,7 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/nvidia-isaac/leapp"
+Homepage = "https://nvidia-isaac.github.io/leapp/"
 Repository = "https://github.com/nvidia-isaac/leapp"
 Issues = "https://github.com/nvidia-isaac/leapp/issues"
 
