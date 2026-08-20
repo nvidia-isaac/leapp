@@ -132,6 +132,8 @@ Documentation Map
 
 * Install LEAPP and walk through your first annotated policy pipeline in
   :doc:`getting_started`.
+* See how LEAPP connects to Isaac Lab and Isaac ROS Deploy in
+  :doc:`ecosystem`.
 * Add graph-structure annotations with :doc:`guides/nodes`,
   :doc:`guides/export`, :doc:`guides/graph`, :doc:`guides/buffers`, and
   :doc:`guides/debugging`.
@@ -147,6 +149,7 @@ Documentation Map
    :maxdepth: 2
 
    getting_started
+   ecosystem
 
 .. toctree::
    :caption: Graph Structure Annotations
