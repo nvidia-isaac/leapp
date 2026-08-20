@@ -481,6 +481,12 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         if handled:
             return result
 
+        # A carrier is an alias, which Torch refuses to detach in place, and the
+        # autograd state detach_ edits is never read while tracing.
+        if (getattr(func, "__name__", "") == "detach_"
+                and args and isinstance(args[0], TracedTensor)):
+            return args[0]
+
         # Extract real tensors for actual computation
         real_args = tuple(TracedTensor.unwrap_traced_tensor(arg) for arg in args)
         real_kwargs = {k: TracedTensor.unwrap_traced_tensor(v) for k, v in kwargs.items()}

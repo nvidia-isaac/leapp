@@ -846,6 +846,22 @@ class TestTracedTensor(unittest.TestCase):
         # Detached tensor should not require grad
         self.assertFalse(y.requires_grad)
 
+    def test_detach_in_place_returns_the_receiver(self):
+        """``detach_`` keeps its receiver so chained in-place idioms survive.
+
+        A carrier presents an aliased tensor, which Torch refuses to detach in
+        place, and the autograd state the call would edit is something tracing
+        never reads. Code written as ``buf.zero_().detach_()`` has to keep
+        working and keep returning the buffer it started from.
+        """
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+
+        result = x.zero_().detach_()
+
+        self.assertIs(result, x)
+        self.assertTrue(torch.equal(result.tensor, torch.zeros(3)))
+
     def test_detach_compiled(self):
         """Test detach operation compiles correctly."""
         ctx = TracedTensorNode(name="test", node_index=0)
