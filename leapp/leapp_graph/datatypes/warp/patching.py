@@ -867,8 +867,19 @@ class WarpPatchBackend:
 
     @staticmethod
     def _definition_module_name(obj: Any) -> str:
-        """Return ``obj.__module__`` when it is a real string (not a descriptor)."""
-        module = getattr(obj, "__module__", None)
+        """Return ``obj.__module__`` when it is a real string (not a descriptor).
+
+        The alias scan reads this from arbitrary third-party objects, and a lazy
+        import placeholder standing in for a missing optional dependency answers
+        every attribute with the ImportError it represents. ``getattr``'s default
+        only absorbs ``AttributeError``, so that would escape and take
+        ``leapp.start`` with it. An object unwilling to say where it came from is
+        not a Warp callable, which makes the refusal a miss.
+        """
+        try:
+            module = getattr(obj, "__module__", None)
+        except Exception:
+            return ""
         return module if isinstance(module, str) else ""
 
     @staticmethod

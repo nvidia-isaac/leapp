@@ -4,6 +4,8 @@
 #
 
 import contextlib
+import sys
+import types
 import unittest
 
 import leapp
@@ -878,6 +880,43 @@ class TestWarpAutomaticSegmentDetection(WarpTestCase, LEAPPFunctionalTestBase):
 
         leapp.compile_graph(visualize=False)
         self._assert_compiled_segments(node, 3)
+
+
+class TestGlobalPatchingAliasScan(WarpTestCase, LEAPPFunctionalTestBase):
+    """Global patching reads attributes off every loaded module's namespace.
+
+    Repointing an alias such as ``from warp import launch`` means asking each
+    already-imported name whether Warp defined it, so the scan touches objects
+    belonging to unrelated third-party libraries.
+    """
+
+    def test_scan_tolerates_a_lazy_import_placeholder(self):
+        """A stub for a missing optional dependency must not abort ``leapp.start``.
+
+        Libraries such as trimesh, which urdfpy imports, park an object in their
+        namespace that answers every attribute with the ImportError it stands
+        for. Asking it for a defining module raises ``ModuleNotFoundError``,
+        which ``getattr``'s default does not absorb because the default only
+        covers ``AttributeError``.
+        """
+        class ExceptionWrapper:
+            def __init__(self, exception):
+                object.__setattr__(self, "_exception", exception)
+
+            def __getattribute__(self, name):
+                raise object.__getattribute__(self, "_exception")
+
+            def __call__(self, *args, **kwargs):
+                raise object.__getattribute__(self, "_exception")
+
+        module = types.ModuleType("leapp_test_absent_dependency")
+        module.mesh_loader = ExceptionWrapper(
+            ModuleNotFoundError("No module named 'networkx'"))
+        sys.modules[module.__name__] = module
+        self.addCleanup(sys.modules.pop, module.__name__, None)
+
+        leapp.start(name=self.TEST_GRAPH_NAME, global_patching=True)
+        leapp.stop()
 
 
 if __name__ == "__main__":
