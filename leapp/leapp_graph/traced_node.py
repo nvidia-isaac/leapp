@@ -35,6 +35,7 @@ from leapp.utils.tensor_description import (
 # and exposes ``get_op``/``QUALIFIED_NAME`` used when emitting segment nodes.
 from leapp.leapp_graph.custom_operator_registry import warp_operator
 import collections
+from dataclasses import replace
 
 if TYPE_CHECKING:
     from leapp.leapp_graph.datatypes.warp import WarpSegment
@@ -659,6 +660,14 @@ class TracedTensorNode(LeappNode):
                 f"Input '{name}' for node '{self.name}' shares memory with declared "
                 f"input '{declared.name}'. Both names describe one graph value, so "
                 f"'{declared.name}' will be the only port in the exported node interface.")
+            # Adoption skips add_input, which is where semantics are normally
+            # attached, so a description the surviving port does not already
+            # have would be lost. The name is dropped because adoption already
+            # chose which one the interface exposes.
+            surviving = self.get_io_description_by_name(declared.name, self.inputs)
+            if (semantics is not None and surviving is not None
+                    and surviving.semantics is None):
+                surviving.init_semantics(replace(semantics, name=None))
             if isinstance(data, TracedData):
                 # Rebind the object the caller holds rather than returning a new
                 # carrier. A buffer promoted in place stays the same object on
