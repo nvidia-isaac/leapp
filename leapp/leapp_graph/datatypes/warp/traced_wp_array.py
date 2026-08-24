@@ -42,12 +42,12 @@ register_dtype_codec(DtypeCodec(
 ))
 
 
-class TracedWpArray(wp.array):
-    """A ``wp.array`` subclass that can be class-swapped in place.
+class TracedWpArray(wp.array, TracedData):
+    """A traced ``wp.array`` subclass that can be class-swapped in place.
 
-    Keep this as single inheritance from ``wp.array``. Directly inheriting from
-    ``TracedData`` changes the object layout and breaks ``arr.__class__`` swaps
-    from raw Warp arrays.
+    ``wp.array`` must remain the first base. That preserves its CPython object
+    layout lineage so exact raw Warp arrays can be promoted with
+    ``arr.__class__ = TracedWpArray``.
     """
 
     def __new__(cls, array, name, context, proxy=None, *, view=None):
@@ -159,15 +159,6 @@ class TracedWpArray(wp.array):
     def tensor(self) -> torch.Tensor:
         return wp.to_torch(self)
 
-    # Reused from TracedData; assignment rather than forwarding because these
-    # are properties. ``output_port`` carries its setter along with it.
-    proxy = TracedData.proxy
-    proxy_view = TracedData.proxy_view
-    name = TracedData.name
-    context = TracedData.context
-    context_obj = TracedData.context_obj
-    output_port = TracedData.output_port
-
     @property
     def is_tracing(self) -> bool:
         # ``_context`` may be missing while the object is still being built
@@ -180,25 +171,3 @@ class TracedWpArray(wp.array):
     def _new(self, value: Any, proxy: Proxy = None) -> "TracedWpArray":
         name = TracedData._name_from_proxy(proxy)
         return type(self)(value, name, self._context, proxy)
-
-    def get_dtype_name(self) -> str:
-        return TracedData.get_dtype_name(self)
-
-    def validate_status(self, args=None, kwargs=None) -> bool:
-        return TracedData.validate_status(self, args=args, kwargs=kwargs)
-
-    def preserve_port(self, result):
-        return TracedData.preserve_port(self, result)
-
-    def overwrite_port(self, key, value) -> None:
-        return TracedData.overwrite_port(self, key, value)
-
-
-###############################################################################
-# Registration
-# this allows the TracedWpArray to be viewed as a TracedData instance. This
-# structure is required to be able to do class swapping in place. View binding
-# lives in ``proxy_view`` as free functions so this class need not forward it;
-# remaining TracedData helpers are still called unbound below.
-###############################################################################
-TracedData.register(TracedWpArray)
