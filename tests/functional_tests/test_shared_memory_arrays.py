@@ -22,6 +22,8 @@ import torch
 import warp as wp
 import leapp
 from leapp.leapp import _MANAGER as annotate
+from leapp.utils.enums import InputKindEnum
+from leapp.utils.tensor_description import TensorSemantics
 from .base import LEAPPFunctionalTestBase
 from tests.warp_support import WarpTestCase
 
@@ -228,6 +230,34 @@ class TestTorchSharedMemory(LEAPPFunctionalTestBase):
             source_inputs={"policy/buffer": obs_value},
             source_outputs={"policy/action": (obs_value + 1.0) * 2.0},
         )
+
+    def test_adopted_declaration_supplies_semantics_the_port_lacks(self):
+        """The surviving port keeps its name but gains a description it lacked.
+
+        Adoption bypasses the registration that normally attaches semantics, so
+        a kind written on the second declaration would otherwise be dropped even
+        though exactly one port exists to carry it. The name is not adopted with
+        it, because the first declaration already decided the interface.
+        """
+        buffer = torch.tensor([1.0, 2.0, 3.0])
+        alias = buffer.detach()
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        traced_buffer = annotate.input_tensors("policy", {"buffer": buffer})
+        annotate.input_tensors("policy", [
+            TensorSemantics(
+                name="alias", ref=alias, kind=InputKindEnum.JOINT_POSITION),
+        ])
+        annotate.output_tensors(
+            "policy", {"action": traced_buffer * 2.0}, export_with="jit")
+        node = annotate.get_nodes()["policy"]
+        leapp.stop()
+
+        ports = [description.name_str for description in node.inputs]
+        self.assertEqual(ports, ["buffer"], "adoption changed the exported port")
+        self.assertEqual(
+            node.inputs[0].semantics.kind, InputKindEnum.JOINT_POSITION,
+            "the adopted declaration's semantics were dropped")
 
     def test_output_alias_with_a_surviving_different_root_faults(self):
         """A pre-declaration mutation cannot silently escape through an alias.
