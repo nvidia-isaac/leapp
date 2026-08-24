@@ -1,4 +1,4 @@
-from leapp.leapp_graph.datatypes import as_traced
+from leapp.leapp_graph.datatypes import TracedData, as_traced
 from leapp.leapp_graph.datatypes.warp import WarpSegment
 from leapp.leapp_graph.datatypes.warp import TracedWpArray, wp
 from leapp.leapp_graph.datatypes.warp.patching import WarpPatchBackend
@@ -28,13 +28,30 @@ class TestWarpTwoPassPlanning(unittest.TestCase):
         array = wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device="cpu")
         original_id = id(array)
         original_deleter = array.deleter
+        proxy = object()
 
-        traced = as_traced(array, "array", _FakeNode(), object())
+        context = _FakeNode()
+        traced = as_traced(array, "array", context, proxy)
 
         self.assertIs(traced, array)
         self.assertEqual(id(traced), original_id)
         self.assertIsInstance(traced, TracedWpArray)
+        self.assertIsInstance(traced, TracedData)
+        self.assertTrue(issubclass(TracedWpArray, TracedData))
         self.assertIs(traced.deleter, original_deleter)
+        self.assertIs(traced.proxy, proxy)
+        self.assertEqual(traced.name, "array")
+        self.assertEqual(traced.context, "node")
+        self.assertIs(traced.context_obj, context)
+        self.assertIsNone(traced.output_port)
+
+        traced.output_port = "output"
+        self.assertEqual(traced.output_port, "output")
+
+        raw = traced.data
+        self.assertIs(type(raw), wp.array)
+        self.assertEqual(raw.ptr, traced.ptr)
+        self.assertIs(raw._ref, traced)
 
     def test_warp_op_discovery_close_records_segment_bookmark(self):
         session = WarpTraceSession()
