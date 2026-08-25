@@ -17,6 +17,81 @@ LEAPP traces PyTorch computations into a graph of named nodes, then exports:
 
 Primary goal: export complex pipelines with small annotation inserts and no functional code rewrites (unless absolutely needed for tracing/export edge cases).
 
+## Repository architecture and ownership
+
+When changing LEAPP internals, place behavior with the component that owns its
+meaning rather than the component that happens to observe it:
+
+This is the current ownership model. Warp array construction remains in
+`warp/patching.py` because interception begins before the carrier is initialized.
+
+```text
+TracedData
+├── TracedTensor   owns Torch value semantics and Torch dispatch
+├── TracedNpArray  owns NumPy value semantics and NumPy dispatch
+└── TracedWpArray  owns Warp value semantics and simulated Warp dispatch
+
+backend patcher    owns interception and global guards
+trace session      owns capture/segment lifecycle
+node/graph layer   owns ports, edges, compilation, and export
+```
+
+Use these rules when deciding where code belongs:
+
+- Put backend-neutral tracing state and operations in
+  `leapp/leapp_graph/datatypes/traced_data.py`: proxy/name/context/output-port
+  state, shared structure traversal, context validation, and common port or
+  assignment policy. Lift a helper here only when at least two datatype
+  backends share its complete contract.
+- Put native value behavior on its carrier:
+  `torch/traced_tensor.py`, `numpy/traced_np_array.py`, or
+  `warp/traced_wp_array.py`. Finding an anchor, unwrapping native values,
+  wrapping or promoting results, alias decisions, and datatype-specific port
+  propagation are carrier responsibilities.
+- Keep patch backends focused on interception concerns that exist outside a
+  particular value: installing/restoring wrappers, imported-alias discovery,
+  re-entrancy guards, and global boundary detection. Do not leave value
+  semantics in a patcher merely because the patcher detected the call.
+- Keep lifecycle in its lifecycle owner. Warp segment creation, ownership,
+  discovery/capture matching, and close policy belong to `warp/session.py`,
+  `warp_op.py`, and `warp/warp_segment.py`, not the carrier.
+- Keep node ports, graph connectivity, compilation, and export behavior in
+  `traced_node.py`, `leapp_graph.py`, and the backend/export layers. Datatype
+  carriers may preserve or clear an existing port, but they do not invent
+  graph edges.
+- Keep cross-backend conversion logic with the backend function being invoked.
+  For example, `wp.from_torch` and `wp.to_torch` are Warp boundaries and belong
+  to Warp dispatch, while shared alias checks remain in `proxy_view.py`.
+
+Warp has two explicit exceptions that should remain visible:
+
+1. Warp has no native equivalent of `__torch_function__`, so
+   `WarpPatchBackend` intercepts public Warp calls and delegates their value
+   semantics to the simulated `TracedWpArray.__warp_function__` protocol.
+2. Warp currently rejects array subclasses at launch-time boundaries, so
+   `TracedWpArray` must provide an exact, non-owning raw `wp.array` alias before
+   calling Warp. Do not remove this normalization until upstream Warp accepts
+   subclasses.
+
+Useful paths:
+
+| Area | Location |
+| --- | --- |
+| Shared traced-data state and policy | `leapp/leapp_graph/datatypes/traced_data.py` |
+| Shared alias / `ProxyView` logic | `leapp/leapp_graph/datatypes/proxy_view.py` |
+| Torch carrier and patching | `leapp/leapp_graph/datatypes/torch/` |
+| NumPy carrier and patching | `leapp/leapp_graph/datatypes/numpy/` |
+| Warp carrier, patching, and session | `leapp/leapp_graph/datatypes/warp/` |
+| Warp operation and APIC segment integration | `leapp/leapp_graph/warp_op.py` |
+| Node I/O and FX compilation | `leapp/leapp_graph/traced_node.py` |
+| Pipeline connectivity | `leapp/leapp_graph/leapp_graph.py` |
+| Public annotation entry points | `leapp/export_manager.py` and `leapp/leapp.py` |
+
+Prefer conceptual symmetry across Torch, NumPy, and Warp over forced identical
+code. Preserve real backend differences explicitly, and after moving a
+responsibility, delete the old implementation instead of leaving forwarding
+twins.
+
 ## Core workflow (always in this order)
 
 ```python

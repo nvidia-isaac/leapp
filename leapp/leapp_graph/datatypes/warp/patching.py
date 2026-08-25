@@ -65,7 +65,7 @@ from warp._src.context import Function as WarpKernelLanguageFunction
 from leapp.utils.caller_identity import caller_identity_has_same_anchor, get_caller_stack_identity
 from leapp.utils.logging import _get_logger
 
-from ..proxy_view import ProxyView, may_adopt_view
+from ..proxy_view import may_adopt_view
 from .cupti_oracle import WarpCudaOracle
 from .session import WarpTraceSession
 from .traced_wp_array import TracedWpArray
@@ -73,7 +73,6 @@ from .warp_segment import WarpSegment
 
 _WRAPPER_MARKER = "__leapp_warp_detector_wrapper__"
 _ALLOWED_DUNDER_METHODS = {"__init__"}
-_MAX_PARAM_SCAN_DEPTH = 16
 _MAX_CLASS_SCAN_DEPTH = 1
 
 @dataclass
@@ -82,14 +81,6 @@ class _Patch:
     attr_name: str
     original: Any
     wrapper: Any
-
-
-@dataclass(frozen=True)
-class _WarpTraceState:
-    # this is the simplification of the traced state provided by the proxies
-    name: str
-    context: Any
-    view: ProxyView
 
 
 
@@ -104,6 +95,7 @@ class WarpPatchBackend:
     def __init__(self) -> None:
         self._patches: list[_Patch] = []
         self._wrappers_by_original_id: dict[int, Any] = {}
+        self._qualnames_by_original_id: dict[int, str] = {}
         self._session: Any | None = None
         self._installed = False
         self._boundary_function_ids: set[int] = set()
@@ -185,10 +177,24 @@ class WarpPatchBackend:
                 "leaving it open because it is protected by its owner token."
             )
 
-    def _pause_context(self):
+    def pause_context(self):
         if self._session is None:
             return contextlib.nullcontext()
         return self._session.pause()
+
+    def is_boundary_function(self, func: Callable) -> bool:
+        return id(func) in self._boundary_function_ids
+
+    def is_readback_boundary(self, func: Callable) -> bool:
+        return id(func) in self._readback_boundary_function_ids
+
+    def is_full_copy_function(self, func: Callable) -> bool:
+        return id(func) == self._full_copy_function_id
+
+    def function_qualname(self, func: Callable) -> str:
+        return self._qualnames_by_original_id.get(
+            id(func), f"warp.{func.__qualname__}"
+        )
 
     def uninstall(self) -> None:
         """Restore every attribute patched by this detector."""
@@ -213,6 +219,7 @@ class WarpPatchBackend:
 
         self._patches.clear()
         self._wrappers_by_original_id.clear()
+        self._qualnames_by_original_id.clear()
         self._boundary_function_ids.clear()
         self._sync_boundary_function_ids.clear()
         self._readback_boundary_function_ids.clear()
@@ -409,6 +416,7 @@ class WarpPatchBackend:
         if wrapper is None:
             wrapper = self._make_wrapper(qualname, original)
             self._wrappers_by_original_id[id(original)] = wrapper
+            self._qualnames_by_original_id[id(original)] = qualname
         return wrapper
 
 
@@ -418,37 +426,21 @@ class WarpPatchBackend:
             if self._session is not None and self._session.paused:
                 return original(*args, **kwargs)
 
-            # Warp sync APIs are hard boundaries. Close before running them, and
-            # do not pause: pausing would hide the CUDA sync from CUPTI.
             if id(original) in self._sync_boundary_function_ids:
                 self.close_warp_segment()
                 return original(*args, **kwargs)
 
-            if id(original) in self._boundary_function_ids:
-                handled, result = self._handle_boundary_call(original, args, kwargs)
+            if id(original) == self._boundary_array_init_id:
+                handled, result = self._handle_array_init(original, args, kwargs)
                 if handled:
                     return result
 
-            # Single pass: swap active traced arrays for raw ``.data`` views (so
-            # Warp sees exact wp.array objects) and collect them so we can derive
-            # the shared trace state. The original traced objects are left
-            # untouched, so there is nothing to convert back afterward.
-            traced_inputs, call_args, call_kwargs = self._normalize_and_collect(args, kwargs)
-            trace_state = self._build_trace_state(qualname, traced_inputs)
-            segment = self._resolve_or_begin_warp_segment(trace_state)
-
-            if segment is not None:
-                self._record_segment_inputs(segment, qualname, traced_inputs)
-
-            with self._pause_context():
-                result = original(*call_args, **call_kwargs)
-
-            self._process_post_call_arrays(
-                segment, args, kwargs, result, trace_state
+            return TracedWpArray.__warp_function__(
+                original,
+                (TracedWpArray,),
+                args,
+                kwargs,
             )
-            self._carry_full_copy_port(original, args, kwargs)
-
-            return result
 
         setattr(wrapped, _WRAPPER_MARKER, True)
         return wrapped
@@ -497,190 +489,58 @@ class WarpPatchBackend:
             if sync_fn is not None and callable(sync_fn):
                 self._sync_boundary_function_ids.add(id(sync_fn))
 
-    def _handle_boundary_call(
+    def _handle_array_init(
         self, original: Callable, args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> tuple[bool, Any]:
-        # lazy to avoid circular imports
-        from leapp.leapp_graph.datatypes import as_traced, is_tracable_tensor_type
         from leapp.leapp_graph.datatypes.traced_data import TracedData
 
-        is_init = id(original) == self._boundary_array_init_id
-        # ``__init__`` with no args has no ``self`` to promote; fall through.
-        if is_init and not args:
+        if not args:
             return False, None
 
-        search_args = args[1:] if is_init else args
-        src = self._find_single_traced_data(search_args, kwargs)
-        # earlly exit path if no traced data is involved.
+        src = TracedWpArray._find_single_traced_data(args[1:], kwargs)
         if src is None:
-            if is_init:
-                with self._pause_context():
-                    original(*args, **kwargs)
-                return True, None
-            return False, None
-
-        # Host conversion/readback ends the current Warp segment before the
-        # CUDA copy/sync happens under pause (which CUPTI would otherwise miss).
-        if id(original) in self._readback_boundary_function_ids:
-            self.close_warp_segment()
+            with self.pause_context():
+                original(*args, **kwargs)
+            return True, None
 
         call_args = TracedData.unwrap_traced_data(args)
         call_kwargs = TracedData.unwrap_traced_data(kwargs)
+        with self.pause_context():
+            original(*call_args, **call_kwargs)
 
-        with self._pause_context():
-            raw = original(*call_args, **call_kwargs)
+        if may_adopt_view(src, args[0]):
+            view, proxy = src.proxy_view, None
+        else:
+            view, proxy = None, src.proxy
+        TracedWpArray.make_traced_in_place(
+            args[0], src.name, src.context_obj, proxy, view=view
+        )
+        return True, None
 
-        if is_init:
-            if may_adopt_view(src, args[0]):
-                view, proxy = src.proxy_view, None
-            else:
-                view, proxy = None, src.proxy
-            TracedWpArray.make_traced_in_place(
-                args[0], src.name, src.context_obj, proxy, view=view
-            )
-            return True, None
-        if raw is src.data:
-            return True, src
-        if is_tracable_tensor_type(raw):
-            if may_adopt_view(src, raw):
-                view, proxy = src.proxy_view, None
-            else:
-                view, proxy = None, src.proxy
-            traced_raw = as_traced(
-                raw, src.name, src.context_obj, proxy, view=view
-            )
-            return True, traced_raw
-        return True, raw
-
-    def _find_single_traced_data(
-        self, args: tuple[Any, ...], kwargs: dict[str, Any] | None = None
-    ):
-        # lazy to avoid circular imports
-        from leapp.leapp_graph.datatypes.traced_data import TracedData
-
-        values = []
-
-        def collect(obj):
-            if isinstance(obj, TracedData):
-                values.append(obj)
-            elif isinstance(obj, dict):
-                for value in obj.values():
-                    collect(value)
-            elif isinstance(obj, (list, tuple, set, frozenset)):
-                for value in obj:
-                    collect(value)
-
-        collect([args, kwargs or {}])
-        if not values:
-            return None
-
-        context_ids = {id(value.context_obj) for value in values}
-        if len(context_ids) > 1:
-            _get_logger().fatal(
-                "Warp boundary call received traced data from different LEAPP "
-                "trace contexts. Mixing contexts is not supported.",
-                error_type=ValueError,
-            )
-        return values[0]
-
-    def _normalize_and_collect(
-        self, args: tuple[Any, ...], kwargs: dict[str, Any]
-    ) -> tuple[list[TracedWpArray], tuple[Any, ...], dict[str, Any]]:
-        """Single pass over ``args`` and ``kwargs``: substitute active traced
-        arrays with raw ``.data`` views and collect them for trace-state
-        validation.
-
-        Returns ``(traced_inputs, call_args, call_kwargs)``. Only ``TracedWpArray``
-        instances are substituted, so Warp receives exact ``wp.array`` objects
-        (passing both the concrete ``pack_arg`` check and the generic
-        ``infer_argument_types`` check). The view aliases the same memory
-        (``copy=False``), so kernels compute on the real buffer and APIC capture
-        records the correct allocation. Containers are rebuilt rather than
-        mutated in place, so the caller's own args/lists are never touched and
-        there is nothing to walk back afterward. Raw ``wp.array`` values and
-        all other values pass through unchanged so the post-call traversal
-        can still class-swap them later.
-        """
-        traced: list[TracedWpArray] = []
-        call_args = self._normalize_node(args, traced, depth=0)
-        call_kwargs = self._normalize_node(kwargs, traced, depth=0)
-        return traced, call_args, call_kwargs
-
-    def _normalize_node(
-        self, obj: Any, traced: list[TracedWpArray], *, depth: int
-    ) -> Any:
-        if depth > _MAX_PARAM_SCAN_DEPTH:
-            _get_logger().fatal(
-                "When traversing a nested structure in a Warp function call, "
-                f"exceeded LEAPP's max traversal depth ({_MAX_PARAM_SCAN_DEPTH}).",
-                error_type=RuntimeError,
-            )
-
-        if isinstance(obj, TracedWpArray):
-            # Always hand Warp an exact ``wp.array`` view. Active carriers
-            # drive segment capture; inactive carriers only propagate tracing
-            # state to array-valued results.
-            traced.append(obj)
-            return obj.data
-
-        if isinstance(obj, dict):
-            return {
-                key: self._normalize_node(value, traced, depth=depth + 1)
-                for key, value in obj.items()
-            }
-        if isinstance(obj, (list, tuple, set, frozenset)):
-            return type(obj)(
-                self._normalize_node(item, traced, depth=depth + 1) for item in obj
-            )
-
-        # Anything else (scalars like int/float/bool/str, raw wp.array, None,
-        # Device, dtypes, ...) is not a traced array and is passed through as-is.
-        return obj
-
-    def _build_trace_state(
-        self, qualname: str, traced_inputs: list[TracedWpArray]
-    ) -> "_WarpTraceState | None":
-        if not traced_inputs:
-            return None
-
-        source = traced_inputs[0]
-        for candidate in traced_inputs[1:]:
-            if candidate.context_obj is not source.context_obj:
-                _get_logger().fatal(
-                    f"{qualname} received traced Warp arrays from different LEAPP "
-                    "trace contexts.",
-                    error_type=ValueError,
-                )
-
-        return _WarpTraceState(source.name, source.context_obj, source.proxy_view)
-
-    def _resolve_or_begin_warp_segment(
+    def resolve_or_begin_warp_segment(
         self,
-        trace_state: "_WarpTraceState | None",
+        trace_source: Any | None,
     ) -> Any | None:
         active_segment = None if self._session is None else self._session.active_segment
         if active_segment is not None:
-            if trace_state is None:
+            if trace_source is None:
                 return active_segment
-            incoming_node_name = getattr(trace_state.context, "name", None)
+            incoming_node_name = getattr(trace_source.context_obj, "name", None)
             if incoming_node_name == active_segment.node_name:
-                return active_segment # same node, no need to close
-            else:
-                # different node, close the active segment
-                self.close_warp_segment()
-                warp_op = self._begin_boundary_closeable_warp_op(trace_state)
-                return None if warp_op is None else warp_op.segment
-        if trace_state is not None:
-            # no active segment, begin a new one
-            warp_op = self._begin_boundary_closeable_warp_op(trace_state)
+                return active_segment
+            self.close_warp_segment()
+            warp_op = self._begin_boundary_closeable_warp_op(trace_source)
             return None if warp_op is None else warp_op.segment
-        return None # no active segment, no need to close
+        if trace_source is None:
+            return None
+        warp_op = self._begin_boundary_closeable_warp_op(trace_source)
+        return None if warp_op is None else warp_op.segment
 
     def _begin_boundary_closeable_warp_op(
         self,
-        trace_state: "_WarpTraceState",
+        trace_source: Any,
     ) -> Any | None:
-        node_ref = trace_state.context
+        node_ref = trace_source.context_obj
         if node_ref is None or not getattr(node_ref, "is_tracing", False):
             return None
         warp_op = self.create_warp_op(node_ref)
@@ -688,7 +548,7 @@ class WarpPatchBackend:
             call_stack=get_caller_stack_identity(),
         )
 
-    def _record_segment_inputs(
+    def record_segment_inputs(
         self,
         segment: Any,
         qualname: str,
@@ -697,157 +557,8 @@ class WarpPatchBackend:
         segment.add_event({"kind": "warp_call", "qualname": qualname})
 
         for array in traced_inputs:
-            # An array the segment already stands for is not a new input, whether
-            # an earlier launch produced it or this one passed it twice.
             if not segment.knows_array(array):
                 segment.add_input_ref(array)
-
-    def _carry_full_copy_port(
-        self, original: Callable, args: tuple[Any, ...], kwargs: dict[str, Any]
-    ) -> None:
-        """Give a full ``wp.copy`` destination the boundary identity of its source.
-
-        The post-call traversal has already upgraded a raw destination into a
-        traced array bound to the source's node. A copy covering the whole array
-        leaves that destination holding the published data, so it also takes the
-        port that connects it onward. Offsets or a partial count make it a
-        different value, which keeps the default portless carrier.
-        """
-        if (
-            id(original) != self._full_copy_function_id
-            or len(args) < 2
-            or any(args[2:])
-            or kwargs.get("dest_offset")
-            or kwargs.get("src_offset")
-            or kwargs.get("count")
-        ):
-            return
-
-        dest, src = args[0], args[1]
-        if (
-            getattr(src, "output_port", None) is None
-            or not isinstance(dest, TracedWpArray)
-            or dest.shape != src.shape
-            or dest.dtype != src.dtype
-        ):
-            return
-        src.preserve_port(dest)
-
-    def _process_post_call_arrays(
-        self,
-        segment: Any | None,
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
-        result: Any,
-        trace_state: "_WarpTraceState | None",
-    ) -> None:
-        seen: set[int] = set()
-        # Warp kernels and runtime helpers can mutate arrays through arguments
-        # without declaring intent, so conservatively inspect all call inputs and
-        # return values for arrays that may need to be tracked as segment outputs.
-        for value in (args, kwargs, result):
-            self._process_post_call_node(
-                value,
-                segment,
-                trace_state,
-                seen,
-                depth=0,
-            )
-
-    def _process_post_call_node(
-        self,
-        obj: Any,
-        segment: Any | None,
-        trace_state: "_WarpTraceState | None",
-        seen: set[int],
-        *,
-        depth: int,
-    ) -> None:
-        # needs to lazy import to avoid circular import
-        from leapp.leapp_graph.datatypes import (
-            as_traced,
-            is_tracable_tensor_type,
-            promote_in_place,
-        )
-        if depth > _MAX_PARAM_SCAN_DEPTH:
-            _get_logger().fatal(
-                "When traversing a nested structure in a Warp function call, "
-                f"exceeded LEAPP's max traversal depth ({_MAX_PARAM_SCAN_DEPTH}).",
-                error_type=RuntimeError,
-            )
-
-        obj_id = id(obj)
-        if obj_id in seen:
-            return
-        seen.add(obj_id)
-
-        if is_tracable_tensor_type(obj):
-            if trace_state is not None and isinstance(obj, wp.array):
-                owner = getattr(obj, "context_obj", None)
-                published = getattr(obj, "output_port", None) is not None
-                if published or (owner is not None and owner is not trace_state.context):
-                    # A value another node already published stays untouched, so
-                    # it can still fan out; this call only gets an alias of it.
-                    traced_array = as_traced(
-                        obj,
-                        trace_state.name,
-                        trace_state.context,
-                        trace_state.view.proxy,
-                    )
-                elif owner is not None:
-                    # Already carries provenance for this node, so leave both its
-                    # view and its proxy alone. Writing a neighbouring argument's
-                    # proxy over it would discard whatever produced this buffer,
-                    # and the close assigns this argument's own runner output
-                    # regardless.
-                    traced_array = obj
-                else:
-                    # The caller keeps using this exact array after the call, so
-                    # its tracing state has to live on the object itself for the
-                    # segment close to rebind it to the segment output proxy. It
-                    # gets its own view and only borrows the donor's proxy as
-                    # placeholder provenance until then: a kernel writing two
-                    # arrays must leave them on two roots to receive two outputs.
-                    traced_array = promote_in_place(
-                        obj,
-                        trace_state.name,
-                        trace_state.context,
-                        trace_state.view.proxy,
-                    )
-                if segment is not None:
-                    segment.add_output_ref(traced_array)
-                    traced_array.warp_segment = segment
-            return
-
-        if isinstance(obj, dict):
-            for value in obj.values():
-                self._process_post_call_node(
-                    value,
-                    segment,
-                    trace_state,
-                    seen,
-                    depth=depth + 1,
-                )
-        elif isinstance(obj, (list, tuple)):
-            for item in obj:
-                self._process_post_call_node(
-                    item,
-                    segment,
-                    trace_state,
-                    seen,
-                    depth=depth + 1,
-                )
-        elif isinstance(obj, (set, frozenset)):
-            for item in obj:
-                self._process_post_call_node(
-                    item,
-                    segment,
-                    trace_state,
-                    seen,
-                    depth=depth + 1,
-                )
-
-
 
     #########################################################
     # static Helper functions
