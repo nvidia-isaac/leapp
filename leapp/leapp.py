@@ -35,7 +35,7 @@ _MANAGER = ExportManager()
 
 
 def start(name, save_path=".", verbose=False, dry_run=False, non_traced=None,
-          max_cached_io=5, global_patching=True):
+          max_cached_io=5, global_patching=True, patching=None):
     """Initialize and start LEAPP graph interpretation.
 
     ``name`` may be a bare graph name (``"my_graph"``), a relative path
@@ -87,7 +87,11 @@ def start(name, save_path=".", verbose=False, dry_run=False, non_traced=None,
 
     # Apply patches for functions that bypass normal traced-type dispatch.
     if global_patching:
-        manager.patcher.install()
+        try:
+            manager.patcher.install(patching=patching)
+        except Exception:
+            ExportManager.set_interpret_graph(False)
+            raise
 
 
 def stop():

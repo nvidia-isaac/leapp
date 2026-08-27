@@ -9,6 +9,8 @@ import functools
 
 import numpy as np
 
+from .._attribute_patching import AttributePatchRegistry
+
 
 class NumpyPatchBackend:
     """Apply and restore numpy conversion patches for a tracing session."""
@@ -19,17 +21,8 @@ class NumpyPatchBackend:
     ]
 
     def __init__(self) -> None:
-        self._originals: dict[tuple[object, str], object] = {}
-        self._patches: dict[tuple[object, str], object] = {}
+        self._patches = AttributePatchRegistry()
         self._installed = False
-        for module, name in self._FUNCTIONS:
-            original = getattr(module, name)
-            key = (module, name)
-            self._originals[key] = original
-            # np.array copies by default; np.asarray copies only when needed.
-            self._patches[key] = self._create_patch(
-                original, copy_default=True if name == "array" else None
-            )
 
     @property
     def installed(self) -> bool:
@@ -38,15 +31,24 @@ class NumpyPatchBackend:
     def install(self) -> None:
         if self._installed:
             return
-        for (module, name), patched in self._patches.items():
-            setattr(module, name, patched)
+        try:
+            for module, name in self._FUNCTIONS:
+                original = getattr(module, name)
+                # np.array copies by default; np.asarray copies only when needed.
+                patched = self._create_patch(
+                    original,
+                    copy_default=True if name == "array" else None,
+                )
+                self._patches.install(module, name, original, patched)
+        except Exception:
+            self._patches.restore()
+            raise
         self._installed = True
 
     def uninstall(self) -> None:
         if not self._installed:
             return
-        for (module, name), original in self._originals.items():
-            setattr(module, name, original)
+        self._patches.restore()
         self._installed = False
 
     @staticmethod

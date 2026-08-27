@@ -5,6 +5,7 @@ from leapp.leapp_graph.datatypes.warp.patching import WarpPatchBackend
 from leapp.leapp_graph.datatypes.warp.session import WarpTraceSession
 from leapp.leapp_graph.warp_op import WarpOp
 from leapp.utils.caller_identity import CallerFrame, CallerIdentity
+import types
 import unittest
 from unittest.mock import patch
 
@@ -102,6 +103,47 @@ class TestWarpTwoPassPlanning(unittest.TestCase):
         self.assertFalse(matches)
         self.assertIs(session.active_segment, segment)
         session.close_warp_segment()
+
+    def test_backend_install_failure_rolls_back_installed_attributes(self):
+        backend = WarpPatchBackend()
+        module = types.ModuleType("warp_patch_target")
+
+        def original():
+            return "original"
+
+        def wrapper():
+            return "wrapper"
+
+        module.target = original
+
+        def install_patch():
+            backend._patches.install(module, "target", original, wrapper)
+
+        oracle_path = (
+            "leapp.leapp_graph.datatypes.warp.patching.WarpCudaOracle"
+        )
+        with (
+            patch("torch.cuda.is_available", return_value=False),
+            patch(oracle_path) as oracle_class,
+            patch.object(backend, "_register_boundary_functions"),
+            patch.object(
+                backend,
+                "_patch_warp_modules",
+                side_effect=install_patch,
+            ),
+            patch.object(
+                backend,
+                "_patch_loaded_aliases",
+                side_effect=RuntimeError("installation failed"),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "installation failed"):
+                backend.install()
+
+        self.assertIs(module.target, original)
+        self.assertFalse(backend.installed)
+        self.assertIsNone(backend._session)
+        oracle_class.return_value.stop.assert_called_once()
 
     def test_capture_close_fails_on_divergent_call_sequence(self):
         session = WarpTraceSession()
