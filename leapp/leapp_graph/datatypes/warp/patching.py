@@ -54,7 +54,6 @@ from typing import Any, Callable
 from types import ModuleType
 import contextlib
 import functools
-from dataclasses import dataclass
 import inspect
 import sys
 
@@ -65,6 +64,7 @@ from warp._src.context import Function as WarpKernelLanguageFunction
 from leapp.utils.caller_identity import caller_identity_has_same_anchor, get_caller_stack_identity
 from leapp.utils.logging import _get_logger
 
+from .._attribute_patching import AttributePatchRegistry
 from ..proxy_view import may_adopt_view
 from .cupti_oracle import WarpCudaOracle
 from .session import WarpTraceSession
@@ -74,14 +74,6 @@ from .warp_segment import WarpSegment
 _WRAPPER_MARKER = "__leapp_warp_detector_wrapper__"
 _ALLOWED_DUNDER_METHODS = {"__init__"}
 _MAX_CLASS_SCAN_DEPTH = 1
-
-@dataclass
-class _Patch:
-    owner: Any
-    attr_name: str
-    original: Any
-    wrapper: Any
-
 
 
 class WarpPatchBackend:
@@ -93,7 +85,7 @@ class WarpPatchBackend:
     """
 
     def __init__(self) -> None:
-        self._patches: list[_Patch] = []
+        self._patches = AttributePatchRegistry()
         self._wrappers_by_original_id: dict[int, Any] = {}
         self._qualnames_by_original_id: dict[int, str] = {}
         self._session: Any | None = None
@@ -104,12 +96,14 @@ class WarpPatchBackend:
         self._boundary_array_init_id: int | None = None
         self._full_copy_function_id: int | None = None
         self._cuda_oracle: WarpCudaOracle | None = None
+
     #########################################################
     # Properties
     #########################################################
     @property
     def patched_count(self) -> int:
         return len(self._patches)
+
     #########################################################
     # Public methods
     #########################################################
@@ -123,18 +117,21 @@ class WarpPatchBackend:
         if self._installed:
             return self
 
-        if torch.cuda.is_available():
-            torch.cuda.init()
-            torch.cuda.memory.caching_allocator_enable(False)
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.init()
+                torch.cuda.memory.caching_allocator_enable(False)
 
-        self._cuda_oracle = WarpCudaOracle(self.close_warp_segment)
-        self._session = WarpTraceSession()
-        self._cuda_oracle.set_session(self._session)
-        self._cuda_oracle.start()
-        self._register_boundary_functions()
-        self._patch_warp_modules()
-
-        self._patch_loaded_aliases()
+            self._cuda_oracle = WarpCudaOracle(self.close_warp_segment)
+            self._session = WarpTraceSession()
+            self._cuda_oracle.set_session(self._session)
+            self._cuda_oracle.start()
+            self._register_boundary_functions()
+            self._patch_warp_modules()
+            self._patch_loaded_aliases()
+        except Exception:
+            self.uninstall()
+            raise
 
         self._installed = True
         return self
@@ -203,21 +200,7 @@ class WarpPatchBackend:
             self._cuda_oracle.stop()
             self._cuda_oracle = None
 
-        for patch in reversed(self._patches):
-            try:
-                current = inspect.getattr_static(patch.owner, patch.attr_name)
-            except Exception:
-                try:
-                    current = getattr(patch.owner, patch.attr_name)
-                except Exception:
-                    continue
-            if current is patch.wrapper:
-                try:
-                    setattr(patch.owner, patch.attr_name, patch.original)
-                except Exception:
-                    pass
-
-        self._patches.clear()
+        self._patches.restore(suppress_errors=True)
         self._wrappers_by_original_id.clear()
         self._qualnames_by_original_id.clear()
         self._boundary_function_ids.clear()
@@ -391,25 +374,25 @@ class WarpPatchBackend:
         if getattr(callable_original, _WRAPPER_MARKER, False):
             return
 
-        for patch in self._patches:
-            if patch.owner is owner and patch.attr_name == attr_name:
-                return
+        if self._patches.contains(owner, attr_name):
+            return
 
         wrapper_func = self._get_or_make_wrapper(qualname, callable_original)
         wrapper = descriptor_type(wrapper_func) if descriptor_type is not None else wrapper_func
 
         try:
-            setattr(owner, attr_name, wrapper)
+            self._patches.install(
+                owner,
+                attr_name,
+                raw_original,
+                wrapper,
+            )
         except Exception:
             return
-
-        self._patches.append(_Patch(owner, attr_name, raw_original, wrapper))
-
 
     #########################################################
     # Wrapper creation and execution
     #########################################################
-
 
     def _get_or_make_wrapper(self, qualname: str, original: Callable) -> Callable:
         wrapper = self._wrappers_by_original_id.get(id(original))
@@ -418,7 +401,6 @@ class WarpPatchBackend:
             self._wrappers_by_original_id[id(original)] = wrapper
             self._qualnames_by_original_id[id(original)] = qualname
         return wrapper
-
 
     def _make_wrapper(self, qualname: str, original: Callable) -> Callable:
         @functools.wraps(original)

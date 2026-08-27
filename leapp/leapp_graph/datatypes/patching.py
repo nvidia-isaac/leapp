@@ -7,27 +7,92 @@
 
 from __future__ import annotations
 
+import functools
 import sys
-from typing import TYPE_CHECKING, Protocol
+from dataclasses import dataclass
+from types import ModuleType
+from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 import torch
 
 from leapp.utils.logging import _get_logger
 
+from ._attribute_patching import AttributePatchRegistry
 from .numpy.patching import NumpyPatchBackend
 from .torch.patching import TorchPatchBackend
+from .traced_data import TracedData
 
 if TYPE_CHECKING:
     from .warp.patching import WarpPatchBackend
 
 
-class _PatchBackend(Protocol):
-    @property
-    def installed(self) -> bool: ...
+@dataclass(frozen=True)
+class FunctionPatch:
+    """Define a traceable replacement for one module-level function."""
 
-    def install(self) -> None: ...
+    module: ModuleType
+    function_name: str
+    replacement: Callable[..., Any]
 
-    def uninstall(self) -> None: ...
+
+def _create_user_patch(original, replacement):
+    @functools.wraps(original)
+    def patched(*args, **kwargs):
+        active = False
+
+        def find_active(item):
+            nonlocal active
+            if isinstance(item, TracedData) and item.is_tracing:
+                active = True
+            return item
+
+        TracedData._map_structure((args, kwargs), find_active)
+        if active:
+            return replacement(*args, **kwargs)
+        return original(*args, **kwargs)
+
+    return patched
+
+
+def _validate_user_patches(
+    patching: Sequence[FunctionPatch] | None,
+) -> tuple[FunctionPatch, ...]:
+    definitions = () if patching is None else tuple(patching)
+    targets: set[tuple[int, str]] = set()
+
+    for definition in definitions:
+        if not isinstance(definition, FunctionPatch):
+            raise TypeError("patching entries must be FunctionPatch instances")
+        if not isinstance(definition.module, ModuleType):
+            raise TypeError("FunctionPatch.module must be a Python module")
+        if not isinstance(definition.function_name, str) or not definition.function_name:
+            raise ValueError(
+                "FunctionPatch.function_name must be a non-empty string"
+            )
+        try:
+            target = getattr(definition.module, definition.function_name)
+        except AttributeError:
+            raise ValueError(
+                f"module {definition.module.__name__!r} has no attribute "
+                f"{definition.function_name!r}"
+            ) from None
+        if not callable(target):
+            raise TypeError(
+                f"{definition.module.__name__}."
+                f"{definition.function_name} is not callable"
+            )
+        if not callable(definition.replacement):
+            raise TypeError("FunctionPatch.replacement must be callable")
+
+        key = (id(definition.module), definition.function_name)
+        if key in targets:
+            raise ValueError(
+                f"duplicate patch target "
+                f"{definition.module.__name__}.{definition.function_name}"
+            )
+        targets.add(key)
+
+    return definitions
 
 
 def _try_create_warp_backend() -> WarpPatchBackend | None:
@@ -47,32 +112,49 @@ class TracingPatcher:
         self.numpy = NumpyPatchBackend()
 
         self.warp = _try_create_warp_backend()
+        self._user_patches = AttributePatchRegistry()
         self._installed = False
 
     @property
     def installed(self) -> bool:
         return self._installed
 
-    def install(self) -> None:
+    def install(
+        self,
+        *,
+        patching: Sequence[FunctionPatch] | None = None,
+    ) -> None:
         """Apply all available backends."""
         if self._installed:
             return
 
-        installed: list[_PatchBackend] = []
+        definitions = _validate_user_patches(patching)
         try:
-            if self.torch is not None: # install torch patches
+            if self.torch is not None:
                 self.torch.install()
-                installed.append(self.torch)
-            if self.numpy is not None: # install numpy patches
+            if self.numpy is not None:
                 self.numpy.install()
-                installed.append(self.numpy)
-            if self.warp is not None: # install warp patches
+            if self.warp is not None:
                 self.warp.install()
-                installed.append(self.warp)
+            for definition in definitions:
+                original = getattr(
+                    definition.module,
+                    definition.function_name,
+                )
+                patched = _create_user_patch(
+                    original,
+                    definition.replacement,
+                )
+                self._user_patches.install(
+                    definition.module,
+                    definition.function_name,
+                    original,
+                    patched,
+                )
             self._installed = True
         except Exception:
-            for backend in reversed(installed):
-                backend.uninstall()
+            self._user_patches.restore()
+            self._uninstall_defaults()
             raise
 
     def uninstall(self) -> None:
@@ -80,13 +162,17 @@ class TracingPatcher:
         if not self._installed:
             return
 
+        self._user_patches.restore()
+        self._uninstall_defaults()
+        self._installed = False
+
+    def _uninstall_defaults(self) -> None:
         if self.warp is not None and self.warp.installed:
             self.warp.uninstall()
         if self.numpy.installed:
             self.numpy.uninstall()
         if self.torch.installed:
             self.torch.uninstall()
-        self._installed = False
 
 
 def get_warp_backend() -> WarpPatchBackend | None:

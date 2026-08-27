@@ -40,6 +40,7 @@ Signature
        non_traced=None,
        max_cached_io: int = 5,
        global_patching: bool = True,
+       patching=None,
    )
 
 Parameters
@@ -59,16 +60,63 @@ Parameters
   connectivity, and appear in the YAML. Defaults to ``None``.
 * ``max_cached_io`` (int, optional): How many re-entry I/O examples
   LEAPP caches per node for multi-example validation. Defaults to ``5``.
-* ``global_patching`` (bool, optional): Patch ``torch`` numpy interop
-  functions for ``TracedTensor`` compatibility. Defaults to ``True``.
+* ``global_patching`` (bool, optional): Enable all process-global patches,
+  including user-defined replacements. Defaults to ``True``.
+* ``patching`` (sequence[FunctionPatch] | None, optional): User-defined
+  replacements for module-level functions that LEAPP cannot otherwise trace.
+  Defaults to ``None``.
 
   .. warning::
 
      Disabling ``global_patching`` disables patches that allow traced
      tensors to pass through ``torch.from_numpy()`` and related numpy
-     interop functions. If your pipeline calls any such functions on
-     traced tensors, they silently return untraced results and those
-     operations become invisible to LEAPP.
+     interop functions, and skips definitions supplied through ``patching``.
+     Unsupported operations can then become invisible to LEAPP.
+
+User-defined function patches
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``FunctionPatch`` maps a module attribute to a user-provided traceable
+replacement:
+
+.. code-block:: python
+
+   import scipy.ndimage
+   import leapp
+
+   leapp.start(
+       "pipeline",
+       patching=[
+           leapp.FunctionPatch(
+               scipy.ndimage,
+               "gaussian_filter",
+               leapp_gaussian_filter,
+           ),
+       ],
+   )
+
+During the tracing session, calls containing active traced data use the
+replacement. Calls containing only ordinary values, or traced values from a
+finished node, use the original function. Positional arguments, keyword
+arguments, and nested lists, tuples, and dictionaries are searched. User
+patches require ``global_patching=True``.
+
+The replacement receives traced arguments directly and must build its result
+from operations LEAPP already traces. It must accept a compatible signature,
+return the output structure, shape, and dtype expected by the caller, and be
+pure. Mutation, output arguments such as ``out=`` or ``dst=``, input/output
+aliasing, and calls back into the patched target are not supported.
+
+Call ``leapp.stop()`` before starting a session with a different patch list.
+Stopping restores the exact function object captured when the patch was
+installed.
+
+.. warning::
+
+   Patching a module attribute does not update references imported before
+   ``leapp.start()``. Call ``scipy.ndimage.gaussian_filter(...)`` rather than a
+   previously captured ``from scipy.ndimage import gaussian_filter`` alias.
+   Installed patches are process-global and can affect other threads.
 
 Behavior
 ~~~~~~~~

@@ -9,6 +9,8 @@ import functools
 
 import torch
 
+from .._attribute_patching import AttributePatchRegistry
+
 
 class TorchPatchBackend:
     """Apply and restore torch conversion patches for a tracing session."""
@@ -20,14 +22,8 @@ class TorchPatchBackend:
     ]
 
     def __init__(self) -> None:
-        self._originals: dict[tuple[object, str], object] = {}
-        self._patches: dict[tuple[object, str], object] = {}
+        self._patches = AttributePatchRegistry()
         self._installed = False
-        for module, name in self._FUNCTIONS:
-            original = getattr(module, name)
-            key = (module, name)
-            self._originals[key] = original
-            self._patches[key] = self._create_patch(original)
 
     @property
     def installed(self) -> bool:
@@ -36,16 +32,21 @@ class TorchPatchBackend:
     def install(self) -> None:
         if self._installed:
             return
-        for (module, name), patched in self._patches.items():
-            setattr(module, name, patched)
-        torch.jit._state.disable()
+        try:
+            for module, name in self._FUNCTIONS:
+                original = getattr(module, name)
+                patched = self._create_patch(original)
+                self._patches.install(module, name, original, patched)
+            torch.jit._state.disable()
+        except Exception:
+            self._patches.restore()
+            raise
         self._installed = True
 
     def uninstall(self) -> None:
         if not self._installed:
             return
-        for (module, name), original in self._originals.items():
-            setattr(module, name, original)
+        self._patches.restore()
         torch.jit._state.enable()
         self._installed = False
 
