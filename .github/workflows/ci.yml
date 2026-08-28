@@ -23,10 +23,10 @@ jobs:
         with:
           lfs: true
 
+      # No pip cache: HOME on the self-hosted runner is not writable by the job.
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
 
       - name: Upgrade pip
         run: python -m pip install --upgrade pip
