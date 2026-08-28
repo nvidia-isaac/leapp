@@ -11,7 +11,7 @@ handling by hand.
    :gutter: 3
 
    .. grid-item-card:: Isaac Lab
-      :link: https://isaac-sim.github.io/IsaacLab/release/3.0.0-beta2/source/policy_deployment/05_leapp/exporting_policies_with_leapp.html
+      :link: https://isaac-sim.github.io/IsaacLab/release/3.0.0/source/policy_deployment/05_leapp/exporting_policies_with_leapp.html
       :link-type: url
       :img-bottom: _static/images/ecosystem_isaac_lab.gif
       :img-alt: Isaac Lab
