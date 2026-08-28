@@ -27,33 +27,7 @@ import onnxruntime as ort
 
 from leapp.utils.logging import _get_logger
 from leapp.backends.module_builder import ModuleBuilder
-
-
-def _load_warp_onnx_runtime(
-    session_options: ort.SessionOptions,
-    model_path: str,
-) -> None:
-    from leapp.leapp_graph.custom_operator_registry.warp_operator import (
-        onnx_model_contains_warp_runner,
-    )
-
-    model = onnx.load(model_path, load_external_data=False)
-    if not onnx_model_contains_warp_runner(model):
-        return
-
-    library_path = os.environ.get("LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY")
-    if not library_path:
-        _get_logger().fatal(
-            "ONNX model contains com.nvidia.warp::WrpRunner, but "
-            "LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY is not set",
-            error_type=RuntimeError,
-        )
-    if not os.path.exists(library_path):
-        _get_logger().fatal(
-            f"LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY does not exist: {library_path}",
-            error_type=FileNotFoundError,
-        )
-    session_options.register_custom_ops_library(library_path)
+from leapp.warp_runtime import resolve_warp_runtime_library
 
 
 class SimplifiedONNXProgram:
@@ -82,6 +56,22 @@ class SimplifiedONNXProgram:
         self._input_names = None
         self._output_metas = None
         self._active_provider = None
+
+    @staticmethod
+    def _load_warp_runtime(
+        session_options: ort.SessionOptions,
+        model_path: str,
+    ) -> None:
+        from leapp.leapp_graph.custom_operator_registry.warp_operator import (
+            onnx_model_contains_warp_runner,
+        )
+
+        model = onnx.load(model_path, load_external_data=False)
+        if not onnx_model_contains_warp_runner(model):
+            return
+
+        library_path = resolve_warp_runtime_library("onnx")
+        session_options.register_custom_ops_library(str(library_path))
 
     @staticmethod
     def _torch_dtype_to_numpy_dtype(dtype):
@@ -312,7 +302,7 @@ class SimplifiedONNXProgram:
             model_path = os.path.join(self._source_dir, self._source_filename)
             providers = self._get_providers()
             sess_options = ort.SessionOptions()
-            _load_warp_onnx_runtime(sess_options, model_path)
+            self._load_warp_runtime(sess_options, model_path)
             # ORT_ENABLE_ALL can silently corrupt results for certain graph
             # patterns (e.g. Gemm chains produced by FX make_fx decomposition).
             # ORT_ENABLE_BASIC is safe and still applies constant folding.

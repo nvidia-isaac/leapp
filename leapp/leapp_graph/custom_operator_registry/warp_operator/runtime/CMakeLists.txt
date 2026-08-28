@@ -4,12 +4,19 @@ project(leapp_warp_runtime LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+foreach(CONFIG IN ITEMS DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_${CONFIG} "${CMAKE_BINARY_DIR}")
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${CONFIG} "${CMAKE_BINARY_DIR}")
+endforeach()
 
 option(LEAPP_WARP_BUILD_ONNX "Build ONNX Runtime custom op" ON)
 option(LEAPP_WARP_BUILD_TORCH "Build PyTorch dispatcher extension" ON)
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 find_package(CUDAToolkit REQUIRED)
+find_package(Threads REQUIRED)
 
 execute_process(
     COMMAND "${Python3_EXECUTABLE}" -c "import os, warp; print(os.path.dirname(warp.__file__))"
@@ -20,7 +27,14 @@ execute_process(
 
 set(WARP_NATIVE_DIR "${WARP_PACKAGE_DIR}/native")
 set(WARP_BIN_DIR "${WARP_PACKAGE_DIR}/bin")
-set(WARP_SHARED_LIBRARY "${WARP_BIN_DIR}/warp.so")
+if(WIN32)
+    set(WARP_SHARED_LIBRARY "${WARP_BIN_DIR}/warp.dll")
+    set(WARP_IMPORT_LIBRARY "${WARP_BIN_DIR}/warp.lib" CACHE FILEPATH "Warp import library")
+elseif(APPLE)
+    set(WARP_SHARED_LIBRARY "${WARP_BIN_DIR}/libwarp.dylib")
+else()
+    set(WARP_SHARED_LIBRARY "${WARP_BIN_DIR}/warp.so")
+endif()
 
 if(NOT EXISTS "${WARP_SHARED_LIBRARY}")
     message(FATAL_ERROR "Warp shared library not found: ${WARP_SHARED_LIBRARY}")
@@ -30,7 +44,17 @@ if(NOT EXISTS "${WARP_NATIVE_DIR}/apic.h")
 endif()
 
 add_library(warp_native SHARED IMPORTED)
-set_target_properties(warp_native PROPERTIES IMPORTED_LOCATION "${WARP_SHARED_LIBRARY}")
+set_target_properties(warp_native PROPERTIES
+    IMPORTED_LOCATION "${WARP_SHARED_LIBRARY}"
+)
+if(WIN32)
+    if(NOT EXISTS "${WARP_IMPORT_LIBRARY}")
+        message(FATAL_ERROR "Warp import library not found: ${WARP_IMPORT_LIBRARY}. Set WARP_IMPORT_LIBRARY to a valid warp.lib.")
+    endif()
+    set_target_properties(warp_native PROPERTIES
+        IMPORTED_IMPLIB "${WARP_IMPORT_LIBRARY}"
+    )
+endif()
 
 set(LEAPP_WARP_CORE_SOURCES
     core/runtime_metadata.cc
@@ -45,7 +69,7 @@ target_include_directories(leapp_warp_runtime_core PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/core"
     "${WARP_NATIVE_DIR}"
 )
-target_link_libraries(leapp_warp_runtime_core PUBLIC warp_native CUDA::cudart pthread)
+target_link_libraries(leapp_warp_runtime_core PUBLIC warp_native CUDA::cudart Threads::Threads)
 set_target_properties(leapp_warp_runtime_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 if(LEAPP_WARP_BUILD_ONNX)
@@ -63,14 +87,24 @@ if(LEAPP_WARP_BUILD_ONNX)
     )
 
     set(ORT_CAPI_DIR "${ONNXRUNTIME_PACKAGE_DIR}/capi")
-    set(ORT_SHARED_LIBRARY "${ORT_CAPI_DIR}/libonnxruntime.so.${ONNXRUNTIME_VERSION}")
+    if(WIN32)
+        set(ORT_SHARED_LIBRARY "${ORT_CAPI_DIR}/onnxruntime.dll")
+    elseif(APPLE)
+        set(ORT_SHARED_LIBRARY "${ORT_CAPI_DIR}/libonnxruntime.${ONNXRUNTIME_VERSION}.dylib")
+    else()
+        set(ORT_SHARED_LIBRARY "${ORT_CAPI_DIR}/libonnxruntime.so.${ONNXRUNTIME_VERSION}")
+    endif()
     if(NOT EXISTS "${ORT_SHARED_LIBRARY}")
         message(FATAL_ERROR "ONNX Runtime shared library not found: ${ORT_SHARED_LIBRARY}")
     endif()
 
     set(ORT_INCLUDE_DIR "${CMAKE_BINARY_DIR}/onnxruntime_headers")
     file(MAKE_DIRECTORY "${ORT_INCLUDE_DIR}")
-    foreach(ORT_HEADER IN ITEMS onnxruntime_c_api.h onnxruntime_ep_c_api.h)
+    foreach(ORT_HEADER IN ITEMS
+        onnxruntime_c_api.h
+        onnxruntime_ep_c_api.h
+        onnxruntime_error_code.h
+    )
         set(ORT_HEADER_PATH "${ORT_INCLUDE_DIR}/${ORT_HEADER}")
         if(NOT EXISTS "${ORT_HEADER_PATH}")
             file(DOWNLOAD
@@ -87,17 +121,15 @@ if(LEAPP_WARP_BUILD_ONNX)
         endif()
     endforeach()
 
-    add_library(onnxruntime SHARED IMPORTED)
-    set_target_properties(onnxruntime PROPERTIES IMPORTED_LOCATION "${ORT_SHARED_LIBRARY}")
-
     add_library(leapp_wrp_onnx_custom_op SHARED onnx/ort_wrp_runner_op.cc)
     target_include_directories(leapp_wrp_onnx_custom_op PRIVATE "${ORT_INCLUDE_DIR}")
-    target_link_libraries(leapp_wrp_onnx_custom_op PRIVATE leapp_warp_runtime_core onnxruntime)
-    set_target_properties(leapp_wrp_onnx_custom_op PROPERTIES
-        PREFIX "lib"
-        BUILD_RPATH "${ORT_CAPI_DIR};${WARP_BIN_DIR};${CUDAToolkit_LIBRARY_DIR}"
-        INSTALL_RPATH "${ORT_CAPI_DIR};${WARP_BIN_DIR};${CUDAToolkit_LIBRARY_DIR}"
-    )
+    target_link_libraries(leapp_wrp_onnx_custom_op PRIVATE leapp_warp_runtime_core)
+    if(NOT WIN32)
+        set_target_properties(leapp_wrp_onnx_custom_op PROPERTIES
+            BUILD_RPATH "${WARP_BIN_DIR};${CUDAToolkit_LIBRARY_DIR}"
+            INSTALL_RPATH "${WARP_BIN_DIR};${CUDAToolkit_LIBRARY_DIR}"
+        )
+    endif()
 endif()
 
 if(LEAPP_WARP_BUILD_TORCH)
@@ -118,8 +150,10 @@ if(LEAPP_WARP_BUILD_TORCH)
     add_library(leapp_wrp_torch_custom_op SHARED torch/torch_warp_runner_op.cc)
     target_link_libraries(leapp_wrp_torch_custom_op PRIVATE leapp_warp_runtime_core "${TORCH_LIBRARIES}")
     target_include_directories(leapp_wrp_torch_custom_op PRIVATE "${TORCH_INCLUDE_DIRS}")
-    set_target_properties(leapp_wrp_torch_custom_op PROPERTIES
-        BUILD_RPATH "${WARP_BIN_DIR};${CUDAToolkit_LIBRARY_DIR}"
-        INSTALL_RPATH "${WARP_BIN_DIR};${CUDAToolkit_LIBRARY_DIR}"
-    )
+    if(NOT WIN32)
+        set_target_properties(leapp_wrp_torch_custom_op PROPERTIES
+            BUILD_RPATH "${WARP_BIN_DIR};${CUDAToolkit_LIBRARY_DIR}"
+            INSTALL_RPATH "${WARP_BIN_DIR};${CUDAToolkit_LIBRARY_DIR}"
+        )
+    endif()
 endif()

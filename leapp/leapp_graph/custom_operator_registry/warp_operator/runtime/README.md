@@ -8,12 +8,27 @@ This directory contains the C++ runtime for `leapp::warp_runner` / `com.nvidia.w
 
 The runtime consumes the same `runtime_metadata` JSON emitted by the Python tracer/exporter and the same CPU `uint8` WRPB bundle tensor used by ONNX external data.
 
-The default CMake configuration builds both adapters:
+Installed packages provide two commands:
 
-- `build/libleapp_wrp_onnx_custom_op.so`
-- `build/libleapp_wrp_torch_custom_op.so`
+```bash
+leapp-build-warp-runtime
+leapp-build-warp-runtime --status
+```
 
-Use `LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY` for ONNX exports and
-`LEAPP_WARP_PT2_CUSTOM_OP_LIBRARY` for `.pt2` exports. Build with the Python
-environment that will load the libraries because the adapters link against
-that environment's ONNX Runtime and PyTorch installations.
+The build command validates existing dependencies without installing them,
+then builds both adapters under the standard user cache:
+
+- Linux: `build/libleapp_wrp_onnx_custom_op.so` and
+  `build/libleapp_wrp_torch_custom_op.so`
+- Windows: `build/leapp_wrp_onnx_custom_op.dll` and
+  `build/leapp_wrp_torch_custom_op.dll`
+
+LEAPP discovers the cached libraries automatically. Use
+`LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY` and
+`LEAPP_WARP_PT2_CUSTOM_OP_LIBRARY` only to override the cache paths. Build with
+the Python environment that will load the libraries because the adapters link
+against that environment's Warp and PyTorch installations.
+
+Windows builds also require a Warp import library. The `warp-lang` wheel does
+not currently include `warp.lib`; set `LEAPP_WARP_IMPORT_LIBRARY` to an
+externally supplied import library before building.

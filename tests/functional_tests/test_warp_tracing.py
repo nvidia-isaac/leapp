@@ -6,8 +6,10 @@
 import contextlib
 import os
 import sys
+import tempfile
 import types
 import unittest
+from unittest import mock
 
 import leapp
 import numpy as np
@@ -633,14 +635,14 @@ class TestWarpInference(WarpTestCase, LEAPPFunctionalTestBase):
             lambda values: self._launch_add(values, 1.0),
             export_with="pt2",
         )
-        library_path = os.environ.pop("LEAPP_WARP_PT2_CUSTOM_OP_LIBRARY")
-        try:
+        with tempfile.TemporaryDirectory() as cache_dir, mock.patch.dict(
+            os.environ, {"XDG_CACHE_HOME": cache_dir}
+        ):
+            os.environ.pop("LEAPP_WARP_PT2_CUSTOM_OP_LIBRARY")
             with self.assertRaisesRegex(
-                RuntimeError, "LEAPP_WARP_PT2_CUSTOM_OP_LIBRARY"
+                FileNotFoundError, "leapp-build-warp-runtime"
             ):
                 leapp.compile_graph(visualize=False)
-        finally:
-            os.environ["LEAPP_WARP_PT2_CUSTOM_OP_LIBRARY"] = library_path
 
     def test_onnx_runner_requires_custom_op_library(self):
         from leapp import InferenceManager
@@ -649,17 +651,17 @@ class TestWarpInference(WarpTestCase, LEAPPFunctionalTestBase):
             lambda values: self._launch_add(values, 1.0),
         )
         leapp.compile_graph(visualize=False)
-        library_path = os.environ.pop("LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY")
-        try:
+        with tempfile.TemporaryDirectory() as cache_dir, mock.patch.dict(
+            os.environ, {"XDG_CACHE_HOME": cache_dir}
+        ):
+            os.environ.pop("LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY")
             manager = InferenceManager(
                 f"{self.TEST_GRAPH_NAME}/{self.TEST_GRAPH_NAME}.yaml"
             )
             with self.assertRaisesRegex(
-                RuntimeError, "LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY"
+                FileNotFoundError, "leapp-build-warp-runtime"
             ):
                 manager.run_policy(manager.get_mock_input())
-        finally:
-            os.environ["LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY"] = library_path
 
     def test_one_array_read_by_three_launches_is_one_segment_input(self):
         """A buffer several launches read is one runner argument, not several.

@@ -73,6 +73,31 @@ Narrower (use these while iterating):
 | Visualization | `pytest packages/leapp-visualization/tests/ -v` (Python 3.11+) |
 | Warp tracing | see `warp_support.md` |
 
+### Warp runtime build
+
+Pip distributions ship the native sources under
+`leapp/leapp_graph/custom_operator_registry/warp_operator/runtime/`, not
+prebuilt libraries. `scripts/leapp-build-warp-runtime` owns dependency
+validation and CMake execution. Keep `leapp/warp_runtime.py` limited to
+platform-specific artifact paths, cache paths, and runtime resolution.
+
+```bash
+leapp-build-warp-runtime
+leapp-build-warp-runtime --status
+pytest tests/unit_tests/test_warp_runtime.py -v
+```
+
+The build always produces the ONNX and PT2 adapters together in
+`${XDG_CACHE_HOME:-~/.cache}/leapp/warp-runtime/build` on Linux. It must
+never install dependencies: fail clearly when CMake, CUDA `nvcc`, Warp
+native/APIC resources, ONNX Runtime, or PyTorch CMake resources are
+missing. CMake downloads version-matched ONNX Runtime public headers;
+keep its header list complete, including `onnxruntime_error_code.h` for
+ONNX Runtime 1.29 and newer. Runtime replay is not CUPTI-dependent, so
+do not add a blanket Linux build gate. Windows builds require
+`LEAPP_WARP_IMPORT_LIBRARY` because the `warp-lang` wheel does not ship
+`warp.lib`.
+
 Docs (CI uses `-W`; spelling needs `enchant-2`):
 
 ```bash

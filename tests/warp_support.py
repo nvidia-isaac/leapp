@@ -17,6 +17,7 @@ from pathlib import Path
 import warp as wp
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+_WARP_BUILD_SCRIPT = _REPO_ROOT / "scripts" / "leapp-build-warp-runtime"
 _WARP_RUNTIME_DIR = (
     _REPO_ROOT
     / "leapp"
@@ -34,24 +35,13 @@ _WARP_PT2_CUSTOM_OP_LIB = (
 
 
 def _build_warp_custom_op_libraries() -> None:
-    build_dir = _WARP_RUNTIME_DIR / "build"
-    build_dir.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         [
-            "cmake",
-            "-S",
-            str(_WARP_RUNTIME_DIR),
-            "-B",
-            str(build_dir),
-            f"-DPython3_EXECUTABLE={sys.executable}",
-            "-DCMAKE_BUILD_TYPE=Release",
-            "-DLEAPP_WARP_BUILD_ONNX=ON",
-            "-DLEAPP_WARP_BUILD_TORCH=ON",
+            sys.executable,
+            str(_WARP_BUILD_SCRIPT),
+            "--build-dir",
+            str(_WARP_RUNTIME_DIR / "build"),
         ],
-        check=True,
-    )
-    subprocess.run(
-        ["cmake", "--build", str(build_dir), "--config", "Release", "-j", "8"],
         check=True,
     )
 

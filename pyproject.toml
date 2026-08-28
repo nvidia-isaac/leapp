@@ -67,6 +67,9 @@ dev = [
     "flake8",
     "mypy",
 ]
+warp = [
+    "warp-lang>=1.16",
+]
 test = [
     "warp-lang>=1.15",
 ]
@@ -95,6 +98,9 @@ Issues = "https://github.com/nvidia-isaac/leapp/issues"
 [tool.setuptools]
 include-package-data = true
 zip-safe = false
+script-files = [
+    "scripts/leapp-build-warp-runtime",
+]
 
 [tool.setuptools.packages.find]
 # Include internal visualization modules shipped with leapp.
@@ -106,6 +112,19 @@ exclude = ["tests*"]
 # Include all files specified in MANIFEST.in
 "*" = ["*.md", "*.txt", "LICENSE"]
 "leapp" = ["*.py"]
+"leapp.leapp_graph.custom_operator_registry.warp_operator" = [
+    "runtime/CMakeLists.txt",
+    "runtime/README.md",
+    "runtime/core/*.cc",
+    "runtime/core/*.h",
+    "runtime/onnx/*.cc",
+    "runtime/torch/*.cc",
+]
+
+[tool.setuptools.exclude-package-data]
+"leapp.leapp_graph.custom_operator_registry.warp_operator" = [
+    "runtime/build/*",
+]
 
 [tool.pytest.ini_options]
 filterwarnings = [
