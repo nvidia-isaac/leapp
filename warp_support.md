@@ -23,18 +23,23 @@ Warp APIC with LEAPP currently requires:
 - `warp-lang>=1.15.0`
 - `leapp.start(..., global_patching=True)`, which is the default
 
-Use the repository lock file when setting up a local test environment. The lock
-keeps the CUDA/CUPTI/ONNX Runtime pieces on versions that are known to work
-together for Warp tracing.
+Install the extra matching the CUDA toolkit on the machine:
 
 ```bash
-uv sync --extra test
+python -m pip install "leapp[warp-cu12]"  # CUDA 12
+python -m pip install "leapp[warp-cu13]"  # CUDA 13
 ```
 
-This installs local LEAPP plus the locked test dependencies, including Warp.
-Do not install the latest `cupti-python` or `onnxruntime-gpu` independently
-when validating this feature; mismatched CUDA or ONNX Runtime API versions can
-fail at runtime.
+For repository development, install the same extra together with the test
+dependencies:
+
+```bash
+uv sync --extra test --extra warp-cu12  # CUDA 12
+uv sync --extra test --extra warp-cu13  # CUDA 13
+```
+
+Do not install `cupti-python` independently. Its major version must match the
+CUDA toolkit's `libcupti` major version or CUPTI initialization will fail.
 
 The committed lock currently uses:
 

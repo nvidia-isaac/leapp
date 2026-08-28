@@ -58,7 +58,6 @@ dependencies = [
     # Visualization layout/render deps (Python 3.11+ only; skipped on 3.10).
     "fast-sugiyama>=0.5.3; python_version >= '3.11'",
     "Pillow>=10.0.0; python_version >= '3.11'",
-    "cupti-python>=12.8,<14; sys_platform == 'linux'",
 ]
 
 [project.optional-dependencies]
@@ -70,6 +69,22 @@ dev = [
 ]
 test = [
     "warp-lang>=1.15",
+]
+warp-cu12 = [
+    "warp-lang>=1.15",
+    "cupti-python>=12.8,<13; sys_platform == 'linux'",
+]
+warp-cu13 = [
+    "warp-lang>=1.15",
+    "cupti-python>=13,<14; sys_platform == 'linux'",
+]
+
+[tool.uv]
+conflicts = [
+    [
+        { extra = "warp-cu12" },
+        { extra = "warp-cu13" },
+    ],
 ]
 
 [project.urls]

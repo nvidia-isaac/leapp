@@ -57,7 +57,8 @@ docs, and tests.
 ## Commands
 
 ```bash
-python -m pip install -e ".[dev,test]"
+python -m pip install -e ".[dev,test,warp-cu12]"  # CUDA 12
+python -m pip install -e ".[dev,test,warp-cu13]"  # CUDA 13
 pytest tests/ packages/leapp-visualization/tests/ -v
 ```
 

@@ -28,12 +28,15 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
+      - name: Install Warp custom-op build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential
+
       - name: Upgrade pip
         run: python -m pip install --upgrade pip
 
       # Visualization modules ship with leapp; gated deps install on 3.11+.
       - name: Install package and test dependencies
-        run: python -m pip install -e ".[dev,test]"
+        run: python -m pip install -e ".[dev,test,warp-cu12]"
 
       - name: Run pytest
         run: pytest tests/ packages/leapp-visualization/tests/ -v
