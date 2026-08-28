@@ -12,6 +12,31 @@ from leapp.backends.export_backend import ExportBackend, prepare_tensors_for_exp
 from leapp.utils.logging import _get_logger
 
 
+def _load_warp_pt2_runtime(exported_program: torch.export.ExportedProgram) -> None:
+    from leapp.leapp_graph.custom_operator_registry.warp_operator import (
+        module_contains_warp_runner,
+    )
+
+    if not module_contains_warp_runner(exported_program.graph_module):
+        return
+
+    library_path = os.environ.get("LEAPP_WARP_PT2_CUSTOM_OP_LIBRARY")
+    if not library_path:
+        _get_logger().fatal(
+            "PT2 model contains leapp::warp_runner, but "
+            "LEAPP_WARP_PT2_CUSTOM_OP_LIBRARY is not set",
+            error_type=RuntimeError,
+        )
+    try:
+        torch.ops.load_library(library_path)
+    except OSError as exc:
+        _get_logger().fatal(
+            f"Failed to load the PT2 Warp custom operator library: {library_path}",
+            error_type=RuntimeError,
+            cause=exc,
+        )
+
+
 class ExportedProgramExportBackend(ExportBackend):
     """Export node graphs via ``torch.export`` to ``.pt2`` artifacts."""
 
@@ -43,6 +68,7 @@ class ExportedProgramExportBackend(ExportBackend):
 
         self.exported_program = torch.export.export(
             m, export_args, **export_kwargs)
+        _load_warp_pt2_runtime(self.exported_program)
         self.compiled_model = self.exported_program.module()
         self.compiled_module = m
         return self.exported_program
@@ -67,6 +93,7 @@ class ExportedProgramExportBackend(ExportBackend):
                 error_type=ValueError)
 
         self.exported_program = torch.export.load(model_path)
+        _load_warp_pt2_runtime(self.exported_program)
         device = self._select_runtime_device()
         self.compiled_model = self.exported_program.module().to(device)
         self.runtime_device = device

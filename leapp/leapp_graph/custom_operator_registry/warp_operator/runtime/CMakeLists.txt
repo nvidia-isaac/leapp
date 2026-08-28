@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(LEAPP_WARP_BUILD_ONNX "Build ONNX Runtime custom op" ON)
-option(LEAPP_WARP_BUILD_TORCH "Build PyTorch dispatcher extension" OFF)
+option(LEAPP_WARP_BUILD_TORCH "Build PyTorch dispatcher extension" ON)
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 find_package(CUDAToolkit REQUIRED)
@@ -101,6 +101,9 @@ if(LEAPP_WARP_BUILD_ONNX)
 endif()
 
 if(LEAPP_WARP_BUILD_TORCH)
+    if(NOT CMAKE_CUDA_COMPILER)
+        set(CMAKE_CUDA_COMPILER "${CUDAToolkit_NVCC_EXECUTABLE}" CACHE FILEPATH "CUDA compiler" FORCE)
+    endif()
     if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
         set(CMAKE_CUDA_ARCHITECTURES native CACHE STRING "CUDA architectures for Torch-enabled builds")
     endif()
@@ -115,4 +118,8 @@ if(LEAPP_WARP_BUILD_TORCH)
     add_library(leapp_wrp_torch_custom_op SHARED torch/torch_warp_runner_op.cc)
     target_link_libraries(leapp_wrp_torch_custom_op PRIVATE leapp_warp_runtime_core "${TORCH_LIBRARIES}")
     target_include_directories(leapp_wrp_torch_custom_op PRIVATE "${TORCH_INCLUDE_DIRS}")
+    set_target_properties(leapp_wrp_torch_custom_op PROPERTIES
+        BUILD_RPATH "${WARP_BIN_DIR};${CUDAToolkit_LIBRARY_DIR}"
+        INSTALL_RPATH "${WARP_BIN_DIR};${CUDAToolkit_LIBRARY_DIR}"
+    )
 endif()

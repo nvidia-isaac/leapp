@@ -1,9 +1,12 @@
+#include <cstdint>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 
-#include <torch/extension.h>
+#include <ATen/ATen.h>
 #include <ATen/cuda/CUDAContext.h>
+#include <torch/library.h>
 
 #include "../core/runtime_metadata.h"
 #include "../core/warp_apic_runner.h"
@@ -11,7 +14,7 @@
 namespace leapp::warp_runtime::torch_adapter {
 namespace {
 
-ElementType FromTorchType(c10::ScalarType dtype) {
+ElementType FromTorchType(at::ScalarType dtype) {
     switch (dtype) {
         case c10::kBool: return ElementType::Bool;
         case c10::kByte: return ElementType::UInt8;
@@ -27,7 +30,7 @@ ElementType FromTorchType(c10::ScalarType dtype) {
     }
 }
 
-torch::ScalarType ToTorchType(ElementType dtype) {
+at::ScalarType ToTorchType(ElementType dtype) {
     switch (dtype) {
         case ElementType::Bool: return c10::kBool;
         case ElementType::UInt8: return c10::kByte;
@@ -43,7 +46,7 @@ torch::ScalarType ToTorchType(ElementType dtype) {
     }
 }
 
-TensorView FromTensor(const torch::Tensor& tensor) {
+TensorView FromTensor(const at::Tensor& tensor) {
     TensorView view;
     view.data = tensor.data_ptr();
     view.dtype = FromTorchType(tensor.scalar_type());
@@ -56,6 +59,7 @@ TensorView FromTensor(const torch::Tensor& tensor) {
 
 struct RunnerCacheEntry {
     RuntimeMetadata metadata;
+    at::Tensor bundle;
     std::unique_ptr<WarpApicRunner> runner;
 };
 
@@ -63,32 +67,36 @@ std::mutex g_cache_mutex;
 std::unordered_map<std::string, std::shared_ptr<RunnerCacheEntry>> g_cache;
 
 std::shared_ptr<RunnerCacheEntry> GetRunner(const std::string& runtime_metadata,
-                                            const torch::Tensor& bundle) {
+                                            const at::Tensor& bundle) {
+    const std::string cache_key =
+        runtime_metadata + ":" +
+        std::to_string(reinterpret_cast<std::uintptr_t>(bundle.data_ptr()));
     std::lock_guard<std::mutex> guard(g_cache_mutex);
-    auto it = g_cache.find(runtime_metadata);
+    auto it = g_cache.find(cache_key);
     if (it != g_cache.end()) {
         return it->second;
     }
     auto entry = std::make_shared<RunnerCacheEntry>();
     entry->metadata = ParseRuntimeMetadata(runtime_metadata);
+    entry->bundle = bundle;
     entry->runner = std::make_unique<WarpApicRunner>(entry->metadata);
-    const torch::Tensor cpu_bundle = bundle.device().is_cpu() ? bundle.contiguous() : bundle.cpu().contiguous();
+    const at::Tensor cpu_bundle = bundle.device().is_cpu() ? bundle.contiguous() : bundle.cpu().contiguous();
     entry->runner->LoadOnce(static_cast<const std::uint8_t*>(cpu_bundle.data_ptr()), cpu_bundle.nbytes());
-    g_cache.emplace(runtime_metadata, entry);
+    g_cache.emplace(cache_key, entry);
     return entry;
 }
 
-std::vector<torch::Tensor> WarpRunner(const std::vector<torch::Tensor>& inputs,
-                                      const std::string& runtime_metadata,
-                                      const torch::Tensor& bundle) {
+std::vector<at::Tensor> WarpRunner(const std::vector<at::Tensor>& inputs,
+                                   const std::string& runtime_metadata,
+                                   const at::Tensor& bundle) {
     auto entry = GetRunner(runtime_metadata, bundle);
     const auto& metadata = entry->metadata;
-    std::vector<torch::Tensor> outputs;
+    std::vector<at::Tensor> outputs;
     outputs.reserve(metadata.outputs.size());
-    const torch::Device device = inputs.empty() ? torch::Device(torch::kCUDA, 0) : inputs.front().device();
+    const at::Device device = inputs.empty() ? at::Device(at::kCUDA, 0) : inputs.front().device();
     for (const auto& spec : metadata.outputs) {
         std::vector<std::int64_t> shape = spec.shape;
-        outputs.push_back(torch::empty(shape, torch::TensorOptions().dtype(ToTorchType(spec.dtype)).device(device)));
+        outputs.push_back(at::empty(shape, at::TensorOptions().dtype(ToTorchType(spec.dtype)).device(device)));
     }
 
     RuntimeInvocation invocation;
@@ -107,10 +115,6 @@ std::vector<torch::Tensor> WarpRunner(const std::vector<torch::Tensor>& inputs,
 
 }  // namespace
 }  // namespace leapp::warp_runtime::torch_adapter
-
-TORCH_LIBRARY_FRAGMENT(leapp, m) {
-    m.def("warp_runner(Tensor[] inputs, str runtime_metadata, Tensor bundle) -> Tensor[]");
-}
 
 TORCH_LIBRARY_IMPL(leapp, CUDA, m) {
     m.impl("warp_runner", leapp::warp_runtime::torch_adapter::WarpRunner);

@@ -49,13 +49,14 @@ Runtime at the same API version as the locked CPU package:
 uv pip install "onnxruntime-gpu[cuda,cudnn]==1.26.0"
 ```
 
-### Build and configure the ONNX runner
+### Build and configure the exported runners
 
-Exported ONNX models containing `com.nvidia.warp::WrpRunner` require LEAPP's
-ONNX Runtime custom operator. Build it from the repository root with CMake,
-using the same Python environment created by `uv sync`. Rebuild this library
-after changing the `uv.lock` or ONNX Runtime version; the custom op must be
-compiled against the same ONNX Runtime API version that will load it.
+Exported ONNX and PT2 models containing a Warp runner require LEAPP's native
+custom operator libraries. Build them from the repository root with CMake,
+using the same Python environment created by `uv sync`. Rebuild the libraries
+after changing the `uv.lock`, PyTorch, Warp, or ONNX Runtime version. The ONNX
+custom op must be compiled against the same ONNX Runtime API version that will
+load it.
 
 ```bash
 RUNTIME_DIR="leapp/leapp_graph/custom_operator_registry/warp_operator/runtime"
@@ -69,20 +70,24 @@ cmake \
 cmake --build "${RUNTIME_DIR}/build" --config Release -j
 ```
 
-The build requires a C++17 compiler, CMake 3.18 or newer, and the CUDA Toolkit.
-CMake locates Warp and ONNX Runtime through the selected Python interpreter
-and downloads the matching ONNX Runtime C API headers.
+The default build produces `libleapp_wrp_onnx_custom_op.so` and
+`libleapp_wrp_torch_custom_op.so`. It requires a C++17 compiler, CMake 3.18 or
+newer, the CUDA Toolkit, and its CUDA compiler. CMake locates Warp, PyTorch,
+and ONNX Runtime through the selected Python interpreter and downloads the
+matching ONNX Runtime C API headers.
 
-Point LEAPP at the resulting shared library before loading or running an
-exported ONNX model:
+Point LEAPP at the library for the selected export backend before compiling,
+loading, or running a Warp model:
 
 ```bash
 export LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY="$(pwd)/leapp/leapp_graph/custom_operator_registry/warp_operator/runtime/build/libleapp_wrp_onnx_custom_op.so"
+export LEAPP_WARP_PT2_CUSTOM_OP_LIBRARY="$(pwd)/leapp/leapp_graph/custom_operator_registry/warp_operator/runtime/build/libleapp_wrp_torch_custom_op.so"
 ```
 
-The runner uses ONNX Runtime's CUDA execution provider, so a working
+The ONNX runner uses ONNX Runtime's CUDA execution provider, so a working
 `onnxruntime-gpu` installation and its compatible CUDA dependencies must be
-available in the inference environment.
+available in that inference environment. The PT2 runner uses PyTorch's CUDA
+dispatcher and must be built against the PyTorch installation that loads it.
 
 ## How it works
 
@@ -107,9 +112,9 @@ ExportedProgram (`pt2`) export paths.
 For automatic detection, LEAPP wraps public Warp API calls and observes CUDA
 activity that may require the current segment to close.
 
-Warp nodes must currently be exported with ONNX. Use `export_with="onnx"` when
-calling `annotate.output_tensors()` for nodes that contain Warp operations;
-other export backends are not supported for Warp graphs yet.
+Warp nodes can use `export_with="onnx"` or `export_with="pt2"` when calling
+`annotate.output_tensors()`. Other export backends are not supported for Warp
+graphs.
 
 ## Explicit `warp_op` annotation
 
@@ -270,8 +275,8 @@ Automatic routing follows these rules:
 - **Annotation arguments:** `annotate.warp_op()` currently uses only the node
   name; its `inputs`, `outputs`, and additional keyword arguments are not wired
   into Warp capture.
-- **Runtime integration:** running an exported ONNX model requires LEAPP's
-  Warp ONNX Runtime custom operator library.
+- **Runtime integration:** running an exported ONNX or PT2 model requires the
+  corresponding LEAPP Warp custom operator library.
 
 When automatic detection cannot express a desired boundary safely, use an
 explicit `annotate.warp_op()` block and keep the block limited to replayable
@@ -279,10 +284,10 @@ Warp operations.
 
 ## Try an inference pass
 
-After exporting a Warp graph and configuring `LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY`,
-run a full-pipeline smoke test with `InferenceManager`. The general workflow is
-covered in the LEAPP [runtime and validation guide](docs/source/guides/runtime.rst)
-and in the published docs at
+After exporting a Warp graph and configuring the custom operator library for
+its backend, run a full-pipeline smoke test with `InferenceManager`. The
+general workflow is covered in the LEAPP
+[runtime and validation guide](docs/source/guides/runtime.rst) and in the published docs at
 [Runtime and validation](https://nvidia-isaac.github.io/leapp/guides/runtime.html).
 
 ```python
@@ -299,7 +304,7 @@ outputs = manager.run_policy(mock_inputs)
 print(outputs)
 ```
 
-For Warp ONNX exports, run this in the same environment used to build the ONNX
-custom op. If the custom op is missing, built against a different ONNX Runtime
-version, or loaded without ONNX Runtime's CUDA execution provider, the smoke
-test will fail before the Warp runner can execute.
+Run this in the same environment used to build the selected custom op. PT2
+requires `LEAPP_WARP_PT2_CUSTOM_OP_LIBRARY`; ONNX requires
+`LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY` and ONNX Runtime's CUDA execution provider.
+Missing or incompatible libraries fail before the Warp runner executes.

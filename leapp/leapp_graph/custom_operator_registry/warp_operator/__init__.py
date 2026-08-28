@@ -43,6 +43,7 @@ from .schema import (
 )
 
 if TYPE_CHECKING:
+    import onnx
     import torch.nn
 
 from leapp.leapp_graph.datatypes.warp import wp
@@ -52,7 +53,7 @@ _LIB = torch.library.Library(NAMESPACE, "FRAGMENT")
 _SUPPORTED_EXPORT_BACKENDS = frozenset({"onnx-dynamo", "exported-program"})
 
 
-def _module_contains_warp_runner(module: "torch.nn.Module | None") -> bool:
+def module_contains_warp_runner(module: "torch.nn.Module | None") -> bool:
     if module is None:
         return False
     op_packet = get_op()
@@ -74,6 +75,22 @@ def _module_contains_warp_runner(module: "torch.nn.Module | None") -> bool:
     return False
 
 
+def _onnx_graph_contains_warp_runner(graph) -> bool:
+    for node in graph.node:
+        if node.domain == ONNX_WRP_DOMAIN and node.op_type == ONNX_WRP_OP_TYPE:
+            return True
+        for attribute in node.attribute:
+            if attribute.HasField("g") and _onnx_graph_contains_warp_runner(attribute.g):
+                return True
+            if any(_onnx_graph_contains_warp_runner(graph) for graph in attribute.graphs):
+                return True
+    return False
+
+
+def onnx_model_contains_warp_runner(model: "onnx.ModelProto | None") -> bool:
+    return model is not None and _onnx_graph_contains_warp_runner(model.graph)
+
+
 def _warp_unsupported_message(backend: str) -> str:
     return (
         f"export_with='{backend}' is not supported for graphs containing a Warp "
@@ -86,7 +103,7 @@ def _warp_unsupported_message(backend: str) -> str:
 def _register_export_hooks() -> None:
     register_export_hooks(
         op_name=QUALIFIED_NAME,
-        detect_in_module=_module_contains_warp_runner,
+        detect_in_module=module_contains_warp_runner,
         supported_backends=_SUPPORTED_EXPORT_BACKENDS,
         unsupported_message=_warp_unsupported_message,
     )
@@ -122,6 +139,8 @@ __all__ = [
     "ONNX_WRP_DOMAIN",
     "ONNX_WRP_OPSET",
     "ONNX_WRP_OP_TYPE",
+    "module_contains_warp_runner",
+    "onnx_model_contains_warp_runner",
     "get_op",
     "build_runtime_metadata",
     "encode_runtime_metadata",

@@ -4,6 +4,7 @@
 #
 
 import contextlib
+import os
 import sys
 import types
 import unittest
@@ -602,29 +603,104 @@ class TestWarpCompoundType(WarpTestCase, LEAPPFunctionalTestBase):
 
 
 
-class TestWarpAutomaticSegmentDetection(WarpTestCase, LEAPPFunctionalTestBase):
+class TestWarpInference(WarpTestCase, LEAPPFunctionalTestBase):
     NODE_NAME = "node_a"
 
-    def _run_single_node_operation(self, operation):
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        source = wp.array(
-            [1.0, 2.0, 3.0],
-            dtype=wp.float32,
-            device=self.DEVICE,
+    def test_pt2_runner_executes_distinct_warp_segments(self):
+        def operation(values):
+            values = self._launch_add(values, 1.0)
+            values = self._torch_roundtrip(values, 2.0)
+            return self._launch_add(values, 3.0)
+
+        node = self._run_single_node_operation(operation, export_with="pt2")
+        leapp.compile_graph(visualize=False)
+        self._assert_compiled_segments(node, 2)
+        self.verify_inference_manager(
+            source_inputs={
+                f"{self.NODE_NAME}/in_a": torch.tensor(
+                    [1.0, 2.0, 3.0], device=self.DEVICE
+                )
+            },
+            source_outputs={
+                f"{self.NODE_NAME}/out_a": torch.tensor(
+                    [7.0, 8.0, 9.0], device=self.DEVICE
+                )
+            },
         )
 
-        for _ in range(2):
-            values = annotate.input_tensors(self.NODE_NAME, {"in_a": source})
-            output = operation(values)
-            annotate.output_tensors(
-                self.NODE_NAME,
-                {"out_a": output},
-                export_with="onnx",
-            )
+    def test_pt2_runner_requires_custom_op_library(self):
+        self._run_single_node_operation(
+            lambda values: self._launch_add(values, 1.0),
+            export_with="pt2",
+        )
+        library_path = os.environ.pop("LEAPP_WARP_PT2_CUSTOM_OP_LIBRARY")
+        try:
+            with self.assertRaisesRegex(
+                RuntimeError, "LEAPP_WARP_PT2_CUSTOM_OP_LIBRARY"
+            ):
+                leapp.compile_graph(visualize=False)
+        finally:
+            os.environ["LEAPP_WARP_PT2_CUSTOM_OP_LIBRARY"] = library_path
 
-        node = annotate.get_nodes()[self.NODE_NAME]
-        leapp.stop()
-        return node
+    def test_onnx_runner_requires_custom_op_library(self):
+        from leapp import InferenceManager
+
+        self._run_single_node_operation(
+            lambda values: self._launch_add(values, 1.0),
+        )
+        leapp.compile_graph(visualize=False)
+        library_path = os.environ.pop("LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY")
+        try:
+            manager = InferenceManager(
+                f"{self.TEST_GRAPH_NAME}/{self.TEST_GRAPH_NAME}.yaml"
+            )
+            with self.assertRaisesRegex(
+                RuntimeError, "LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY"
+            ):
+                manager.run_policy(manager.get_mock_input())
+        finally:
+            os.environ["LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY"] = library_path
+
+    def test_one_array_read_by_three_launches_is_one_segment_input(self):
+        """A buffer several launches read is one runner argument, not several.
+
+        Inputs are recorded per launch, so this only holds because a launch
+        skips an allocation the segment already stands for. The first launch's
+        post-call walk registers every array it touched, which is what the
+        later launches recognize.
+        """
+        def operation(values):
+            first = self._launch_add(values, 1.0)
+            second = self._launch_add(values, 2.0)
+            output = wp.empty_like(values)
+            wp.launch(
+                self.kernels.average_three,
+                dim=values.size,
+                inputs=[first, second, values],
+                outputs=[output],
+                device=values.device,
+            )
+            return output
+
+        node = self._run_single_node_operation(operation)
+        leapp.compile_graph(visualize=False)
+        self._assert_compiled_segments(node, 1)
+
+        segment = node.warp_segments[0]
+        self.assertEqual(
+            len(segment.input_refs), 1,
+            "one buffer read by three launches produced "
+            f"{len(segment.input_refs)} segment inputs")
+        self.verify_inference_manager(
+            source_inputs={f"{self.NODE_NAME}/in_a": torch.tensor(
+                [1.0, 2.0, 3.0], device=self.DEVICE)},
+            source_outputs={f"{self.NODE_NAME}/out_a": torch.tensor(
+                [2.0, 3.0, 4.0], device=self.DEVICE)},
+        )
+
+
+class TestWarpAutomaticSegmentDetection(WarpTestCase, LEAPPFunctionalTestBase):
+    NODE_NAME = "node_a"
 
     def test_same_node_interleaved_warp_arrays_stay_in_one_segment(self):
         leapp.start(name=self.TEST_GRAPH_NAME)
@@ -752,43 +828,6 @@ class TestWarpAutomaticSegmentDetection(WarpTestCase, LEAPPFunctionalTestBase):
                     self._launch_add(node2_array, 1.0)
         finally:
             leapp.stop()
-
-    def test_one_array_read_by_three_launches_is_one_segment_input(self):
-        """A buffer several launches read is one runner argument, not several.
-
-        Inputs are recorded per launch, so this only holds because a launch
-        skips an allocation the segment already stands for. The first launch's
-        post-call walk registers every array it touched, which is what the
-        later launches recognize.
-        """
-        def operation(values):
-            first = self._launch_add(values, 1.0)
-            second = self._launch_add(values, 2.0)
-            output = wp.empty_like(values)
-            wp.launch(
-                self.kernels.average_three,
-                dim=values.size,
-                inputs=[first, second, values],
-                outputs=[output],
-                device=values.device,
-            )
-            return output
-
-        node = self._run_single_node_operation(operation)
-        leapp.compile_graph(visualize=False)
-        self._assert_compiled_segments(node, 1)
-
-        segment = node.warp_segments[0]
-        self.assertEqual(
-            len(segment.input_refs), 1,
-            "one buffer read by three launches produced "
-            f"{len(segment.input_refs)} segment inputs")
-        self.verify_inference_manager(
-            source_inputs={f"{self.NODE_NAME}/in_a": torch.tensor(
-                [1.0, 2.0, 3.0], device=self.DEVICE)},
-            source_outputs={f"{self.NODE_NAME}/out_a": torch.tensor(
-                [2.0, 3.0, 4.0], device=self.DEVICE)},
-        )
 
     def test_sync_device_boundary_creates_two_segments(self):
         def operation(values):

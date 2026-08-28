@@ -25,19 +25,15 @@ _WARP_RUNTIME_DIR = (
     / "warp_operator"
     / "runtime"
 )
-_WARP_CUSTOM_OP_LIB = _WARP_RUNTIME_DIR / "build" / "libleapp_wrp_onnx_custom_op.so"
+_WARP_ONNX_CUSTOM_OP_LIB = (
+    _WARP_RUNTIME_DIR / "build" / "libleapp_wrp_onnx_custom_op.so"
+)
+_WARP_PT2_CUSTOM_OP_LIB = (
+    _WARP_RUNTIME_DIR / "build" / "libleapp_wrp_torch_custom_op.so"
+)
 
 
-def ensure_warp_onnx_custom_op_library() -> str:
-    """Return the Warp ONNX custom-op library path, building it if needed.
-
-    TODO: Remove the cmake build fallback once the ONNX custom op is always
-    shipped prebuilt with the package/CI image. After that, this helper should
-    only resolve the bundled library path and set LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY.
-    """
-    if _WARP_CUSTOM_OP_LIB.is_file():
-        return str(_WARP_CUSTOM_OP_LIB)
-
+def _build_warp_custom_op_libraries() -> None:
     build_dir = _WARP_RUNTIME_DIR / "build"
     build_dir.mkdir(parents=True, exist_ok=True)
     subprocess.run(
@@ -49,6 +45,8 @@ def ensure_warp_onnx_custom_op_library() -> str:
             str(build_dir),
             f"-DPython3_EXECUTABLE={sys.executable}",
             "-DCMAKE_BUILD_TYPE=Release",
+            "-DLEAPP_WARP_BUILD_ONNX=ON",
+            "-DLEAPP_WARP_BUILD_TORCH=ON",
         ],
         check=True,
     )
@@ -56,17 +54,34 @@ def ensure_warp_onnx_custom_op_library() -> str:
         ["cmake", "--build", str(build_dir), "--config", "Release", "-j", "8"],
         check=True,
     )
-    if not _WARP_CUSTOM_OP_LIB.is_file():
+
+
+def ensure_warp_onnx_custom_op_library() -> str:
+    """Return the Warp ONNX custom-op library path, building it if needed."""
+    if not _WARP_ONNX_CUSTOM_OP_LIB.is_file():
+        _build_warp_custom_op_libraries()
+    if not _WARP_ONNX_CUSTOM_OP_LIB.is_file():
         raise FileNotFoundError(
-            f"Warp ONNX custom op library was not built: {_WARP_CUSTOM_OP_LIB}"
+            f"Warp ONNX custom op library was not built: {_WARP_ONNX_CUSTOM_OP_LIB}"
         )
-    return str(_WARP_CUSTOM_OP_LIB)
+    return str(_WARP_ONNX_CUSTOM_OP_LIB)
+
+
+def ensure_warp_pt2_custom_op_library() -> str:
+    """Return the Warp PT2 custom-op library path, building it if needed."""
+    if not _WARP_PT2_CUSTOM_OP_LIB.is_file():
+        _build_warp_custom_op_libraries()
+    if not _WARP_PT2_CUSTOM_OP_LIB.is_file():
+        raise FileNotFoundError(
+            f"Warp PT2 custom op library was not built: {_WARP_PT2_CUSTOM_OP_LIB}"
+        )
+    return str(_WARP_PT2_CUSTOM_OP_LIB)
 
 
 class WarpTestCase(unittest.TestCase):
-    """Base unittest class that registers the Warp ONNX custom op for tests.
+    """Base unittest class that configures the Warp runtime adapters for tests.
 
-    TODO: Remove once the ONNX custom op is always prebuilt and discovered
+    TODO: Remove once the custom ops are always prebuilt and discovered
     automatically; warp tests can then inherit LEAPPFunctionalTestBase only.
     """
 
@@ -110,6 +125,30 @@ class WarpTestCase(unittest.TestCase):
         array = values.numpy()
         array = array + value
         return wp.from_numpy(array, device=values.device)
+
+    def _run_single_node_operation(self, operation, export_with="onnx"):
+        import leapp
+        from leapp.leapp import _MANAGER as annotate
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        source = wp.array(
+            [1.0, 2.0, 3.0],
+            dtype=wp.float32,
+            device=self.DEVICE,
+        )
+
+        for _ in range(2):
+            values = annotate.input_tensors(self.NODE_NAME, {"in_a": source})
+            output = operation(values)
+            annotate.output_tensors(
+                self.NODE_NAME,
+                {"out_a": output},
+                export_with=export_with,
+            )
+
+        node = annotate.get_nodes()[self.NODE_NAME]
+        leapp.stop()
+        return node
 
     def _assert_compiled_segments(self, node, expected_segments):
         self.assertFalse(node.has_pending_warp_segments)
@@ -183,8 +222,12 @@ class WarpTestCase(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        lib_path = ensure_warp_onnx_custom_op_library()
-        os.environ["LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY"] = lib_path
+        os.environ[
+            "LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY"
+        ] = ensure_warp_onnx_custom_op_library()
+        os.environ[
+            "LEAPP_WARP_PT2_CUSTOM_OP_LIBRARY"
+        ] = ensure_warp_pt2_custom_op_library()
         # Most Warp entry points initialize the runtime on first use, but the
         # Torch conversions read it directly, so a test whose first Warp call is
         # ``wp.from_torch`` would fail on an uninitialized runtime.
