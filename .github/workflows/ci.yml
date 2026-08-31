@@ -14,7 +14,7 @@ jobs:
   test:
     runs-on: [self-hosted, gpu]
     container:
-      image: nvidia/cuda:13.0.2-devel-ubuntu24.04
+      image: nvidia/cuda:12.8.1-devel-ubuntu24.04
       options: --gpus all
     strategy:
       fail-fast: false
@@ -42,7 +42,7 @@ jobs:
 
       # Visualization modules ship with leapp; gated deps install on 3.11+.
       - name: Install package and test dependencies
-        run: python -m pip install -e ".[dev,test,warp-cu13]" cmake ninja
+        run: python -m pip install -e ".[dev,test,warp-cu12]" cmake ninja
 
       - name: Run pytest
         env:
