@@ -22,6 +22,12 @@ jobs:
         python-version: ["3.10", "3.11", "3.12"]
 
     steps:
+      # The CUDA devel image is minimal; checkout needs git and git-lfs.
+      - name: Install container dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git git-lfs ca-certificates
+
       - uses: actions/checkout@v4
         with:
           lfs: true
