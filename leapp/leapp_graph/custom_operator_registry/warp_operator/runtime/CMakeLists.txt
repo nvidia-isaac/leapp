@@ -116,7 +116,15 @@ if(LEAPP_WARP_BUILD_ONNX)
             list(GET ORT_HEADER_DOWNLOAD_STATUS 0 ORT_HEADER_DOWNLOAD_CODE)
             list(GET ORT_HEADER_DOWNLOAD_STATUS 1 ORT_HEADER_DOWNLOAD_MESSAGE)
             if(NOT ORT_HEADER_DOWNLOAD_CODE EQUAL 0)
-                message(FATAL_ERROR "Failed to download ${ORT_HEADER}: ${ORT_HEADER_DOWNLOAD_MESSAGE}")
+                # Split out of onnxruntime_c_api.h in 1.29; older releases 404.
+                if(ORT_HEADER STREQUAL "onnxruntime_error_code.h")
+                    file(REMOVE "${ORT_HEADER_PATH}")
+                    message(STATUS
+                        "Optional ${ORT_HEADER} is not available for "
+                        "ONNX Runtime ${ONNXRUNTIME_VERSION}; skipping.")
+                else()
+                    message(FATAL_ERROR "Failed to download ${ORT_HEADER}: ${ORT_HEADER_DOWNLOAD_MESSAGE}")
+                endif()
             endif()
         endif()
     endforeach()
