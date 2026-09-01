@@ -112,6 +112,20 @@ class TracedWpArray(wp.array, TracedData):
             bind_new_view(array, name, context, proxy)
         return array
 
+    @classmethod
+    def clear_tracing_state(cls, array: "TracedWpArray") -> wp.array:
+        """Undo :meth:`make_traced_in_place`, returning a raw ``wp.array``.
+
+        The view a carrier holds points at one graph, so a buffer that outlives
+        the pass that promoted it has to shed that provenance before the next
+        pass can describe it.
+        """
+        for attribute in ("_name", "_context", "_proxy_view", "_output_port",
+                          "_leapp_warp_segment"):
+            array.__dict__.pop(attribute, None)
+        array.__class__ = wp.array
+        return array
+
     def rebind_tracing_proxy(self, name: str, context, proxy: Proxy) -> None:
         """Rebind this traced array to the canonical FX proxy for its value.
 
@@ -243,6 +257,9 @@ class TracedWpArray(wp.array, TracedData):
         cls._validate_scan_depth(depth)
 
         if isinstance(obj, cls):
+            if cls._describes_replaced_graph(obj):
+                cls.clear_tracing_state(obj)
+                return obj
             traced.append(obj)
             return obj.data
         if isinstance(obj, dict):
@@ -256,6 +273,20 @@ class TracedWpArray(wp.array, TracedData):
                 for item in obj
             )
         return obj
+
+    @classmethod
+    def _describes_replaced_graph(cls, array: "TracedWpArray") -> bool:
+        """Whether this carrier's proxy belongs to a graph its node has replaced.
+
+        A buffer that outlives the pass that promoted it keeps that pass's
+        provenance, so reading it again would pull a node out of a discarded
+        graph and into the one being built.
+        """
+        proxy = array.proxy
+        if proxy is None:
+            return False
+        context = array.context_obj
+        return context is not None and proxy.node.graph is not context.graph
 
     @staticmethod
     def _validate_scan_depth(depth: int) -> None:
