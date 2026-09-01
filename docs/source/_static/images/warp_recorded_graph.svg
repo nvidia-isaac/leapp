@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 784"
+     class="leapp-warp-diagram" role="img">
+  <title>Recorded graph, with each Warp segment collapsed to one node</title>
+  <defs>
+    <marker id="ah" viewBox="0 0 8 8" markerWidth="8" markerHeight="8" refX="7" refY="4"
+            orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0.5,0.8 L7.2,4 L0.5,7.2 z" fill="var(--pst-color-text-muted, #5c5c5c)"/>
+    </marker>
+    <marker id="ah_g" viewBox="0 0 8 8" markerWidth="9" markerHeight="9" refX="7" refY="4"
+            orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0.5,0.8 L7.2,4 L0.5,7.2 z" fill="#76b900"/>
+    </marker>
+    <marker id="ah_p" viewBox="0 0 8 8" markerWidth="7" markerHeight="7" refX="7" refY="4"
+            orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0.5,0.8 L7.2,4 L0.5,7.2 z" fill="#9061c2"/>
+    </marker>
+  </defs>
+  <text x="26" y="392.0" text-anchor="middle" transform="rotate(-90,26,392.0)" font-family="var(--pst-font-family-base, 'Open Sans', system-ui, sans-serif)" font-size="13.5" font-weight="600" fill="#76b900" letter-spacing="0.1em">RECORDED GRAPH</text>
+  <g>
+    <rect x="145.0" y="30" width="210" height="54" rx="8"
+          fill="rgba(118,185,0,0.14)" stroke="#76b900" stroke-width="1.6"/>
+    <text x="250" y="57.0" text-anchor="middle" dominant-baseline="central"
+          font-family="var(--pst-font-family-base, 'Open Sans', system-ui, sans-serif)" font-size="17.5" fill="var(--pst-color-text-base, #232629)">Input</text>
+  </g>
+  <g>
+    <rect x="455.0" y="30" width="210" height="54" rx="8"
+          fill="rgba(118,185,0,0.14)" stroke="#76b900" stroke-width="1.6"/>
+    <text x="560" y="57.0" text-anchor="middle" dominant-baseline="central"
+          font-family="var(--pst-font-family-base, 'Open Sans', system-ui, sans-serif)" font-size="17.5" fill="var(--pst-color-text-base, #232629)">Input</text>
+  </g>
+  <g>
+    <rect x="145.0" y="130" width="210" height="54" rx="8"
+          fill="rgba(240,185,30,0.18)" stroke="#cc9a06" stroke-width="1.6"/>
+    <text x="250" y="157.0" text-anchor="middle" dominant-baseline="central"
+          font-family="var(--pst-font-family-base, 'Open Sans', system-ui, sans-serif)" font-size="17.5" fill="var(--pst-color-text-base, #232629)">Torch function</text>
+  </g>
+  <g>
+    <rect x="145.0" y="230" width="210" height="54" rx="8"
+          fill="rgba(240,185,30,0.18)" stroke="#cc9a06" stroke-width="1.6"/>
+    <text x="250" y="257.0" text-anchor="middle" dominant-baseline="central"
+          font-family="var(--pst-font-family-base, 'Open Sans', system-ui, sans-serif)" font-size="17.5" fill="var(--pst-color-text-base, #232629)">Torch function</text>
+  </g>
+  <g>
+    <rect x="300.0" y="360" width="210" height="54" rx="8"
+          fill="rgba(144,97,194,0.16)" stroke="#9061c2" stroke-width="1.6"/>
+    <text x="405" y="387.0" text-anchor="middle" dominant-baseline="central"
+          font-family="var(--pst-font-family-monospace, ui-monospace, 'SFMono-Regular', monospace)" font-size="15.5" fill="var(--pst-color-text-base, #232629)">leapp.warp_runner</text>
+  </g>
+  <g>
+    <rect x="300.0" y="470" width="210" height="54" rx="8"
+          fill="rgba(240,185,30,0.18)" stroke="#cc9a06" stroke-width="1.6"/>
+    <text x="405" y="497.0" text-anchor="middle" dominant-baseline="central"
+          font-family="var(--pst-font-family-base, 'Open Sans', system-ui, sans-serif)" font-size="17.5" fill="var(--pst-color-text-base, #232629)">Torch function</text>
+  </g>
+  <g>
+    <rect x="300.0" y="580" width="210" height="54" rx="8"
+          fill="rgba(144,97,194,0.16)" stroke="#9061c2" stroke-width="1.6"/>
+    <text x="405" y="607.0" text-anchor="middle" dominant-baseline="central"
+          font-family="var(--pst-font-family-monospace, ui-monospace, 'SFMono-Regular', monospace)" font-size="15.5" fill="var(--pst-color-text-base, #232629)">leapp.warp_runner</text>
+  </g>
+  <g>
+    <rect x="300.0" y="690" width="210" height="54" rx="8"
+          fill="rgba(118,185,0,0.14)" stroke="#76b900" stroke-width="1.6"/>
+    <text x="405" y="717.0" text-anchor="middle" dominant-baseline="central"
+          font-family="var(--pst-font-family-base, 'Open Sans', system-ui, sans-serif)" font-size="17.5" fill="var(--pst-color-text-base, #232629)">Output</text>
+  </g>
+  <path d="M250,84 V130" fill="none" stroke="var(--pst-color-text-muted, #5c5c5c)" stroke-width="1.7"
+        stroke-linejoin="round" marker-end="url(#ah)"/>
+  <path d="M250,184 V230" fill="none" stroke="var(--pst-color-text-muted, #5c5c5c)" stroke-width="1.7"
+        stroke-linejoin="round" marker-end="url(#ah)"/>
+  <path d="M250,284 V315 H405" fill="none" stroke="var(--pst-color-text-muted, #5c5c5c)" stroke-width="1.7" stroke-linejoin="round"/>
+  <path d="M560,84 V315 H405" fill="none" stroke="var(--pst-color-text-muted, #5c5c5c)" stroke-width="1.7" stroke-linejoin="round"/>
+  <circle cx="405" cy="315" r="3.4" fill="var(--pst-color-text-muted, #5c5c5c)"/>
+  <path d="M405,315 V360" fill="none" stroke="var(--pst-color-text-muted, #5c5c5c)" stroke-width="1.7"
+        stroke-linejoin="round" marker-end="url(#ah)"/>
+  <path d="M405,414 V470" fill="none" stroke="var(--pst-color-text-muted, #5c5c5c)" stroke-width="1.7"
+        stroke-linejoin="round" marker-end="url(#ah)"/>
+  <path d="M405,524 V580" fill="none" stroke="var(--pst-color-text-muted, #5c5c5c)" stroke-width="1.7"
+        stroke-linejoin="round" marker-end="url(#ah)"/>
+  <path d="M405,634 V690" fill="none" stroke="var(--pst-color-text-muted, #5c5c5c)" stroke-width="1.7"
+        stroke-linejoin="round" marker-end="url(#ah)"/>
+  <path d="M688,387.0 H518.0" fill="none" stroke="#9061c2" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#ah_p)" opacity="0.7"/>
+  <text x="700" y="378.0" dominant-baseline="central" font-family="var(--pst-font-family-base, 'Open Sans', system-ui, sans-serif)" font-size="14" fill="#9061c2">segment 1: two wp.launch</text>
+  <text x="700" y="396.0" dominant-baseline="central" font-family="var(--pst-font-family-base, 'Open Sans', system-ui, sans-serif)" font-size="14" fill="#9061c2">calls, now one node</text>
+  <path d="M688,607.0 H518.0" fill="none" stroke="#9061c2" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#ah_p)" opacity="0.7"/>
+  <text x="700" y="607.0" dominant-baseline="central" font-family="var(--pst-font-family-base, 'Open Sans', system-ui, sans-serif)" font-size="14" fill="#9061c2">segment 2: one node</text>
+</svg>

@@ -8,6 +8,9 @@ build/
 dist/
 *.egg
 
+# Sphinx build output
+docs/_build/
+
 # PyPI upload artifacts
 .pypirc
 

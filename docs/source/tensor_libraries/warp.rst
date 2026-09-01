@@ -18,13 +18,12 @@ same exported graph as the surrounding PyTorch code. A pipeline can keep
 simulation-side conditioning in Warp instead of rewriting it in torch
 before it can be exported.
 
-For any pipeline that traces Warp,
+.. role:: strong-underline
+   :class: leapp-strong-underline
 
-.. container:: leapp-highlight
-
-   Warp features require at least two passes to capture correctly: a
-   discovery pass, then a capture pass of the same Warp control-flow path
-   before ``leapp.stop()``.
+For any pipeline that traces Warp, :strong-underline:`Warp features require
+at least two passes to capture correctly: a discovery pass, then a capture
+pass of the same Warp control-flow path before` ``leapp.stop()``.
 
 Each captured Warp region becomes a ``leapp::warp_runner`` operation in an
 ONNX or PT2 artifact. Export Warp-containing nodes with
@@ -35,9 +34,8 @@ for what it rules out.
 Example: a simulated robot policy
 =================================
 
-The simulator yields joint state as Warp arrays. Conditioning stays in Warp.
-The learned policy stays in torch. Commands go back through Warp before they
-are written to the sim.
+The simulator yields joint state as Warp arrays, so conditioning stays in
+Warp. The learned policy stays in torch.
 
 .. code-block:: python
 
@@ -46,9 +44,7 @@ are written to the sim.
    import leapp
    from leapp import annotate
 
-   JOINT_LIMIT = 1.0
    VEL_SCALE = 4.0
-   ACTION_SCALE = 0.25
 
    @wp.kernel
    def scale_and_clip(
@@ -68,19 +64,10 @@ are written to the sim.
        def forward(self, obs: torch.Tensor) -> torch.Tensor:
            return torch.tanh(self.net(obs))
 
-   def get_robot_state(sim):
-       return {
-           "joint_pos": sim.joint_positions,
-           "joint_vel": sim.joint_velocities,
-       }
-
-   def set_robot_command(sim, command):
-       sim.set_joint_targets(command)
-
-   def preprocess(frame: dict) -> torch.Tensor:
+   def preprocess(joint_pos, joint_vel) -> torch.Tensor:
        pos, vel = annotate.input_tensors("preprocess", {
-           "joint_pos": frame["joint_pos"],
-           "joint_vel": frame["joint_vel"],
+           "joint_pos": joint_pos,
+           "joint_vel": joint_vel,
        })
 
        pos_n = wp.empty_like(pos)
@@ -97,47 +84,45 @@ are written to the sim.
    def run_policy(policy: Policy, obs: torch.Tensor) -> torch.Tensor:
        traced_obs = annotate.input_tensors("policy", {"obs": obs})
        action = policy(traced_obs.unsqueeze(0)).squeeze(0)
-       annotate.output_tensors("policy", {"action": action}, export_with="jit")
+       annotate.output_tensors("policy", {"action": action}, export_with="onnx")
        return action
 
-   def postprocess(action: torch.Tensor):
-       cmd_in = annotate.input_tensors(
-           "postprocess", {"action": wp.from_torch(action)})
-       command = wp.empty_like(cmd_in)
-       wp.launch(scale_and_clip, dim=cmd_in.size,
-                 inputs=[cmd_in, command, ACTION_SCALE, JOINT_LIMIT],
-                 device=cmd_in.device)
-       annotate.output_tensors(
-           "postprocess", {"command": command}, export_with="onnx")
-       return command
-
    def main(sim):
-       policy = Policy().eval()
+       policy = Policy().eval().cuda()
 
        leapp.start(name="warp_robot_pipeline")
-       for _ in range(2):
-           frame = get_robot_state(sim)
-           obs = preprocess(frame)
-           action = run_policy(policy, obs)
-           command = postprocess(action)
-           set_robot_command(sim, command)
+       for _ in range(2):  # discovery pass, then capture pass
+           pos, vel = sim.joint_state()
+           obs = preprocess(pos, vel)
+           run_policy(policy, obs)
        leapp.stop()
        leapp.compile_graph()
 
+The maintained copy of this example is ``examples/warp_robot_pipeline.py``.
+
 The loop runs the annotated path twice: once to discover Warp segments, once
-to capture them. ``wp.to_torch()`` and ``wp.from_torch()`` are traced
-conversions. The exported bundle wires the three nodes together:
+to capture them. ``wp.to_torch()`` is a traced conversion, not a trace break.
 
-.. code-block:: yaml
+Nothing separates the two launches, so both belong to the same segment. This
+is the graph LEAPP records for ``preprocess``:
 
-   pipeline:
-     data_flow:
-       preprocess/obs: [policy/obs]
-       policy/action: [postprocess/action]
-     inputs:
-       preprocess: [joint_pos, joint_vel]
-     outputs:
-       postprocess: [command]
+.. code-block:: text
+
+   %joint_pos               = placeholder[target=joint_pos]
+   %joint_vel               = placeholder[target=joint_vel]
+   %warp_segment_0_bundle   = get_attr[target=_warp_segment_0_bundle]
+   # Both wp.launch calls are condensed into this single node.
+   %warp_segment_0          = call_function[target=torch.ops.leapp.warp_runner.default](args = ([%joint_pos, %joint_vel], {...boundary metadata...}, %warp_segment_0_bundle))
+   %warp_segment_0_output_5 = call_function[target=operator.getitem](args = (%warp_segment_0, 5))
+   %warp_segment_0_output_7 = call_function[target=operator.getitem](args = (%warp_segment_0, 7))
+   %cat                     = call_function[target=torch.cat](args = ([%warp_segment_0_output_5, %warp_segment_0_output_7],))
+   return cat
+
+The kernels themselves are not in the graph. ``_warp_segment_0_bundle`` is the
+captured APIC archive, the elided argument is the shape and dtype metadata for
+the arrays crossing the boundary, and the two ``getitem`` calls select the
+buffers the segment wrote. Only ``torch.cat``, which ran outside Warp, is
+recorded as an ordinary torch operation.
 
 .. note::
 

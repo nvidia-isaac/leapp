@@ -7,6 +7,27 @@ follow from what LEAPP has to guarantee for a capture to be replayable in an
 exported model. Plain Warp restrictions that apply with or without LEAPP are
 not repeated here.
 
+Kernels are exported as PTX
+===========================
+
+An exported bundle embeds the compiled Warp modules, so it has to load on a
+machine LEAPP never saw. To make that possible LEAPP forces Warp to emit PTX
+built for compute capability 7.5, before any kernel is compiled:
+
+.. code-block:: python
+
+   wp.config.cuda_output = "ptx"
+   wp.config.ptx_target_arch = 75
+
+The driver compiles that PTX when the model loads, so one artifact runs on a
+range of CUDA GPUs instead of only the one that traced it. The cost is:
+
+* Compute capability 7.5 is the floor. Older GPUs cannot load the export.
+* Kernels cannot use hardware features newer than ``sm_75``, however new the
+  GPU running them is.
+* The driver compiles the PTX on first load, so the first inference pays a
+  one-time cost.
+
 The two passes must match
 =========================
 
@@ -74,8 +95,8 @@ torch layout, so a logical ``(2, 4)`` array of ``wp.vec3`` is recorded as a
 Heterogeneous ``@wp.struct`` arrays have no such layout and are rejected with
 ``Unsupported dtype``.
 
-One node per Warp call
-======================
+A Warp call cannot span two nodes
+=================================
 
 A single Warp call cannot consume traced arrays owned by different LEAPP
 nodes, because the call would have to belong to two segments at once:
@@ -114,9 +135,16 @@ A Warp call that receives no traced Warp value opens no segment and leaves
 nothing in the graph, so Warp work on arrays that never passed through
 :func:`~leapp.annotate.input_tensors` is simply absent from the export.
 
+Tracing changes process-wide state
+==================================
+
 Warp patching is installed by ``leapp.start(..., global_patching=True)``, the
-default. It also disables torch's CUDA caching allocator for the rest of the
-process, which can slow down torch allocations after a Warp trace.
+default. Two of its effects outlive the trace:
+
+* Torch's CUDA caching allocator is disabled for the rest of the process,
+  which can slow down torch allocations afterwards.
+* The PTX settings above are Warp configuration, so every Warp kernel
+  compiled in the process uses them, not only the exported ones.
 
 Running the export needs the native library
 ===========================================

@@ -62,6 +62,7 @@ libcupti
 CUPTI
 cuDNN
 APIC
+Unmanaged
 safetensors
 mypy
 pytest
