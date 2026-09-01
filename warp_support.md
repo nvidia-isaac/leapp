@@ -44,15 +44,13 @@ CUDA toolkit's `libcupti` major version or CUPTI initialization will fail.
 The committed lock currently uses:
 
 - `cupti-python==12.8.0`
-- `onnxruntime==1.26.0`
 - `warp-lang>=1.15.0`
 
-If you need to validate the exported ONNX model, install the GPU build of ONNX
-Runtime at the same API version as the locked CPU package:
-
-```bash
-uv pip install "onnxruntime-gpu[cuda,cudnn]==1.26.0"
-```
+The `warp-cu12` and `warp-cu13` extras install `onnxruntime-gpu` (with the
+`cuda` and `cudnn` extra) so the CUDA execution provider is available without
+a second install. Pick the extra that matches the CUDA toolkit: `warp-cu12`
+pulls an ORT GPU build for CUDA 12, `warp-cu13` for CUDA 13. `warp-cu13`
+needs Python 3.11 or newer for `onnxruntime-gpu`.
 
 ### Build and configure the exported runners
 
@@ -101,10 +99,10 @@ Building requires a C++17 compiler, CMake 3.18 or newer, the CUDA Toolkit, and
 its CUDA compiler. CMake downloads matching ONNX Runtime C API headers during
 configuration, so each clean build requires network access.
 
-The ONNX runner uses ONNX Runtime's CUDA execution provider, so a working
-`onnxruntime-gpu` installation and its compatible CUDA dependencies must be
-available in that inference environment. The PT2 runner uses PyTorch's CUDA
-dispatcher and must be built against the PyTorch installation that loads it.
+The ONNX runner uses ONNX Runtime's CUDA execution provider, which the
+`warp-cu12` / `warp-cu13` extras install via `onnxruntime-gpu`. The PT2 runner
+uses PyTorch's CUDA dispatcher and must be built against the PyTorch
+installation that loads it.
 
 ## How it works
 
@@ -304,8 +302,8 @@ Warp operations.
 After exporting a Warp graph and building the custom operator libraries, run a
 full-pipeline smoke test with `InferenceManager`. The general workflow is
 covered in the LEAPP
-[runtime and validation guide](docs/source/guides/runtime.rst) and in the published docs at
-[Runtime and validation](https://nvidia-isaac.github.io/leapp/guides/runtime.html).
+[Python runtime guide](docs/source/leapp_runtime.rst) and in the published docs at
+[LEAPP Python runtime](https://nvidia-isaac.github.io/leapp/leapp_runtime.html).
 
 ```python
 from leapp import InferenceManager

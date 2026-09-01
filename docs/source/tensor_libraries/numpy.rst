@@ -9,54 +9,8 @@ keep the NumPy preprocessing it already has instead of rewriting it in torch
 before it can be exported.
 
 The exported artifact is always a torch graph. NumPy is a frontend to that
-graph, not a second export backend. See :doc:`limitations` for the cases that
-follow from that.
-
-How NumPy tracing works
-=======================
-
-``TracedNpArray`` subclasses ``np.ndarray``, so it holds real array data and
-behaves like an array everywhere LEAPP is not involved. It implements NumPy's
-two dispatch hooks, ``__array_ufunc__`` and ``__array_function__``, which lets
-it see every NumPy call made on it before NumPy executes it.
-
-Each intercepted call does two things:
-
-#. Runs the original NumPy operation eagerly on the underlying buffer, so the
-   value you get back is exactly what NumPy would have produced.
-#. Looks the NumPy function up in a translation table and records the
-   **equivalent torch operation** into the FX graph.
-
-So ``np.clip`` on a traced array returns a clipped NumPy array and records
-``torch.clamp``. Given this node:
-
-.. code-block:: python
-
-   state, velocity = annotate.input_tensors("preprocess", {
-       "state": frame["observation.state"],
-       "velocity": frame["observation.velocity"],
-   })
-
-   state_norm = np.clip((state - STATE_MEAN) / STATE_STD, -5.0, 5.0)
-   obs = np.concatenate([state_norm, velocity])
-
-LEAPP records a graph that mentions no NumPy at all:
-
-.. code-block:: text
-
-   %state             = placeholder[target=state]
-   %velocity          = placeholder[target=velocity]
-   %_tensor_constant0 = get_attr[target=_tensor_constant0]
-   %sub               = call_function[target=torch.sub](args = (%state, %_tensor_constant0))
-   %_tensor_constant1 = get_attr[target=_tensor_constant1]
-   %div               = call_function[target=torch.div](args = (%sub, %_tensor_constant1))
-   %clamp             = call_function[target=torch.clamp](args = (%div, -5.0, 5.0))
-   %cat               = call_function[target=torch.cat](args = ([%clamp, %velocity],))
-
-Two details in that graph matter for :doc:`limitations`. Plain NumPy arrays
-used as operands, here ``STATE_MEAN`` and ``STATE_STD``, become frozen
-``get_attr`` constants. And each recorded node comes from a lookup, so a
-NumPy call with no entry in the table records nothing.
+graph, not a second export backend. See :doc:`how_it_works` for the
+interception model and :doc:`limitations` for the cases that follow from that.
 
 Example: a dataset-driven policy pipeline
 =========================================
@@ -144,12 +98,5 @@ unchanged, they also keep the node boundary that connects ``preprocess`` to
 .. toctree::
    :hidden:
 
+   how_it_works
    limitations
-
-Guidance
-========
-
-Keep the NumPy portion of a pipeline to the element-wise, reduction, and shape
-work close to the data source, and cross into torch as early as the pipeline
-allows. That is where NumPy support pays for itself, and it keeps the surface
-that has to be checked small.

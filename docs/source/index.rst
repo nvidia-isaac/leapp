@@ -139,7 +139,7 @@ Documentation Map
   :doc:`guides/debugging`.
 * Add semantic data annotations with :doc:`semantics/usage`.
 * Trace pipelines written against other tensor libraries with
-  :doc:`tensor_libraries/numpy`.
+  :doc:`tensor_libraries/numpy` and :doc:`tensor_libraries/warp`.
 * Learn how to run an exported bundle in :doc:`generated_configs` and
   :doc:`leapp_runtime`.
 * Browse the full :doc:`api/index`.
@@ -179,6 +179,7 @@ Documentation Map
    :maxdepth: 2
 
    tensor_libraries/numpy
+   tensor_libraries/warp
 
 .. toctree::
    :caption: Running the Exported Model

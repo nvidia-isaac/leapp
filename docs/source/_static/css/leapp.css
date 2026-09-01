@@ -1,5 +1,13 @@
 @import url("https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css");
 
+.leapp-highlight {
+    background-color: #ffe566;
+    color: #1a1a1a;
+    border-radius: 4px;
+    margin: 0.75rem 0 1rem;
+    padding: 0.75rem 1rem;
+}
+
 a.reference.external::after {
     font-family: FontAwesome;
     content: "\f08e";

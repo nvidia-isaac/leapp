@@ -144,3 +144,11 @@ Casts are limited to the shared dtypes
 ``float16``, ``float32``, ``float64``, ``int8``, ``int16``, ``int32``,
 ``int64``, ``uint8``, and ``bool``. Any other target dtype casts eagerly, warns,
 and leaves the graph at the original dtype.
+
+Guidance
+========
+
+Keep the NumPy portion of a pipeline to the element-wise, reduction, and shape
+work close to the data source, and cross into torch as early as the pipeline
+allows. That is where NumPy support pays for itself, and it keeps the surface
+that has to be checked small.
