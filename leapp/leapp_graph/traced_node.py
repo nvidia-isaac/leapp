@@ -143,6 +143,9 @@ class TracedTensorNode(LeappNode):
         self.m = None
         self._model_captured = False
         self._layout_index.clear()
+        # State placeholders belong to the graph being replaced, so a second
+        # pass has to re-declare them rather than reuse the old carriers.
+        self._state_tensors.clear()
 
     def find_declared_alias(self, value):
         """Carrier declared on this node that ``value`` may share a root with.

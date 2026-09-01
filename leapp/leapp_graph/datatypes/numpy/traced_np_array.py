@@ -120,7 +120,6 @@ NUMPY_UFUNC_TO_TORCH = {
     np.floor: torch.floor,
     np.ceil: torch.ceil,
     np.trunc: torch.trunc,
-    np.round: torch.round,
     np.rint: torch.round,
 
     # Comparison (element-wise, return boolean tensor)
@@ -132,6 +131,10 @@ NUMPY_UFUNC_TO_TORCH = {
     np.not_equal: torch.ne,
     np.maximum: torch.maximum,
     np.minimum: torch.minimum,
+
+    # Matrix multiplication. ``np.matmul`` is a ufunc, so it never reaches
+    # ``__array_function__``; ``np.dot`` is not, and is mapped there instead.
+    np.matmul: torch.matmul,
 
     # Logical operations
     np.logical_and: torch.logical_and,
@@ -180,7 +183,9 @@ NUMPY_FUNC_TO_TORCH = {
     np.stack: torch.stack,
     np.vstack: torch.vstack,
     np.hstack: torch.hstack,
-    np.split: torch.split,
+    # Integer sections mean "N parts" in NumPy and "chunk size" in torch.split.
+    # tensor_split matches both np.split and np.array_split.
+    np.split: torch.tensor_split,
     np.array_split: torch.tensor_split,
     np.squeeze: torch.squeeze,
     np.expand_dims: torch.unsqueeze,
@@ -210,9 +215,10 @@ NUMPY_FUNC_TO_TORCH = {
     np.cos: torch.cos,
     np.tan: torch.tan,
     np.tanh: torch.tanh,
+    np.round: torch.round,
+    np.around: torch.round,
 
     # Linear algebra
-    np.matmul: torch.matmul,
     np.dot: torch.matmul,  # Note: torch.dot is only for 1D vectors
     np.tensordot: torch.tensordot,
     np.einsum: torch.einsum,
@@ -239,6 +245,7 @@ NUMPY_FUNC_TO_TORCH = {
 # Functions that need axis -> dim conversion
 AXIS_TO_DIM_FUNCTIONS = {
     torch.sum,
+    torch.prod,
     torch.mean,
     torch.std,
     torch.var,
@@ -253,12 +260,24 @@ AXIS_TO_DIM_FUNCTIONS = {
     torch.all,
     torch.any,
     torch.cat,
+    torch.stack,
+    torch.tensor_split,
     torch.squeeze,
     torch.unsqueeze,
-    torch.flip,
-    torch.roll,
     torch.sort,
     torch.argsort,
+}
+
+# torch.flip / torch.roll take dims, not dim. A bare int must be a 1-tuple for flip.
+AXIS_TO_DIMS_FUNCTIONS = {
+    torch.flip,
+    torch.roll,
+}
+
+# These reject Python scalars, unlike torch.clamp and the arithmetic ops.
+SCALAR_TENSOR_FUNCTIONS = {
+    torch.maximum,
+    torch.minimum,
 }
 
 
@@ -337,7 +356,8 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
     @property
     def tensor(self) -> np.ndarray:
         """Get the underlying numpy array (for TracedData compatibility)."""
-        return torch.from_numpy(self.view(np.ndarray))
+        array = np.ascontiguousarray(self.view(np.ndarray))
+        return torch.from_numpy(array)
 
     @property
     def data(self) -> np.ndarray:
@@ -400,6 +420,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
             for v in obj.values():
                 TracedNpArray.find_all_contexts(v, contexts)
         return contexts
+
     def _extract_proxy(self, obj):
         """Recursively extract proxies and convert constant NumPy arrays."""
         def convert(item):
@@ -407,38 +428,63 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
                 return item.proxy
             if isinstance(item, np.ndarray):
                 return torch.from_numpy(item.copy())
+            if isinstance(item, np.generic):
+                return torch.as_tensor(np.asarray(item))
             return item
 
         return TracedData._map_structure(obj, convert)
 
-    def _convert_numpy_kwargs_to_torch(self, proxy_kwargs, torch_func, original_kwargs=None, args=None):
-        """Convert numpy kwargs to torch kwargs.
-        
-        Args:
-            proxy_kwargs: Dict of kwargs with proxies extracted
-            torch_func: The torch function being called
-            original_kwargs: Original kwargs dict (before proxy extraction) for key checking
-            args: Original args for getting array dimensions
-        
+    def _convert_numpy_call_to_torch(
+            self, proxy_args, proxy_kwargs, torch_func,
+            original_kwargs=None, args=None):
+        """Convert numpy args/kwargs to the matching torch call.
+
         Handles:
         - 'axis' → 'dim' for functions in AXIS_TO_DIM_FUNCTIONS
+        - 'axis' → 'dims' for functions in AXIS_TO_DIMS_FUNCTIONS
+        - omitted / integer axis for torch.flip
+        - scalar operands for torch.maximum / torch.minimum
         - 'keepdims' → 'keepdim' (numpy uses 's', torch doesn't)
         - 'keepdims' without axis: torch requires dim when keepdim is specified
         - 'axes' for transpose: None or missing → reversed dims tuple
         """
+        proxy_args = tuple(proxy_args)
         proxy_kwargs = proxy_kwargs.copy()
         if original_kwargs is None:
             original_kwargs = {}
-        
+
         # Get input array for dimension info
         input_arr = args[0] if args and len(args) > 0 else None
-        
+
         # Convert axis → dim
         has_dim = False
         if torch_func in AXIS_TO_DIM_FUNCTIONS and 'axis' in proxy_kwargs:
             proxy_kwargs['dim'] = proxy_kwargs.pop('axis')
             has_dim = True
-        
+
+        if torch_func in AXIS_TO_DIMS_FUNCTIONS:
+            if 'axis' in proxy_kwargs:
+                dims = proxy_kwargs.pop('axis')
+                if dims is None and torch_func is torch.flip and hasattr(input_arr, 'ndim'):
+                    dims = tuple(range(input_arr.ndim))
+                elif torch_func is torch.flip and isinstance(dims, int):
+                    dims = (dims,)
+                if dims is not None:
+                    proxy_kwargs['dims'] = dims
+            elif torch_func is torch.flip:
+                if args is not None and len(args) > 1:
+                    dims = proxy_args[1]
+                    if isinstance(dims, int):
+                        proxy_args = (proxy_args[0], (dims,)) + proxy_args[2:]
+                elif hasattr(input_arr, 'ndim'):
+                    proxy_kwargs['dims'] = tuple(range(input_arr.ndim))
+
+        if torch_func in SCALAR_TENSOR_FUNCTIONS:
+            proxy_args = tuple(
+                torch.tensor(arg) if isinstance(arg, (int, float, bool)) else arg
+                for arg in proxy_args
+            )
+
         # Convert keepdims → keepdim (numpy uses 's', torch doesn't)
         # Important: torch.sum/mean only support keepdim when dim is also specified
         if 'keepdims' in proxy_kwargs:
@@ -452,7 +498,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
                 proxy_kwargs['dim'] = tuple(range(input_arr.ndim))
                 proxy_kwargs['keepdim'] = True
             # If keepdims=False without axis, we can just omit both (default behavior)
-        
+
         # np.var/std default to ddof=0 (population), torch defaults to correction=1 (sample)
         if torch_func in (torch.var, torch.std):
             if 'ddof' in proxy_kwargs:
@@ -460,12 +506,15 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
             elif 'correction' not in proxy_kwargs:
                 proxy_kwargs['correction'] = 0
 
+        if torch_func is torch.tensordot and 'axes' in proxy_kwargs:
+            proxy_kwargs['dims'] = proxy_kwargs.pop('axes')
+
         # Handle np.transpose with axes=None or missing
         # torch.permute requires explicit dims, but numpy reverses all dims when axes is omitted
         if torch_func == torch.permute:
             # Check if axes was passed as positional arg (2nd argument)
             axes_in_args = len(args) > 1 if args else False
-            
+
             if 'axes' in proxy_kwargs:
                 axes = proxy_kwargs.pop('axes')
                 if axes is None and input_arr is not None and hasattr(input_arr, 'ndim'):
@@ -478,8 +527,8 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
                 if input_arr is not None and hasattr(input_arr, 'ndim'):
                     proxy_kwargs['dims'] = tuple(range(input_arr.ndim - 1, -1, -1))
             # If axes_in_args is True, it will be passed as positional arg, don't add to kwargs
-        
-        return proxy_kwargs
+
+        return proxy_args, proxy_kwargs
 
     # =========================================================================
     # NumPy Ufunc Interception (__array_ufunc__)
@@ -520,8 +569,8 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
             )
             return result_array
 
-        proxy_inputs = tuple(self._extract_proxy(inp) for inp in inputs)
-        proxy_kwargs = self._convert_numpy_kwargs_to_torch(
+        proxy_inputs, proxy_kwargs = self._convert_numpy_call_to_torch(
+            tuple(self._extract_proxy(inp) for inp in inputs),
             {key: self._extract_proxy(value) for key, value in kwargs.items()},
             torch_func,
             original_kwargs=kwargs,
@@ -601,8 +650,8 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
             )
             return result_array
 
-        proxy_args = tuple(self._extract_proxy(arg) for arg in args)
-        proxy_kwargs = self._convert_numpy_kwargs_to_torch(
+        proxy_args, proxy_kwargs = self._convert_numpy_call_to_torch(
+            tuple(self._extract_proxy(arg) for arg in args),
             {key: self._extract_proxy(value) for key, value in kwargs.items()},
             torch_func,
             original_kwargs=kwargs,
@@ -619,9 +668,17 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
             result = []
             for index, array in enumerate(result_array):
                 if isinstance(array, np.ndarray):
-                    item_proxy = traced_array._context.tracer.create_proxy(
-                        "call_function", operator.getitem, (proxy_out, index), {}
-                    )
+                    if torch_func is torch.nonzero:
+                        # torch.nonzero returns one (N, ndim) tensor while numpy
+                        # returns one index array per dimension, so the numpy
+                        # element is a column of the torch result, not a row.
+                        item_proxy = traced_array._context.tracer.create_proxy(
+                            "call_function", torch.select, (proxy_out, 1, index), {}
+                        )
+                    else:
+                        item_proxy = traced_array._context.tracer.create_proxy(
+                            "call_function", operator.getitem, (proxy_out, index), {}
+                        )
                     result.append(traced_array._new(array, item_proxy))
                 else:
                     result.append(array)

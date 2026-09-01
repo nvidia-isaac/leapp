@@ -103,6 +103,42 @@ class TestWarpOp(WarpTestCase, LEAPPFunctionalTestBase):
         self.assertIsNotNone(node.warp_segments[0].apic_graph)
         self.verify_all_models_exist("node_a")
 
+    def test_persistent_warp_state_buffer_survives_both_passes(self):
+        """A Warp buffer reused across steps is re-declared on the second pass.
+
+        Declared state is the only way a Warp array can legally span both
+        passes: its carrier points at the graph discovery built, and the
+        capture pass replaces that graph.
+        """
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        source = wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)
+        state = wp.zeros(3, dtype=wp.float32, device=self.DEVICE)
+
+        for _ in range(2):
+            arr = annotate.input_tensors("node_a", {"in_a": source})
+            carried = annotate.state_tensors("node_a", {"state": state})
+            with annotate.warp_op("node_a"):
+                wp.launch(
+                    self.kernels.increment_in_place,
+                    dim=carried.size,
+                    inputs=[carried],
+                    device=self.DEVICE,
+                )
+                out = wp.empty_like(arr)
+                wp.copy(out, arr)
+            annotate.update_state("node_a", {"state": carried})
+            annotate.output_tensors("node_a", {"out_a": out}, export_with="onnx")
+
+        node = annotate.get_nodes()["node_a"]
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        self.assertFalse(node.has_pending_warp_segments)
+        self.verify_node_io(node, inputs=2, outputs=2)
+        self.assertEqual(len(node.warp_segments), 1)
+        self.assertIsNotNone(node.warp_segments[0].apic_graph)
+        self.verify_all_models_exist("node_a")
+
     def test_multiple_warp_ops_in_one_node_capture_in_discovery_order(self):
         leapp.start(name=self.TEST_GRAPH_NAME)
         source = wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)

@@ -121,12 +121,24 @@ else:
             segment.status = "closed"
             return segment
 
-        input_refs = [
-            ref
-            for ref in segment.input_refs.values()
-            if getattr(ref.array, "proxy", None) is not None
-        ]
-        input_proxies = [ref.array.proxy for ref in input_refs]
+        input_refs = []
+        input_proxies = []
+        for ref in segment.input_refs.values():
+            proxy = getattr(ref.array, "proxy", None)
+            if proxy is None:
+                continue
+            if proxy.node.graph is not node_ref.graph:
+                _get_logger().fatal(
+                    f"[{node_ref.name}] Warp segment input '{ref.name}' carries "
+                    f"proxy '{proxy.node.name}' from a graph this node no longer "
+                    "owns. A Warp array that outlives a trace pass keeps that "
+                    "pass's provenance, so the captured segment cannot take its "
+                    "buffer as an input. Allocate the array inside the traced "
+                    "region, or declare it with annotate.state_tensors().",
+                    error_type=RuntimeError,
+                )
+            input_refs.append(ref)
+            input_proxies.append(proxy)
         output_refs = list(segment.output_refs.values())
 
         # ``output_mask`` starts all-True; the post-prune pass rewrites it to
