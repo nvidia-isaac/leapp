@@ -61,8 +61,6 @@ class ExportedProgramExportBackend(ExportBackend):
         export_kwargs = {}
         if "strict" in self.backend_params:
             export_kwargs["strict"] = self.backend_params["strict"]
-        if "dynamic_shapes" in self.backend_params:
-            export_kwargs["dynamic_shapes"] = self.backend_params["dynamic_shapes"]
 
         self.exported_program = torch.export.export(
             m, export_args, **export_kwargs)

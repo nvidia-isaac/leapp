@@ -136,8 +136,7 @@ diff (`git diff origin/main...HEAD`) is the true delta.
 | `guides/export.rst` | Backends and `export_with` |
 | `guides/graph.rst` | State, `annotate.module`, feedback |
 | `guides/buffers.rst` | `static_outputs`, `mirror_leapp_tags` |
-| `guides/debugging.rst` | Logs, dry_run, `non_traced` |
-| `guides/runtime.rst` | `compile_graph(validate=...)` |
+| `guides/debugging.rst` | Validation, logs, dry_run, `non_traced` |
 | `leapp_runtime.rst` | `InferenceManager` |
 | `semantics/` | `TensorSemantics`, kinds, `TemporalAxis` |
 | `generated_configs.rst` | YAML shape |

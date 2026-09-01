@@ -45,14 +45,6 @@ LEAPP supports these public backend names:
      - ``NoneExportBackend``
      - No compilation
 
-Recommended defaults:
-
-* start with ``"jit"`` for the fastest bring-up
-* use ``"onnx"`` when you want the default ONNX exporter
-* use ``"onnx-torchscript"`` for recurrent models such as ``nn.GRU`` and
-  ``nn.LSTM``
-* use ``"exported-program"`` (or the ``"pt2"`` alias) when you want a
-  ``torch.export`` artifact instead of TorchScript or ONNX
 
 TorchScript export
 ==================
@@ -125,9 +117,6 @@ All ExportedProgram backend parameters are passed through
    * - ``strict``
      - PyTorch default
      - Passed through to :func:`torch.export.export`
-   * - ``dynamic_shapes``
-     - ``None``
-     - Optional dynamic-shapes spec for :func:`torch.export.export`
 
 Example:
 
@@ -142,19 +131,6 @@ Example:
        },
    )
 
-Runtime notes
--------------
-
-* ``InferenceManager`` can load and run ``pt2`` artifacts.
-* When CUDA is available, LEAPP loads exported programs onto the GPU.
-  Pass runtime inputs on the same device, or use
-  ``InferenceManager.get_mock_input()`` which preallocates tensors on the
-  node device.
-* Lifted constants baked into the exported graph during trace may remain on
-  CPU even after ``module.to(device)``. Prefer ``annotate.register_buffer``
-  for values that must travel with the model, or keep runtime inputs on
-  the model device.
-* The YAML records the exporting PyTorch version in ``torch_version``.
 
 ONNX export
 ===========
@@ -249,7 +225,8 @@ The main LEAPP validation path is still:
    leapp.compile_graph(validate=True, rtol=1e-3, atol=1e-5, strict=True)
 
 That validation compares exported model outputs against the captured
-traced outputs. See :doc:`runtime` for validation details and :doc:`/leapp_runtime` for Python runtime usage.
+traced outputs. See :doc:`debugging` for validation details and
+:doc:`/leapp_runtime` for Python runtime usage.
 
 Bringing your own model
 =======================
@@ -293,7 +270,6 @@ without asking LEAPP to compile it. This is useful for:
 * ``model_path`` (optional): Path to an existing model artifact.
 * ``copy_original_model`` (optional, default ``False``): Copy the provided
   artifact into the LEAPP output directory.
-* ``device`` (optional): Device hint used when loading the artifact.
 
 Important behavior:
 

@@ -97,6 +97,12 @@ np
 unwrap
 unwrapped
 unwraps
+subclasses
+frontend
+LeRobot
+SciPy
+OpenCV
+numba
 auto-generated
 auto-initialized
 auto-populated
@@ -107,6 +113,7 @@ auto-detection
 TracedTensor
 TracedTensors
 TracedTensorNode
+TracedNpArray
 TensorSemantics
 TemporalAxis
 InferenceManager
@@ -193,6 +200,9 @@ parameterization
 # misc
 lifecycle
 untraced
+untraceable
+inlined
+Unmapped
 Passthrough
 passthrough
 feedforward

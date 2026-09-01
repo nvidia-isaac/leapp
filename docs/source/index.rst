@@ -138,11 +138,11 @@ Documentation Map
   :doc:`guides/export`, :doc:`guides/graph`, :doc:`guides/buffers`, and
   :doc:`guides/debugging`.
 * Add semantic data annotations with :doc:`semantics/usage`.
+* Trace pipelines written against other tensor libraries with
+  :doc:`tensor_libraries/numpy`.
 * Learn how to run an exported bundle in :doc:`generated_configs` and
   :doc:`leapp_runtime`.
 * Browse the full :doc:`api/index`.
-* If you are changing the tracer itself, read
-  :doc:`internals/traced_value_provenance`.
 
 
 .. toctree::
@@ -163,7 +163,6 @@ Documentation Map
    guides/graph
    guides/buffers
    guides/debugging
-   guides/runtime
 
 .. toctree::
    :caption: Semantic Data Annotations
@@ -173,6 +172,13 @@ Documentation Map
    semantics/usage
    semantics/kind_element_names
    semantics/temporal
+
+.. toctree::
+   :caption: Tensor Libraries
+   :hidden:
+   :maxdepth: 2
+
+   tensor_libraries/numpy
 
 .. toctree::
    :caption: Running the Exported Model
@@ -188,10 +194,3 @@ Documentation Map
    :maxdepth: 2
 
    api/index
-
-.. toctree::
-   :caption: Internals
-   :hidden:
-   :maxdepth: 2
-
-   internals/traced_value_provenance

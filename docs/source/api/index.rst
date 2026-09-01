@@ -928,6 +928,6 @@ See also
 * :doc:`/getting_started` --- learn the basics
 * :doc:`/guides/nodes` --- advanced node patterns
 * :doc:`/guides/graph` --- graph and feedback operations
-* :doc:`/guides/runtime` --- validation
+* :doc:`/guides/debugging` --- validation and debugging
 * :doc:`/leapp_runtime` --- LEAPP Python runtime
 * :doc:`/semantics/usage` --- semantic data annotation

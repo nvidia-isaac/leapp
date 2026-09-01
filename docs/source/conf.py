@@ -38,7 +38,7 @@ extensions = [
 ]
 
 templates_path = ['_templates']
-exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
+exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', '_redirects']
 
 autosectionlabel_prefix_document = True
 autosectionlabel_maxdepth = 2
@@ -89,6 +89,7 @@ html_theme_options = {
 }
 
 html_static_path = ['_static']
+html_extra_path = ['_redirects']
 html_css_files = ['css/leapp.css']
 
 html_last_updated_fmt = '%b %d, %Y'
