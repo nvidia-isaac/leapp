@@ -257,7 +257,7 @@ class TracedWpArray(wp.array, TracedData):
         cls._validate_scan_depth(depth)
 
         if isinstance(obj, cls):
-            if cls._describes_replaced_graph(obj):
+            if obj.describes_replaced_graph():
                 cls.clear_tracing_state(obj)
                 return obj
             traced.append(obj)
@@ -273,20 +273,6 @@ class TracedWpArray(wp.array, TracedData):
                 for item in obj
             )
         return obj
-
-    @classmethod
-    def _describes_replaced_graph(cls, array: "TracedWpArray") -> bool:
-        """Whether this carrier's proxy belongs to a graph its node has replaced.
-
-        A buffer that outlives the pass that promoted it keeps that pass's
-        provenance, so reading it again would pull a node out of a discarded
-        graph and into the one being built.
-        """
-        proxy = array.proxy
-        if proxy is None:
-            return False
-        context = array.context_obj
-        return context is not None and proxy.node.graph is not context.graph
 
     @staticmethod
     def _validate_scan_depth(depth: int) -> None:

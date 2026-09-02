@@ -107,6 +107,23 @@ class TracedData(ABC):
         if self._context is None:
             return False
         return self._context.is_tracing
+
+    def describes_replaced_graph(self) -> bool:
+        """Whether this carrier's proxy belongs to a graph its node has replaced.
+
+        A buffer promoted in place outlives the call that promoted it, so it
+        keeps that pass's provenance. Reading it again once its node has
+        installed a new graph would pull a node out of the discarded graph and
+        into the one being built.
+        """
+        proxy = self.proxy
+        if proxy is None:
+            return False
+        # Only a context that traces owns a graph it could replace, and
+        # LeappNode leaves the attribute unset, so a boundary-only context has
+        # no provenance to shed.
+        graph = getattr(self._context, "graph", None)
+        return graph is not None and proxy.node.graph is not graph
     
     @property
     @abstractmethod

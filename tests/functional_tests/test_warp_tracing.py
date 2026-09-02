@@ -139,6 +139,41 @@ class TestWarpOp(WarpTestCase, LEAPPFunctionalTestBase):
         self.assertIsNotNone(node.warp_segments[0].apic_graph)
         self.verify_all_models_exist("node_a")
 
+    def test_persistent_torch_buffer_survives_both_passes(self):
+        """Plain torch buffers written inside a Warp node shed stale provenance.
+
+        Torch promotes a plain destination in place, so a buffer reused across
+        steps reaches the capture pass still holding the graph discovery built.
+        ``copy_`` and ``__setitem__`` are the writes that promote, so both have
+        to shed that provenance and re-promote against the new graph.
+        """
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        source = wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)
+        copied = torch.zeros(3, device=self.DEVICE)
+        assigned = torch.zeros(3, device=self.DEVICE)
+
+        for _ in range(2):
+            arr = annotate.input_tensors("node_a", {"in_a": source})
+            with annotate.warp_op("node_a"):
+                out = wp.empty_like(arr)
+                wp.copy(out, arr)
+            tensor = wp.to_torch(out)
+            copied.copy_(tensor)
+            assigned[:] = tensor
+            annotate.output_tensors(
+                "node_a",
+                {"out_a": copied * 2.0, "out_b": assigned + 1.0},
+                export_with="onnx",
+            )
+
+        node = annotate.get_nodes()["node_a"]
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        self.assertFalse(node.has_pending_warp_segments)
+        self.verify_node_io(node, inputs=1, outputs=2)
+        self.verify_all_models_exist("node_a")
+
     def test_multiple_warp_ops_in_one_node_capture_in_discovery_order(self):
         leapp.start(name=self.TEST_GRAPH_NAME)
         source = wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)

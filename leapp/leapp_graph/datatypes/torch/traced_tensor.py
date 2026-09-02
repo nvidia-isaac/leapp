@@ -327,6 +327,33 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         bind_new_view(target, name, context, proxy)
         return target
 
+    def clear_tracing_state(self) -> torch.Tensor:
+        """Undo :meth:`_promote_plain_tensor`, returning a plain ``torch.Tensor``.
+
+        The view a carrier holds points at one graph, so a tensor that outlives
+        the pass that promoted it has to shed that provenance before the next
+        pass can describe it.
+        """
+        for attribute in ("_name", "_context", "_proxy_view", "_output_port"):
+            self.__dict__.pop(attribute, None)
+        self.__class__ = torch.Tensor
+        return self
+
+    def _shed_replaced_graph(self) -> bool:
+        """Drop stale provenance so the caller can re-enter as a plain tensor.
+
+        Torch reaches its in-place writes through methods on this class rather
+        than through ``__torch_function__``, so each one has to notice a carrier
+        left over from a replaced graph itself. Re-entering after the swap sends
+        the call to ``torch.Tensor``, whose dispatch reaches
+        ``_handle_plain_assignment`` and re-promotes the buffer against the graph
+        being built now.
+        """
+        if not self.describes_replaced_graph():
+            return False
+        self.clear_tracing_state()
+        return True
+
     def _record_assignment(self, key, value, real_value):
         """Record one functional assignment and update this object's proxy."""
         # Plain full replacement may already have promoted with the source proxy.
@@ -850,6 +877,8 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
     def copy_(self, src, non_blocking=False):
         """Copy ``src`` into this tensor and record a full functional write."""
+        if self._shed_replaced_graph():
+            return self.copy_(src, non_blocking=non_blocking)
         real_value = TracedTensor.unwrap_traced_tensor(src)
         self.tensor.copy_(real_value, non_blocking=non_blocking)
 
@@ -988,6 +1017,9 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         ``_handle_plain_assignment`` promotes them and installs a destination
         constant as this tensor's proxy.
         """
+        if self._shed_replaced_graph():
+            self[key] = value
+            return
         real_key = TracedData.unwrap_traced_data(key)
         real_value = TracedTensor.unwrap_traced_tensor(value)
         self.tensor[real_key] = real_value
