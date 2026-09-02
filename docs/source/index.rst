@@ -138,8 +138,9 @@ Documentation Map
   :doc:`guides/export`, :doc:`guides/graph`, :doc:`guides/buffers`, and
   :doc:`guides/debugging`.
 * Add semantic data annotations with :doc:`semantics/usage`.
-* Trace pipelines written against other tensor libraries with
-  :doc:`tensor_libraries/numpy` and :doc:`tensor_libraries/warp`.
+* See how tracing works in :doc:`tensor_libraries/torch`, and how it extends to
+  other tensor libraries in :doc:`tensor_libraries/numpy` and
+  :doc:`tensor_libraries/warp`.
 * Learn how to run an exported bundle in :doc:`generated_configs` and
   :doc:`leapp_runtime`.
 * Browse the full :doc:`api/index`.
@@ -178,6 +179,7 @@ Documentation Map
    :hidden:
    :maxdepth: 2
 
+   tensor_libraries/torch
    tensor_libraries/numpy
    tensor_libraries/warp
 
