@@ -290,7 +290,7 @@ Output YAML structure
      python version: "3.12.9"
      torch version: "2.7.0+cu126"
      warp version: null
-     leapp version: "0.6.1"
+     leapp version: "0.7.0"
      leapp config version: "1.3"
      cuda version: "12.6"
      os: Linux

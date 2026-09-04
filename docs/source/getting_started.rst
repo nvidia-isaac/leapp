@@ -14,6 +14,11 @@ Python 3.11+; on Python 3.10, LEAPP warns and skips PNG generation while
 completing the rest of the export. The full dependency list is
 in the :doc:`/index`.
 
+.. note::
+
+   To trace and export NVIDIA Warp kernels, additional CUDA and package setup
+   is required. See :doc:`tensor_libraries/installation`.
+
 Welcome to LEAPP! This guide walks you through the basics of using LEAPP
 to trace and export computational graphs from PyTorch code.
 
@@ -23,8 +28,6 @@ You'll learn how to:
 * Build multi-node graphs by connecting one node's outputs to a later node's
   inputs
 * Understand where LEAPP writes models, YAML, and graph visualizations
-* Use :func:`~leapp.annotate.method` as a shorthand for simple,
-  self-contained functions
 
 .. note::
 
@@ -158,34 +161,6 @@ This pair gives you the most flexible capture surface:
 * **Distributed inputs** --- call ``input_tensors()`` multiple times with the
   same ``node_name`` before one final ``output_tensors()``.
 
-Function decorator
-------------------
-
-:func:`~leapp.annotate.method` is a shorthand for simple, self-contained
-functions:
-
-.. code-block:: python
-
-   @annotate.method(export_with="jit", node_name="preprocess")
-   def preprocess(raw_readings):
-       return torch.clamp(raw_readings, min=0.0, max=1.0)
-
-Internally it uses the same traced-tensor machinery as
-``input_tensors()`` / ``output_tensors()``.
-
-.. list-table::
-   :header-rows: 1
-   :widths: 50 50
-
-   * - Use ``annotate.method()`` when...
-     - Use ``input_tensors()`` / ``output_tensors()`` when...
-   * - The node fits cleanly in one function
-     - Node logic spans helper functions or multiple call sites
-   * - Function args and return values already define I/O well
-     - You want explicit control over input and output names
-   * -
-     - You want to inject semantic data into the final configs
-
 Graph flow
 ----------
 
@@ -268,7 +243,8 @@ detected the node boundaries and cross-node connections you intended.
 Graph specification file
 ------------------------
 
-LEAPP also generates a complete specification of the pipeline:
+LEAPP also generates a complete specification of the pipeline. More details in
+:doc:`Understanding the Generated Configs <generated_configs>`:
 
 .. code-block:: yaml
 

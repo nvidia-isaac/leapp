@@ -21,7 +21,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "leapp"
-version = "0.6.1"
+version = "0.7.0"
 description = "LEAPP - Lightweight Export Annotations for Policy Pipelines: A Python package for tracing and exporting computational graphs from PyTorch code"
 readme = "README.md"
 license = "Apache-2.0"
@@ -52,7 +52,8 @@ dependencies = [
     "torch>=2.6.0",
     "PyYAML>=6.0",
     "onnx>=1.19.0",
-    "onnxruntime>=1.20.0",
+    "onnxruntime>=1.20.0,<1.24; python_version < '3.11'",
+    "onnxruntime>=1.20.0; python_version >= '3.11'",
     "onnxscript>=0.1.0",
     "safetensors>=0.5.0",
     # Visualization layout/render deps (Python 3.11+ only; skipped on 3.10).
@@ -76,7 +77,7 @@ test = [
 warp-cu12 = [
     "warp-lang>=1.16",
     "cupti-python>=12.8,<13; sys_platform == 'linux'",
-    "onnxruntime-gpu[cuda,cudnn]>=1.20.0,<1.26; python_version < '3.11'",
+    "onnxruntime-gpu[cuda,cudnn]>=1.20.0,<1.24; python_version < '3.11'",
     "onnxruntime-gpu[cuda,cudnn]>=1.20.0,<1.27; python_version >= '3.11'",
 ]
 warp-cu13 = [
