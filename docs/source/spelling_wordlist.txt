@@ -54,11 +54,21 @@ yaml
 opset
 opset_version
 onnxruntime
+onnxruntime-gpu
 onnxscript
+cupti
+cupti-python
+libcupti
+CUPTI
+cuDNN
+APIC
+Unmanaged
 safetensors
 mypy
 pytest
 fx
+CMake
+nvcc
 
 # Code identifiers used in prose
 str
@@ -97,6 +107,14 @@ np
 unwrap
 unwrapped
 unwraps
+ufuncs
+bitwise
+subclasses
+frontend
+LeRobot
+SciPy
+OpenCV
+numba
 auto-generated
 auto-initialized
 auto-populated
@@ -107,13 +125,20 @@ auto-detection
 TracedTensor
 TracedTensors
 TracedTensorNode
+TracedNpArray
+TracedWpArray
 TensorSemantics
 TemporalAxis
 InferenceManager
 InputKindEnum
 OutputKindEnum
 ExportManager
+FunctionPatch
 runnable
+replayable
+readback
+callables
+allocator
 multi-step
 multi-node
 non-invasive
@@ -192,6 +217,10 @@ parameterization
 # misc
 lifecycle
 untraced
+untraceable
+inlined
+EXPERIMENTAL
+Unmapped
 Passthrough
 passthrough
 feedforward

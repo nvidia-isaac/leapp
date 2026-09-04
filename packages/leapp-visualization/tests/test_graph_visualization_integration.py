@@ -33,8 +33,13 @@ class FakeTensorDescription:
     name_str: str
     dtype: str
     shape: tuple[int, ...]
-    tag: str | None = None
     semantics: dict | None = None
+    source_node: object | None = None
+    port: str | None = None
+
+    @property
+    def has_source(self) -> bool:
+        return self.source_node is not None and self.port is not None
 
     def get_semantics(self):
         return self.semantics or {}
@@ -47,6 +52,9 @@ class FakeNode:
     outputs: list[FakeTensorDescription]
     backend: str | None = "jit-script"
     node_index: int = 0
+
+    def state_feedback_pairs(self):
+        return ()
 
 
 def test_leapp_graph_visualize_writes_png(tmp_path: Path):

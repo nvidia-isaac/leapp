@@ -10,6 +10,7 @@ import torch
 
 from leapp.backends.export_backend import ExportBackend, prepare_tensors_for_export
 from leapp.utils.logging import _get_logger
+from leapp.warp_runtime import resolve_warp_runtime_library
 
 
 class ExportedProgramExportBackend(ExportBackend):
@@ -18,6 +19,28 @@ class ExportedProgramExportBackend(ExportBackend):
     def __init__(self, node_context, backend_params=None):
         super().__init__(node_context, backend_params)
         self.exported_program = None
+
+    @staticmethod
+    def _load_warp_runtime(
+        exported_program: torch.export.ExportedProgram,
+    ) -> None:
+        from leapp.leapp_graph.custom_operator_registry.warp_operator import (
+            module_contains_warp_runner,
+        )
+
+        if not module_contains_warp_runner(exported_program.graph_module):
+            return
+
+        library_path = resolve_warp_runtime_library("pt2")
+        try:
+            torch.ops.load_library(str(library_path))
+        except OSError as exc:
+            _get_logger().fatal(
+                "Failed to load the PT2 Warp custom operator library: "
+                f"{library_path}",
+                error_type=RuntimeError,
+                cause=exc,
+            )
 
     def get_backend_metadata(self):
         return {"torch_version": str(torch.__version__)}
@@ -38,11 +61,10 @@ class ExportedProgramExportBackend(ExportBackend):
         export_kwargs = {}
         if "strict" in self.backend_params:
             export_kwargs["strict"] = self.backend_params["strict"]
-        if "dynamic_shapes" in self.backend_params:
-            export_kwargs["dynamic_shapes"] = self.backend_params["dynamic_shapes"]
 
         self.exported_program = torch.export.export(
             m, export_args, **export_kwargs)
+        self._load_warp_runtime(self.exported_program)
         self.compiled_model = self.exported_program.module()
         self.compiled_module = m
         return self.exported_program
@@ -67,6 +89,7 @@ class ExportedProgramExportBackend(ExportBackend):
                 error_type=ValueError)
 
         self.exported_program = torch.export.load(model_path)
+        self._load_warp_runtime(self.exported_program)
         device = self._select_runtime_device()
         self.compiled_model = self.exported_program.module().to(device)
         self.runtime_device = device

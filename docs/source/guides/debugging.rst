@@ -2,30 +2,97 @@
 Debugging
 =========
 
-This guide covers the LEAPP features that are most useful while bringing up
-a graph: logging, full FX graph inspection, dry-run capture, and selective
-non-traced nodes.
+LEAPP provides multiple lines of defense against an incorrectly traced
+graph. The goal is confidence that the traced graph is numerically
+correct.
 
-Logging
-=======
+.. list-table::
+   :header-rows: 1
+   :widths: 55 45
 
-Every ``leapp.start()`` call configures a LEAPP log file in the graph output
-directory. For example:
+   * - When
+     - Use
+   * - You want numeric confidence in an export
+     - ``compile_graph(validate=True)``
+   * - Validation failed and you need the recorded ops
+     - ``log.txt`` and the FX dump
+   * - You need to tell tracing from export from patching
+     - ``dry_run``, ``non_traced``, ``global_patching=False``
+
+Confirm the export
+==================
+
+``compile_graph(validate=True)`` checks that each exported node matches
+the traced Python on the inputs captured during tracing. LEAPP runs the
+exported model, compares outputs with
+``torch.allclose(..., rtol=..., atol=...)``, logs any deviation, and
+returns a dict mapping node names to results.
+
+.. code-block:: python
+
+   leapp.compile_graph(
+       validate=True,
+       rtol=1e-3,
+       atol=1e-5,
+       strict=True,
+   )
+
+``strict=True`` raises if any node fails. ``strict=False`` still runs
+validation, but leaves the result dict available. Nodes with no compiled
+model, such as ``non_traced`` or dry-run cases, are skipped and treated
+as successful.
+
+A mismatch log includes the node and output names, the sample index,
+tolerances, shapes and dtypes, value ranges, and absolute-difference
+percentiles. Several samples are what make those numbers meaningful:
+one pair of tensors cannot characterize error, and it cannot show
+whether a value was captured because it is computed or because it
+happened to be constant on the first step.
+
+Run more than one step
+----------------------
+
+.. warning::
+
+   Loop the annotated policy. A graph that matches the first observation
+   can still have inlined a live input as a constant, and a single
+   sample says nothing about error on any other input.
+
+.. code-block:: python
+
+   leapp.start(name="policy_graph", max_cached_io=5)
+   for _ in range(5):
+       obs = annotate.input_tensors("policy", {"obs": next_obs()})
+       action = policy(obs)
+       annotate.output_tensors(
+           "policy", {"action": action}, export_with="jit",
+       )
+   leapp.stop()
+   leapp.compile_graph(validate=True, strict=True)
+
+Each iteration is stored as a sample, up to ``max_cached_io``.
+``compile_graph(validate=True)`` replays the export against every one.
+Use inputs that look like deployment: different state, commands, and
+timing, not copies of the first frame. If a later step fails while the
+first passes, the log names that ``sample N``.
+
+Re-entry also checks names, shapes, dtypes, and connectivity against
+the first step. Those failures show up during tracing, not at
+``compile_graph()``.
+
+Inspect what was captured
+=========================
+
+Every ``leapp.start()`` call writes a LEAPP log file in the graph output
+directory:
 
 .. code-block:: python
 
    leapp.start("debug_policy", save_path="exports")
 
-creates:
-
-.. code-block:: text
-
-   exports/debug_policy/log.txt
-
-The log file captures all LEAPP log levels, including DEBUG output. The
-console is quieter by default and shows warnings and errors. Use
-``verbose=True`` when you want LEAPP to stream the detailed trace and compile
-log to the console while still writing the same information to ``log.txt``:
+creates ``exports/debug_policy/log.txt``. The file includes DEBUG
+output. The console is quieter and shows warnings and errors. Pass
+``verbose=True`` to stream the same detail to the console:
 
 .. code-block:: python
 
@@ -34,15 +101,15 @@ log to the console while still writing the same information to ``log.txt``:
    leapp.stop()
    leapp.compile_graph(validate=True, verbose=True)
 
-Use ``leapp.start(..., verbose=True)`` to see trace-time diagnostics. Use
-``leapp.compile_graph(..., verbose=True)`` to turn verbose console output on
-for graph compilation, export, and validation.
+``leapp.start(..., verbose=True)`` covers trace-time diagnostics.
+``leapp.compile_graph(..., verbose=True)`` covers compilation, export,
+and validation.
 
-Full FX graph inspection
-------------------------
+FX graph
+--------
 
-For each traced node, LEAPP writes the full ``torch.fx.Graph`` to the log
-after building the node's ``fx.GraphModule``. Search for
+For each traced node, LEAPP writes the full ``torch.fx.Graph`` to the
+log after building the node's ``fx.GraphModule``. Search for
 ``Compiled graph module for <node name>`` in ``log.txt``:
 
 .. code-block:: text
@@ -56,40 +123,44 @@ after building the node's ``fx.GraphModule``. Search for
    [DEBUG]: Graph module inputs: [...]
    [DEBUG]: Graph module outputs: [...]
 
-This is the exact FX graph LEAPP hands to the export backend. It is often
-the fastest way to answer questions like:
+This is the graph LEAPP hands to the export backend. Use it to check
+that annotated inputs became placeholders, that operations recorded as
+the operators you expected, that unused inputs were trimmed, and that
+the graph outputs match what you passed to ``annotate.output_tensors()``.
 
-* Did my annotated inputs become FX placeholders?
-* Did an operation trace as the operator I expected?
-* Was an input trimmed because it was not used by the output?
-* Are the graph outputs the values I passed to ``annotate.output_tensors()``?
+Graph image
+-----------
 
-Dry run and selective non-traced nodes
-======================================
+On Python 3.11+, ``leapp.compile_graph(visualize=True)`` writes a PNG
+of the node graph, which is the fastest check that nodes connected the
+way you intended and the dtypes are as you expect.
 
-LEAPP provides three related options for keeping graph structure without
-fully compiling every node:
+Isolate the failure
+===================
 
-* ``leapp.start(..., dry_run=True)`` makes the entire trace metadata-only
-  from the start.
-* ``leapp.start(..., non_traced=[...])`` disables tracing/export for only
-  selected nodes.
-* ``leapp.compile_graph(..., dry_run=True)`` keeps an already-captured
-  trace but skips compile/save/validate.
+These flags turn pieces of a LEAPP session off so you can tell whether
+a bad result comes from tracing, from export, or from LEAPP's own
+patches.
 
-``start(dry_run=True)``: whole-graph metadata-only
---------------------------------------------------
+Skip export
+-----------
 
-Use this when you want to explore graph boundaries, graph I/O, and
-connectivity without paying export cost.
+Tracing is what produces the values that carry graph connectivity, so
+it cannot be skipped while still producing a graph. Export can.
 
-In this mode:
+* ``leapp.start(..., dry_run=True)`` traces every node and writes YAML,
+  but exports no models. Use it to inspect boundaries, I/O, and
+  connectivity without paying export cost.
+* ``leapp.start(..., non_traced=["some_node"])`` does the same for
+  listed nodes only: they still appear in the graph and still connect
+  to neighbors, but they produce no model artifact.
+* ``export_with=None`` on a single ``output_tensors()`` call skips
+  export for that node only.
 
-* ``input_tensors()`` and related APIs return normal tensors instead of
-  ``TracedTensor``
-* LEAPP still tags outputs so graph connectivity can be detected
-* YAML and graph structure are still produced
-* model files are not exported
+Warp graphs still run the annotated path a second time and still report
+a segment that diverges between the two runs. Only APIC capture is
+skipped, because nothing consumes the captured bundle when the node is
+not exported.
 
 .. code-block:: python
 
@@ -98,99 +169,10 @@ In this mode:
    leapp.stop()
    leapp.compile_graph()
 
-Useful for:
+Disable session patches
+-----------------------
 
-* debugging node boundaries
-* checking graph I/O quickly
-* validating connectivity before expensive export
-
-``non_traced=[...]``: selective non-compiled nodes
---------------------------------------------------
-
-Use this when only some nodes should stay in the graph but should not be
-traced through or compiled. This is especially useful because traced-tensor
-nodes normally try to trace through the computation inside the node, which
-can be problematic when:
-
-* the code calls into functionality that is not trace-friendly
-* the node intentionally acts as a placeholder or opaque stage
-* tracing through that node raises errors even though you still want it
-  represented in the graph
-
-With ``non_traced=[...]``, LEAPP lets that node run on normal tensors,
-skips export for it, but still tags its outputs so downstream traced nodes
-can connect to it.
-
-.. code-block:: python
-
-   import torch
-   import leapp
-   from leapp import annotate
-
-   leapp.start("mixed_graph", non_traced=["raw_node"])
-
-   x = annotate.input_tensors("raw_node",
-                              {"x": torch.tensor([1.0, 2.0, 3.0])})
-   raw_y = x * 2.0
-   annotate.output_tensors("raw_node",
-                           {"y": raw_y},
-                           export_with="jit")
-
-   traced_y = annotate.input_tensors("traced_node", {"y": raw_y})
-   traced_z = traced_y + 1.0
-   annotate.output_tensors("traced_node",
-                           {"z": traced_z},
-                           export_with="jit")
-
-   leapp.stop()
-   leapp.compile_graph(validate=True)
-
-Result:
-
-* ``raw_node`` appears in the graph
-* ``raw_node`` outputs still connect to ``traced_node``
-* ``raw_node`` does not produce a compiled model artifact
-* ``traced_node`` is still traced and exported normally
-
-``compile_graph(dry_run=True)``: skip export after tracing
-----------------------------------------------------------
-
-Use this when you want a normal trace session first but want to skip
-compile/save/validate at the final export step.
-
-.. code-block:: python
-
-   leapp.start("captured_graph")
-   # ... normal tracing ...
-   leapp.stop()
-   leapp.compile_graph(dry_run=True, validate=False)
-
-This differs from ``start(dry_run=True)``:
-
-* tracing still happens normally during the session
-* FX graphs and node traces are still built
-* compile/save/validate are skipped only at the end
-
-Choosing the right option
--------------------------
-
-* Use ``start(dry_run=True)`` when the whole graph should be metadata-only.
-* Use ``non_traced=[...]`` when only specific nodes should stay uncompiled.
-* Use ``compile_graph(dry_run=True)`` when you already did a real trace and
-  only want to skip final export work.
-
-Related debugging tools
-=======================
-
-* On Python 3.11+, ``leapp.compile_graph(visualize=True)`` writes a PNG
-  graph image that is useful for checking node connectivity. Python 3.10
-  emits a warning and skips this artifact.
-* ``leapp.compile_graph(validate=True, strict=True, rtol=..., atol=...)``
-  compares exported model outputs against captured outputs. See
-  :doc:`runtime`.
-* ``leapp.start(..., max_cached_io=...)`` controls how many re-entry examples
-  LEAPP keeps for validation. This is useful when nodes run repeatedly or
-  carry state. See :doc:`runtime`.
-* ``leapp.start(..., global_patching=False)`` can help isolate issues caused
-  by LEAPP's global tracing patches. Disable it only when you specifically
-  need to test whether those patches are involved.
+``leapp.start(..., global_patching=False)`` turns off the conversions
+LEAPP patches for the tracing session (for example NumPy and torch
+interop). Use this only to test whether those patches are involved in
+a failure.

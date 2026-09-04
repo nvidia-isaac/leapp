@@ -40,6 +40,7 @@ Signature
        non_traced=None,
        max_cached_io: int = 5,
        global_patching: bool = True,
+       patching=None,
    )
 
 Parameters
@@ -54,21 +55,68 @@ Parameters
 * ``dry_run`` (bool, optional): Skip model compilation and export.
   Useful to verify graph structure without paying export cost. Defaults
   to ``False``.
-* ``non_traced`` (list[str], optional): Node names to exclude from
-  tracing/export. They still capture I/O, contribute to graph
+* ``non_traced`` (list[str], optional): Node names to exclude from export.
+  They are still traced, still capture I/O, contribute to graph
   connectivity, and appear in the YAML. Defaults to ``None``.
 * ``max_cached_io`` (int, optional): How many re-entry I/O examples
   LEAPP caches per node for multi-example validation. Defaults to ``5``.
-* ``global_patching`` (bool, optional): Patch ``torch`` numpy interop
-  functions for ``TracedTensor`` compatibility. Defaults to ``True``.
+* ``global_patching`` (bool, optional): Enable all process-global patches,
+  including user-defined replacements. Defaults to ``True``.
+* ``patching`` (sequence[FunctionPatch] | None, optional): User-defined
+  replacements for module-level functions that LEAPP cannot otherwise trace.
+  Defaults to ``None``.
 
   .. warning::
 
      Disabling ``global_patching`` disables patches that allow traced
      tensors to pass through ``torch.from_numpy()`` and related numpy
-     interop functions. If your pipeline calls any such functions on
-     traced tensors, they silently return untraced results and those
-     operations become invisible to LEAPP.
+     interop functions, and skips definitions supplied through ``patching``.
+     Unsupported operations can then become invisible to LEAPP.
+
+User-defined function patches
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``FunctionPatch`` maps a module attribute to a user-provided traceable
+replacement:
+
+.. code-block:: python
+
+   import scipy.ndimage
+   import leapp
+
+   leapp.start(
+       "pipeline",
+       patching=[
+           leapp.FunctionPatch(
+               scipy.ndimage,
+               "gaussian_filter",
+               leapp_gaussian_filter,
+           ),
+       ],
+   )
+
+During the tracing session, calls containing active traced data use the
+replacement. Calls containing only ordinary values, or traced values from a
+finished node, use the original function. Positional arguments, keyword
+arguments, and nested lists, tuples, and dictionaries are searched. User
+patches require ``global_patching=True``.
+
+The replacement receives traced arguments directly and must build its result
+from operations LEAPP already traces. It must accept a compatible signature,
+return the output structure, shape, and dtype expected by the caller, and be
+pure. Mutation, output arguments such as ``out=`` or ``dst=``, input/output
+aliasing, and calls back into the patched target are not supported.
+
+Call ``leapp.stop()`` before starting a session with a different patch list.
+Stopping restores the exact function object captured when the patch was
+installed.
+
+.. warning::
+
+   Patching a module attribute does not update references imported before
+   ``leapp.start()``. Call ``scipy.ndimage.gaussian_filter(...)`` rather than a
+   previously captured ``from scipy.ndimage import gaussian_filter`` alias.
+   Installed patches are process-global and can affect other threads.
 
 Behavior
 ~~~~~~~~
@@ -122,7 +170,6 @@ Signature
        visualize: bool = True,
        verbose: bool | None = None,
        validate: bool = True,
-       dry_run: bool = False,
        rtol: float = 1e-3,
        atol: float = 1e-5,
        strict: bool = True,
@@ -140,9 +187,6 @@ Parameters
   compile step. ``None`` leaves the current setting unchanged.
 * ``validate`` (bool, optional): Validate exported models against
   captured traced outputs. Defaults to ``True``.
-* ``dry_run`` (bool, optional): Skip model compile/save/validate while
-  still tracing graph structure and generating YAML. Defaults to
-  ``False``.
 * ``rtol`` (float, optional): Relative tolerance for
   ``torch.allclose()``. Defaults to ``1e-3``.
 * ``atol`` (float, optional): Absolute tolerance for
@@ -245,7 +289,8 @@ Output YAML structure
    system information:
      python version: "3.12.9"
      torch version: "2.7.0+cu126"
-     leapp version: "0.6.1"
+     warp version: null
+     leapp version: "0.7.0"
      leapp config version: "1.3"
      cuda version: "12.6"
      os: Linux
@@ -641,7 +686,7 @@ Notes
 ``annotate.mirror_leapp_tags()``
 --------------------------------
 
-Transfer LEAPP's internal tracing tags from one tensor to another when
+Transfer LEAPP's internal port representation from one value to another when
 data is duplicated without using standard PyTorch operations.
 
 Signature
@@ -649,24 +694,29 @@ Signature
 
 .. code-block:: python
 
-   annotate.mirror_leapp_tags(source, target)
+   target = annotate.mirror_leapp_tags(source, target)
 
 Parameters
 ~~~~~~~~~~
 
-* ``source`` (Tensor, required): Original tensor with LEAPP tags.
-* ``target`` (Tensor, required): Tensor that receives the tags. Must
-  contain exactly the same values as ``source``.
+* ``source`` (required): A value that was registered as a node output, so it
+  carries the producing node and output port.
+* ``target`` (required): Value that receives the traced state. Must contain
+  exactly the same values as ``source``.
 
 Behavior
 ~~~~~~~~
 
 #. Verifies that ``source`` and ``target`` contain exactly the same
    values.
-#. If verification passes, copies all LEAPP internal tracking tags from
-   ``source`` to ``target``.
+#. If verification passes, copies the producing node, output port, and
+   tracing proxy from ``source`` to ``target``.
 #. If data does not match, logs an error and raises rather than copying
    incorrect tracing metadata.
+#. Returns the target. Torch and Warp targets are upgraded in place, so the
+   return value can be ignored. A raw ``np.ndarray`` cannot be upgraded in
+   place, so NumPy callers must assign the returned value.
+#. Outside graph interpretation, returns the target unchanged.
 
 See :doc:`/guides/buffers` for between-node copy examples.
 
@@ -878,6 +928,6 @@ See also
 * :doc:`/getting_started` --- learn the basics
 * :doc:`/guides/nodes` --- advanced node patterns
 * :doc:`/guides/graph` --- graph and feedback operations
-* :doc:`/guides/runtime` --- validation
+* :doc:`/guides/debugging` --- validation and debugging
 * :doc:`/leapp_runtime` --- LEAPP Python runtime
 * :doc:`/semantics/usage` --- semantic data annotation

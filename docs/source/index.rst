@@ -138,6 +138,9 @@ Documentation Map
   :doc:`guides/export`, :doc:`guides/graph`, :doc:`guides/buffers`, and
   :doc:`guides/debugging`.
 * Add semantic data annotations with :doc:`semantics/usage`.
+* See how tracing works in :doc:`tensor_libraries/torch`, and how it extends to
+  other tensor libraries in :doc:`tensor_libraries/numpy` and
+  :doc:`tensor_libraries/warp`.
 * Learn how to run an exported bundle in :doc:`generated_configs` and
   :doc:`leapp_runtime`.
 * Browse the full :doc:`api/index`.
@@ -161,7 +164,6 @@ Documentation Map
    guides/graph
    guides/buffers
    guides/debugging
-   guides/runtime
 
 .. toctree::
    :caption: Semantic Data Annotations
@@ -171,6 +173,15 @@ Documentation Map
    semantics/usage
    semantics/kind_element_names
    semantics/temporal
+
+.. toctree::
+   :caption: Tensor Libraries
+   :hidden:
+   :maxdepth: 2
+
+   tensor_libraries/torch
+   tensor_libraries/numpy
+   tensor_libraries/warp
 
 .. toctree::
    :caption: Running the Exported Model

@@ -20,14 +20,25 @@ from dataclasses import dataclass, field, fields
 from typing import Optional, Any, Dict, Tuple, List
 
 import torch
-import numpy as np
 import yaml
+
+# Dtype mapping lives in a dependency-free module; re-exported here (explicit
+# ``as`` form) for the existing import sites
+# (``from leapp.utils.tensor_description import ...``).
+from leapp.utils.dtype import (
+    map_to_torch_dtype as map_to_torch_dtype,
+    warp_dtype_to_torch_name as warp_dtype_to_torch_name,
+    dtype_to_name as dtype_to_name,
+    value_to_name_and_shape as value_to_name_and_shape,
+    DtypeCodec as DtypeCodec,
+    register_dtype_codec as register_dtype_codec,
+)
 
 from leapp.utils.logging import _get_logger
 from leapp.leapp_graph.datatypes import (
     TracedData,
-    TracedTensor,
     is_tracable_tensor_type,
+    to_export_torch_tensor,
     TRACABLE_BASE_TYPES,
 )
 from leapp.utils.utils import safe_deepcopy
@@ -71,7 +82,10 @@ class TemporalAxis:
 
     def __post_init__(self):
         if self.period_ms <= 0:
-            raise ValueError("TemporalAxis period_ms must be positive")
+            _get_logger().fatal(
+                "TemporalAxis period_ms must be positive",
+                error_type=ValueError,
+            )
 
 
 @dataclass
@@ -83,7 +97,10 @@ class GraphConfigs:
 
     def __post_init__(self):
         if self.frequency is not None and self.frequency <= 0:
-            raise ValueError("GraphConfigs frequency must be positive when provided")
+            _get_logger().fatal(
+                "GraphConfigs frequency must be positive when provided",
+                error_type=ValueError,
+            )
 
     def to_dict(self) -> Dict[str, Any]:
         """Return non-None graph config fields with extra flattened."""
@@ -128,10 +145,12 @@ class TensorSemantics:
         existing_period_ms = self.temporal_period_ms
         self.temporal_period_ms = None
         if not is_tracable_tensor_type(self.ref): # this checks for both base types and traced types
-            raise TypeError(
+            _get_logger().fatal(
                 f"TensorSemantics 'ref' must be a traceable tensor type "
                 f"accepted types are: {TRACABLE_BASE_TYPES}"
-                f"got {type(self.ref).__name__}")
+                f"got {type(self.ref).__name__}",
+                error_type=TypeError,
+            )
         if self.element_names is not None:
             self.element_names, detected_period_ms = self._normalize_element_names(
                 self.element_names, allow_temporal_sentinel=existing_period_ms is not None)
@@ -178,8 +197,10 @@ class TensorSemantics:
             if element_names == TEMPORAL_AXIS_SENTINEL:
                 if allow_temporal_sentinel:
                     return CompactYamlList([element_names]), None
-                raise ValueError(
-                    f"{TEMPORAL_AXIS_SENTINEL!r} is reserved for TemporalAxis")
+                _get_logger().fatal(
+                    f"{TEMPORAL_AXIS_SENTINEL!r} is reserved for TemporalAxis",
+                    error_type=ValueError,
+                )
             return CompactYamlList([CompactYamlList([element_names])]), None
 
         if not isinstance(element_names, list):
@@ -193,7 +214,10 @@ class TensorSemantics:
         for item in element_names:
             if isinstance(item, TemporalAxis):
                 if has_temporal_axis:
-                    raise ValueError("element_names can contain at most one TemporalAxis")
+                    _get_logger().fatal(
+                        "element_names can contain at most one TemporalAxis",
+                        error_type=ValueError,
+                    )
                 has_axis_descriptors = True
                 has_temporal_axis = True
                 temporal_period_ms = item.period_ms
@@ -201,18 +225,25 @@ class TensorSemantics:
             elif isinstance(item, str):
                 if item == TEMPORAL_AXIS_SENTINEL:
                     if not allow_temporal_sentinel:
-                        raise ValueError(
-                            f"{TEMPORAL_AXIS_SENTINEL!r} is reserved for TemporalAxis")
+                        _get_logger().fatal(
+                            f"{TEMPORAL_AXIS_SENTINEL!r} is reserved for TemporalAxis",
+                            error_type=ValueError,
+                        )
                     has_axis_descriptors = True
                     normalized.append(TEMPORAL_AXIS_SENTINEL)
                 else:
                     normalized.append(item)
             elif isinstance(item, list):
                 if any(isinstance(child, TemporalAxis) for child in item):
-                    raise ValueError("TemporalAxis must be an axis item, not nested in a list")
+                    _get_logger().fatal(
+                        "TemporalAxis must be an axis item, not nested in a list",
+                        error_type=ValueError,
+                    )
                 if any(child == TEMPORAL_AXIS_SENTINEL for child in item):
-                    raise ValueError(
-                        f"{TEMPORAL_AXIS_SENTINEL!r} must be a bare axis item, not nested in a list")
+                    _get_logger().fatal(
+                        f"{TEMPORAL_AXIS_SENTINEL!r} must be a bare axis item, not nested in a list",
+                        error_type=ValueError,
+                    )
                 has_axis_descriptors = True
                 normalized.append(CompactYamlList(item))
             elif item is None:
@@ -237,11 +268,14 @@ class TensorDescription:
     or in bulk via get_semantics()/set_semantics().
     """
 
-    def __init__(self, name: str, value: Any, tag: Optional[str] = None,
+    def __init__(self, name: str, value: Any,
                  semantics: Optional[TensorSemantics] = None):
-        # extract tag from the input if not overridden
-        if tag is None and hasattr(value, 'leapp_tag'):
-            tag = value.leapp_tag
+        # Capture where the value came from before unwrapping loses that state.
+        source_node = None
+        port = None
+        if isinstance(value, TracedData):
+            source_node = value.context_obj
+            port = value.output_port
 
         # unwrap TracedData to the underlying tensor
         if isinstance(value, TracedData):
@@ -254,9 +288,19 @@ class TensorDescription:
         self.dtype = dtype
         self.shape = CompactYamlList(shape)
         self.type = "tensor"
-        self.tag = tag
+        self.source_node = source_node
+        # The port on ``source_node`` that identifies this data. An input takes
+        # it from the value it received; an output is its own source, so its
+        # node stamps both at registration. Unlike ``name``, which export
+        # backends may rewrite, a port is set once and never changes.
+        self.port = port
         self.cached_values = []
         self.init_semantics(semantics)
+
+    @property
+    def has_source(self) -> bool:
+        """Whether this description resolves to a specific node output."""
+        return self.source_node is not None and self.port is not None
 
     # --- Semantic field access ---
 
@@ -284,22 +328,12 @@ class TensorDescription:
 
     @staticmethod
     def get_shape_and_dtype(value) -> Tuple[str, tuple]:
-        """Extract dtype string and shape from a torch.Tensor or numpy ndarray."""
-        dtype_map = get_dtype_map()
-
-        data_type = type(value)
-        if data_type == torch.Tensor:
-            dtype = dtype_map['torch'][value.dtype]
-            shape = value.shape
-        elif data_type == np.ndarray:
-            dtype = dtype_map['numpy'][value.dtype]
-            shape = value.shape
-        else:
-            raise ValueError(f"Unsupported type: {data_type}")
+        """Extract dtype string and shape from a registered backend value."""
+        dtype, shape = value_to_name_and_shape(value)
 
         return dtype, shape
 
-    def dict(self, ignore_tag=True, ignore_value=True) -> Dict[str, Any]:
+    def dict(self, ignore_value=True) -> Dict[str, Any]:
         """Convert to a dictionary for YAML serialization."""
         result = {
             "name": self.name,
@@ -307,8 +341,6 @@ class TensorDescription:
             "shape": self.shape,
             "type": self.type
         }
-        if self.tag is not None and not ignore_tag:
-            result["tag"] = self.tag
         if self.value is not None and not ignore_value:
             result["value"] = self.value
         # Merge in all non-None semantic fields
@@ -507,71 +539,40 @@ class ParameterFormat:
         _generate_unpacking(self.formatting, self.name_str, assignments)
         return "\n".join(assignments)
 
-def get_dtype_map():
-    return {
-        "torch": {
-            torch.float64: "float64",
-            torch.float32: "float32",
-            torch.float16: "float16",
-            torch.int16: "int16",
-            torch.int32: "int32",
-            torch.int64: "int64",
-            torch.uint8: "uint8",
-            torch.int8: "int8",
-            torch.bool: "bool",
-            torch.bfloat16: "bfloat16",
-        },
-        "numpy": {
-            np.float64: "float64",
-            np.float32: "float32",
-            np.float16: "float16",
-            np.int16: "int16",
-            np.int32: "int32",
-            np.int64: "int64",
-            np.uint8: "uint8",
-            np.int8: "int8",
-            np.bool_: "bool",
-        },
-    }
-
-def map_to_torch_dtype(string):
-    torch_map = get_dtype_map()['torch']
-    reverse_map = {dtype_str: dtype for dtype, dtype_str in torch_map.items()}
-    if string in reverse_map:
-        return reverse_map[string]
-    raise ValueError(f"Unsupported string: {string}")
-
-
 def validate_connection_compatibility(source_name, source_shape, source_dtype,
                                       target_name, target_shape, target_dtype):
     """Validate shape and dtype compatibility for a single pipeline edge."""
     if list(source_shape) != list(target_shape):
-        raise ValueError(
+        _get_logger().fatal(
             f"Shape mismatch in pipeline connection: "
             f"{source_name} {tuple(source_shape)} -> "
-            f"{target_name} {tuple(target_shape)}"
+            f"{target_name} {tuple(target_shape)}",
+            error_type=ValueError,
         )
 
     if target_dtype != source_dtype:
-        raise ValueError(
+        _get_logger().fatal(
             f"Dtype mismatch in pipeline connection: "
             f"{source_name} {source_dtype} -> "
-            f"{target_name} {target_dtype}"
+            f"{target_name} {target_dtype}",
+            error_type=ValueError,
         )
 
 
 def verify_data_exact_match(source_data, target_data):
     # Check if both are the same type (allow dict-like and list-like substitutions)
-    source_is_list_like = isinstance(source_data, collections.abc.Sequence) and not isinstance(
-        source_data, (str, bytes, torch.Tensor))
-    target_is_list_like = isinstance(target_data, collections.abc.Sequence) and not isinstance(
-        target_data, (str, bytes, torch.Tensor))
+    source_is_list_like = (
+        isinstance(source_data, collections.abc.Sequence)
+        and not isinstance(source_data, (str, bytes, torch.Tensor))
+        and not is_tracable_tensor_type(source_data)
+    )
+    target_is_list_like = (
+        isinstance(target_data, collections.abc.Sequence)
+        and not isinstance(target_data, (str, bytes, torch.Tensor))
+        and not is_tracable_tensor_type(target_data)
+    )
     source_is_dict_like = isinstance(source_data, collections.abc.Mapping)
     target_is_dict_like = isinstance(target_data, collections.abc.Mapping)
-    if isinstance(source_data, TracedTensor):
-        source_data = source_data.tensor
-    if isinstance(target_data, TracedTensor):
-        target_data = target_data.tensor
 
     # If one is list-like and the other is not, they don't match
     if source_is_list_like != target_is_list_like:
@@ -580,9 +581,14 @@ def verify_data_exact_match(source_data, target_data):
     if source_is_dict_like != target_is_dict_like:
         return False
 
-    if isinstance(source_data, torch.Tensor):
-        if not isinstance(target_data, torch.Tensor):
+    if is_tracable_tensor_type(source_data):
+        # conversion to torch tensor to utilize torch equality
+        if not is_tracable_tensor_type(target_data):
             return False
+        source_data = to_export_torch_tensor(source_data)
+        target_data = to_export_torch_tensor(target_data)
+        
+        # identity comparison
         if source_data.shape != target_data.shape:
             return False
         if source_data.dtype != target_data.dtype:
@@ -621,7 +627,7 @@ def flatten_io_structure(data, name_str):
         for key, value in data.items():
             child_name = f"{name_str}_{key}" if name_str else key
             flat_data.update(flatten_io_structure(value, child_name))
-    elif isinstance(data, torch.Tensor) or isinstance(data, TracedTensor):
+    elif is_tracable_tensor_type(data):
         flat_data[name_str] = data
 
     return flat_data
@@ -646,23 +652,29 @@ def unwrap_tensor_semantics(data):
         data = [data]
 
     if not isinstance(data, (list, tuple)):
-        raise TypeError(
+        _get_logger().fatal(
             f"unwrap_tensor_semantics expects a TensorSemantics or list of TensorSemantics, "
-            f"got {type(data).__name__}")
+            f"got {type(data).__name__}",
+            error_type=TypeError,
+        )
 
     if not all(isinstance(item, TensorSemantics) for item in data):
         bad_types = {type(item).__name__ for item in data if not isinstance(item, TensorSemantics)}
-        raise TypeError(
+        _get_logger().fatal(
             f"All items must be TensorSemantics when using semantic inputs. "
-            f"Found non-TensorSemantics types: {bad_types}")
+            f"Found non-TensorSemantics types: {bad_types}",
+            error_type=TypeError,
+        )
 
     # Check for duplicate names
     names = [sem.name for sem in data]
     duplicates = {name for name in names if names.count(name) > 1}
     if duplicates:
-        raise ValueError(
+        _get_logger().fatal(
             f"Duplicate TensorSemantics names: {duplicates}. "
-            f"Each TensorSemantics must have a unique name.")
+            f"Each TensorSemantics must have a unique name.",
+            error_type=ValueError,
+        )
 
     tensors = {}
     semantics_map = {}
@@ -707,7 +719,8 @@ def describe_io_helper(data, name_str):
             if child_format is not None:
                 io_format[k] = child_format
                 data_description.extend(child_description)
-    elif isinstance(data, torch.Tensor):
+    # elif isinstance(data, torch.Tensor):
+    elif is_tracable_tensor_type(data):
         tensor_desc = TensorDescription(name_str, data)
 
         # Return as a list containing the dataclass (for now, keep compatibility)
@@ -781,139 +794,3 @@ def resolve_tensor_descriptions_to_values(io_format):
         If a ParameterFormat is passed, returns the resolved formatting from within it.
     """
     return _resolve_tensor_descriptions(io_format, lambda td: td.value)
-
-
-def reconstruct_from_named_dict(named_dict, io_format, use_tag_first=True):
-    """
-    Reverse of describe_io_helper: reconstruct data structure from named dict and format.
-
-    Takes a dictionary mapping names/tags to actual data values and an io_format structure,
-    and reconstructs the original nested data structure.
-
-    Args:
-        named_dict: Dictionary mapping names or tags to actual data values
-        io_format: The format structure (can be ParameterFormat, TensorDescription objects or strings)
-        use_tag_first: If True, try to lookup by tag first, then by name. If False, use name only.
-
-    Returns:
-        The reconstructed data structure with the same shape as the original
-
-    Example:
-        # Original data
-        data = {'a': tensor1, 'b': [tensor2, tensor3]}
-
-        # Describe it
-        desc, fmt = describe_io_helper(data, "root", "python")
-
-        # Later reconstruct from a named dict
-        named = {'root.a': new_tensor1, 'root.b.0': new_tensor2, 'root.b.1': new_tensor3}
-        reconstructed = reconstruct_from_named_dict(named, fmt)
-        # reconstructed = {'a': new_tensor1, 'b': [new_tensor2, new_tensor3]}
-    """
-    def resolve(item):
-        if isinstance(item, ParameterFormat):
-            # For ParameterFormat, extract the formatting attribute
-            return resolve(item.formatting)
-        elif isinstance(item, TensorDescription):
-            # Try to find the value in named_dict
-            # First try by tag if it exists
-            if item.tag is not None and item.tag in named_dict:
-                return named_dict[item.tag]
-
-            # Then try by name
-            if item.name in named_dict:
-                return named_dict[item.name]
-
-            raise KeyError(
-                f"Could not find data for TensorDescription with name='{item.name}' and tag='{item.tag}' in named_dict")
-        elif isinstance(item, str):
-            # If it's a string, look it up directly in named_dict
-            if item in named_dict:
-                return named_dict[item]
-            raise KeyError(
-                f"Could not find data for key '{item}' in named_dict")
-        elif isinstance(item, collections.abc.Sequence) and not isinstance(item, (str, bytes, torch.Tensor)):
-            return [resolve(sub_item) for sub_item in item]
-        elif isinstance(item, collections.abc.Mapping):
-            return {key: resolve(value) for key, value in item.items()}
-        else:
-            # Return as-is for other types
-            return item
-
-    return resolve(io_format)
-
-
-def flatten_to_named_dict(data, io_format, use_tag_first=True):
-    """
-    Flatten a nested data structure to a dictionary using io_format as a guide.
-
-    This is the inverse of reconstruct_from_named_dict: given a nested data structure
-    and its corresponding format, it creates a flat dictionary mapping tags/names to values.
-
-    Args:
-        data: The nested data structure (can be tensor, list, dict, etc.)
-        io_format: The format structure (can be ParameterFormat or containing TensorDescription objects)
-        use_tag_first: If True, use tag as key if available, otherwise use name
-
-    Returns:
-        Dictionary mapping tags/names to actual values
-
-    Example:
-        # Original data
-        data = {'a': tensor1, 'b': [tensor2, tensor3]}
-
-        # Describe it to get format
-        desc, fmt = describe_io_helper(data, "root", "python")
-
-        # Flatten it back
-        flat = flatten_to_named_dict(data, fmt)
-        # flat = {'root.a': tensor1, 'root.b.0': tensor2, 'root.b.1': tensor3}
-    """
-    result = {}
-
-    def flatten(data_item, format_item):
-        if isinstance(format_item, ParameterFormat):
-            # For ParameterFormat, extract the formatting attribute
-            flatten(data_item, format_item.formatting)
-        elif isinstance(format_item, TensorDescription):
-            # Extract the key (tag or name)
-            if use_tag_first and format_item.tag is not None:
-                key = format_item.tag
-            else:
-                key = format_item.name
-
-            # Store the value
-            result[key] = data_item
-
-        elif isinstance(format_item, collections.abc.Sequence) and not isinstance(format_item, (str, bytes, torch.Tensor)):
-            # Both should be lists or list-like
-            if not (isinstance(data_item, collections.abc.Sequence) and not isinstance(data_item, (str, bytes, torch.Tensor))):
-                raise TypeError(
-                    f"Format expects a list but data is {type(data_item)}")
-            if len(data_item) != len(format_item):
-                raise ValueError(
-                    f"List length mismatch: data has {len(data_item)} items, "
-                    f"format expects {len(format_item)}")
-
-            for data_sub, format_sub in zip(data_item, format_item):
-                flatten(data_sub, format_sub)
-
-        elif isinstance(format_item, collections.abc.Mapping):
-            # Both should be dicts or dict-like
-            if not isinstance(data_item, collections.abc.Mapping):
-                raise TypeError(
-                    f"Format expects a dict but data is {type(data_item)}")
-            if set(data_item.keys()) != set(format_item.keys()):
-                raise ValueError(
-                    f"Dict keys mismatch: data has {set(data_item.keys())}, "
-                    f"format expects {set(format_item.keys())}")
-
-            for key in format_item.keys():
-                flatten(data_item[key], format_item[key])
-        else:
-            # For other types, we don't have a good way to extract a key
-            # This shouldn't normally happen if format was created by describe_io_helper
-            pass
-
-    flatten(data, io_format)
-    return result

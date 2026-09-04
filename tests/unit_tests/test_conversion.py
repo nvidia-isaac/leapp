@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-"""Tests for conversion between TracedTensor and TracedNpArray.
+"""Tests for conversion between TracedTensor, TracedNpArray, and TracedWpArray.
 
 These tests verify that:
 1. Conversions produce the correct traced type
@@ -14,13 +14,19 @@ These tests verify that:
 import unittest
 import numpy as np
 import torch
+import warp as wp
 
 from leapp.leapp_graph.traced_node import TracedTensorNode
-from leapp.leapp_graph.datatypes import TracedTensor, TracedNpArray
-from leapp.leapp_graph.datatypes.global_patching import (
-    apply_traced_data_patches,
-    remove_traced_data_patches,
-)
+from leapp.leapp_graph.datatypes import TracedTensor, TracedNpArray, TracedWpArray
+from leapp.export_manager import ExportManager
+
+
+def _install_patches():
+    ExportManager().patcher.install()
+
+
+def _uninstall_patches():
+    ExportManager().patcher.uninstall()
 
 
 class TestTracedTensorToNumpy(unittest.TestCase):
@@ -28,11 +34,11 @@ class TestTracedTensorToNumpy(unittest.TestCase):
 
     def setUp(self):
         """Apply patches before each test."""
-        apply_traced_data_patches()
+        _install_patches()
 
     def tearDown(self):
         """Remove patches after each test."""
-        remove_traced_data_patches()
+        _uninstall_patches()
 
     def test_numpy_method_returns_traced_np_array(self):
         """Test TracedTensor.numpy() returns TracedNpArray when tracing."""
@@ -44,16 +50,17 @@ class TestTracedTensorToNumpy(unittest.TestCase):
         self.assertIsInstance(y, TracedNpArray)
         np.testing.assert_array_almost_equal(y, np.array([1.0, 2.0, 3.0]))
 
-    def test_numpy_method_returns_ndarray_after_compile(self):
-        """Test TracedTensor.numpy() returns plain ndarray after compile."""
+    def test_numpy_method_preserves_traced_array_after_compile(self):
+        """Test TracedTensor.numpy() preserves an inactive traced carrier."""
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
         ctx.compile_trace({'output': x * 2})
         
         y = x.numpy()
         
-        self.assertIsInstance(y, np.ndarray)
-        self.assertNotIsInstance(y, TracedNpArray)
+        self.assertIsInstance(y, TracedNpArray)
+        self.assertFalse(y.is_tracing)
+        self.assertIs(y.context_obj, ctx)
 
     def test_np_array_returns_traced_np_array(self):
         """Test np.array(TracedTensor) returns TracedNpArray when patched."""
@@ -91,11 +98,11 @@ class TestNumpyToTracedTensor(unittest.TestCase):
 
     def setUp(self):
         """Apply patches before each test."""
-        apply_traced_data_patches()
+        _install_patches()
 
     def tearDown(self):
         """Remove patches after each test."""
-        remove_traced_data_patches()
+        _uninstall_patches()
 
     def test_torch_from_numpy_returns_traced_tensor(self):
         """Test torch.from_numpy(TracedNpArray) returns TracedTensor when tracing."""
@@ -127,17 +134,18 @@ class TestNumpyToTracedTensor(unittest.TestCase):
         self.assertIsInstance(y, TracedTensor)
         self.assertTrue(torch.allclose(y.tensor, torch.tensor([1.0, 2.0, 3.0])))
 
-    def test_torch_from_numpy_returns_tensor_after_compile(self):
-        """Test torch.from_numpy returns plain tensor after compile."""
+    def test_torch_from_numpy_preserves_traced_tensor_after_compile(self):
+        """Test torch.from_numpy preserves an inactive traced carrier."""
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(np.array([1.0, 2.0, 3.0], dtype=np.float32), name="x")
         ctx.compile_trace({'output': x * 2})
         
-        # After compile, x is no longer tracing
-        y = torch.from_numpy(x.view(np.ndarray))
-        
-        self.assertIsInstance(y, torch.Tensor)
-        self.assertNotIsInstance(y, TracedTensor)
+        # After compile, x is inactive but still carries its source context.
+        y = torch.from_numpy(x)
+
+        self.assertIsInstance(y, TracedTensor)
+        self.assertFalse(y.is_tracing)
+        self.assertIs(y.context_obj, ctx)
 
 
 class TestConversionFXGraphCompilation(unittest.TestCase):
@@ -148,11 +156,11 @@ class TestConversionFXGraphCompilation(unittest.TestCase):
 
     def setUp(self):
         """Apply patches before each test."""
-        apply_traced_data_patches()
+        _install_patches()
 
     def tearDown(self):
         """Remove patches after each test."""
-        remove_traced_data_patches()
+        _uninstall_patches()
 
     def test_tensor_to_numpy_and_back(self):
         """Test: tensor → numpy → operations → tensor → output.
@@ -281,11 +289,11 @@ class TestConversionWithDtype(unittest.TestCase):
 
     def setUp(self):
         """Apply patches before each test."""
-        apply_traced_data_patches()
+        _install_patches()
 
     def tearDown(self):
         """Remove patches after each test."""
-        remove_traced_data_patches()
+        _uninstall_patches()
 
     def test_numpy_with_dtype_change(self):
         """Test conversion with dtype change preserves tracing."""
@@ -320,11 +328,11 @@ class TestTracedTensorIdentityPreservation(unittest.TestCase):
 
     def setUp(self):
         """Apply patches before each test."""
-        apply_traced_data_patches()
+        _install_patches()
 
     def tearDown(self):
         """Remove patches after each test."""
-        remove_traced_data_patches()
+        _uninstall_patches()
 
     def test_torch_as_tensor_preserves_identity(self):
         """Test torch.as_tensor returns same TracedTensor object."""
@@ -353,28 +361,134 @@ class TestTracedTensorIdentityPreservation(unittest.TestCase):
         self.assertTrue(torch.allclose(result.tensor, traced.tensor))
 
 
+class TestTracedTensorToWarp(unittest.TestCase):
+    """Test conversions from TracedTensor to TracedWpArray."""
+
+    def setUp(self):
+        """Apply patches before each test."""
+        _install_patches()
+
+    def tearDown(self):
+        """Remove patches after each test."""
+        _uninstall_patches()
+
+    def test_wp_from_torch_returns_traced_wp_array(self):
+        """Test wp.from_torch(TracedTensor) returns TracedWpArray when tracing."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0], device="cuda"), name="x")
+
+        y = wp.from_torch(x)
+
+        self.assertIsInstance(y, TracedWpArray)
+        self.assertIs(y.proxy, x.proxy)
+        self.assertTrue(torch.allclose(wp.to_torch(y), x.tensor))
+
+    def test_wp_array_returns_traced_wp_array(self):
+        """Test wp.array(TracedTensor, dtype=...) returns TracedWpArray when patched."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0], device="cuda"), name="x")
+
+        y = wp.array(x, dtype=wp.float32)
+
+        self.assertIsInstance(y, TracedWpArray)
+        self.assertIs(y.proxy, x.proxy)
+        self.assertTrue(torch.allclose(wp.to_torch(y), x.tensor))
+
+
+class TestWarpToTracedTensor(unittest.TestCase):
+    """Test conversions from TracedWpArray to TracedTensor."""
+
+    def setUp(self):
+        """Apply patches before each test."""
+        _install_patches()
+
+    def tearDown(self):
+        """Remove patches after each test."""
+        _uninstall_patches()
+
+    def test_wp_to_torch_returns_traced_tensor(self):
+        """Test wp.to_torch(TracedWpArray) returns TracedTensor when tracing."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x_torch = ctx.create_input(torch.tensor([1.0, 2.0, 3.0], device="cuda"), name="x")
+        x = wp.from_torch(x_torch)
+
+        y = wp.to_torch(x)
+
+        self.assertIsInstance(y, TracedTensor)
+        self.assertIs(y.proxy, x.proxy)
+        self.assertTrue(torch.allclose(y.tensor, x_torch.tensor))
+
+
+class TestTracedNumpyToWarp(unittest.TestCase):
+    """Test conversions from TracedNpArray to TracedWpArray."""
+
+    def setUp(self):
+        """Apply patches before each test."""
+        _install_patches()
+
+    def tearDown(self):
+        """Remove patches after each test."""
+        _uninstall_patches()
+
+    def test_wp_from_numpy_returns_traced_wp_array(self):
+        """Test wp.from_numpy(TracedNpArray) returns TracedWpArray when tracing."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(np.array([1.0, 2.0, 3.0], dtype=np.float32), name="x")
+
+        y = wp.from_numpy(x)
+
+        self.assertIsInstance(y, TracedWpArray)
+        self.assertIs(y.proxy, x.proxy)
+        self.assertEqual(y.shape, x.shape)
+        self.assertEqual(y.dtype, wp.float32)
+
+
+class TestWarpToTracedNumpy(unittest.TestCase):
+    """Test conversions from TracedWpArray to TracedNpArray."""
+
+    def setUp(self):
+        """Apply patches before each test."""
+        _install_patches()
+
+    def tearDown(self):
+        """Remove patches after each test."""
+        _uninstall_patches()
+
+    def test_wp_array_numpy_returns_traced_np_array(self):
+        """Test TracedWpArray.numpy() returns TracedNpArray when tracing."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x_torch = ctx.create_input(torch.tensor([1.0, 2.0, 3.0], device="cuda"), name="x")
+        x = wp.from_torch(x_torch)
+
+        y = x.numpy()
+
+        self.assertIsInstance(y, TracedNpArray)
+        self.assertIs(y.proxy, x.proxy)
+        np.testing.assert_array_almost_equal(y, np.array([1.0, 2.0, 3.0], dtype=np.float32))
+
+
 class TestPatchingBehavior(unittest.TestCase):
     """Test the patching mechanism itself."""
 
     def tearDown(self):
         """Ensure patches are removed after each test."""
-        remove_traced_data_patches()
+        _uninstall_patches()
 
     def test_patches_can_be_toggled(self):
         """Test that patches can be applied and removed."""
-        from leapp.leapp_graph.datatypes.global_patching import is_patching_enabled
-        
+        patcher = ExportManager().patcher
+
         # Start clean
-        remove_traced_data_patches()
-        self.assertFalse(is_patching_enabled())
-        
+        _uninstall_patches()
+        self.assertFalse(patcher.installed)
+
         # Apply patches
-        apply_traced_data_patches()
-        self.assertTrue(is_patching_enabled())
-        
+        _install_patches()
+        self.assertTrue(patcher.installed)
+
         # Remove patches
-        remove_traced_data_patches()
-        self.assertFalse(is_patching_enabled())
+        _uninstall_patches()
+        self.assertFalse(patcher.installed)
 
 
 if __name__ == '__main__':

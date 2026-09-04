@@ -18,6 +18,7 @@ import torch
 
 from leapp.leapp_graph.traced_node import TracedTensorNode
 from leapp.leapp_graph.datatypes import TracedNpArray
+from leapp.leapp_graph.datatypes.patching import TracingPatcher
 
 from tests.unit_tests.export_format_validation import (
     verify_exported_program,
@@ -790,24 +791,117 @@ class TestTracedNpArray(unittest.TestCase):
 
     # ==================== Operations After Compile Tests ====================
 
-    def test_operations_after_compile_return_arrays(self):
-        """Test that operations return raw arrays after compile_trace."""
+    def test_operations_after_compile_return_native_arrays(self):
+        """A value derived from a finished node is new data, so it stays native."""
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
         y = x * 2
-        
+
         ctx.compile_trace({'y': y})
-        
+
         # After compilation, is_tracing should be False
         self.assertFalse(ctx.is_tracing)
-        
-        # Operations on traced array should now return regular arrays
-        z = x + 1
-        self.assertIsInstance(z, np.ndarray)
-        self.assertNotIsInstance(z, TracedNpArray)
 
-    def test_getitem_after_compile_returns_array(self):
-        """Test that indexing returns raw array after compile."""
+        patcher = TracingPatcher()
+        patcher.install()
+        try:
+            derived = [
+                x + 1,
+                x.copy(),
+                x.astype(np.float32),
+                np.array(x),
+            ]
+            # These alias the boundary value rather than producing new data.
+            aliases = [np.asarray(x), np.asanyarray(x)]
+        finally:
+            patcher.uninstall()
+
+        for result in derived:
+            self.assertNotIsInstance(result, TracedNpArray)
+            self.assertIsInstance(result, np.ndarray)
+
+        for result in aliases:
+            self.assertIs(result, x)
+
+        # The boundary value itself is untouched and still carries its node.
+        self.assertIsInstance(x, TracedNpArray)
+        self.assertIs(x.context_obj, ctx)
+
+    # ==================== Conversion Patch Tests ====================
+
+    def test_conversion_copy_property(self):
+        """Test that np.array copies and np.asarray aliases, in eager and graph."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
+
+        patcher = TracingPatcher()
+        patcher.install()
+        try:
+            aliased = np.asarray(x)
+            never_copy = np.asarray(x, copy=False)
+            copied = np.array(x)
+            forced = np.asarray(x, copy=True)
+        finally:
+            patcher.uninstall()
+
+        # np.asarray copies only when needed, so an unchanged request aliases
+        self.assertIs(aliased, x)
+        self.assertIs(never_copy, x)
+
+        # np.array copies by default, and copy=True forces one either way
+        for result in (copied, forced):
+            self.assertIsInstance(result, TracedNpArray)
+            self.assertIsNot(result, x)
+            self.assertFalse(
+                np.shares_memory(result.view(np.ndarray), x.view(np.ndarray))
+            )
+            self.assertTrue(np.array_equal(result.view(np.ndarray), [1.0, 2.0, 3.0]))
+
+        ctx.compile_trace({'aliased': aliased, 'copied': copied})
+
+        # Each copy is recorded, while the alias reuses its source proxy
+        targets = [node.target for node in ctx.graph.nodes]
+        self.assertEqual(targets.count(torch.clone), 1)
+
+        alias_out, copy_out = ctx.m(torch.tensor([1.0, 2.0, 3.0]))
+        self.assertFalse(alias_out.data_ptr() == copy_out.data_ptr())
+
+    def test_conversion_dtype_swap_property(self):
+        """Test that a dtype swap casts eagerly and is recorded in the graph."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
+
+        patcher = TracingPatcher()
+        patcher.install()
+        try:
+            # dtype is accepted positionally as well as by keyword
+            positional = np.asarray(x, np.float32)
+            keyword = np.asarray(x, dtype=np.float32)
+            widened = np.asarray(x, dtype=np.int64)
+        finally:
+            patcher.uninstall()
+
+        for result, expected in ((positional, np.float32),
+                                 (keyword, np.float32),
+                                 (widened, np.int64)):
+            self.assertIsInstance(result, TracedNpArray)
+            self.assertEqual(result.dtype, expected)
+
+        ctx.compile_trace({'positional': positional, 'widened': widened})
+
+        # Each output cast is a real node rather than a reuse of the source proxy
+        casts = [node for node in ctx.graph.nodes if node.target == "to"]
+        self.assertEqual([node.args[1] for node in casts],
+                         [torch.float32, torch.int64])
+
+        # A float64 input proves the recorded cast changes dtype rather than
+        # coincidentally matching torch's float32 default.
+        float_out, int_out = ctx.m(torch.tensor([1.0, 2.0, 3.0], dtype=torch.float64))
+        self.assertEqual(float_out.dtype, torch.float32)
+        self.assertEqual(int_out.dtype, torch.int64)
+
+    def test_getitem_after_compile_returns_native_array(self):
+        """Inactive indexing produces new data, so it stays native."""
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(np.array([1.0, 2.0, 3.0, 4.0, 5.0]), name="x")
         # Use slice to get array output (scalar indexing returns np.float64, not array)
@@ -815,9 +909,10 @@ class TestTracedNpArray(unittest.TestCase):
         
         ctx.compile_trace({'y': y})
         
-        # Indexing after compile should return regular array
         z = x[2:4]
         self.assertNotIsInstance(z, TracedNpArray)
+        self.assertIsInstance(z, np.ndarray)
+        self.assertIsInstance(x, TracedNpArray)
 
     # ==================== Context Validation Tests ====================
 
@@ -1056,6 +1151,27 @@ class TestCompiledGraphExecution(unittest.TestCase):
         expected = input_data * 3
         self._test_operation("mul_scalar", lambda x: x * 3, input_data, expected)
 
+    def test_mul_np_float32(self):
+        """Test: x * np.float32(2.0) — numpy scalars must become Python numbers."""
+        input_data = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+        expected = input_data * np.float32(2.0)
+        self._test_operation(
+            "mul_np_float32", lambda x: x * np.float32(2.0), input_data, expected)
+
+    def test_mul_np_float64(self):
+        """Test: x * np.float64(2.0) — numpy scalars must not leak into the FX graph."""
+        input_data = np.array([1.0, 2.0, 3.0])
+        expected = input_data * np.float64(2.0)
+        self._test_operation(
+            "mul_np_float64", lambda x: x * np.float64(2.0), input_data, expected)
+
+    def test_div_norm(self):
+        """Test: x / np.linalg.norm(x) — unmapped norm returns a numpy scalar."""
+        input_data = np.array([3.0, 4.0], dtype=np.float32)
+        expected = input_data / np.linalg.norm(input_data)
+        self._test_operation(
+            "div_norm", lambda x: x / np.linalg.norm(x), input_data, expected)
+
     def test_div_scalar(self):
         """Test: x / 2"""
         input_data = np.array([2.0, 4.0, 6.0])
@@ -1176,6 +1292,12 @@ class TestCompiledGraphExecution(unittest.TestCase):
         expected = np.asarray(np.prod(input_data))
         self._test_operation("np_prod_scalar", lambda x: np.prod(x), input_data, expected)
 
+    def test_np_prod_axis(self):
+        """Test: np.prod(x, axis=1) — axis must be renamed to dim for aten."""
+        input_data = np.array([[1.0, 2.0], [3.0, 4.0]])
+        expected = np.prod(input_data, axis=1)
+        self._test_operation("np_prod_axis", lambda x: np.prod(x, axis=1), input_data, expected)
+
     def test_np_max_scalar(self):
         """Test: np.max(x) returning a scalar — must stay traced."""
         input_data = np.array([1.0, 3.0, 2.0])
@@ -1211,6 +1333,53 @@ class TestCompiledGraphExecution(unittest.TestCase):
         input_data = np.array([[1.0, 3.0, 2.0], [4.0, 2.0, 5.0]])
         expected = np.min(input_data, axis=0)
         self._test_operation("np_min_axis", lambda x: np.min(x, axis=0), input_data, expected)
+
+    def test_np_stack_axis(self):
+        """Test: np.stack([x, x], axis=0) — axis must be renamed to dim for aten."""
+        input_data = np.array([1.0, 2.0, 3.0])
+        expected = np.stack([input_data, input_data], axis=0)
+        self._test_operation(
+            "np_stack_axis", lambda x: np.stack([x, x], axis=0), input_data, expected)
+
+    def test_np_split_axis(self):
+        """Test: np.split(x, 2, axis=0) — axis must be renamed to dim for aten."""
+        input_data = np.array([[1.0, 2.0], [3.0, 4.0]])
+        expected = np.split(input_data, 2, axis=0)[0]
+        self._test_operation(
+            "np_split_axis", lambda x: np.split(x, 2, axis=0)[0], input_data, expected)
+
+    def test_np_array_split_axis(self):
+        """Test: np.array_split(x, 2, axis=0) — axis must be renamed to dim for aten."""
+        input_data = np.array([[1.0, 2.0], [3.0, 4.0]])
+        expected = np.array_split(input_data, 2, axis=0)[0]
+        self._test_operation(
+            "np_array_split_axis", lambda x: np.array_split(x, 2, axis=0)[0],
+            input_data, expected)
+
+    def test_np_flip_axis(self):
+        """Test: np.flip(x, axis=1) — axis becomes dims as a tuple."""
+        input_data = np.array([[1.0, 2.0], [3.0, 4.0]])
+        expected = np.ascontiguousarray(np.flip(input_data, axis=1))
+        self._test_operation("np_flip_axis", lambda x: np.flip(x, axis=1), input_data, expected)
+
+    def test_np_flip_positional(self):
+        """Test: np.flip(x, 1) — integer dims must be wrapped for torch.flip."""
+        input_data = np.array([[1.0, 2.0], [3.0, 4.0]])
+        expected = np.ascontiguousarray(np.flip(input_data, 1))
+        self._test_operation("np_flip_positional", lambda x: np.flip(x, 1), input_data, expected)
+
+    def test_np_flip_all_axes(self):
+        """Test: np.flip(x) — omitted axis reverses every dimension."""
+        input_data = np.array([1.0, 2.0, 3.0])
+        expected = np.ascontiguousarray(np.flip(input_data))
+        self._test_operation("np_flip_all_axes", lambda x: np.flip(x), input_data, expected)
+
+    def test_np_roll_axis(self):
+        """Test: np.roll(x, 1, axis=1) — axis becomes dims, not dim."""
+        input_data = np.array([[1.0, 2.0], [3.0, 4.0]])
+        expected = np.roll(input_data, 1, axis=1)
+        self._test_operation(
+            "np_roll_axis", lambda x: np.roll(x, 1, axis=1), input_data, expected)
 
     # ==================== Shape Operations ====================
 
@@ -1284,6 +1453,50 @@ class TestCompiledGraphExecution(unittest.TestCase):
         expected = np.clip(input_data, 1.5, 2.5)
         self._test_operation("np_clip", lambda x: np.clip(x, 1.5, 2.5), input_data, expected)
 
+    def test_np_maximum_scalar(self):
+        """Test: np.maximum(x, 3.0) — torch.maximum requires tensor operands."""
+        input_data = np.array([1.0, 4.0, 2.0])
+        expected = np.maximum(input_data, 3.0)
+        self._test_operation(
+            "np_maximum_scalar", lambda x: np.maximum(x, 3.0), input_data, expected)
+
+    def test_np_minimum_scalar(self):
+        """Test: np.minimum(x, 3.0) — torch.minimum requires tensor operands."""
+        input_data = np.array([1.0, 4.0, 2.0])
+        expected = np.minimum(input_data, 3.0)
+        self._test_operation(
+            "np_minimum_scalar", lambda x: np.minimum(x, 3.0), input_data, expected)
+
+    def test_np_round(self):
+        """Test: np.round(x) — dispatches as a function, not a ufunc."""
+        input_data = np.array([1.4, 2.6, -0.6])
+        expected = np.round(input_data)
+        self._test_operation("np_round", lambda x: np.round(x), input_data, expected)
+
+    # ==================== Linear Algebra Operations ====================
+
+    def test_np_matmul(self):
+        """Test: np.matmul(x, x.T) — matmul is a ufunc and must stay traced."""
+        input_data = np.array([[1.0, 2.0], [3.0, 4.0]])
+        expected = np.matmul(input_data, input_data.T)
+        self._test_operation(
+            "np_matmul", lambda x: np.matmul(x, x.T), input_data, expected)
+
+    def test_matmul_operator(self):
+        """Test: x @ x.T — the operator form routes through the same ufunc."""
+        input_data = np.array([[1.0, 2.0], [3.0, 4.0]])
+        expected = input_data @ input_data.T
+        self._test_operation(
+            "matmul_operator", lambda x: x @ x.T, input_data, expected)
+
+    def test_np_tensordot_axes(self):
+        """Test: np.tensordot(x, x, axes=...) — torch.tensordot takes dims."""
+        input_data = np.array([[1.0, 2.0], [3.0, 4.0]])
+        expected = np.tensordot(input_data, input_data, axes=([1], [1]))
+        self._test_operation(
+            "np_tensordot_axes",
+            lambda x: np.tensordot(x, x, axes=([1], [1])), input_data, expected)
+
     # ==================== Sorting and Searching Operations ====================
 
     def test_np_sort(self):
@@ -1311,6 +1524,22 @@ class TestCompiledGraphExecution(unittest.TestCase):
         input_data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
         expected = np.where(input_data > 2, input_data, 0.0)
         self._test_operation("np_where", lambda x: np.where(x > 2, x, 0.0), input_data, expected)
+
+    def test_np_nonzero_rows(self):
+        """Test: np.nonzero(x)[0] — numpy returns one index array per dimension."""
+        input_data = np.array([[0.0, 0.0, 1.0], [1.0, 0.0, 1.0]])
+        expected = np.nonzero(input_data)[0].astype(np.float32)
+        self._test_operation(
+            "np_nonzero_rows", lambda x: np.nonzero(x)[0].astype(np.float32),
+            input_data, expected)
+
+    def test_np_nonzero_cols(self):
+        """Test: np.nonzero(x)[1] — the second element indexes the last dimension."""
+        input_data = np.array([[0.0, 0.0, 1.0], [1.0, 0.0, 1.0]])
+        expected = np.nonzero(input_data)[1].astype(np.float32)
+        self._test_operation(
+            "np_nonzero_cols", lambda x: np.nonzero(x)[1].astype(np.float32),
+            input_data, expected)
 
     # ==================== Setitem Operations ====================
 

@@ -23,19 +23,19 @@ import os
 import yaml
 
 from .utils.logging import _get_logger
-from .leapp_graph.datatypes import apply_traced_data_patches, remove_traced_data_patches
-from .leapp_graph.leapp_graph import LeappGraph
+from .export_manager import ExportManager
 from .utils.tracing_lock import TracingLock
 from .utils.utils import get_system_info
-from .export_manager import ExportManager
 from .utils.tensor_description import GraphConfigs
+
+from .leapp_graph.leapp_graph import LeappGraph
 
 
 _MANAGER = ExportManager()
 
 
 def start(name, save_path=".", verbose=False, dry_run=False, non_traced=None,
-          max_cached_io=5, global_patching=True):
+          max_cached_io=5, global_patching=True, patching=None):
     """Initialize and start LEAPP graph interpretation.
 
     ``name`` may be a bare graph name (``"my_graph"``), a relative path
@@ -85,10 +85,13 @@ def start(name, save_path=".", verbose=False, dry_run=False, non_traced=None,
     manager.reset_nodes()
     ExportManager.set_interpret_graph(True)
 
-    # Apply patches for torch functions that bypass __torch_function__
+    # Apply patches for functions that bypass normal traced-type dispatch.
     if global_patching:
-        apply_traced_data_patches()
-    manager.set_patches_applied(global_patching)
+        try:
+            manager.patcher.install(patching=patching)
+        except Exception:
+            ExportManager.set_interpret_graph(False)
+            raise
 
 
 def stop():
@@ -107,15 +110,17 @@ def stop():
     ExportManager.set_interpret_graph(False)
     manager.restore_pending_buffer_trackers()
 
-    # Remove patches to restore original torch function behavior
-    if manager.is_numpy_patches_applied():
-        remove_traced_data_patches()
-        manager.set_patches_applied(False)
+    # Remove patches to restore original function behavior.
+    if manager.patcher.installed:
+        manager.patcher.uninstall()
 
 
-def compile_graph(visualize=True, verbose=None, validate=True, dry_run=False,
+def compile_graph(visualize=True, verbose=None, validate=True,
                   rtol=1e-3, atol=1e-5, strict=True, graph_configs=None):
     """Compile and save the computational graph from traced nodes.
+
+    Dry run is declared once via ``leapp.start(dry_run=True)``; when it is
+    active this call skips compile, save, and validation.
 
     When ``visualize`` is ``True`` on Python 3.11 or later, LEAPP writes
     a static ``.png`` graph artifact to the graph output
@@ -131,9 +136,6 @@ def compile_graph(visualize=True, verbose=None, validate=True, dry_run=False,
 
     if verbose is not None:
         _get_logger().set_verbose(verbose)
-
-    if dry_run:
-        manager.set_dry_run_and_non_traced(dry_run, [])
 
     manager.validate_nodes_ready_for_compile()
 
@@ -212,6 +214,7 @@ class AnnotateAPI:
         "register_buffer",
         "module",
         "mirror_leapp_tags",
+        "warp_op",
     }
 
     def __getattr__(self, name):

@@ -158,7 +158,7 @@ class TestNumpyPatchingDisabled(unittest.TestCase):
 
     def test_numpy_method_returns_array_when_patching_disabled(self):
         """Test that .numpy() returns actual numpy array when global_patching=False."""
-        from leapp.leapp_graph.datatypes.traced_tensor import TracedTensor
+        from leapp.leapp_graph.datatypes.torch.traced_tensor import TracedTensor
         
         tensor = torch.tensor([1.0, 2.0, 3.0])
         
@@ -181,7 +181,7 @@ class TestNumpyPatchingDisabled(unittest.TestCase):
 
     def test_np_array_returns_array_when_patching_disabled(self):
         """Test that np.array() returns actual numpy array when global_patching=False."""
-        from leapp.leapp_graph.datatypes.traced_tensor import TracedTensor
+        from leapp.leapp_graph.datatypes.torch.traced_tensor import TracedTensor
         
         tensor = torch.tensor([4.0, 5.0, 6.0])
         
@@ -204,7 +204,7 @@ class TestNumpyPatchingDisabled(unittest.TestCase):
 
     def test_np_asarray_returns_array_when_patching_disabled(self):
         """Test that np.asarray() returns actual numpy array when global_patching=False."""
-        from leapp.leapp_graph.datatypes.traced_tensor import TracedTensor
+        from leapp.leapp_graph.datatypes.torch.traced_tensor import TracedTensor
         
         tensor = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
         

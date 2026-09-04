@@ -1,0 +1,250 @@
+#!/usr/bin/env python3
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+
+import argparse
+import importlib
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import leapp
+from leapp.warp_runtime import (
+    WARP_RUNTIME_ENVIRONMENTS,
+    warp_runtime_artifact_paths,
+)
+
+
+def _runtime_source_dir() -> Path:
+    return (
+        Path(leapp.__file__).resolve().parent
+        / "leapp_graph"
+        / "custom_operator_registry"
+        / "warp_operator"
+        / "runtime"
+    )
+
+
+def _require_module(name: str, install_hint: str):
+    try:
+        return importlib.import_module(name)
+    except ImportError as exc:
+        raise RuntimeError(
+            f"{name} is required to build LEAPP Warp support but is not "
+            "installed. "
+            f"Install it first with {install_hint}. "
+            "leapp-build-warp-runtime never installs dependencies."
+        ) from exc
+
+
+def _find_nvcc() -> Path:
+    candidates = []
+    if os.environ.get("CUDACXX"):
+        candidates.append(Path(os.environ["CUDACXX"]))
+    nvcc = shutil.which("nvcc")
+    if nvcc:
+        candidates.append(Path(nvcc))
+    if os.environ.get("CUDA_PATH"):
+        candidates.append(
+            Path(os.environ["CUDA_PATH"])
+            / "bin"
+            / ("nvcc.exe" if sys.platform == "win32" else "nvcc")
+        )
+    if sys.platform != "win32":
+        candidates.append(Path("/usr/local/cuda/bin/nvcc"))
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise RuntimeError(
+        "The CUDA compiler nvcc is required to build LEAPP Warp support but "
+        "was not found. Install the CUDA Toolkit or set CUDACXX."
+    )
+
+
+def _warp_library_name() -> str:
+    if sys.platform == "win32":
+        return "warp.dll"
+    if sys.platform == "darwin":
+        return "libwarp.dylib"
+    return "warp.so"
+
+
+def _onnxruntime_library_name(version: str) -> str:
+    if sys.platform == "win32":
+        return "onnxruntime.dll"
+    if sys.platform == "darwin":
+        return f"libonnxruntime.{version}.dylib"
+    return f"libonnxruntime.so.{version}"
+
+
+def _validate_build_resources() -> tuple[Path, Path | None]:
+    if shutil.which("cmake") is None:
+        raise RuntimeError(
+            "CMake is required to build LEAPP Warp support but was not found."
+        )
+
+    warp = _require_module("warp", 'pip install "leapp[warp]"')
+    warp_dir = Path(warp.__file__).resolve().parent
+    warp_library = warp_dir / "bin" / _warp_library_name()
+    apic_header = warp_dir / "native" / "apic.h"
+    if not warp_library.is_file():
+        raise RuntimeError(
+            "Warp is installed, but its native library was not found: "
+            f"{warp_library}"
+        )
+    if not apic_header.is_file():
+        raise RuntimeError(
+            "Warp is installed, but its APIC header was not found: "
+            f"{apic_header}"
+        )
+
+    warp_import_library = None
+    if sys.platform == "win32":
+        configured_import_library = os.environ.get(
+            "LEAPP_WARP_IMPORT_LIBRARY"
+        )
+        warp_import_library = (
+            Path(configured_import_library).expanduser()
+            if configured_import_library
+            else warp_dir / "bin" / "warp.lib"
+        )
+        if not warp_import_library.is_file():
+            raise RuntimeError(
+                "The Windows Warp import library was not found: "
+                f"{warp_import_library}. The warp-lang wheel does not include "
+                "warp.lib; provide one with LEAPP_WARP_IMPORT_LIBRARY."
+            )
+
+    onnxruntime = _require_module("onnxruntime", "pip install onnxruntime")
+    ort_library = (
+        Path(onnxruntime.__file__).resolve().parent
+        / "capi"
+        / _onnxruntime_library_name(onnxruntime.__version__)
+    )
+    if not ort_library.is_file():
+        raise RuntimeError(
+            "ONNX Runtime is installed, but its shared library was not found: "
+            f"{ort_library}"
+        )
+
+    torch = _require_module("torch", "pip install torch")
+    cmake_prefix = getattr(
+        getattr(torch, "utils", None), "cmake_prefix_path", None
+    )
+    if not cmake_prefix:
+        raise RuntimeError(
+            "PyTorch is installed, but its CMake path is unavailable."
+        )
+    torch_cmake_dir = Path(cmake_prefix) / "Torch"
+    if not (torch_cmake_dir / "TorchConfig.cmake").is_file():
+        raise RuntimeError(
+            "PyTorch is installed, but its CMake resources were not found: "
+            f"{torch_cmake_dir}"
+        )
+
+    return _find_nvcc(), warp_import_library
+
+
+def build_warp_runtime(
+    build_dir: str | Path | None = None,
+) -> dict[str, Path]:
+    source_dir = _runtime_source_dir()
+    if not (source_dir / "CMakeLists.txt").is_file():
+        raise RuntimeError(
+            f"LEAPP Warp runtime sources were not found: {source_dir}. "
+            "Reinstall LEAPP from a distribution that includes native sources."
+        )
+
+    nvcc, warp_import_library = _validate_build_resources()
+    artifacts = warp_runtime_artifact_paths(build_dir)
+    output_dir = next(iter(artifacts.values())).parent
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    configure_command = [
+        "cmake",
+        "-S",
+        str(source_dir),
+        "-B",
+        str(output_dir),
+        f"-DPython3_EXECUTABLE={sys.executable}",
+        f"-DCMAKE_CUDA_COMPILER={nvcc}",
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DLEAPP_WARP_BUILD_ONNX=ON",
+        "-DLEAPP_WARP_BUILD_TORCH=ON",
+    ]
+    if warp_import_library is not None:
+        configure_command.append(
+            f"-DWARP_IMPORT_LIBRARY={warp_import_library}"
+        )
+    subprocess.run(configure_command, check=True)
+    subprocess.run(
+        ["cmake", "--build", str(output_dir), "--config", "Release", "-j"],
+        check=True,
+    )
+
+    missing = [str(path) for path in artifacts.values() if not path.is_file()]
+    if missing:
+        raise RuntimeError(
+            "Warp runtime build completed without producing: "
+            + ", ".join(missing)
+        )
+    return artifacts
+
+
+def show_status(build_dir: str | Path | None = None) -> int:
+    artifacts = warp_runtime_artifact_paths(build_dir)
+    all_exist = True
+    for backend, cached_path in artifacts.items():
+        env_name = WARP_RUNTIME_ENVIRONMENTS[backend]
+        configured_path = os.environ.get(env_name)
+        if configured_path:
+            path = Path(configured_path).expanduser()
+            source = "environment"
+        else:
+            path = cached_path
+            source = "cache" if path.is_file() else "missing"
+        exists = path.is_file()
+        all_exist = all_exist and exists
+        print(f"{backend}: {path} ({source})")
+    return 0 if all_exist else 1
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Build LEAPP's ONNX and PT2 Warp runtime adapters."
+    )
+    parser.add_argument(
+        "--status",
+        action="store_true",
+        help="Show discovered artifacts without building.",
+    )
+    parser.add_argument(
+        "--build-dir",
+        type=Path,
+        help="Override the build directory.",
+    )
+    args = parser.parse_args()
+
+    if args.status:
+        return show_status(args.build_dir)
+
+    try:
+        artifacts = build_warp_runtime(args.build_dir)
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+        print(f"Failed to build LEAPP Warp runtime: {exc}", file=sys.stderr)
+        return 1
+
+    print("Built LEAPP Warp runtime:")
+    for backend, path in artifacts.items():
+        print(f"{backend}: {path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

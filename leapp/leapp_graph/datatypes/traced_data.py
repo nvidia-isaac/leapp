@@ -11,6 +11,9 @@ from typing import Any, Set, Optional
 
 from torch.fx.proxy import Proxy
 from leapp.utils.logging import _get_logger
+from leapp.utils.dtype import dtype_to_name
+
+from .proxy_view import ProxyView, bind_new_view, update_view_proxy
 
 import torch
 
@@ -39,17 +42,11 @@ class TracedData(ABC):
             proxy: The fx.Proxy for graph recording
         """
         self._value = value
-        self._init_tracing_state(name, context, proxy)
+        bind_new_view(self, name, context, proxy)
     
     # =========================================================================
     # Common Properties
     # =========================================================================
-
-    def _init_tracing_state(self, name: str, context, proxy: Proxy) -> None:
-        """Initialize common tracing metadata for TracedData subclasses."""
-        self._name = name
-        self._context = context
-        self._proxy = proxy
 
     @staticmethod
     def _name_from_proxy(proxy: Proxy) -> str:
@@ -61,7 +58,17 @@ class TracedData(ABC):
     @property
     def proxy(self) -> Proxy:
         """Get the fx.Proxy for graph recording."""
-        return self._proxy
+        return self._proxy_view.proxy
+
+    @property
+    def proxy_view(self) -> ProxyView:
+        """The view holding this value's current proxy.
+
+        Exposed for code that outlives a single call and must read the proxy
+        later, such as the Warp boundary, where snapshotting ``proxy`` would let
+        a mutation in between go unseen.
+        """
+        return self._proxy_view
     
     @property
     def name(self) -> str:
@@ -79,6 +86,20 @@ class TracedData(ABC):
     def context_obj(self):
         """Get the TraceContext that owns this data."""
         return self._context
+
+    @property
+    def output_port(self) -> Optional[str]:
+        """Name of this node's output that published this value, if any.
+
+        Together with ``context_obj`` this is the complete connection identity
+        of a node boundary value. ``None`` means the value was never registered
+        as an output of its node.
+        """
+        return self._output_port
+
+    @output_port.setter
+    def output_port(self, port: Optional[str]) -> None:
+        self._output_port = port
     
     @property
     def is_tracing(self) -> bool:
@@ -86,6 +107,23 @@ class TracedData(ABC):
         if self._context is None:
             return False
         return self._context.is_tracing
+
+    def describes_replaced_graph(self) -> bool:
+        """Whether this carrier's proxy belongs to a graph its node has replaced.
+
+        A buffer promoted in place outlives the call that promoted it, so it
+        keeps that pass's provenance. Reading it again once its node has
+        installed a new graph would pull a node out of the discarded graph and
+        into the one being built.
+        """
+        proxy = self.proxy
+        if proxy is None:
+            return False
+        # Only a context that traces owns a graph it could replace, and
+        # LeappNode leaves the attribute unset, so a boundary-only context has
+        # no provenance to shed.
+        graph = getattr(self._context, "graph", None)
+        return graph is not None and proxy.node.graph is not graph
     
     @property
     @abstractmethod
@@ -98,6 +136,14 @@ class TracedData(ABC):
     def data(self) -> Any:
         """Get the underlying data."""
         pass
+
+    def get_dtype_name(self) -> str:
+        """Common dtype name (e.g. "float32") of the underlying value.
+
+        Delegates to the backend dtype-codec registry, so each backend's
+        mapping lives with that backend rather than in leapp core.
+        """
+        return dtype_to_name(self.data.dtype)
     # =========================================================================
     # Abstract Methods - Must be implemented by child classes
     # =========================================================================
@@ -114,7 +160,7 @@ class TracedData(ABC):
             A new TracedData instance of the same type
         """
         pass
-    
+
     # =========================================================================
     # Common Static Methods
     # =========================================================================
@@ -124,7 +170,7 @@ class TracedData(ABC):
         """Find the first TracedData in a supported nested structure.
         
         Args:
-            obj: Object to search (can be TracedData, list, tuple, or other)
+            obj: Object to search (can be TracedData, list, tuple, dict, or other)
             
         Returns:
             The first TracedData found, or None if not found
@@ -150,9 +196,14 @@ class TracedData(ABC):
                 TracedData._map_structure(obj.step, leaf_fn),
             )
         if isinstance(obj, (list, tuple)):
-            return type(obj)(
+            mapped = tuple(
                 TracedData._map_structure(item, leaf_fn) for item in obj
             )
+            if hasattr(obj, "_fields"):
+                # namedtuples take their fields positionally. Plain sequences and
+                # torch's structseq return types instead take a single sequence.
+                return type(obj)(*mapped)
+            return type(obj)(mapped)
         if isinstance(obj, dict):
             return {
                 key: TracedData._map_structure(value, leaf_fn)
@@ -258,7 +309,96 @@ class TracedData(ABC):
                 "2. combine both nodes into a single node by calling input_tensors() with the same node name",
                 error_type=Exception)
         return True
-    
+
+    # =========================================================================
+    # Transit State
+    # =========================================================================
+
+    # Subclasses override these to name the allocating / relocating ops whose
+    # results still hold the published boundary values, plus the native type of
+    # those results. Empty means no inactive-source function preserves a port.
+    _EQUIVALENT_COPY_NAMES: frozenset = frozenset()
+    _NATIVE_TYPE = None
+
+    @classmethod
+    def _is_equivalent_copy(cls, func, source, result, args) -> bool:
+        """Return whether ``func`` produced a value-identical copy of ``source``.
+
+        Recognition is by ``func.__name__`` so torch method descriptors and
+        numpy module functions share one template. Subclasses supply the name
+        set and native result type; method-level copies that never reach
+        dispatch (e.g. ``TracedNpArray.copy``) call ``preserve_port`` directly.
+        """
+        return (
+            cls._NATIVE_TYPE is not None
+            and getattr(func, "__name__", "") in cls._EQUIVALENT_COPY_NAMES
+            and isinstance(result, cls._NATIVE_TYPE)
+            and bool(args)
+            and args[0] is source
+        )
+
+    @staticmethod
+    def _is_complete_slice(key) -> bool:
+        """Return whether key is an open ``slice(None)`` without comparing tensors."""
+        return (
+            isinstance(key, slice)
+            and key.start is None
+            and key.stop is None
+            and key.step is None
+        )
+
+    @staticmethod
+    def _is_full_assignment_key(key) -> bool:
+        """Return whether an index covers the complete destination."""
+        if key is Ellipsis:
+            return True
+        if isinstance(key, slice):
+            return TracedData._is_complete_slice(key)
+        return (
+            isinstance(key, tuple)
+            and key
+            and all(TracedData._is_complete_slice(item) for item in key)
+        )
+
+    def preserve_port(self, result):
+        """Give ``result`` this carrier's published output port, if any.
+
+        ``result`` may already be a traced carrier (e.g. after an explicit
+        ``as_traced`` conversion) or a native value. A native value is promoted
+        first. With no published port, ``result`` is returned unchanged so
+        callers can always promote-then-preserve without a special case.
+        """
+        if self._output_port is None:
+            return result
+
+        if not isinstance(result, TracedData):
+            from leapp.leapp_graph.datatypes import as_traced
+
+            result = as_traced(result, self._name, self._context, self.proxy)
+        result.output_port = self._output_port
+        return result
+
+    def overwrite_port(self, key, value) -> None:
+        """Update this carrier's boundary identity after a write made in transit.
+
+        A full overwrite from a published output leaves this carrier holding
+        that output's data, so it adopts the whole boundary identity. Any other
+        write makes the data differ from whatever this carrier published, so it
+        drops its own port and stops being a usable edge source.
+        """
+        if (
+            getattr(value, "output_port", None) is not None
+            and self._is_full_assignment_key(key)
+            and tuple(value.shape) == tuple(self.shape)
+            and value.dtype == self.dtype
+        ):
+            update_view_proxy(
+                self, value.name, value.context_obj, value.proxy
+            )
+            self._output_port = value.output_port
+            return
+        self._output_port = None
+
     # =========================================================================
     # Common Magic Methods
     # =========================================================================
@@ -445,7 +585,7 @@ class TracedData(ABC):
         """Create a functional getitem proxy for a supported index key."""
         if not self._is_supported_index_key(key):
             return None
-        return self._lower_index_key(self._proxy, key)
+        return self._lower_index_key(self.proxy, key)
 
     def _create_setitem_proxy(self, key, value_proxy, real_value=None):
         """Lower indexed assignment to one functional flat ``index_put``.
@@ -499,14 +639,15 @@ class TracedData(ABC):
                     (source_proxy, target_shape), {}
                 )
 
+        destination_proxy = self.proxy
         source_proxy = self._context.tracer.create_proxy(
-            "call_method", "to", (source_proxy, self._proxy), {}
+            "call_method", "to", (source_proxy, destination_proxy), {}
         )
         flat_source_proxy = self._context.tracer.create_proxy(
             "call_method", "reshape", (source_proxy, (-1,)), {}
         )
         flat_destination_proxy = self._context.tracer.create_proxy(
-            "call_method", "reshape", (self._proxy, (-1,)), {}
+            "call_method", "reshape", (destination_proxy, (-1,)), {}
         )
         updated_proxy = self._context.tracer.create_proxy(
             "call_function", torch.index_put,
@@ -523,5 +664,5 @@ class TracedData(ABC):
         )
         if proxy_out is None:
             return False
-        self._proxy = proxy_out
+        self._proxy_view.proxy = proxy_out
         return True

@@ -27,6 +27,7 @@ import onnxruntime as ort
 
 from leapp.utils.logging import _get_logger
 from leapp.backends.module_builder import ModuleBuilder
+from leapp.warp_runtime import resolve_warp_runtime_library
 
 
 class SimplifiedONNXProgram:
@@ -55,6 +56,22 @@ class SimplifiedONNXProgram:
         self._input_names = None
         self._output_metas = None
         self._active_provider = None
+
+    @staticmethod
+    def _load_warp_runtime(
+        session_options: ort.SessionOptions,
+        model_path: str,
+    ) -> None:
+        from leapp.leapp_graph.custom_operator_registry.warp_operator import (
+            onnx_model_contains_warp_runner,
+        )
+
+        model = onnx.load(model_path, load_external_data=False)
+        if not onnx_model_contains_warp_runner(model):
+            return
+
+        library_path = resolve_warp_runtime_library("onnx")
+        session_options.register_custom_ops_library(str(library_path))
 
     @staticmethod
     def _torch_dtype_to_numpy_dtype(dtype):
@@ -141,8 +158,9 @@ class SimplifiedONNXProgram:
             device_id = prepared.device.index or 0
             np_dtype = self._torch_dtype_to_numpy_dtype(prepared.dtype)
             if np_dtype is None:
-                raise TypeError(
-                    f"Unsupported CUDA input dtype for ONNX Runtime I/O binding: {prepared.dtype}"
+                _get_logger().fatal(
+                    f"Unsupported CUDA input dtype for ONNX Runtime I/O binding: {prepared.dtype}",
+                    error_type=TypeError,
                 )
             binding.bind_input(
                 name=name,
@@ -158,8 +176,9 @@ class SimplifiedONNXProgram:
         for output_meta in self._output_metas:
             torch_dtype = self._onnx_type_to_torch_dtype(output_meta.type)
             if torch_dtype is None:
-                raise TypeError(
-                    f"Unsupported ONNX output dtype for CUDA I/O binding: {output_meta.type}"
+                _get_logger().fatal(
+                    f"Unsupported ONNX output dtype for CUDA I/O binding: {output_meta.type}",
+                    error_type=TypeError,
                 )
 
             output_tensor = torch.empty(
@@ -283,6 +302,7 @@ class SimplifiedONNXProgram:
             model_path = os.path.join(self._source_dir, self._source_filename)
             providers = self._get_providers()
             sess_options = ort.SessionOptions()
+            self._load_warp_runtime(sess_options, model_path)
             # ORT_ENABLE_ALL can silently corrupt results for certain graph
             # patterns (e.g. Gemm chains produced by FX make_fx decomposition).
             # ORT_ENABLE_BASIC is safe and still applies constant folding.
@@ -308,9 +328,10 @@ class SimplifiedONNXProgram:
         self._ensure_session()
 
         if len(args) != len(self._input_names):
-            raise ValueError(
+            _get_logger().fatal(
                 f"Expected {len(self._input_names)} inputs, got {len(args)}. "
-                f"Input names: {self._input_names}"
+                f"Input names: {self._input_names}",
+                error_type=ValueError,
             )
 
         # Determine output device from input tensors

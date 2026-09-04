@@ -15,6 +15,8 @@
 # limitations under the License.
 #
 
+from leapp.utils.logging import _get_logger
+
 
 class TracingLock:
     """Singleton class to manage global function tracing lock.
@@ -48,7 +50,10 @@ class TracingLock:
             Exception: If tracing lock is already acquired.
         """
         if self._is_active_function_tracing:
-            raise Exception("Tracing lock is already acquired")
+            _get_logger().fatal(
+                "Tracing lock is already acquired",
+                error_type=Exception,
+            )
         self._is_active_function_tracing = True
     
     def release(self):

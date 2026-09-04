@@ -27,9 +27,13 @@ import textwrap
 import torch
 
 from leapp.utils.logging import _get_logger
+from leapp.leapp_graph.datatypes import (  # noqa: F401
+    is_tracable_tensor_type,
+    is_traced_type,
+    promote_in_place,
+    to_export_torch_tensor,
+)
 
-# Re-export from datatypes for backwards compatibility
-from leapp.leapp_graph.datatypes import is_tracable_tensor_type  # noqa: F401
 
 def find_with_block_end(filename, start_lineno):
     """Use AST to find the end line of the with block starting at start_lineno.
@@ -253,9 +257,10 @@ def extract_return_names(func):
             # Different number of return values - this is an error
             count_details = {count: return_counts.count(
                 count) for count in unique_counts}
-            raise Exception(
+            _get_logger().fatal(
                 f"Function {func.__name__} has inconsistent return statements with different numbers of values: "
-                f"{count_details}. All return statements must return the same number of values."
+                f"{count_details}. All return statements must return the same number of values.",
+                error_type=Exception,
             )
 
         # All return statements have the same number of values
@@ -304,11 +309,8 @@ def extract_return_names(func):
 def safe_deepcopy(data):
     # this is used to deepcopy a complex data structure.
     # running safe deepcopy also unwraps the TracedTensor to the underlying tensor.
-    if isinstance(data, torch.Tensor):
-        cloned_data = data.clone()
-        if hasattr(data, 'leapp_tag'):
-            tag_tensor(cloned_data, data.leapp_tag)
-        return cloned_data
+    if is_tracable_tensor_type(data):
+        return to_export_torch_tensor(data).clone()
     elif isinstance(data, list):
         return [safe_deepcopy(item) for item in data]
     elif isinstance(data, dict):
@@ -343,19 +345,28 @@ def get_attribute_value_from_namespace(namespace, attr_name):
         parts = attr_name.split(".")
         final_attr_name = parts[-1]
         if parts[0] not in namespace:
-            raise Exception(f"Variable '{parts[0]}' not found in namespace")
+            _get_logger().fatal(
+                f"Variable '{parts[0]}' not found in namespace",
+                error_type=Exception,
+            )
         
         obj = namespace[parts[0]]
         for attr in parts[1:]:
             try:
                 obj = getattr(obj, attr)
             except Exception as e:
-                raise Exception(
+                _get_logger().fatal(
                     f"Error attempting to find {attr_name}, "
-                    f"failed to get attribute {attr}\n", e)
+                    f"failed to get attribute {attr}",
+                    error_type=Exception,
+                    cause=e,
+                )
     else:
         if attr_name not in namespace:
-            raise Exception(f"Variable '{attr_name}' not found in namespace")
+            _get_logger().fatal(
+                f"Variable '{attr_name}' not found in namespace",
+                error_type=Exception,
+            )
         obj = namespace[attr_name]
         final_attr_name = attr_name
 
@@ -363,93 +374,40 @@ def get_attribute_value_from_namespace(namespace, attr_name):
 
 
 #########################################################
-# Tagged datatype
+# Traced state transfer
 #########################################################
 
 
-def tag_tensor(tensor, tag):
-    """Tag a tensor instance with a leapp_tag and wrap methods to preserve the tag.
-    
-    This binds wrapper methods to the specific tensor INSTANCE only.
-    Works with both torch.Tensor and numpy arrays (including TracedNpArray).
-    """
-    if hasattr(tensor, 'leapp_tag'):
-        # Already tagged - just update the tag
-        tensor.leapp_tag = tag
-        return tensor
-
-    tensor.leapp_tag = tag
-
-    # Methods to wrap depend on tensor type
-    # torch.Tensor: clone, detach, contiguous, cpu, cuda, to
-    # numpy.ndarray: copy (numpy's equivalent of clone)
-    if isinstance(tensor, torch.Tensor):
-        methods_to_wrap = ['clone', 'detach', 'contiguous', 'cpu', 'cuda', 'to']
-    else:
-        # For numpy arrays (including TracedNpArray), only wrap methods that exist
-        methods_to_wrap = ['copy']  # numpy's equivalent of clone
-
-    for method_name in methods_to_wrap:
-        # Only wrap if the method exists on the tensor
-        if not hasattr(tensor, method_name):
-            continue
-        # Store the original bound method on the instance
-        original_attr = f'_original_{method_name}'
-        if not hasattr(tensor, original_attr):
-            setattr(tensor, original_attr, getattr(tensor, method_name))
-
-        def make_wrapper(mname, source_tensor):
-            """Create a wrapper that preserves leapp_tag on the result tensor."""
-            orig_attr = f'_original_{mname}'
-
-            def wrapper(*args, **kwargs):
-                original_method = getattr(source_tensor, orig_attr)
-                result = original_method(*args, **kwargs)
-                # Tag the result tensor with the same tag (and wrap its methods too)
-                if hasattr(source_tensor, 'leapp_tag'):
-                    tag_tensor(result, source_tensor.leapp_tag)
-                return result
-
-            return wrapper
-
-        # Bind wrapper to this specific instance (shadows the class method)
-        setattr(tensor, method_name, make_wrapper(method_name, tensor))
-
-    return tensor
-
-
-def tag_data(data, tag):
+def mirror_all_traced_state(source, target):
     '''
-    Recursively expand data to tag underlying tensors in the data structure.
-    if the data is already tagged, it will overwrite the tag.
-    '''
-    if isinstance(data, torch.Tensor):
-        tag_tensor(data, tag)
-    elif isinstance(data, collections.abc.Mapping):
-        for key, value in data.items():
-            tag_data(value, tag + "[" + key + "]")
-    elif isinstance(data, collections.abc.Iterable) and not isinstance(data, (str, bytes)) and not hasattr(data, '__array__'):
-        # This catches lists, tuples, sets, etc. but excludes strings, bytes, and numpy arrays
-        for idx, item in enumerate(data):
-            tag_data(item, tag + "[" + str(idx) + "]")
-    else:
-        _get_logger().warning(
-            f"\033[93mWarning: Untaggable datatype in i/o: {type(data)}\033[0m")
+    Copy the traced boundary state of every tensor in source onto target.
 
-
-def mirror_all_tensor_tags(source, target):
+    Torch and Warp targets are upgraded in place, so the caller's object is
+    updated directly. A raw numpy target becomes a zero-copy view, which is a
+    new object, so the rebuilt target is returned and numpy callers must use it.
     '''
-    Mirror all tensor tags from source to target.
-    '''
-    if isinstance(source, torch.Tensor) and isinstance(target, torch.Tensor):
-        if hasattr(source, 'leapp_tag'):
-            tag_tensor(target, source.leapp_tag)
+    if is_tracable_tensor_type(source) and is_tracable_tensor_type(target):
+        if not is_traced_type(source):
+            _get_logger().error(
+                f"Error: cannot mirror traced state from a plain {type(source).__name__}.\n"
+                "Only values registered as a node output carry the state needed "
+                "to connect nodes.")
+            return target
+        promoted = promote_in_place(
+            target, source.name, source.context_obj, source.proxy)
+        promoted.output_port = source.output_port
+        return promoted
     elif isinstance(source, collections.abc.Mapping):
-        for key, value in source.items():
-            mirror_all_tensor_tags(value, target[key])
+        return type(target)(
+            (key, mirror_all_traced_state(value, target[key]))
+            for key, value in source.items()
+        )
     elif isinstance(source, collections.abc.Iterable):
-        for idx, item in enumerate(source):
-            mirror_all_tensor_tags(item, target[idx])
+        return type(target)(
+            mirror_all_traced_state(item, target[idx])
+            for idx, item in enumerate(source)
+        )
+    return target
 
 
 def get_relative_path(model_path, yaml_save_path):
@@ -491,7 +449,17 @@ def _get_os_description():
     return os_release.get("PRETTY_NAME") or platform.platform()
 
 
+def _get_warp_version():
+    try:
+        import warp
+    except ImportError:
+        return None
+
+    return str(warp.__version__)
+
+
 def get_system_info():
+    # lazy import to avoid circular import
     import leapp
     metadata = {'system information': {}}
     metadata['system information']['leapp version'] = leapp.__version__
@@ -499,6 +467,7 @@ def get_system_info():
     metadata['system information']['torch version'] = str(torch.__version__)
     metadata['system information']['python version'] = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     metadata['system information']['cuda version'] = str(torch.version.cuda)
+    metadata['system information']['warp version'] = _get_warp_version()
     metadata['system information']['os'] = _get_os_description()
 
     return metadata

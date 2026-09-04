@@ -13,29 +13,40 @@ concurrency:
 jobs:
   test:
     runs-on: [self-hosted, gpu]
+    container:
+      image: nvidia/cuda:12.8.1-devel-ubuntu24.04
+      options: --gpus all
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
 
     steps:
+      # The CUDA devel image is minimal; checkout needs git and git-lfs.
+      - name: Install container dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git git-lfs ca-certificates
+
       - uses: actions/checkout@v4
         with:
           lfs: true
 
+      # No pip cache: HOME on the self-hosted runner is not writable by the job.
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
 
       - name: Upgrade pip
         run: python -m pip install --upgrade pip
 
       # Visualization modules ship with leapp; gated deps install on 3.11+.
       - name: Install package and test dependencies
-        run: python -m pip install -e ".[dev]"
+        run: python -m pip install -e ".[dev,test,warp-cu12]" cmake ninja
 
       - name: Run pytest
+        env:
+          CMAKE_GENERATOR: Ninja
         run: pytest tests/ packages/leapp-visualization/tests/ -v
 
   docs:

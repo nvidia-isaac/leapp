@@ -31,7 +31,7 @@ Use ``InferenceManager`` to:
 
    For ONNX models, ``InferenceManager`` uses CPU-safe ``onnxruntime`` by
    default. Install ``onnxruntime-gpu`` to enable CUDA execution; when the CUDA
-   provider is available, LEAPP prefers it automatically for ONNX-backed nodes.
+   provider is available, LEAPP prefers it automatically.
 
 Running With Your Own Values
 ============================

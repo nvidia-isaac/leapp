@@ -176,12 +176,20 @@ class _LeappLogger:
             self.logger.warning(msg)
 
     def error(self, msg):
-        """Log error message (file always, console always)."""
+        """Log a recoverable error message (file always, console always).
+
+        Use ``error`` when LEAPP can continue the current operation and surface
+        the problem later. If LEAPP cannot continue safely, use ``fatal``.
+        """
         if self.initialized:
             self.logger.error(msg)
 
     def fatal(self, msg, error_type=RuntimeError, *, cause=None):
-        """Log a fatal message, then raise it as ``error_type``."""
+        """Log a fatal message, then raise it as ``error_type``.
+
+        Use ``fatal`` for conditions where LEAPP cannot continue safely and
+        should exit the current operation immediately.
+        """
         if self.initialized:
             self.logger.log(FATAL, msg)
 
