@@ -12,17 +12,30 @@ These tests verify that:
 """
 
 import unittest
+from unittest import mock
 import numpy as np
 import torch
 import warp as wp
 
 from leapp.leapp_graph.traced_node import TracedTensorNode
 from leapp.leapp_graph.datatypes import TracedTensor, TracedNpArray, TracedWpArray
+from leapp.leapp_graph.datatypes import patching as patching_module
 from leapp.export_manager import ExportManager
+from leapp.leapp_graph.datatypes.warp.patching import WarpPatchBackend
 
 
 def _install_patches():
     ExportManager().patcher.install()
+
+
+def _install_warp_patches():
+    """Bypass availability checks in conversion-only unit tests."""
+    with mock.patch.object(
+        patching_module,
+        "_try_create_warp_backend",
+        return_value=WarpPatchBackend(),
+    ):
+        _install_patches()
 
 
 def _uninstall_patches():
@@ -366,7 +379,7 @@ class TestTracedTensorToWarp(unittest.TestCase):
 
     def setUp(self):
         """Apply patches before each test."""
-        _install_patches()
+        _install_warp_patches()
 
     def tearDown(self):
         """Remove patches after each test."""
@@ -400,7 +413,7 @@ class TestWarpToTracedTensor(unittest.TestCase):
 
     def setUp(self):
         """Apply patches before each test."""
-        _install_patches()
+        _install_warp_patches()
 
     def tearDown(self):
         """Remove patches after each test."""
@@ -424,7 +437,7 @@ class TestTracedNumpyToWarp(unittest.TestCase):
 
     def setUp(self):
         """Apply patches before each test."""
-        _install_patches()
+        _install_warp_patches()
 
     def tearDown(self):
         """Remove patches after each test."""
@@ -448,7 +461,7 @@ class TestWarpToTracedNumpy(unittest.TestCase):
 
     def setUp(self):
         """Apply patches before each test."""
-        _install_patches()
+        _install_warp_patches()
 
     def tearDown(self):
         """Remove patches after each test."""

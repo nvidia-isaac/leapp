@@ -4,9 +4,11 @@
 #
 
 import dataclasses
+import os
 import tempfile
 import types
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -15,8 +17,10 @@ from leapp.export_manager import ExportManager
 from leapp.leapp_graph.datatypes._attribute_patching import (
     AttributePatchRegistry,
 )
+from leapp.leapp_graph.datatypes import patching as patching_module
 from leapp.leapp_graph.datatypes.patching import FunctionPatch, TracingPatcher
 from leapp.leapp_graph.traced_node import TracedTensorNode
+from leapp.warp_runtime import warp_runtime_artifact_paths
 
 
 def _original(*args, **kwargs):
@@ -199,6 +203,66 @@ class TestUserFunctionPatching(unittest.TestCase):
     def tearDown(self):
         if ExportManager.is_interpret_graph_enabled():
             leapp.stop()
+
+
+class TestWarpPatchingGate(unittest.TestCase):
+    def test_missing_runtime_library_leaves_warp_functions_untouched(self):
+        try:
+            import warp as wp
+        except ImportError:
+            self.skipTest("warp-lang is not installed")
+
+        original_rand_init = wp.rand_init
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
+            os.environ,
+            {"XDG_CACHE_HOME": temp_dir},
+            clear=False,
+        ):
+            for env_name in patching_module.WARP_RUNTIME_ENVIRONMENTS.values():
+                os.environ.pop(env_name, None)
+
+            patcher = TracingPatcher()
+            patcher.install()
+            try:
+                self.assertIsNone(patcher.warp)
+                self.assertIs(wp.rand_init, original_rand_init)
+            finally:
+                patcher.uninstall()
+
+    def test_missing_cupti_leaves_warp_functions_untouched(self):
+        try:
+            import warp as wp
+        except ImportError:
+            self.skipTest("warp-lang is not installed")
+
+        from warp._src import context as warp_context
+
+        from leapp.leapp_graph.datatypes.warp import cupti_oracle
+
+        original_rand_init = wp.rand_init
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
+            os.environ,
+            {"XDG_CACHE_HOME": temp_dir},
+            clear=False,
+        ):
+            for env_name in patching_module.WARP_RUNTIME_ENVIRONMENTS.values():
+                os.environ.pop(env_name, None)
+            runtime_library = warp_runtime_artifact_paths()["onnx"]
+            runtime_library.parent.mkdir(parents=True)
+            runtime_library.touch()
+
+            with mock.patch.object(
+                warp_context,
+                "runtime",
+                object(),
+            ), mock.patch.object(cupti_oracle, "CUPTI_AVAILABLE", False):
+                patcher = TracingPatcher()
+                patcher.install()
+                try:
+                    self.assertIsNone(patcher.warp)
+                    self.assertIs(wp.rand_init, original_rand_init)
+                finally:
+                    patcher.uninstall()
 
 
 class TestAttributePatchRegistry(unittest.TestCase):

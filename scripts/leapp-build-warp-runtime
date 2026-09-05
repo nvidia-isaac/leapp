@@ -87,7 +87,11 @@ def _validate_build_resources() -> tuple[Path, Path | None]:
             "CMake is required to build LEAPP Warp support but was not found."
         )
 
-    warp = _require_module("warp", 'pip install "leapp[warp]"')
+    warp = _require_module(
+        "warp",
+        'pip install "leapp[warp-cu12]" (CUDA 12) or '
+        'pip install "leapp[warp-cu13]" (CUDA 13)',
+    )
     warp_dir = Path(warp.__file__).resolve().parent
     warp_library = warp_dir / "bin" / _warp_library_name()
     apic_header = warp_dir / "native" / "apic.h"

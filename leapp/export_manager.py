@@ -735,7 +735,9 @@ class ExportManager:
         if warp_backend is None:
             _get_logger().fatal(
                 "LEAPP: the warp backend is not installed. "
-                "Please call leapp.start(..., global_patching=True), and make sure warp-lang is installed.",
+                "Install LEAPP with the matching warp-cu12 or warp-cu13 extra, "
+                "run leapp-build-warp-runtime, and initialize Warp before "
+                "leapp.start(..., global_patching=True).",
                 error_type=ImportError,
             )
 

@@ -160,16 +160,27 @@ def test_build_preflight_reports_missing_native_resources(
         _BUILD_SCRIPT._validate_build_resources()
 
 
-def test_missing_python_dependency_is_not_installed(monkeypatch):
+def test_missing_warp_dependency_recommends_cuda_extra(monkeypatch):
     def missing_module(name):
         raise ImportError(name)
 
     monkeypatch.setattr(
         _BUILD_SCRIPT.importlib, "import_module", missing_module
     )
+    monkeypatch.setattr(
+        _BUILD_SCRIPT.shutil,
+        "which",
+        lambda name: "/usr/bin/cmake" if name == "cmake" else None,
+    )
 
-    with pytest.raises(RuntimeError, match="never installs dependencies"):
-        _BUILD_SCRIPT._require_module("warp", 'pip install "leapp[warp]"')
+    with pytest.raises(
+        RuntimeError, match="never installs dependencies"
+    ) as exc_info:
+        _BUILD_SCRIPT._validate_build_resources()
+
+    message = str(exc_info.value)
+    assert "leapp[warp-cu12]" in message
+    assert "leapp[warp-cu13]" in message
 
 
 def test_windows_preflight_reports_missing_warp_import_library(

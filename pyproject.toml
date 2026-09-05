@@ -68,9 +68,6 @@ dev = [
     "flake8",
     "mypy",
 ]
-warp = [
-    "warp-lang>=1.16",
-]
 test = [
     "warp-lang>=1.16",
 ]

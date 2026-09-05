@@ -8,14 +8,17 @@
 from __future__ import annotations
 
 import functools
+import os
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 import torch
 
 from leapp.utils.logging import _get_logger
+from leapp.warp_runtime import WARP_RUNTIME_ENVIRONMENTS, warp_runtime_artifact_paths
 
 from ._attribute_patching import AttributePatchRegistry
 from .numpy.patching import NumpyPatchBackend
@@ -96,12 +99,30 @@ def _validate_user_patches(
 
 
 def _try_create_warp_backend() -> WarpPatchBackend | None:
+    # warp-lang alone, as installed by Isaac Sim, must not enable patching.
     try:
-        from .warp.patching import WarpPatchBackend
+        from warp._src import context as warp_context
 
-        return WarpPatchBackend()
+        from .warp.cupti_oracle import CUPTI_AVAILABLE
+        from .warp.patching import WarpPatchBackend
     except ImportError:
         return None
+
+    cached_paths = warp_runtime_artifact_paths()
+    runtime_library_available = any(
+        Path(os.environ.get(env_name) or cached_paths[backend])
+        .expanduser()
+        .is_file()
+        for backend, env_name in WARP_RUNTIME_ENVIRONMENTS.items()
+    )
+    if (
+        not runtime_library_available
+        or warp_context.runtime is None
+        or not CUPTI_AVAILABLE
+    ):
+        return None
+
+    return WarpPatchBackend()
 
 
 class TracingPatcher:
@@ -111,7 +132,7 @@ class TracingPatcher:
         self.torch = TorchPatchBackend()
         self.numpy = NumpyPatchBackend()
 
-        self.warp = _try_create_warp_backend()
+        self.warp = None
         self._user_patches = AttributePatchRegistry()
         self._installed = False
 
@@ -129,6 +150,7 @@ class TracingPatcher:
             return
 
         definitions = _validate_user_patches(patching)
+        self.warp = _try_create_warp_backend()
         try:
             if self.torch is not None:
                 self.torch.install()
@@ -176,7 +198,7 @@ class TracingPatcher:
 
 
 def get_warp_backend() -> WarpPatchBackend | None:
-    """Return the active session's warp backend, if warp-lang is available."""
+    """Return the active session's Warp backend, if it was enabled."""
     from leapp.export_manager import ExportManager
 
     return ExportManager().patcher.warp
