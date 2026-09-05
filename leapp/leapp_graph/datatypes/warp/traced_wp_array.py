@@ -267,7 +267,7 @@ class TracedWpArray(wp.array, TracedData):
                 key: cls._normalize_node(value, traced, depth=depth + 1)
                 for key, value in obj.items()
             }
-        if isinstance(obj, (list, tuple, set, frozenset)):
+        if type(obj) in (list, tuple, set, frozenset):
             return type(obj)(
                 cls._normalize_node(item, traced, depth=depth + 1)
                 for item in obj

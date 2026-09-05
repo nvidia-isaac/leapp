@@ -238,3 +238,37 @@ class TestWarpTwoPassPlanning(unittest.TestCase):
 
         self.assertIsNone(session.active_segment)
         self.assertIsNone(session.active_warp_op)
+
+
+class _MultiArgTuple(tuple):
+    """Tuple subclass whose constructor does not accept an iterable."""
+
+    def __new__(cls, first, second, third):
+        return super().__new__(cls, (first, second, third))
+
+
+class TestWarpCallNormalization(unittest.TestCase):
+    def test_normalize_preserves_tuple_subclasses_and_rebuilds_builtins(self):
+        opaque = _MultiArgTuple(1, 2, 3)
+        nested = [
+            (4, 5),
+            {6},
+            frozenset({7}),
+            {"k": 8},
+            opaque,
+        ]
+        traced = []
+
+        result = TracedWpArray._normalize_node(nested, traced, depth=0)
+
+        self.assertEqual(traced, [])
+        self.assertIs(type(result), list)
+        self.assertIsNot(result, nested)
+        self.assertEqual(result[0], (4, 5))
+        self.assertIs(type(result[0]), tuple)
+        self.assertEqual(result[1], {6})
+        self.assertIs(type(result[1]), set)
+        self.assertEqual(result[2], frozenset({7}))
+        self.assertIs(type(result[2]), frozenset)
+        self.assertEqual(result[3], {"k": 8})
+        self.assertIs(result[4], opaque)
