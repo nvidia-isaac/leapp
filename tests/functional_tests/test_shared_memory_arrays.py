@@ -202,24 +202,40 @@ class TestTorchSharedMemory(LEAPPFunctionalTestBase):
         tensor it never reads.
         """
         obs_value = torch.tensor([1.0, 2.0, 3.0])
-        buffer = obs_value.clone()
-        alias = buffer.detach()
 
         leapp.start(name=self.TEST_GRAPH_NAME)
-        traced_buffer = annotate.input_tensors("policy", {"buffer": buffer})
-        traced_alias = annotate.input_tensors("policy", {"alias": alias})
+        for pass_index in range(2):
+            buffer = obs_value.clone()
+            alias = buffer.detach()
 
-        self.assertIs(
-            traced_buffer.proxy_view, traced_alias.proxy_view,
-            "a declared alias did not adopt the declared buffer's root")
+            traced_buffer = annotate.input_tensors(
+                "policy", {"buffer": buffer}
+            )
+            traced_alias = annotate.input_tensors(
+                "policy", {"alias": alias}
+            )
 
-        traced_buffer += 1.0
-        self.assertIs(
-            traced_alias.proxy, traced_buffer.proxy,
-            "a mutation through one declared alias was invisible to the other")
+            if pass_index == 0:
+                self.assertIs(
+                    traced_buffer.proxy_view,
+                    traced_alias.proxy_view,
+                    "a declared alias did not adopt the declared buffer's root",
+                )
 
-        annotate.output_tensors(
-            "policy", {"action": traced_alias * 2.0}, export_with="jit")
+            traced_buffer += 1.0
+            if pass_index == 0:
+                self.assertIs(
+                    traced_alias.proxy,
+                    traced_buffer.proxy,
+                    "a mutation through one declared alias was invisible to the other",
+                )
+
+            annotate.output_tensors(
+                "policy",
+                {"action": traced_alias * 2.0},
+                export_with="jit",
+            )
+
         leapp.stop()
         leapp.compile_graph(visualize=False)
 

@@ -360,7 +360,7 @@ class LeappNode():
     @staticmethod
     def get_io_description_by_name(name, io_list):
         for io_description in io_list:
-            if io_description.name_str == name:
+            if name in io_description.aliases:
                 return io_description
         return None
 
@@ -393,6 +393,7 @@ class LeappNode():
 
             existing_io_description_dict = existing_io_description.dict()
             current_io_description_dict = io_description.dict()
+            current_io_description_dict["name"] = existing_io_description.name
 
             common_keys = existing_io_description_dict.keys() & current_io_description_dict.keys()
             if not all(existing_io_description_dict[key] == current_io_description_dict[key] for key in common_keys):

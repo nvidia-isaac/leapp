@@ -283,7 +283,7 @@ class TensorDescription:
 
         dtype, shape = TensorDescription.get_shape_and_dtype(value)
 
-        self.name = name
+        self._aliases = [name]
         self.value = safe_deepcopy(value)
         self.dtype = dtype
         self.shape = CompactYamlList(shape)
@@ -356,6 +356,21 @@ class TensorDescription:
         self.name = new_name
         if self.semantics is not None:
             self.semantics.name = new_name
+
+    @property
+    def name(self) -> str:
+        """Return the canonical name."""
+        return self._aliases[0]
+
+    @name.setter
+    def name(self, new_name: str):
+        """Rename the canonical name while preserving aliases."""
+        self._aliases[0] = new_name
+
+    @property
+    def aliases(self) -> List[str]:
+        """Return every declared name for this tensor."""
+        return self._aliases
 
     @property
     def name_str(self) -> str:

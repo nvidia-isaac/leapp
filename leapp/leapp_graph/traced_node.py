@@ -664,12 +664,12 @@ class TracedTensorNode(LeappNode):
                 f"input '{declared.name}'. Both names describe one graph value, so "
                 f"'{declared.name}' will be the only port in the exported node interface.")
             # Adoption skips add_input, which is where semantics are normally
-            # attached, so a description the surviving port does not already
-            # have would be lost. The name is dropped because adoption already
-            # chose which one the interface exposes.
+            # attached, so remember the alias and preserve any semantics the
+            # surviving port does not already have.
             surviving = self.get_io_description_by_name(declared.name, self.inputs)
-            if (semantics is not None and surviving is not None
-                    and surviving.semantics is None):
+            if name not in surviving.aliases:
+                surviving.aliases.append(name)
+            if semantics is not None and surviving.semantics is None:
                 surviving.init_semantics(replace(semantics, name=None))
             if isinstance(data, TracedData):
                 # Rebind the object the caller holds rather than returning a new
