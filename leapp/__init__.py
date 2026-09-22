@@ -30,7 +30,7 @@ from .inference_manager import InferenceManager
 # side effect, so it is available to tracing/export without explicit setup.
 from .leapp_graph.custom_operator_registry import warp_operator  # noqa: F401
 from .leapp_graph.datatypes.patching import FunctionPatch
-from .leapp import annotate, start, stop, compile_graph
+from .leapp import annotate, start, stop, compile_graph, optimize_graph
 from .utils.enums import InputKindEnum, OutputKindEnum
 from .utils.tensor_description import GraphConfigs, TensorSemantics, TemporalAxis
 
@@ -49,6 +49,7 @@ __all__ = [
     "start",
     "stop",
     "compile_graph",
+    "optimize_graph",
     "__version__",
     "TensorSemantics",
     "TemporalAxis",

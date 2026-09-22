@@ -82,6 +82,14 @@ warp-cu13 = [
     "cupti-python>=13,<14; sys_platform == 'linux'",
     "onnxruntime-gpu[cuda,cudnn]>=1.27.0; python_version >= '3.11'",
 ]
+graph-surgery = [
+    "onnx-graphsurgeon",
+]
+
+[project.scripts]
+leapp = "leapp.cli:main"
+isaac_deploy_trt = "isaac_deploy_trt.cli:main"
+generate-tensorrt-supported-layers = "isaac_deploy_trt.generate_cmd:main"
 
 [tool.uv]
 conflicts = [
@@ -104,9 +112,9 @@ script-files = [
 ]
 
 [tool.setuptools.packages.find]
-# Include internal visualization modules shipped with leapp.
-where = [".", "packages/leapp-visualization/src"]
-include = ["leapp*", "leapp_visualization*"]
+# Include internal visualization and TensorRT rewrite modules shipped with leapp.
+where = [".", "packages/leapp-visualization/src", "packages/isaac_deploy_trt/src"]
+include = ["leapp*", "leapp_visualization*", "isaac_deploy_trt*"]
 exclude = ["tests*"]
 
 [tool.setuptools.package-data]

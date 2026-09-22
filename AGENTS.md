@@ -21,8 +21,9 @@ Python 3.10+ and PyTorch 2.6.0+. Visualization extras install only on
 | Warp tracing (`TracedWpArray`, APIC, `warp_op`) | `warp_support.md` |
 | Public annotate/lifecycle API or docs examples | `docs/source/api/index.rst` plus the matching guide under `docs/source/` |
 | Graph PNG layout | `packages/leapp-visualization/` |
+| TensorRT ONNX rewrite / catalog / pipeline merge | `packages/isaac_deploy_trt/` |
 | Export backends | `leapp/backends/` |
-| YAML / `InferenceManager` | `leapp/leapp.py` (`compile_graph`), `leapp/inference_manager.py`, `docs/source/generated_configs.rst` |
+| YAML / `InferenceManager` | `leapp/leapp.py` (`compile_graph`, `optimize_graph`), `leapp/inference_manager.py`, `docs/source/generated_configs.rst` |
 
 Do not mix the skill's current `(context_obj, output_port)` identity with
 legacy `leapp_tag` helpers. The skill states which checkout you have.
@@ -31,7 +32,7 @@ legacy `leapp_tag` helpers. The skill states which checkout you have.
 
 ```
 leapp/                      # installable package
-  leapp.py                  # start / stop / compile_graph / annotate facade
+  leapp.py                  # start / stop / compile_graph / optimize_graph / annotate facade
   export_manager.py         # annotate.* implementations
   inference_manager.py      # runtime loader for exported YAML
   backends/                 # jit, onnx-dynamo, onnx-torchscript, pt2, none
@@ -41,6 +42,7 @@ leapp/                      # installable package
     datatypes/              # TracedData, TracedTensor, TracedNpArray, TracedWpArray
   utils/                    # logging, TensorSemantics, enums, GraphConfigs
 packages/leapp-visualization/   # static PNG layout (ships with leapp)
+packages/isaac_deploy_trt/      # TensorRT ONNX rewrite, catalogs, merge-pipeline
 docs/source/                # Sphinx (NVIDIA theme)
 examples/                   # runnable samples; CI runs tests/test_examples/
 tests/
@@ -54,12 +56,21 @@ allowed on `leapp.annotate` are listed in `AnnotateAPI._ALLOWED_APIS` in
 `leapp/leapp.py`. Do not add a consumer API without updating both, the
 docs, and tests.
 
+Do not call `compile_graph()` before `stop()`. Call
+`leapp.optimize_graph(trt_compatible=True)` after `compile_graph()` when
+exported ONNX should be rewritten for TensorRT (`isaac_deploy_trt` /
+`graph-surgery` extra). Use `leapp.start()`, `leapp.stop()`, and
+`leapp.compile_graph()` for graph lifecycle. Use `annotate` only for
+annotation APIs such as `method()`, `input_tensors()`, and
+`output_tensors()`.
+
 ## Commands
 
 ```bash
 python -m pip install -e ".[dev,test,warp-cu12]"  # CUDA 12
 python -m pip install -e ".[dev,test,warp-cu13]"  # CUDA 13
-pytest tests/ packages/leapp-visualization/tests/ -v
+python -m pip install -e ".[dev,graph-surgery]"   # TensorRT ONNX rewrite extras
+pytest tests/ packages/leapp-visualization/tests/ packages/isaac_deploy_trt/tests/ -v
 ```
 
 Narrower (use these while iterating):
@@ -71,6 +82,7 @@ Narrower (use these while iterating):
 | Annotate / I/O / state | `pytest tests/functional_tests/ -v` |
 | Examples | `pytest tests/test_examples/ -v` |
 | Visualization | `pytest packages/leapp-visualization/tests/ -v` (Python 3.11+) |
+| TensorRT rewrite / catalogs | `pytest packages/isaac_deploy_trt/tests/ tests/unit_tests/test_optimize_graph.py tests/unit_tests/test_tensorrt_leapp_bundle.py -v` |
 | Warp tracing | see `warp_support.md` |
 
 ### Warp runtime build
@@ -140,13 +152,20 @@ diff (`git diff origin/main...HEAD`) is the true delta.
 | `guides/export.rst` | Backends and `export_with` |
 | `guides/graph.rst` | State, `annotate.module`, feedback |
 | `guides/buffers.rst` | `static_outputs`, `mirror_leapp_tags` |
-| `guides/debugging.rst` | Validation, logs, dry_run, `non_traced` |
+| `guides/debugging.rst` | Validation, logs, dry_run, `non_traced`, TensorRT rewrite |
 | `leapp_runtime.rst` | `InferenceManager` |
 | `semantics/` | `TensorSemantics`, kinds, `TemporalAxis` |
 | `generated_configs.rst` | YAML shape |
 | `api/index.rst` | Public signatures |
 
 User-facing integration recipes belong here, not in this file.
+
+TensorRT GraphSurgeon rewrites, op catalogs, and LEAPP DAG merge live in
+`packages/isaac_deploy_trt`. After `compile_graph()`,
+`optimize_graph(trt_compatible=True)` rewrites ONNX in the graph directory
+and updates YAML checksums / `parameters.tensorrt_compatible`. Merge a DAG
+for one Isaac `TensorRTNode` with
+`isaac_deploy_trt merge-pipeline exported.yaml -o pipeline.onnx --rewrite`.
 
 ## Guardrails when changing behavior
 

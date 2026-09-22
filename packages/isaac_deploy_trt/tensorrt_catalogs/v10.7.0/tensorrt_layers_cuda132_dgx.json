@@ -1,0 +1,3508 @@
+{
+  "cuda": "13.2",
+  "platform": "dgx",
+  "display_name": "DGX Spark / DGX Blackwell (CUDA 13.2)",
+  "tensorrt": "TensorRT 10.15+ (Spark/GB10) or TensorRT 11.x on DGX B200-class x86",
+  "arch": "Blackwell GB10 (Spark) or B200/GB200 (DGX)",
+  "compute_capability": "10.0\u201312.x (SKU-dependent)",
+  "parser_tensorrt_version": "11.2",
+  "opset": {
+    "min": 9,
+    "max": 24
+  },
+  "source": "https://raw.githubusercontent.com/onnx/onnx-tensorrt/main/docs/operators.md",
+  "gpu_precisions": [
+    "FP32",
+    "TF32",
+    "FP16",
+    "BF16",
+    "FP8",
+    "FP4",
+    "INT8",
+    "INT4",
+    "INT32",
+    "INT64",
+    "UINT8",
+    "BOOL",
+    "FP64"
+  ],
+  "dla": false,
+  "tensorrt_11": true,
+  "notes": [
+    "DGX Spark (GB10) is ARM and commonly TensorRT 10.15.x on CUDA 13.",
+    "DGX B200/GB200 x86 can use TensorRT 11.x with CUDA 13.x.",
+    "Use this catalog for Blackwell datacenter/desktop; use 'x86' for Hopper-only boxes.",
+    "No DLA."
+  ],
+  "sources": [
+    "https://docs.nvidia.com/deeplearning/tensorrt/latest/getting-started/support-matrix.html",
+    "https://docs.nvidia.com/deeplearning/tensorrt/latest/getting-started/release-notes-11/11.2.1.html",
+    "https://raw.githubusercontent.com/NVIDIA/TensorRT/v10.7.0/include/NvInferRuntimeBase.h",
+    "https://raw.githubusercontent.com/NVIDIA/TensorRT/v10.7.0/include/NvInfer.h",
+    "https://raw.githubusercontent.com/NVIDIA/TensorRT/v10.7.0/include/NvInferRuntime.h"
+  ],
+  "supported_releases": [
+    "v10.7.0"
+  ],
+  "nvinfer": {
+    "source": [
+      "https://raw.githubusercontent.com/NVIDIA/TensorRT/v10.7.0/include/NvInferRuntimeBase.h",
+      "https://raw.githubusercontent.com/NVIDIA/TensorRT/v10.7.0/include/NvInfer.h",
+      "https://raw.githubusercontent.com/NVIDIA/TensorRT/v10.7.0/include/NvInferRuntime.h"
+    ],
+    "data_types": [
+      "kFLOAT",
+      "kHALF",
+      "kINT8",
+      "kINT32",
+      "kBOOL",
+      "kUINT8",
+      "kFP8",
+      "kBF16",
+      "kINT64",
+      "kINT4"
+    ],
+    "layer_types": [
+      "kCONVOLUTION",
+      "kCAST",
+      "kACTIVATION",
+      "kPOOLING",
+      "kLRN",
+      "kSCALE",
+      "kSOFTMAX",
+      "kDECONVOLUTION",
+      "kCONCATENATION",
+      "kELEMENTWISE",
+      "kPLUGIN",
+      "kUNARY",
+      "kPADDING",
+      "kSHUFFLE",
+      "kREDUCE",
+      "kTOPK",
+      "kGATHER",
+      "kMATRIX_MULTIPLY",
+      "kRAGGED_SOFTMAX",
+      "kCONSTANT",
+      "kIDENTITY",
+      "kPLUGIN_V2",
+      "kSLICE",
+      "kSHAPE",
+      "kPARAMETRIC_RELU",
+      "kRESIZE",
+      "kTRIP_LIMIT",
+      "kRECURRENCE",
+      "kITERATOR",
+      "kLOOP_OUTPUT",
+      "kSELECT",
+      "kFILL",
+      "kQUANTIZE",
+      "kDEQUANTIZE",
+      "kCONDITION",
+      "kCONDITIONAL_INPUT",
+      "kCONDITIONAL_OUTPUT",
+      "kSCATTER",
+      "kEINSUM",
+      "kASSERTION",
+      "kONE_HOT",
+      "kNON_ZERO",
+      "kGRID_SAMPLE",
+      "kNMS",
+      "kREVERSE_SEQUENCE",
+      "kNORMALIZATION",
+      "kPLUGIN_V3",
+      "kSQUEEZE",
+      "kUNSQUEEZE"
+    ],
+    "layer_type_names": [
+      "CONVOLUTION",
+      "CAST",
+      "ACTIVATION",
+      "POOLING",
+      "LRN",
+      "SCALE",
+      "SOFTMAX",
+      "DECONVOLUTION",
+      "CONCATENATION",
+      "ELEMENTWISE",
+      "PLUGIN",
+      "UNARY",
+      "PADDING",
+      "SHUFFLE",
+      "REDUCE",
+      "TOPK",
+      "GATHER",
+      "MATRIX_MULTIPLY",
+      "RAGGED_SOFTMAX",
+      "CONSTANT",
+      "IDENTITY",
+      "PLUGIN_V2",
+      "SLICE",
+      "SHAPE",
+      "PARAMETRIC_RELU",
+      "RESIZE",
+      "TRIP_LIMIT",
+      "RECURRENCE",
+      "ITERATOR",
+      "LOOP_OUTPUT",
+      "SELECT",
+      "FILL",
+      "QUANTIZE",
+      "DEQUANTIZE",
+      "CONDITION",
+      "CONDITIONAL_INPUT",
+      "CONDITIONAL_OUTPUT",
+      "SCATTER",
+      "EINSUM",
+      "ASSERTION",
+      "ONE_HOT",
+      "NON_ZERO",
+      "GRID_SAMPLE",
+      "NMS",
+      "REVERSE_SEQUENCE",
+      "NORMALIZATION",
+      "PLUGIN_V3",
+      "SQUEEZE",
+      "UNSQUEEZE"
+    ],
+    "builder_flags": [
+      "kFP16",
+      "kINT8",
+      "kDEBUG",
+      "kGPU_FALLBACK",
+      "kREFIT",
+      "kDISABLE_TIMING_CACHE",
+      "kTF32",
+      "kSPARSE_WEIGHTS",
+      "kSAFETY_SCOPE",
+      "kOBEY_PRECISION_CONSTRAINTS",
+      "kPREFER_PRECISION_CONSTRAINTS",
+      "kDIRECT_IO",
+      "kREJECT_EMPTY_ALGORITHMS",
+      "kVERSION_COMPATIBLE",
+      "kEXCLUDE_LEAN_RUNTIME",
+      "kFP8",
+      "kERROR_ON_TIMING_CACHE_MISS",
+      "kBF16",
+      "kDISABLE_COMPILATION_CACHE",
+      "kSTRIP_PLAN",
+      "kWEIGHTLESS",
+      "kREFIT_IDENTICAL",
+      "kWEIGHT_STREAMING",
+      "kINT4",
+      "kREFIT_INDIVIDUAL",
+      "kSTRICT_NANS",
+      "kMONITOR_MEMORY"
+    ],
+    "network_definition_creation_flags": [
+      "kEXPLICIT_BATCH",
+      "kSTRONGLY_TYPED"
+    ],
+    "strongly_typed": true,
+    "strongly_typed_flag": "NetworkDefinitionCreationFlag::kSTRONGLY_TYPED",
+    "strongly_typed_note": "NetworkDefinitionCreationFlag::kSTRONGLY_TYPED (TensorRT 11: always on; the flag is retained for API compatibility). Tensor DataType is authoritative; TensorRT will not implicitly cast. Listed nvinfer_datatypes must match the ONNX/TRT tensor types.",
+    "onnx_type_to_nvinfer": {
+      "FP32": "kFLOAT",
+      "FLOAT32": "kFLOAT",
+      "FLOAT": "kFLOAT",
+      "FP16": "kHALF",
+      "FLOAT16": "kHALF",
+      "BF16": "kBF16",
+      "BFLOAT16": "kBF16",
+      "FP8": "kFP8",
+      "FP4": "kFP4",
+      "FP64": "kDOUBLE",
+      "DOUBLE": "kDOUBLE",
+      "INT8": "kINT8",
+      "INT4": "kINT4",
+      "INT32": "kINT32",
+      "INT64": "kINT64",
+      "UINT8": "kUINT8",
+      "BOOL": "kBOOL",
+      "TF32": "kFLOAT"
+    }
+  },
+  "onnx_supported": [
+    "Abs",
+    "Acos",
+    "Acosh",
+    "Add",
+    "And",
+    "ArgMax",
+    "ArgMin",
+    "Asin",
+    "Asinh",
+    "Atan",
+    "Atanh",
+    "Attention",
+    "AveragePool",
+    "BatchNormalization",
+    "BlackmanWindow",
+    "Cast",
+    "CastLike",
+    "Ceil",
+    "Celu",
+    "Clip",
+    "Concat",
+    "Constant",
+    "ConstantOfShape",
+    "Conv",
+    "ConvTranspose",
+    "Cos",
+    "Cosh",
+    "CumSum",
+    "DFT",
+    "DeformConv",
+    "DepthToSpace",
+    "DequantizeLinear",
+    "Div",
+    "Dropout",
+    "Einsum",
+    "Elu",
+    "Equal",
+    "Erf",
+    "Exp",
+    "Expand",
+    "EyeLike",
+    "Flatten",
+    "Floor",
+    "Gather",
+    "GatherElements",
+    "GatherND",
+    "Gelu",
+    "Gemm",
+    "GlobalAveragePool",
+    "GlobalLpPool",
+    "GlobalMaxPool",
+    "Greater",
+    "GreaterOrEqual",
+    "GridSample",
+    "GroupNormalization",
+    "GRU",
+    "HammingWindow",
+    "HannWindow",
+    "HardSigmoid",
+    "HardSwish",
+    "Hardmax",
+    "Identity",
+    "If",
+    "ImageScaler",
+    "InstanceNormalization",
+    "IsInf",
+    "IsNaN",
+    "LayerNormalization",
+    "LeakyRelu",
+    "Less",
+    "LessOrEqual",
+    "Log",
+    "LogSoftmax",
+    "Loop",
+    "LRN",
+    "LSTM",
+    "LpNormalization",
+    "LpPool",
+    "MatMul",
+    "Max",
+    "MaxPool",
+    "Mean",
+    "MeanVarianceNormalization",
+    "Min",
+    "Mish",
+    "Mod",
+    "Mul",
+    "Neg",
+    "NonMaxSuppression",
+    "NonZero",
+    "Not",
+    "OneHot",
+    "Or",
+    "Pad",
+    "ParametricSoftplus",
+    "Pow",
+    "PRelu",
+    "QuantizeLinear",
+    "RandomNormal",
+    "RandomNormalLike",
+    "RandomUniform",
+    "RandomUniformLike",
+    "Range",
+    "Reciprocal",
+    "ReduceL1",
+    "ReduceL2",
+    "ReduceLogSum",
+    "ReduceLogSumExp",
+    "ReduceMax",
+    "ReduceMean",
+    "ReduceMin",
+    "ReduceProd",
+    "ReduceSum",
+    "ReduceSumSquare",
+    "Relu",
+    "Reshape",
+    "Resize",
+    "ReverseSequence",
+    "RMSNormalization",
+    "RNN",
+    "RoiAlign",
+    "RotaryEmbedding",
+    "Round",
+    "STFT",
+    "ScaledTanh",
+    "Scan",
+    "Scatter",
+    "ScatterElements",
+    "ScatterND",
+    "Selu",
+    "Shape",
+    "Shrink",
+    "Sigmoid",
+    "Sign",
+    "Sin",
+    "Sinh",
+    "Size",
+    "Slice",
+    "Softmax",
+    "Softplus",
+    "Softsign",
+    "SpaceToDepth",
+    "Split",
+    "Sqrt",
+    "Squeeze",
+    "Sub",
+    "Sum",
+    "Swish",
+    "Tan",
+    "Tanh",
+    "TensorScatter",
+    "ThresholdedRelu",
+    "Tile",
+    "TopK",
+    "Transpose",
+    "Trilu",
+    "Unsqueeze",
+    "Upsample",
+    "Where",
+    "Xor"
+  ],
+  "onnx_unsupported": [
+    "AffineGrid",
+    "Bernoulli",
+    "BitShift",
+    "BitwiseAnd",
+    "BitwiseNot",
+    "BitwiseOr",
+    "BitwiseXor",
+    "Col2Im",
+    "CenterCropPad",
+    "Compress",
+    "ConcatFromSequence",
+    "ConvInteger",
+    "Det",
+    "DynamicQuantizeLinear",
+    "ImageDecoder",
+    "MatMulInteger",
+    "MaxRoiPool",
+    "MaxUnpool",
+    "MelWeightMatrix",
+    "Multinomial",
+    "NegativeLogLikelihoodLoss",
+    "Optional",
+    "OptionalGetElement",
+    "OptionalHasElement",
+    "QLinearConv",
+    "QLinearMatMul",
+    "RegexFullMatch",
+    "SequenceAt",
+    "SequenceConstruct",
+    "SequenceEmpty",
+    "SequenceErase",
+    "SequenceInsert",
+    "SequenceLength",
+    "SequenceMap",
+    "SoftmaxCrossEntropyLoss",
+    "SplitToSequence",
+    "StringConcat",
+    "StringNormalizer",
+    "StringSplit",
+    "TfIdfVectorizer",
+    "Unique"
+  ],
+  "onnx_operators": {
+    "Abs": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "Acos": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Acosh": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Add": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "AffineGrid": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "And": {
+      "supported": true,
+      "types": [
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kBOOL"
+      ],
+      "restrictions": ""
+    },
+    "ArgMax": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "ArgMin": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "Asin": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Asinh": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Atan": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Atanh": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Attention": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT8",
+        "FP8"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT8",
+        "kFP8"
+      ],
+      "restrictions": "`Q`, `K`, `V` and `attn_mask ` must be 4D. `past_key`, `past_value` and `nonpad_kv_seqlen` inputs are unsupported. `present_key`, `present_value` and `qk_matmul_output` outputs are unsupported. `qk_matmul_output_mode` and `softcap` attributes are unsupported. `q_num_heads` and `kv_num_heads` attributes are supported via being specified as the second dimension of `Q` and `K`/`V`'s shapes respectively."
+    },
+    "AveragePool": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "2D or 3D Pooling only. `dilations` must be empty or all ones"
+    },
+    "BatchNormalization": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Bernoulli": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "BitShift": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "BitwiseAnd": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "BitwiseNot": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "BitwiseOr": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "BitwiseXor": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "BlackmanWindow": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF"
+      ],
+      "restrictions": ""
+    },
+    "Cast": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "UINT8",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kUINT8",
+        "kBOOL"
+      ],
+      "restrictions": ""
+    },
+    "CastLike": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "UINT8",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kUINT8",
+        "kBOOL"
+      ],
+      "restrictions": ""
+    },
+    "Ceil": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Col2Im": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "Celu": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "CenterCropPad": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "Clip": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Compress": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "Concat": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": ""
+    },
+    "ConcatFromSequence": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "Constant": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "FP8",
+        "FP4",
+        "INT4",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kFP8",
+        "kINT4",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "`sparse_value`, `value_string`, and `value_strings` attributes are unsupported."
+    },
+    "ConstantOfShape": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "FP8",
+        "FP4",
+        "INT4",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kFP8",
+        "kINT4",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": ""
+    },
+    "Conv": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "ConvInteger": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "ConvTranspose": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Cos": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Cosh": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "CumSum": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "`axis` must be a build-time constant"
+    },
+    "DFT": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Runs on a cuFFT-backed plugin so cuFFT must be available at runtime. Complex tensors use the packed-real `[..., 2]` layout, and the innermost dimension must be a static 1 (real) or 2 (complex). The transform axis must be `-2`. The opset 20 `axis` input must be a build-time constant scalar. `dft_length` is required for the onesided inverse (C2R) and unsupported otherwise. FP16 and BF16 require power-of-two signal lengths."
+    },
+    "DeformConv": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF"
+      ],
+      "restrictions": "`input` must have 1D or 2D spatial dimensions. `pads` for the beginning and end along each spatial axis must be the same"
+    },
+    "DepthToSpace": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "DequantizeLinear": {
+      "supported": true,
+      "types": [
+        "INT8",
+        "FP8",
+        "FP4",
+        "INT4"
+      ],
+      "nvinfer_datatypes": [
+        "kINT8",
+        "kFP8",
+        "kINT4"
+      ],
+      "restrictions": "`x_zero_point` must be zero"
+    },
+    "Det": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "Div": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "Dropout": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "`is_training` must be an initializer and evaluate to False."
+    },
+    "DynamicQuantizeLinear": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Not supported. TensorRT's IDynamicQuantize can be composed from ONNX operators in the form of a model local function."
+    },
+    "Einsum": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Elu": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Equal": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "Erf": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Exp": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Expand": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": ""
+    },
+    "EyeLike": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "`input` must have static dimensions"
+    },
+    "Flatten": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": ""
+    },
+    "Floor": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Gather": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": ""
+    },
+    "GatherElements": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": ""
+    },
+    "GatherND": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": ""
+    },
+    "Gelu": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT8",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT8",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "Gemm": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "GlobalAveragePool": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "GlobalLpPool": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "GlobalMaxPool": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Greater": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "GreaterOrEqual": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "GridSample": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Input must be 4D or 5D."
+    },
+    "GroupNormalization": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "GRU": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "For bidirectional GRUs, activation functions must be the same for both the forward and reverse pass"
+    },
+    "HammingWindow": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF"
+      ],
+      "restrictions": ""
+    },
+    "HannWindow": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF"
+      ],
+      "restrictions": ""
+    },
+    "HardSigmoid": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "HardSwish": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Hardmax": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "`axis` dimension of input must be a build-time constant"
+    },
+    "Identity": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": ""
+    },
+    "If": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "Output tensors of the two conditional branches must have the same rank and must have different names"
+    },
+    "ImageScaler": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "ImageDecoder": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "InstanceNormalization": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "IsInf": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "IsNaN": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "LayerNormalization": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Only the first output `Y` is supported."
+    },
+    "LeakyRelu": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Less": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "LessOrEqual": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "Log": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "LogSoftmax": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Loop": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "Scan output length cannot be dynamic. The shape of Loop carried dependencies must be the same across all loop iterations."
+    },
+    "LRN": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "LSTM": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "For bidirectional LSTMs, activation functions must be the same for both the forward and reverse pass. `input_forget` attribute must be 0. `layout` attribute must be 0."
+    },
+    "LpNormalization": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "LpPool": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "`dilations` must be empty or all ones"
+    },
+    "MatMul": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "MatMulInteger": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "Max": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "MaxPool": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "2D or 3D pooling only. `Indices` output tensor unsupported. `dilations` must be empty or all ones"
+    },
+    "MaxRoiPool": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "MaxUnpool": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "Mean": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "FP8",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kFP8",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "MeanVarianceNormalization": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "MelWeightMatrix": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "Min": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "Mish": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF"
+      ],
+      "restrictions": ""
+    },
+    "Mod": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "Mul": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "Multinomial": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "Neg": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "NegativeLogLikelihoodLoss": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "NonMaxSuppression": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF"
+      ],
+      "restrictions": ""
+    },
+    "NonZero": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF"
+      ],
+      "restrictions": ""
+    },
+    "Not": {
+      "supported": true,
+      "types": [
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kBOOL"
+      ],
+      "restrictions": ""
+    },
+    "OneHot": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "`depth` must be a build-time constant"
+    },
+    "Optional": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "OptionalGetElement": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "OptionalHasElement": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "Or": {
+      "supported": true,
+      "types": [
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kBOOL"
+      ],
+      "restrictions": ""
+    },
+    "Pad": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "ParametricSoftplus": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Pow": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "PRelu": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "QLinearConv": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "QLinearMatMul": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "QuantizeLinear": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "`y_zero_point` must be 0"
+    },
+    "RandomNormal": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "`seed` value is ignored by TensorRT"
+    },
+    "RandomNormalLike": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "`seed` value is ignored by TensorRT"
+    },
+    "RandomUniform": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "`seed` value is ignored by TensorRT"
+    },
+    "RandomUniformLike": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "`seed` value is ignored by TensorRT"
+    },
+    "Range": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "Reciprocal": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "ReduceL1": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "`axes` must be an initializer"
+    },
+    "ReduceL2": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "`axes` must be an initializer"
+    },
+    "ReduceLogSum": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "`axes` must be an initializer"
+    },
+    "ReduceLogSumExp": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "`axes` must be an initializer"
+    },
+    "ReduceMax": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "`axes` must be an initializer"
+    },
+    "ReduceMean": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "`axes` must be an initializer"
+    },
+    "ReduceMin": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "`axes` must be an initializer"
+    },
+    "ReduceProd": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "`axes` must be an initializer"
+    },
+    "ReduceSum": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "`axes` must be an initializer"
+    },
+    "ReduceSumSquare": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "`axes` must be an initializer"
+    },
+    "RegexFullMatch": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "Relu": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "Reshape": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": ""
+    },
+    "Resize": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Supported resize transformation modes: `half_pixel`, `pytorch_half_pixel`, `tf_half_pixel_for_nn`, `asymmetric`, and `align_corners`.<br />Supported resize modes: `nearest`, `linear`.<br />Supported nearest modes: `floor`, `ceil`, `round_prefer_floor`, `round_prefer_ceil`.<br />Supported aspect ratio policy: `stretch`.<br />When `scales` is a tensor input, `axes` must be an iota vector of length rank(input).<br />Antialiasing is not supported."
+    },
+    "ReverseSequence": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": ""
+    },
+    "RMSNormalization": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "RNN": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "For bidirectional RNNs, activation functions must be the same for both the forward and reverse pass"
+    },
+    "RoiAlign": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF"
+      ],
+      "restrictions": ""
+    },
+    "RotaryEmbedding": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "`position_ids` must be INT64"
+    },
+    "Round": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "STFT": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "`frame_step` and `window` must be an initializer. Input must be real-valued."
+    },
+    "ScaledTanh": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Scan": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Scatter": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "ScatterElements": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "ScatterND": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "`reduction` other than `none` is not supported"
+    },
+    "Selu": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "SequenceAt": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "SequenceConstruct": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "SequenceEmpty": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "SequenceErase": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "SequenceInsert": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "SequenceLength": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "SequenceMap": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "Shape": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": ""
+    },
+    "Shrink": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "Sigmoid": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Sign": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "Sin": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Sinh": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Size": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": ""
+    },
+    "Slice": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": ""
+    },
+    "Softmax": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "SoftmaxCrossEntropyLoss": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "Softplus": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Softsign": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "SpaceToDepth": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "Split": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": ""
+    },
+    "SplitToSequence": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "Sqrt": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Squeeze": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "`axes` must be resolvable to a constant."
+    },
+    "StringConcat": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "StringNormalizer": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "StringSplit": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "Sub": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "Sum": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": ""
+    },
+    "Swish": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Tan": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Tanh": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "TensorScatter": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32"
+      ],
+      "restrictions": "`past_cache` and `update` must be 4D. `axis` must be -2."
+    },
+    "TfIdfVectorizer": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "ThresholdedRelu": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Tile": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": ""
+    },
+    "TopK": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "`sorted` must be 1. `K` input must be less than 3840."
+    },
+    "Transpose": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": ""
+    },
+    "Trilu": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": ""
+    },
+    "Unique": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": ""
+    },
+    "Unsqueeze": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "`axes` must be resolvable to a constant."
+    },
+    "Upsample": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": ""
+    },
+    "Where": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": ""
+    },
+    "Xor": {
+      "supported": true,
+      "types": [
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kBOOL"
+      ],
+      "restrictions": ""
+    }
+  },
+  "tensorrt_layers": {
+    "ACTIVATION": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "ASSERTION": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "ATTENTION": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "CAST": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "CONCATENATION": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "CONDITION": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "CONSTANT": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "CONVOLUTION": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "CUMULATIVE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "DECONVOLUTION": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "DEQUANTIZE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "DYNAMIC_QUANTIZE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "EINSUM": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "ELEMENTWISE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "FILL": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "GATHER": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "GRID_SAMPLE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "IDENTITY": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "LOOP": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "LOOP_OUTPUT": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "LRN": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "MATRIX_MULTIPLY": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "NMS": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "NON_ZERO": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "NORMALIZATION": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "ONE_HOT": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "PADDING": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "PARAMETRIC_RELU": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "PLUGIN": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "PLUGIN_V2": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "PLUGIN_V3": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "POOLING": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "QUANTIZE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "RAGGED_SOFTMAX": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "RECURRENCE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "REDUCE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "RESIZE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "REVERSE_SEQUENCE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "SCALE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "SCATTER": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "SELECT": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "SHAPE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "SHUFFLE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "SLICE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "SOFTMAX": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "SQUEEZE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "TOPK": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "TRIP_LIMIT": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "UNARY": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "UNSQUEEZE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "ITERATOR": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "CONDITIONAL_INPUT": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "CONDITIONAL_OUTPUT": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    }
+  },
+  "installed_tensorrt": null
+}
