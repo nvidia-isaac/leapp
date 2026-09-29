@@ -529,16 +529,30 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             receiver_version is not None
             and cls._safe_tensor_version(real_receiver) != receiver_version
         )
+        # Inference tensors do not expose version counters. Conservatively
+        # record an operation that returns its exact receiver so a possible
+        # mutation is not silently discarded as an unchanged alias.
+        receiver_requires_proxy_update = receiver_was_mutated or (
+            receiver_version is None
+            and isinstance(tensor_out, torch.Tensor)
+            and tensor_out is real_receiver
+        )
 
         # Inactive contexts execute eagerly. A mutated receiver is returned as
         # itself so in-place calls keep their identity; derived results are new
         # data and stay native.
         if not traced_tensor.validate_status(args, kwargs):
+            # Confirmed mutations invalidate provenance first; known equivalent
+            # copies preserve it before the conservative inference-tensor fallback,
+            # since no-op contiguous()/cpu() calls can also return their receiver.
             if receiver_was_mutated and receiver is not None:
                 receiver.output_port = None
                 return receiver
             if cls._is_equivalent_copy(func, traced_tensor, tensor_out, args):
                 return traced_tensor.preserve_port(tensor_out)
+            if receiver_requires_proxy_update and receiver is not None:
+                receiver.output_port = None
+                return receiver
             return tensor_out
 
         # ================== SPECIAL CASES IN HANDLING ==================
@@ -566,7 +580,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         # pre-call proxy.
         if (
             receiver is not None
-            and not receiver_was_mutated
+            and not receiver_requires_proxy_update
             and may_adopt_view(receiver, tensor_out)
         ):
             return receiver._new_alias(tensor_out)
@@ -589,7 +603,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         )
 
         if (
-            receiver_was_mutated
+            receiver_requires_proxy_update
             and isinstance(tensor_out, torch.Tensor)
             and tensor_out is real_receiver
         ):

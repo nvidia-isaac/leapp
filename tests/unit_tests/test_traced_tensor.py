@@ -1251,6 +1251,54 @@ class TestTracedTensor(unittest.TestCase):
         graph_result = ctx.m(torch.tensor([1.0, 2.0, 3.0]))
         self.assertTrue(torch.allclose(graph_result, expected))
 
+    def test_inplace_relu_on_inference_tensor(self):
+        """An in-place op on an inference tensor must remain in the graph."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+
+        with torch.inference_mode():
+            y = x * 2
+            torch.nn.functional.relu(y, inplace=True)
+
+        ctx.compile_trace({'y': y})
+        targets = [node.target for node in ctx.m.graph.nodes]
+        self.assertIn(torch.nn.functional.relu, targets)
+
+        runtime_input = torch.tensor([-1.0, 2.0, -3.0])
+        expected = torch.tensor([0.0, 4.0, 0.0])
+        self.validate_export(
+            ctx.m,
+            runtime_input,
+            expected,
+            test_name="inplace_relu_on_inference_tensor",
+            verify_dynamo_onnx=True,
+        )
+
+    def test_equivalent_copies_preserve_port_before_inference_mutation(self):
+        """Transit copies keep provenance, but in-place writes invalidate it."""
+        for mode in (torch.no_grad, torch.inference_mode):
+            with self.subTest(mode=mode.__name__):
+                ctx = TracedTensorNode(name="test", node_index=0)
+                x = ctx.create_input(torch.tensor([-1.0, 2.0, -3.0]), name="x")
+                with mode():
+                    y = x * 2
+                ctx.compile_trace({'y': y})
+                ctx.publish_output_port(y, "y")
+                self.assertFalse(y.is_tracing)
+
+                for op in ("contiguous", "cpu"):
+                    copy = getattr(y, op)()
+                    self.assertEqual(copy.output_port, "y", op)
+                    self.assertEqual(y.output_port, "y", op)
+                    self.assertIs(copy.context_obj, ctx)
+                    self.assertTrue(torch.equal(copy.tensor, y.tensor))
+
+                with mode():
+                    result = torch.nn.functional.relu(y, inplace=True)
+                self.assertIs(result, y)
+                self.assertIsNone(y.output_port)
+                self.assertTrue(torch.equal(y.tensor, torch.tensor([0.0, 4.0, 0.0])))
+
     def test_inplace_method_fill_discarded_result(self):
         """Test that discarded in-place method results update the original proxy."""
         ctx = TracedTensorNode(name="test", node_index=0)
