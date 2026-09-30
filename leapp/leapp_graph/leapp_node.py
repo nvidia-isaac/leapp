@@ -235,6 +235,26 @@ class LeappNode():
                 prepare_and_validate(self.m, self.backend)
             self.export_backend.compile(self.m)
         except Exception as e:
+            # Exporters may wrap the PyTorch error; inspect the exception chain
+            # only on failure, without scanning or copying model state.
+            error = e
+            seen = set()
+            while error is not None and id(error) not in seen:
+                seen.add(id(error))
+                if any(message in str(error) for message in (
+                    "Inference tensors cannot be saved for backward",
+                    "Setting requires_grad=True on inference tensor outside InferenceMode",
+                )):
+                    _get_logger().fatal(
+                        f"LEAPP could not export node '{self.name}' with backend "
+                        f"'{self.backend}' because PyTorch rejected an inference tensor. "
+                        "This may be caused by torch.inference_mode() during model "
+                        "initialization or capture, including decorated functions. "
+                        "Use torch.no_grad() instead in those paths. Recreate affected "
+                        "tensors outside inference mode; leaving inference mode does "
+                        "not convert existing tensors.",
+                        cause=e)
+                error = error.__cause__ or error.__context__
             _get_logger().fatal(
                 f"Error compiling model {self.name}: {e}",
                 error_type=type(e),
