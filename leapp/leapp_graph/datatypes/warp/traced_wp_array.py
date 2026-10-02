@@ -10,6 +10,7 @@ import warp as wp
 from ..proxy_view import (
     bind_new_view,
     bind_shared_view,
+    layout_key,
     may_adopt_view,
     update_view_proxy,
 )
@@ -174,8 +175,12 @@ class TracedWpArray(wp.array, TracedData):
             result = func(*call_args, **call_kwargs)
 
         cls._process_post_call_arrays(
-            segment, args, kwargs, result, trace_source
+            func, segment, args, kwargs, result, trace_source
         )
+        if segment is not None and getattr(func, "__name__", None) == "launch":
+            outputs = kwargs.get("outputs", args[3] if len(args) > 3 else ())
+            if any(getattr(array, "_tensor", None) is not None for array in outputs):
+                backend.close_warp_segment()
         cls._carry_full_copy_port(backend, func, args, kwargs)
         return result
 
@@ -204,6 +209,13 @@ class TracedWpArray(wp.array, TracedData):
         if raw is src.data:
             return True, src
         if is_tracable_tensor_type(raw):
+            # wp.from_torch keeps the unwrapped alias in ``_tensor``. Point it
+            # back at the caller's tensor so a launch that writes this array
+            # rebinds that tensor instead of a temporary alias of it.
+            alias = getattr(raw, "_tensor", None)
+            if (isinstance(src, torch.Tensor) and type(alias) is torch.Tensor
+                    and layout_key(alias) == layout_key(src)):
+                raw._tensor = src
             if may_adopt_view(src, raw):
                 view, proxy = src.proxy_view, None
             else:
@@ -303,16 +315,27 @@ class TracedWpArray(wp.array, TracedData):
     @classmethod
     def _process_post_call_arrays(
         cls,
+        func: Callable,
         segment: Any | None,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
         result: Any,
         trace_source: "TracedWpArray | None",
     ) -> None:
+        writable_ids: set[int] = set()
+        if getattr(func, "__name__", None) == "launch":
+            for values in (
+                kwargs.get("outputs", args[3] if len(args) > 3 else ()),
+                kwargs.get("adj_outputs", args[5] if len(args) > 5 else ()),
+            ):
+                writable_ids.update(id(value) for value in values)
+        elif getattr(func, "__name__", None) == "copy":
+            dest = kwargs.get("dest", args[0] if args else None)
+            writable_ids.add(id(dest))
         seen: set[int] = set()
         for value in (args, kwargs, result):
             cls._process_post_call_node(
-                value, segment, trace_source, seen, depth=0
+                value, segment, trace_source, seen, writable_ids, depth=0
             )
 
     @classmethod
@@ -322,6 +345,7 @@ class TracedWpArray(wp.array, TracedData):
         segment: Any | None,
         trace_source: "TracedWpArray | None",
         seen: set[int],
+        writable_ids: set[int],
         *,
         depth: int,
     ) -> None:
@@ -359,6 +383,30 @@ class TracedWpArray(wp.array, TracedData):
                         trace_source.context_obj,
                         trace_source.proxy,
                     )
+                torch_owner = getattr(obj, "_tensor", None)
+                # A persistent buffer promoted by an earlier launch is already a
+                # TracedTensor. It must still be rebound to this output, or Torch
+                # reads keep its stale proxy and export it as a constant.
+                if isinstance(torch_owner, torch.Tensor) and obj_id in writable_ids:
+                    if not may_adopt_view(traced_array, torch_owner):
+                        _get_logger().fatal(
+                            "Warp output aliases a Torch tensor with an incompatible layout; "
+                            "cannot trace reads through the Torch alias.",
+                            error_type=RuntimeError,
+                        )
+                    if not isinstance(torch_owner, TracedData):
+                        promote_in_place(
+                            torch_owner,
+                            traced_array.name,
+                            traced_array.context_obj,
+                            None,
+                        )
+                    bind_shared_view(
+                        torch_owner,
+                        traced_array.name,
+                        traced_array.context_obj,
+                        traced_array.proxy_view,
+                    )
                 if segment is not None:
                     segment.add_output_ref(traced_array)
                     traced_array.warp_segment = segment
@@ -376,6 +424,7 @@ class TracedWpArray(wp.array, TracedData):
                 segment,
                 trace_source,
                 seen,
+                writable_ids,
                 depth=depth + 1,
             )
 
