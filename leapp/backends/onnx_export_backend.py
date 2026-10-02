@@ -313,6 +313,56 @@ class ONNXTorchScriptExportBackend(ONNXExportBackend):
         self.compiled_module = m
 
 class ONNXDynamoExportBackend(ONNXExportBackend):
+    @staticmethod
+    def _fix_gathernd_int32_indices(model: onnx.ModelProto) -> int:
+        """Replace constant INT32 GatherND indices with per-node INT64 copies.
+
+        This is a temporary workaround for a PyTorch ONNX Dynamo exporter bug.
+        Remove it once the exporter emits spec-compliant INT64 GatherND indices.
+
+        The dynamo ONNX exporter can lower valid PyTorch advanced indexing to a
+        standard-domain GatherND node while retaining an INT32 index initializer.
+        ONNX GatherND requires INT64 indices.  Keep the original initializer for
+        any other consumers and rewire only the affected GatherND input.
+
+        Modifies the model proto in-place.
+        """
+        init_map = {init.name: init for init in model.graph.initializer}
+        used_names = set(init_map)
+        num_fixed = 0
+
+        for node_index, node in enumerate(model.graph.node):
+            if (
+                node.op_type != "GatherND"
+                or node.domain not in ("", "ai.onnx")
+                or len(node.input) < 2
+            ):
+                continue
+
+            indices = init_map.get(node.input[1])
+            if indices is None or indices.data_type != TensorProto.INT32:
+                continue
+
+            new_name = f"{indices.name}_int64_gathernd_{node_index}"
+            while new_name in used_names:
+                new_name += "_"
+            new_indices = numpy_helper.from_array(
+                numpy_helper.to_array(indices).astype("int64"),
+                name=new_name,
+            )
+            model.graph.initializer.append(new_indices)
+            node.input[1] = new_name
+            used_names.add(new_name)
+            num_fixed += 1
+
+        if num_fixed:
+            _get_logger().debug(
+                f"Fixed {num_fixed} GatherND INT32 index initializer(s) "
+                "(ONNX dynamo exporter bug)."
+            )
+
+        return num_fixed
+
     def compile(self, m: torch.nn.Module = None):
         if m is None:
             m = self.module_builder()
@@ -353,6 +403,7 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
         # Fix scalar Slice initializers on the in-memory proto before saving
         # (ONNX exporter bug: shared scalar initializers between Gather and Slice nodes).
         self._fix_scalar_slice_inputs(model_proto)
+        self._fix_gathernd_int32_indices(model_proto)
         self._embed_warp_bundles(model_proto)
 
         # Wrap in SimplifiedONNXProgram so validation uses controlled
