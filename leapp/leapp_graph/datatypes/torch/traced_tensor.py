@@ -381,7 +381,8 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         func_name = getattr(func, "__name__", "")
         is_setitem = func_name == "__setitem__" and len(args) >= 3
         is_copy = func_name == "copy_" and len(args) >= 2
-        if not (is_setitem or is_copy):
+        is_add = func_name == "add_" and len(args) >= 2
+        if not (is_setitem or is_copy or is_add):
             return False, None
 
         target = args[0]
@@ -396,6 +397,8 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         anchor.validate_status((key, value))
 
         full_replacement = (
+            not is_add
+            and
             isinstance(value, TracedTensor)
             and cls._is_full_assignment_key(key)
             and tuple(target.shape) == tuple(value.shape)
@@ -409,6 +412,8 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             )
         cls._promote_plain_tensor(
             target, anchor.name, anchor.context_obj, dest_proxy)
+        if is_add:
+            return True, target.add_(value, alpha=kwargs.get("alpha", 1))
         if full_replacement:
             # The destination now holds exactly the source's data, so it also
             # presents the source's boundary identity to the next node.
@@ -481,12 +486,29 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         if kwargs is None:
             kwargs = {}
 
+        stale = False
+
+        def shed_replaced_graph(value):
+            nonlocal stale
+            if isinstance(value, TracedTensor) and value.describes_replaced_graph():
+                value.clear_tracing_state()
+                stale = True
+            return value
+
+        TracedData._map_structure((args, kwargs), shed_replaced_graph)
+        if stale:
+            return func(*args, **kwargs)
+
         # TODO: revise numpy code when implementing numpy side of tracing
         if func is torch.from_numpy:
             if len(args) == 1 and isinstance(args[0], TracedTensor):
                 return args[0]  # Already a TracedTensor, no conversion needed
 
         traced_tensor = TracedTensor.find_traced_tensor(args)
+
+        handled, result = cls._handle_plain_assignment(func, args, kwargs)
+        if handled:
+            return result
 
         # Convert method descriptors to function equivalents for TorchScript compatibility
         # Pass context if we have a traced_tensor for better error messages
@@ -503,10 +525,6 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         # Example:
         #   torch_tensor[0:3] = traced_tensor
         #   torch_tensor[traced_tensor] = plain_tensor
-
-        handled, result = cls._handle_plain_assignment(func, args, kwargs)
-        if handled:
-            return result
 
         # A carrier is an alias, which Torch refuses to detach in place, and the
         # autograd state detach_ edits is never read while tracing.
@@ -808,6 +826,12 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         ``__torch_function__`` from rewriting it into its allocating form.
         ``inplace_name`` is None for operations torch has no in-place form for.
         """
+        if self.describes_replaced_graph():
+            self.clear_tracing_state()
+            if inplace_name is None:
+                return self.copy_(functional(self, other, **kwargs))
+            return getattr(self, inplace_name)(other, **kwargs)
+
         if not self.is_tracing:
             unwrapped = TracedData.unwrap_traced_data(other)
             underlying = self.as_subclass(torch.Tensor)

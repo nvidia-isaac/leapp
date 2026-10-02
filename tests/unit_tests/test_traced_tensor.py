@@ -2690,6 +2690,60 @@ class TestTracedTensor(unittest.TestCase):
         expected = input_tensor - 1.0
         self.validate_export(ctx.m, (input_tensor,), expected, "class_swap_copy")
 
+    def test_plain_accumulator_adds_traced_value(self):
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(torch.tensor([1.0, 2.0, 3.0]), name="x")
+
+        accumulator = torch.ones(3)
+        accumulator.add_(x)
+
+        self.assertIsInstance(accumulator, TracedTensor)
+        ctx.compile_trace({"y": accumulator * 2.0})
+        result = ctx.m(torch.tensor([4.0, 5.0, 6.0]))
+        self.assertTrue(torch.allclose(result, torch.tensor([10.0, 12.0, 14.0])))
+
+    def test_plain_accumulator_reused_after_graph_reset(self):
+        ctx = TracedTensorNode(name="test", node_index=0)
+        first = ctx.create_input(torch.ones(3), name="x")
+        accumulator = torch.zeros(3)
+        accumulator.add_(first)
+
+        ctx.reset_trace_state()
+        accumulator.zero_()
+        second = ctx.create_input(torch.ones(3), name="x")
+        accumulator.add_(second)
+        ctx.compile_trace({"y": accumulator * 2.0})
+
+        result = ctx.m(torch.tensor([4.0, 5.0, 6.0]))
+        self.assertTrue(torch.allclose(result, torch.tensor([8.0, 10.0, 12.0])))
+
+    def test_stale_accumulator_adds_live_value_after_graph_reset(self):
+        ctx = TracedTensorNode(name="test", node_index=0)
+        first = ctx.create_input(torch.ones(3), name="x")
+        accumulator = torch.zeros(3)
+        accumulator.add_(first)
+
+        ctx.reset_trace_state()
+        second = ctx.create_input(torch.ones(3), name="x")
+        accumulator.add_(second)
+        ctx.compile_trace({"y": accumulator * 2.0})
+
+        result = ctx.m(torch.tensor([4.0, 5.0, 6.0]))
+        self.assertTrue(torch.allclose(result, torch.tensor([10.0, 12.0, 14.0])))
+
+    def test_stale_nonreceiver_tensor_is_constant_in_new_graph(self):
+        ctx = TracedTensorNode(name="test", node_index=0)
+        first = ctx.create_input(torch.ones(3), name="x")
+        constant = torch.ones_like(first)
+
+        ctx.reset_trace_state()
+        second = ctx.create_input(torch.ones(3), name="x")
+        y = torch.where(second > 0, constant, second)
+        ctx.compile_trace({"y": y})
+
+        result = ctx.m(torch.tensor([-1.0, 2.0, -3.0]))
+        self.assertTrue(torch.allclose(result, torch.tensor([-1.0, 1.0, -3.0])))
+
     def test_class_swap_multidim(self):
         """2-D buf[:] = traced works for higher-rank tensors."""
         ctx = TracedTensorNode(name="test", node_index=0)
