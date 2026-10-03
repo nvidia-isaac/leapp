@@ -2,6 +2,8 @@
 LEAPP
 NVIDIA
 BYOM
+BGR
+RGB
 PyPI
 PyTorch
 TorchScript
