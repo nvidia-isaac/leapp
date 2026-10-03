@@ -52,3 +52,7 @@ Downstream consumers can find the temporal axis by locating
 
 See :doc:`kind_element_names` for ``kind`` and ``element_names`` metadata.
 
+For a runnable example covering temporal and other tensor semantics, use
+``python examples/tensor_semantics.py`` from the repository root. It prints
+the generated YAML metadata and replays the exported tensor. The period
+describes nominal spacing between rows; LEAPP does not schedule their execution.
