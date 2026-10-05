@@ -432,7 +432,7 @@ wheels = [
 
 [[package]]
 name = "leapp"
-version = "0.7.0"
+version = "0.7.2"
 source = { editable = "." }
 dependencies = [
     { name = "fast-sugiyama", marker = "python_full_version >= '3.11' or (extra == 'extra-5-leapp-warp-cu12' and extra == 'extra-5-leapp-warp-cu13')" },
