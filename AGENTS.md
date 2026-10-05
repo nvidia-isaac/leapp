@@ -116,9 +116,13 @@ Commits must be DCO signed (`git commit -s`). See `CONTRIBUTING.md`.
 ## Version bump
 
 Keep these in lockstep: `leapp/__init__.py` (`__version__`),
-`pyproject.toml`, `packages/leapp-visualization/pyproject.toml`,
-`docs/source/conf.py` fallback, and example YAML `leapp version` in
+`pyproject.toml`, `docs/source/conf.py` fallback, and example YAML
+`leapp version` in
 `docs/source/api/index.rst` and `docs/source/generated_configs.rst`.
+`leapp-visualization` has an independent version in
+`packages/leapp-visualization/pyproject.toml`. On each LEAPP version
+bump, bump the visualization package separately only when that package
+has changed since its last release.
 `__config_version__` is the YAML schema, not the PyPI version; bump it
 only when the config format changes.
 
