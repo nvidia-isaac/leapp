@@ -78,6 +78,9 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     _EQUIVALENT_COPY_NAMES = frozenset(
         {"clone", "detach", "contiguous", "cpu", "cuda"}
     )
+    _PLAIN_INPLACE_BINARY_NAMES = frozenset(
+        {"add_", "sub_", "mul_", "div_", "pow_"}
+    )
     _NATIVE_TYPE = torch.Tensor
 
     @staticmethod
@@ -371,17 +374,20 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
     @classmethod
     def _handle_plain_assignment(cls, func, args=(), kwargs=None):
-        """Promote a plain destination, then re-enter ``__setitem__`` / ``copy_``.
+        """Promote a plain destination, then re-enter its mutating operation.
 
         Full replacement with a matching traced source reuses that source's
-        proxy. Partial writes register the pre-write destination as a graph
-        constant and use it as the promoted proxy.
+        proxy. Partial writes and in-place arithmetic register the pre-write
+        destination as a graph constant and use it as the promoted proxy.
         """
         kwargs = kwargs or {}
         func_name = getattr(func, "__name__", "")
         is_setitem = func_name == "__setitem__" and len(args) >= 3
         is_copy = func_name == "copy_" and len(args) >= 2
-        if not (is_setitem or is_copy):
+        is_inplace_binary = (
+            func_name in cls._PLAIN_INPLACE_BINARY_NAMES and len(args) >= 2
+        )
+        if not (is_setitem or is_copy or is_inplace_binary):
             return False, None
 
         target = args[0]
@@ -396,7 +402,8 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         anchor.validate_status((key, value))
 
         full_replacement = (
-            isinstance(value, TracedTensor)
+            not is_inplace_binary
+            and isinstance(value, TracedTensor)
             and cls._is_full_assignment_key(key)
             and tuple(target.shape) == tuple(value.shape)
             and target.dtype == value.dtype
@@ -409,6 +416,8 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             )
         cls._promote_plain_tensor(
             target, anchor.name, anchor.context_obj, dest_proxy)
+        if is_inplace_binary:
+            return True, getattr(target, func_name)(value, **kwargs)
         if full_replacement:
             # The destination now holds exactly the source's data, so it also
             # presents the source's boundary identity to the next node.
@@ -481,12 +490,31 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         if kwargs is None:
             kwargs = {}
 
+        stale = False
+
+        def shed_replaced_graph(value):
+            nonlocal stale
+            if isinstance(value, TracedTensor) and value.describes_replaced_graph():
+                value.clear_tracing_state()
+                stale = True
+            return value
+
+        TracedData._map_structure((args, kwargs), shed_replaced_graph)
+        if stale:
+            return func(*args, **kwargs)
+
         # TODO: revise numpy code when implementing numpy side of tracing
         if func is torch.from_numpy:
             if len(args) == 1 and isinstance(args[0], TracedTensor):
                 return args[0]  # Already a TracedTensor, no conversion needed
 
         traced_tensor = TracedTensor.find_traced_tensor(args)
+
+        # A plain receiver must be promoted before method-descriptor conversion
+        # turns an in-place method into an allocating function.
+        handled, result = cls._handle_plain_assignment(func, args, kwargs)
+        if handled:
+            return result
 
         # Convert method descriptors to function equivalents for TorchScript compatibility
         # Pass context if we have a traced_tensor for better error messages
@@ -496,17 +524,6 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         if traced_tensor is None:
             # Fallback to default behavior if no TracedTensor found
             return NotImplemented
-
-
-        # Handles situations where the destination is a plain tensor but a traced object 
-        # is in the key or value.
-        # Example:
-        #   torch_tensor[0:3] = traced_tensor
-        #   torch_tensor[traced_tensor] = plain_tensor
-
-        handled, result = cls._handle_plain_assignment(func, args, kwargs)
-        if handled:
-            return result
 
         # A carrier is an alias, which Torch refuses to detach in place, and the
         # autograd state detach_ edits is never read while tracing.
@@ -822,6 +839,11 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         ``__torch_function__`` from rewriting it into its allocating form.
         ``inplace_name`` is None for operations torch has no in-place form for.
         """
+        if self._shed_replaced_graph():
+            if inplace_name is None:
+                return self.copy_(functional(self, other, **kwargs))
+            return getattr(self, inplace_name)(other, **kwargs)
+
         if not self.is_tracing:
             unwrapped = TracedData.unwrap_traced_data(other)
             underlying = self.as_subclass(torch.Tensor)

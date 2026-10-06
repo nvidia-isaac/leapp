@@ -2738,6 +2738,85 @@ class TestTracedTensor(unittest.TestCase):
         expected = input_tensor - 1.0
         self.validate_export(ctx.m, (input_tensor,), expected, "class_swap_copy")
 
+    def test_plain_destination_inplace_binary_methods(self):
+        """Plain receivers preserve mutation and trace every supported method."""
+        cases = (
+            ("add_", {"alpha": 2}),
+            ("sub_", {"alpha": 2}),
+            ("mul_", {}),
+            ("div_", {"rounding_mode": None}),
+            ("pow_", {}),
+        )
+        initial = torch.tensor([4.0, 8.0, 16.0])
+        trace_source = torch.tensor([2.0, 4.0, 2.0])
+        runtime_source = torch.tensor([3.0, 2.0, 3.0])
+
+        for method, kwargs in cases:
+            with self.subTest(method=method):
+                ctx = TracedTensorNode(name="test", node_index=0)
+                source = ctx.create_input(trace_source, name="source")
+                destination = initial.clone()
+
+                result = getattr(destination, method)(source, **kwargs)
+
+                self.assertIs(result, destination)
+                self.assertIsInstance(destination, TracedTensor)
+                eager_expected = initial.clone()
+                getattr(eager_expected, method)(trace_source, **kwargs)
+                self.assertTrue(torch.allclose(destination.tensor, eager_expected))
+
+                ctx.compile_trace({"out": destination})
+                runtime_expected = initial.clone()
+                getattr(runtime_expected, method)(runtime_source, **kwargs)
+                self.validate_export(
+                    ctx.m,
+                    (runtime_source,),
+                    runtime_expected,
+                    f"plain_destination_{method.rstrip('_')}",
+                )
+
+    def test_plain_accumulator_reused_after_graph_reset(self):
+        ctx = TracedTensorNode(name="test", node_index=0)
+        first = ctx.create_input(torch.ones(3), name="x")
+        accumulator = torch.zeros(3)
+        accumulator.add_(first)
+
+        ctx.reset_trace_state()
+        accumulator.zero_()
+        second = ctx.create_input(torch.ones(3), name="x")
+        accumulator.add_(second)
+        ctx.compile_trace({"y": accumulator * 2.0})
+
+        result = ctx.m(torch.tensor([4.0, 5.0, 6.0]))
+        self.assertTrue(torch.allclose(result, torch.tensor([8.0, 10.0, 12.0])))
+
+    def test_stale_accumulator_adds_live_value_after_graph_reset(self):
+        ctx = TracedTensorNode(name="test", node_index=0)
+        first = ctx.create_input(torch.ones(3), name="x")
+        accumulator = torch.zeros(3)
+        accumulator.add_(first)
+
+        ctx.reset_trace_state()
+        second = ctx.create_input(torch.ones(3), name="x")
+        accumulator.add_(second)
+        ctx.compile_trace({"y": accumulator * 2.0})
+
+        result = ctx.m(torch.tensor([4.0, 5.0, 6.0]))
+        self.assertTrue(torch.allclose(result, torch.tensor([10.0, 12.0, 14.0])))
+
+    def test_stale_nonreceiver_tensor_is_constant_in_new_graph(self):
+        ctx = TracedTensorNode(name="test", node_index=0)
+        first = ctx.create_input(torch.ones(3), name="x")
+        constant = torch.ones_like(first)
+
+        ctx.reset_trace_state()
+        second = ctx.create_input(torch.ones(3), name="x")
+        y = torch.where(second > 0, constant, second)
+        ctx.compile_trace({"y": y})
+
+        result = ctx.m(torch.tensor([-1.0, 2.0, -3.0]))
+        self.assertTrue(torch.allclose(result, torch.tensor([-1.0, 1.0, -3.0])))
+
     def test_class_swap_multidim(self):
         """2-D buf[:] = traced works for higher-rank tensors."""
         ctx = TracedTensorNode(name="test", node_index=0)
