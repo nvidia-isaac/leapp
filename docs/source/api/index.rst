@@ -291,7 +291,7 @@ Output YAML structure
      torch version: "2.7.0+cu126"
      warp version: null
      leapp version: "0.7.1"
-     leapp config version: "1.3"
+     leapp config version: "1.4"
      cuda version: "12.6"
      os: Linux
 
@@ -325,9 +325,12 @@ Signature
    TensorSemantics(
        name: str = None,
        ref = None,
-       kind: InputKindEnum | OutputKindEnum | str | None = None,
-       element_names: list | None = None,
+       kind: Kind | str | None = None,
        extra: dict | None = None,
+       axes: list[Axis | None] | None = None,
+       is_setpoint: bool = False,
+       reference: str | None = None,
+       expressed_in: ExpressionFrame | str | None = None,
    )
 
 Parameters
@@ -335,12 +338,12 @@ Parameters
 
 * ``name`` (str, required): Tensor name to use in the generated pipeline YAML.
 * ``ref`` (Tensor or ndarray, required): Tensor value being annotated.
-* ``kind`` (InputKindEnum | OutputKindEnum | str, optional): Semantic role for
-  the tensor. Enum values are serialized to their string ``.value``.
-* ``element_names`` (list | str, optional): Human-readable element names. A
-  string becomes ``[[name]]``; a flat list of strings becomes ``[[...]]``; a
-  per-dimension list is preserved with optional ``None`` entries. Include
-  ``TemporalAxis(...)`` as a bare axis item to mark that axis temporal.
+* ``kind`` (Kind | str, optional): Quantity represented by the tensor.
+* ``axes`` (list, optional): One ``Axis`` or ``None`` per tensor dimension.
+* ``is_setpoint`` (bool): Marks setpoint inputs; ``True`` is invalid on outputs.
+* ``reference`` (str, optional): Spatial reference frame name.
+* ``expressed_in`` (ExpressionFrame | str, optional): Coordinate basis selector
+  or literal frame name. Twists and wrenches default to ``ExpressionFrame.SELF``.
 * ``extra`` (dict, optional): Additional semantic fields. Keys are flattened
   into the tensor YAML entry rather than serialized under an ``extra`` key.
 
@@ -352,89 +355,100 @@ Behavior
   and ``TensorSemantics`` in the same list is not supported.
 * ``TensorSemantics`` objects are not placed inside dicts. The ``name`` field
   provides the tensor key.
-* Public semantic fields with non-``None`` values are serialized in the YAML.
+* Non-``None`` semantic fields are serialized; ``is_setpoint=False`` is omitted.
 * ``extra`` fields are flattened into the same YAML mapping as built-in fields.
 
-``TemporalAxis``
-~~~~~~~~~~~~~~~~
-
-Mark one ``element_names`` axis as temporal and attach an absolute period in
-milliseconds to the tensor YAML entry.
+``Axis`` and convenience helpers
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
-   from leapp import TensorSemantics, TemporalAxis
+   Axis(kind: AxisKind | str | None = None,
+        names: list[str] | None = None,
+        period_ms: float | None = None)
 
-   TensorSemantics(
-       name="actions",
-       ref=actions,
-       element_names=[TemporalAxis(period_ms=100), ["hip", "knee", "ankle"]],
-   )
-
-This emits the reserved bare axis sentinel and the period metadata:
-
-.. code-block:: yaml
-
-   element_names:
-   - __temporal_axis__
-   - [hip, knee, ankle]
-   temporal_period_ms: 100
-
-``__temporal_axis__`` is reserved for LEAPP output; use
-``TemporalAxis`` rather than writing the sentinel directly.
-
-.. warning::
-
-   ``extra`` fields are non-standard, project-defined metadata. Downstream
-   deployment frameworks should not be expected to understand or support them.
-   Use ``extra`` only for project-specific integration data, and prefer
-   standard LEAPP semantic fields whenever possible.
+``kind`` and ``names`` are independently optional. ``period_ms`` is required
+only for time axes. See :doc:`../semantics/kind_element_names` for every Kind,
+its public helper, the spatial defaults, and validation rules. Helpers return
+``TensorSemantics`` and can enforce stronger quantity-specific checks.
 
 Enum values
 ~~~~~~~~~~~
 
-``InputKindEnum`` currently defines:
+``Kind`` describes the quantity, independently of input/output direction.
+It currently defines:
 
 .. code-block:: text
 
-   JOINT_POSITION = state/joint/position
-   JOINT_VELOCITY = state/joint/velocity
-   JOINT_EFFORT = state/joint/effort
-   BODY_POSE = state/body/pose
-   BODY_VEL = state/body/velocity
-   BODY_ACC = state/body/acceleration
-   BODY_LINEAR_ACCELERATION = state/body/linear_acceleration
-   BODY_LINEAR_VELOCITY = state/body/linear_velocity
-   BODY_ANGULAR_ACCELERATION = state/body/angular_acceleration
-   BODY_ANGULAR_VELOCITY = state/body/angular_velocity
-   BODY_ROTATION = state/body/rotation
-   BODY_POSITION = state/body/position
-   WRENCH = state/wrench
-   VECTOR3D = state/vector3d
-   COMMAND_JOINT_POSITION = command/joint/position
-   COMMAND_JOINT_VELOCITY = command/joint/velocity
-   COMMAND_JOINT_TORQUES = command/joint/torques
-   COMMAND_BODY_ROTATION = command/body/rotation
-   COMMAND_BODY_VELOCITY = command/body/velocity
-   COMMAND_POSE = command/body/pose
-
-``OutputKindEnum`` currently defines:
-
-.. code-block:: text
-
+   JOINT_POSITION = joint/position
+   JOINT_VELOCITY = joint/velocity
+   JOINT_EFFORT = joint/effort
+   FRAME_POSE = frame/pose
+   FRAME_POSITION = frame/position
+   FRAME_ORIENTATION = frame/orientation
+   FRAME_TWIST = frame/twist
+   FRAME_LINEAR_VELOCITY = frame/linear_velocity
+   FRAME_ANGULAR_VELOCITY = frame/angular_velocity
+   FRAME_ACCELERATION = frame/acceleration
+   FRAME_LINEAR_ACCELERATION = frame/linear_acceleration
+   FRAME_ANGULAR_ACCELERATION = frame/angular_acceleration
+   FRAME_WRENCH = frame/wrench
+   VECTOR3D = vector3d
    KP = kp
    KD = kd
-   JOINT_POSITION = target/joint/position
-   JOINT_VELOCITY = target/joint/velocity
-   JOINT_TORQUES = target/joint/torques
-   JOINT_EFFORT = target/joint/effort
-   BODY_POSITION = target/body/position
-   BODY_LINEAR_ACCELERATION = target/body/linear_acceleration
-   BODY_ORIENTATION = target/body/orientation
-   BODY_LINEAR_VELOCITY = target/body/linear_velocity
-   BODY_ANGULAR_ACCELERATION = target/body/angular_acceleration
+   IMAGE = image
 
-See :doc:`/semantics/usage` for examples and field guidance.
+Use the same Kind for measured inputs, setpoint inputs, and outputs. Set
+``is_setpoint=True`` only for setpoint inputs. Joint effort covers both torque
+and force. Custom string kinds are also accepted; omit ``kind`` when the
+quantity is unspecified.
+
+``AxisKind`` describes the meaning of a tensor dimension. It currently defines:
+
+.. code-block:: text
+
+   ROBOT = robot
+   ELEMENT = element
+   COMPONENT = component
+   TIME = time
+
+* ``ROBOT``: different robots in a batch.
+* ``ELEMENT``: different items, such as joints, tool frames, or cameras.
+* ``COMPONENT``: components of each value, such as quaternion or RGB components.
+* ``TIME``: samples separated by ``period_ms``. A tensor can have at most one
+  time axis, with a finite, positive period.
+
+Axis kinds also accept custom strings. Strings matching standard values use
+standard validation. ``Axis.kind`` and ``Axis.names`` are independently
+optional; ``None`` in the ``axes`` list leaves an entire dimension unspecified.
+
+``ExpressionFrame`` selects the coordinate basis for spatial components:
+
+.. code-block:: text
+
+   SELF = self
+   REFERENCE = reference
+
+* ``SELF``: the frame identified by the element name. This is the default
+  for twists and wrenches.
+* ``REFERENCE``: the frame named by ``reference``; that field must be supplied.
+
+An explicit frame name is also accepted. Selectors and literal names have
+distinct YAML representations:
+
+.. code-block:: yaml
+
+   # ExpressionFrame.SELF
+   expressed_in: {selector: self}
+
+.. code-block:: yaml
+
+   # A literal frame named "self"
+   expressed_in: {frame: self}
+
+Pose helpers accept ``reference`` only; wrench helpers accept ``expressed_in``
+only. Twist helpers accept both. Wrench helpers cannot use ``REFERENCE``
+because they have no ``reference`` field.
 
 Annotations
 ===========
