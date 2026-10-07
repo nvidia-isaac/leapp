@@ -1,211 +1,147 @@
-====================
-Kind & Element Names
-====================
+=============
+Kind and Axes
+=============
 
-``kind``
---------
-
-The ``kind`` field describes the **semantic role** of a tensor --- what
-physical quantity or command it represents. LEAPP provides two separate
-enums for inputs and outputs to clearly distinguish between observed
-state and commanded targets. ``kind`` may also be any plain string when
-you need a custom semantic label.
-
-``InputKindEnum``
-~~~~~~~~~~~~~~~~~
-
-Used with :func:`~leapp.annotate.input_tensors`. These represent
-**observed state** or **commanded references** flowing into a node.
+``Kind`` describes the quantity, independently of input/output direction.
+Input annotations default to measured state; set ``is_setpoint=True`` for a
+setpoint input. Output annotations reject ``is_setpoint=True``. Custom string
+kinds and ``kind=None`` are also accepted.
 
 .. list-table::
    :header-rows: 1
-   :widths: 30 30 40
 
-   * - Enum value
-     - YAML string
-     - Description
+   * - Kind
+     - YAML value
+     - Optional helper
    * - ``JOINT_POSITION``
-     - ``state/joint/position``
-     - Observed joint positions (e.g. encoder readings)
+     - ``joint/position``
+     - ``joint_position(...)``
    * - ``JOINT_VELOCITY``
-     - ``state/joint/velocity``
-     - Observed joint velocities
+     - ``joint/velocity``
+     - ``joint_velocity(...)``
    * - ``JOINT_EFFORT``
-     - ``state/joint/effort``
-     - Observed joint effort
-   * - ``BODY_POSE``
-     - ``state/body/pose``
-     - Observed body pose
-   * - ``BODY_POSITION``
-     - ``state/body/position``
-     - Observed body position
-   * - ``BODY_VEL``
-     - ``state/body/velocity``
-     - Observed body velocity
-   * - ``BODY_ACC``
-     - ``state/body/acceleration``
-     - Observed body acceleration
-   * - ``BODY_LINEAR_ACCELERATION``
-     - ``state/body/linear_acceleration``
-     - Body linear acceleration (e.g. from IMU)
-   * - ``BODY_LINEAR_VELOCITY``
-     - ``state/body/linear_velocity``
-     - Body linear velocity
-   * - ``BODY_ANGULAR_ACCELERATION``
-     - ``state/body/angular_acceleration``
-     - Body angular acceleration
-   * - ``BODY_ANGULAR_VELOCITY``
-     - ``state/body/angular_velocity``
-     - Body angular velocity (e.g. gyroscope)
-   * - ``BODY_ROTATION``
-     - ``state/body/rotation``
-     - Body rotation / orientation
-   * - ``WRENCH``
-     - ``state/wrench``
-     - Observed wrench values
+     - ``joint/effort``
+     - ``joint_effort(...)``
+   * - ``FRAME_POSE``
+     - ``frame/pose``
+     - ``frame_pose(...)``
+   * - ``FRAME_POSITION``
+     - ``frame/position``
+     - ``frame_position(...)``
+   * - ``FRAME_ORIENTATION``
+     - ``frame/orientation``
+     - ``frame_orientation(...)``
+   * - ``FRAME_TWIST``
+     - ``frame/twist``
+     - ``frame_twist(...)``
+   * - ``FRAME_LINEAR_VELOCITY``
+     - ``frame/linear_velocity``
+     - ``frame_linear_velocity(...)``
+   * - ``FRAME_ANGULAR_VELOCITY``
+     - ``frame/angular_velocity``
+     - ``frame_angular_velocity(...)``
+   * - ``FRAME_ACCELERATION``
+     - ``frame/acceleration``
+     - ``frame_acceleration(...)``
+   * - ``FRAME_LINEAR_ACCELERATION``
+     - ``frame/linear_acceleration``
+     - ``frame_linear_acceleration(...)``
+   * - ``FRAME_ANGULAR_ACCELERATION``
+     - ``frame/angular_acceleration``
+     - ``frame_angular_acceleration(...)``
+   * - ``FRAME_WRENCH``
+     - ``frame/wrench``
+     - ``frame_wrench(...)``
    * - ``VECTOR3D``
-     - ``state/vector3d``
-     - Generic 3D vector state
-   * - ``COMMAND_JOINT_POSITION``
-     - ``command/joint/position``
-     - Commanded joint position reference
-   * - ``COMMAND_JOINT_VELOCITY``
-     - ``command/joint/velocity``
-     - Commanded joint velocity reference
-   * - ``COMMAND_BODY_ROTATION``
-     - ``command/body/rotation``
-     - Commanded body rotation reference
-   * - ``COMMAND_BODY_VELOCITY``
-     - ``command/body/velocity``
-     - Commanded body velocity reference
-   * - ``COMMAND_POSE``
-     - ``command/body/pose``
-     - Commanded body pose reference
-   * - ``COMMAND_JOINT_TORQUES``
-     - ``command/joint/torques``
-     - Commanded joint torques reference
-
-.. code-block:: python
-
-   from leapp.utils.enums import InputKindEnum
-
-   TensorSemantics("joint_pos", tensor, kind=InputKindEnum.JOINT_POSITION)
-   TensorSemantics("imu_gyro", tensor,
-                   kind=InputKindEnum.BODY_ANGULAR_VELOCITY)
-   TensorSemantics("target_pos", tensor,
-                   kind=InputKindEnum.COMMAND_JOINT_POSITION)
-
-   # Custom string kinds are also allowed.
-   TensorSemantics("terrain_latent", tensor,
-                   kind="state/environment/terrain_embedding")
-
-``OutputKindEnum``
-~~~~~~~~~~~~~~~~~~
-
-Used with :func:`~leapp.annotate.output_tensors`. These represent
-**target commands** or **control outputs** produced by a node.
-
-.. list-table::
-   :header-rows: 1
-   :widths: 30 30 40
-
-   * - Enum value
-     - YAML string
-     - Description
+     - ``vector3d``
+     - ``vector3d(...)``
    * - ``KP``
      - ``kp``
-     - Proportional gain
+     - ``kp(...)``
    * - ``KD``
      - ``kd``
-     - Derivative gain
-   * - ``JOINT_POSITION``
-     - ``target/joint/position``
-     - Target joint position
-   * - ``JOINT_VELOCITY``
-     - ``target/joint/velocity``
-     - Target joint velocity
-   * - ``JOINT_TORQUES``
-     - ``target/joint/torques``
-     - Target joint torques
-   * - ``JOINT_EFFORT``
-     - ``target/joint/effort``
-     - Target joint effort
-   * - ``BODY_POSITION``
-     - ``target/body/position``
-     - Target body position
-   * - ``BODY_LINEAR_ACCELERATION``
-     - ``target/body/linear_acceleration``
-     - Target body linear acceleration
-   * - ``BODY_ORIENTATION``
-     - ``target/body/orientation``
-     - Target body orientation
-   * - ``BODY_LINEAR_VELOCITY``
-     - ``target/body/linear_velocity``
-     - Target body linear velocity
-   * - ``BODY_ANGULAR_ACCELERATION``
-     - ``target/body/angular_acceleration``
-     - Target body angular acceleration
+     - ``kd(...)``
+   * - ``IMAGE``
+     - ``image``
+     - ``image(...)``
+
+``Axis``
+--------
+
+``axes`` is either ``None`` or a list with one entry per tensor dimension.
+Entries can be ``Axis`` objects or ``None``. ``Axis.kind`` and ``Axis.names``
+are independently optional. Supplied names must match the dimension size.
 
 .. code-block:: python
 
-   from leapp.utils.enums import OutputKindEnum
+   from leapp import Axis, AxisKind, Kind, TensorSemantics
 
-   TensorSemantics("torques", action, kind=OutputKindEnum.JOINT_TORQUES)
-   TensorSemantics("kp_gains", kp, kind=OutputKindEnum.KP)
+   annotation = TensorSemantics(
+       "q", q, kind=Kind.JOINT_POSITION,
+       axes=[Axis(AxisKind.ROBOT), Axis(AxisKind.ELEMENT, names=["hip", "knee"])],
+   )
 
-.. note::
+Standard kinds are ``ROBOT``, ``ELEMENT``, ``COMPONENT``, and ``TIME``.
+They serialize as ``robot``, ``element``, ``component``, and ``time``.
+Custom strings such as ``Axis(kind="token")`` remain available. Strings
+matching standard values receive the same validation as their enum equivalents.
+``Axis(names=["a", "b"])`` supplies labels without declaring a kind.
+See :doc:`temporal` for time axes.
 
-   LEAPP does not enforce using ``InputKindEnum`` only for inputs or
-   ``OutputKindEnum`` only for outputs, but it is strongly recommended to
-   follow this convention. The ``kind`` field accepts enum values and
-   plain strings.
+Spatial metadata
+----------------
 
-``element_names``
------------------
+``reference`` names the frame against which pose or motion is measured.
+``expressed_in`` identifies the coordinate basis: a literal frame name,
+``ExpressionFrame.SELF`` (the element's own frame), or
+``ExpressionFrame.REFERENCE`` (the frame named by ``reference``).
+Twists and wrenches default to ``SELF``. A literal frame named ``self`` is
+not the same as the enum selector.
 
-The ``element_names`` field provides human-readable names for the
-elements along each dimension of a tensor. The canonical format is
-``list[list[str]]``, where the outer list corresponds to tensor
-dimensions and each inner list names the elements in that dimension.
-LEAPP also accepts several shorthand formats and normalizes them
-automatically:
+.. code-block:: yaml
 
-.. list-table::
-   :header-rows: 1
-   :widths: 35 35 30
+   kind: frame/twist
+   reference: base
+   expressed_in: {selector: self}
+   axes:
+   - {kind: element, names: [tool]}
+   - {kind: component, names: [vx, vy, vz, wx, wy, wz]}
 
-   * - Input format
-     - Normalized to
-     - Use case
-   * - ``"hip"``
-     - ``[["hip"]]``
-     - Single named element
-   * - ``["hip", "knee", "ankle"]``
-     - ``[["hip", "knee", "ankle"]]``
-     - Flat list --- names for one dimension
-   * - ``[["batch"], ["x", "y", "z"]]``
-     - ``[["batch"], ["x", "y", "z"]]``
-     - Already canonical --- per-dimension names
-   * - ``[None, None, ["r", "g", "b"]]``
-     - ``[None, None, ["r", "g", "b"]]``
-     - Partial --- only name specific dimensions
+A literal expression frame serializes as ``expressed_in: {frame: world}``.
+Poses use ``reference`` only; wrenches use ``expressed_in`` only. Twist linear
+velocity is evaluated at the element frame's origin; wrench moments are taken
+about that origin. These annotations do not transform tensor values.
+
+Convenience helpers
+-------------------
+
+Every built-in Kind has a helper exported from ``leapp``. Helpers return
+ordinary ``TensorSemantics`` and accept ``axes=None`` and
+``is_setpoint=False``. Spatial helpers require ``reference`` except for
+``frame_wrench``. Motion and wrench helpers accept ``expressed_in`` with
+``SELF`` as the default; pose, position, and orientation helpers do not.
 
 .. code-block:: python
 
-   # Name elements along the last dimension.
-   TensorSemantics(
-       "joint_pos", tensor,
-       element_names=["hip", "knee", "ankle",
-                      "shoulder", "elbow", "wrist"])
+   from leapp import frame_pose, frame_twist, image, joint_position
 
-   # Name elements per dimension (e.g. for a [batch, 3] tensor).
-   TensorSemantics(
-       "position", tensor,
-       element_names=[None, ["x", "y", "z"]])
+   target = joint_position("target", q_target, is_setpoint=True)
+   pose = frame_pose("pose", tool_pose, reference="world")
+   twist = frame_twist("twist", tool_twist, reference="base")
+   camera = image("camera", pixels)
 
-   # Name a single element.
-   TensorSemantics("gravity", tensor, element_names="z")
+Helpers additionally validate supplied pose, orientation, position, and velocity
+component labels; permutations are allowed. The generic constructor performs
+structural metadata validation, allowing custom conventions. Missing axes are
+not inferred, and importers decide what metadata they require. Images do not
+assume channel order, colour encoding, or normalization. Acceleration and wrench
+component conventions remain consumer-defined in this POC.
 
-See :doc:`usage` for general ``TensorSemantics`` usage patterns and
-:doc:`temporal` for temporal axis metadata.
+Migration
+---------
 
+``Kind`` replaces ``InputKindEnum`` and ``OutputKindEnum``. Remove direction
+prefixes, use ``FRAME_*`` instead of ``BODY_*``, and use joint effort for torque.
+``axes`` replaces ``element_names``; include ``None`` for unspecified dimensions.
+Temporal metadata now lives on ``Axis(AxisKind.TIME, period_ms=...)``.
+YAML schema version 1.4 identifies this change.

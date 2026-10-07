@@ -47,9 +47,10 @@ YAML structure
          dtype: float32
          shape: [6]
          type: tensor
-         kind: state/joint/position
-         element_names: [left_hip, left_knee, left_ankle, right_hip,
-           right_knee, right_ankle]
+         kind: joint/position
+         axes:
+         - kind: element
+           names: [left_hip, left_knee, left_ankle, right_hip, right_knee, right_ankle]
        outputs:
        - name: obs_features
          dtype: float32
@@ -70,9 +71,10 @@ YAML structure
          dtype: float32
          shape: [6]
          type: tensor
-         kind: target/joint/position
-         element_names: [left_hip, left_knee, left_ankle, right_hip,
-           right_knee, right_ankle]
+         kind: joint/position
+         axes:
+         - kind: element
+           names: [left_hip, left_knee, left_ankle, right_hip, right_knee, right_ankle]
        parameters:
          backend: jit
          model_path: policy.pt
@@ -90,7 +92,7 @@ YAML structure
 
    system information:
      leapp version: 0.7.1
-     leapp config version: '1.3'
+     leapp config version: '1.4'
      torch version: 2.9.1+cu128
      python version: 3.12.9
      cuda version: '12.8'
@@ -202,77 +204,36 @@ Semantic fields are optional tensor-port fields. A deployment library can use
 these fields to connect raw tensors to robot concepts, message formats, topic
 names, controller APIs, coordinate frames, or UI labels.
 
-``kind``
+``kind`` and ``is_setpoint``
+------------------------------------
+
+``kind`` describes the quantity, such as ``joint/position`` or ``frame/twist``.
+The input/output list supplies direction. Inputs default to measured state;
+``is_setpoint: true`` marks requested values. Outputs cannot be setpoints.
+
+``axes``
 --------
 
-   Describes the physical role of a tensor, such as ``state/joint/position``
-   or ``target/joint/position``. A deployment library can use it to route
-   values to the right subscriber, publisher, command interface, or adapter
-   without relying only on tensor names. See
-   :doc:`semantics/kind_element_names`.
+One entry per tensor dimension identifies its optional kind and labels.
+Unspecified dimensions use ``null``; omit ``axes`` when all metadata is absent.
 
-   .. code-block:: yaml
+.. code-block:: yaml
 
-      models:
-        policy:
-          inputs:
-          - name: joint_pos
-            dtype: float32
-            shape: [6]
-            type: tensor
-            kind: state/joint/position
-          outputs:
-          - name: joint_targets
-            dtype: float32
-            shape: [6]
-            type: tensor
-            kind: target/joint/position
+   name: actions
+   dtype: float32
+   shape: [4, 3]
+   type: tensor
+   kind: joint/effort
+   axes:
+   - {kind: time, period_ms: 100}
+   - {kind: element, names: [hip, knee, ankle]}
 
-``element_names``
------------------
+``reference`` and ``expressed_in``
+------------------------------------------
 
-   Describes the order and identity of elements along tensor axes, such as
-   joint names or vector components. A deployment library can use it to reorder
-   robot messages into model order, verify that expected joints are present,
-   and label outputs. See :doc:`semantics/kind_element_names`.
+``reference`` is a literal frame name. ``expressed_in`` is a tagged mapping:
+``{selector: self}``, ``{selector: reference}``, or ``{frame: world}``.
+Twists and wrenches explicitly serialize their default ``self`` selector.
 
-   .. code-block:: yaml
-
-      models:
-        policy:
-          inputs:
-          - name: joint_pos
-            dtype: float32
-            shape: [6]
-            type: tensor
-            element_names: [[left_hip, left_knee, left_ankle,
-              right_hip, right_knee, right_ankle]]
-          outputs:
-          - name: joint_targets
-            dtype: float32
-            shape: [6]
-            type: tensor
-            element_names: [[left_hip, left_knee, left_ankle,
-              right_hip, right_knee, right_ankle]]
-
-``__temporal_axis__`` and ``temporal_period_ms``
-------------------------------------------------
-
-   Mark one tensor axis as time-like and record sample spacing in milliseconds.
-   A deployment library can use these fields to interpret action chunks,
-   trajectories, history windows, or other batched time samples. See
-   :doc:`semantics/temporal`.
-
-   .. code-block:: yaml
-
-      models:
-        policy:
-          outputs:
-          - name: actions
-            dtype: float32
-            shape: [4, 3]
-            type: tensor
-            element_names:
-            - __temporal_axis__
-            - [hip, knee, ankle]
-            temporal_period_ms: 100
+See :doc:`semantics/kind_element_names` for spatial meanings, custom metadata,
+and helper functions, and :doc:`semantics/temporal` for time axes.
