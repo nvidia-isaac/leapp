@@ -21,73 +21,100 @@ just tensor shapes, but what those tensors mean.
 General Usage
 =============
 
-Instead of passing raw tensors, wrap them in ``TensorSemantics`` objects.
-Pass them as a single object or as a list:
+The helpers return ``TensorSemantics`` objects, which can be passed individually
+or as a list. This example exports a small joint controller for one two-joint
+robot: measured positions and velocities, a position setpoint, and an effort
+output. Each tensor has shape ``[robot, joint]`` and shares the same axes.
 
 .. code-block:: python
 
    import torch
    import leapp
-   from leapp import annotate, TensorSemantics
-   from leapp.utils.enums import InputKindEnum, OutputKindEnum
+   from leapp import annotate, Axis, AxisKind
+   from leapp import joint_position, joint_velocity, joint_effort
 
-   joint_pos = torch.randn(1, 12)
-   joint_vel = torch.randn(1, 12)
+   q = torch.tensor([[0.1, -0.2]])
+   dq = torch.zeros(1, 2)
+   q_target = torch.tensor([[0.4, 0.3]])
+   joint_axes = [
+       Axis(AxisKind.ROBOT, names=["robot0"]),
+       Axis(AxisKind.ELEMENT, names=["shoulder", "elbow"]),
+   ]
 
-   leapp.start("my_robot")
-
-   traced_pos, traced_vel = annotate.input_tensors("policy", [
-       TensorSemantics("joint_pos", joint_pos,
-                       kind=InputKindEnum.JOINT_POSITION,
-                       element_names=["hip_l", "knee_l", "ankle_l",
-                                      "hip_r", "knee_r", "ankle_r",
-                                      "shoulder_l", "elbow_l", "wrist_l",
-                                      "shoulder_r", "elbow_r", "wrist_r"]),
-       TensorSemantics("joint_vel", joint_vel,
-                       kind=InputKindEnum.JOINT_VELOCITY),
+   leapp.start("joint_controller")
+   q_in, dq_in, target_in = annotate.input_tensors("controller", [
+       joint_position("q", q, axes=joint_axes),
+       joint_velocity("dq", dq, axes=joint_axes),
+       joint_position("q_target", q_target, axes=joint_axes, is_setpoint=True),
    ])
 
-   command = traced_pos + traced_vel
-
-   annotate.output_tensors("policy", [
-       TensorSemantics("command", command,
-                       kind=OutputKindEnum.JOINT_TORQUES,
-                       element_names=["hip_l", "knee_l", "ankle_l",
-                                      "hip_r", "knee_r", "ankle_r",
-                                      "shoulder_l", "elbow_l", "wrist_l",
-                                      "shoulder_r", "elbow_r", "wrist_r"]),
-   ])
-
+   # A simple proportional/derivative controller.
+   effort = 20.0 * (target_in - q_in) - 2.0 * dq_in
+   annotate.output_tensors(
+       "controller",
+       joint_effort("effort", effort, axes=joint_axes),
+       export_with="jit",
+   )
    leapp.stop()
-   leapp.compile_graph()
+   leapp.compile_graph(visualize=False)
 
-The generated YAML includes the semantic metadata:
+The input/output lists determine direction. Only ``q_target`` is marked as a
+setpoint; measured inputs use the default ``is_setpoint=False``. The same Kind
+can describe measured and requested positions, and outputs need no extra flag.
+
+The generated YAML includes these tensor descriptions (model parameters and
+pipeline wiring are omitted here):
 
 .. code-block:: yaml
 
    models:
-     policy:
+     controller:
        inputs:
-       - name: joint_pos
+       - name: q
          dtype: float32
-         shape: [1, 12]
+         shape: [1, 2]
          type: tensor
-         kind: state/joint/position
-         element_names: [[hip_l, knee_l, ankle_l, hip_r, knee_r, ankle_r,
-             shoulder_l, elbow_l, wrist_l, shoulder_r, elbow_r, wrist_r]]
-       - name: joint_vel
+         kind: joint/position
+         axes:
+         - {kind: robot, names: [robot0]}
+         - {kind: element, names: [shoulder, elbow]}
+       - name: dq
          dtype: float32
-         shape: [1, 12]
+         shape: [1, 2]
          type: tensor
-         kind: state/joint/velocity
+         kind: joint/velocity
+         axes:
+         - {kind: robot, names: [robot0]}
+         - {kind: element, names: [shoulder, elbow]}
+       - name: q_target
+         dtype: float32
+         shape: [1, 2]
+         type: tensor
+         kind: joint/position
+         is_setpoint: true
+         axes:
+         - {kind: robot, names: [robot0]}
+         - {kind: element, names: [shoulder, elbow]}
        outputs:
-       - name: command
+       - name: effort
          dtype: float32
-         shape: [1, 12]
+         shape: [1, 2]
          type: tensor
-         kind: target/joint/torques
-         element_names: [[hip_l, knee_l, ankle_l, hip_r, knee_r, ankle_r,
-             shoulder_l, elbow_l, wrist_l, shoulder_r, elbow_r, wrist_r]]
+         kind: joint/effort
+         axes:
+         - {kind: robot, names: [robot0]}
+         - {kind: element, names: [shoulder, elbow]}
+
+Helpers are optional. For example, the first input can also be written as:
+
+.. code-block:: python
+
+   from leapp import TensorSemantics, Kind
+
+   TensorSemantics("q", q, kind=Kind.JOINT_POSITION, axes=joint_axes)
+
+Use ``axes=None`` or individual ``None`` entries when the consumer already knows
+part of the layout. They are not needed for this fully labelled joint interface.
 
 Notes
 =====
@@ -98,20 +125,20 @@ Notes
 The ``extra`` field accepts a dictionary of additional semantic metadata.
 Keys in ``extra`` are flattened into the generated YAML tensor entry rather
 than nested under an ``extra`` key. Use this for downstream-specific fields
-that LEAPP does not model directly, such as coordinate frames, external IDs,
-units, or application-specific labels.
+that LEAPP does not model directly, such as external IDs, units, or
+application-specific labels. Use the standard spatial fields for frame metadata.
 
 .. code-block:: python
 
    TensorSemantics(
        "joint_pos",
        tensor,
-       kind=InputKindEnum.JOINT_POSITION,
-       extra={"frame": "base", "units": "rad"},
+       kind=Kind.JOINT_POSITION,
+       extra={"sensor_id": "encoders", "units": "rad"},
    )
 
 The generated YAML includes the extra fields at the same level as ``kind`` and
-``element_names``:
+``axes``:
 
 .. code-block:: yaml
 
@@ -119,8 +146,8 @@ The generated YAML includes the extra fields at the same level as ``kind`` and
      dtype: float32
      shape: [1, 12]
      type: tensor
-     kind: state/joint/position
-     frame: base
+     kind: joint/position
+     sensor_id: encoders
      units: rad
 
 Unknown semantic keys applied internally through ``update_semantics()`` are
@@ -153,15 +180,15 @@ supported.
    # OK: single TensorSemantics
    annotate.input_tensors(
        "node",
-       TensorSemantics("pos", tensor, kind=InputKindEnum.JOINT_POSITION),
+       TensorSemantics("pos", tensor, kind=Kind.JOINT_POSITION),
    )
 
    # OK: list of TensorSemantics
    annotate.input_tensors("node", [
        TensorSemantics("pos", pos_tensor,
-                       kind=InputKindEnum.JOINT_POSITION),
+                       kind=Kind.JOINT_POSITION),
        TensorSemantics("vel", vel_tensor,
-                       kind=InputKindEnum.JOINT_VELOCITY),
+                       kind=Kind.JOINT_VELOCITY),
    ])
 
    # OK: regular dict (no semantic metadata)
@@ -170,14 +197,14 @@ supported.
    # NOT supported: TensorSemantics inside a dict
    annotate.input_tensors("node", {
        "pos": TensorSemantics("pos", pos_tensor,
-                              kind=InputKindEnum.JOINT_POSITION),
+                              kind=Kind.JOINT_POSITION),
    })
 
    # NOT supported: mixing TensorSemantics and raw tensors
    # (use multiple calls to input_tensors in that case)
    annotate.input_tensors("node", [
        TensorSemantics("pos", pos_tensor,
-                       kind=InputKindEnum.JOINT_POSITION),
+                       kind=Kind.JOINT_POSITION),
        vel_tensor,
    ])
 
@@ -198,13 +225,13 @@ Limitations
    within the same node's inputs (or outputs). Duplicate names raise an
    error.
 #. **Semantic fields are optional** --- all semantic fields (``kind``,
-   ``element_names``, temporal metadata from ``TemporalAxis``, and
+   ``axes``, spatial metadata, and
    ``extra``) are optional. A ``TensorSemantics`` with no semantic fields
    behaves identically to passing a raw tensor with the same name.
 #. **Extra fields are flattened** --- keys in ``extra`` become top-level YAML
    fields on the tensor entry. Avoid keys that collide with built-in fields
    such as ``name``, ``dtype``, ``shape``, ``type``, ``kind``,
-   ``element_names``, ``temporal_period_ms``, or ``__temporal_axis__``.
+   ``axes``, ``reference``, ``expressed_in``, or ``is_setpoint``.
 
 Graph-level semantics
 =====================
@@ -241,7 +268,7 @@ key.
        skip-first-run: true
 
 Graph-level semantics are independent of tensor-level temporal metadata. LEAPP
-does not validate ``TemporalAxis`` values against ``GraphConfigs.frequency``.
+does not validate time-axis periods against ``GraphConfigs.frequency``.
 
 See :doc:`kind_element_names` for standard ``kind`` values and element naming,
 and :doc:`temporal` for temporal axes on chunked tensors.

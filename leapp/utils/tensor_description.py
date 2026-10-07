@@ -16,7 +16,8 @@
 #
 
 import collections.abc
-from dataclasses import dataclass, field, fields
+import math
+from dataclasses import dataclass, fields
 from typing import Optional, Any, Dict, Tuple, List
 
 import torch
@@ -42,7 +43,7 @@ from leapp.leapp_graph.datatypes import (
     TRACABLE_BASE_TYPES,
 )
 from leapp.utils.utils import safe_deepcopy
-from leapp.utils.enums import InputKindEnum, OutputKindEnum
+from leapp.utils.enums import Kind, AxisKind, ExpressionFrame
 
 
 class CompactYamlList(list):
@@ -71,21 +72,41 @@ yaml.add_representer(
     lambda dumper, data: dumper.represent_mapping('tag:yaml.org,2002:map', data, flow_style=True))
 
 
-TEMPORAL_AXIS_SENTINEL = "__temporal_axis__"
-
-
 @dataclass(frozen=True)
-class TemporalAxis:
-    """Marks an element_names axis as temporal with a fixed period in ms."""
+class Axis:
+    """Optional meaning and labels for one tensor dimension."""
 
-    period_ms: float
+    kind: AxisKind | str | None = None
+    names: list[str] | None = None
+    period_ms: float | None = None
 
     def __post_init__(self):
-        if self.period_ms <= 0:
-            _get_logger().fatal(
-                "TemporalAxis period_ms must be positive",
-                error_type=ValueError,
-            )
+        if self.kind is not None and (not isinstance(self.kind, str) or not self.kind):
+            raise TypeError("Axis.kind must be an AxisKind, non-empty string, or None")
+        if self.names is not None and (
+            not isinstance(self.names, list)
+            or any(not isinstance(name, str) or not name for name in self.names)
+        ):
+            raise TypeError("Axis.names must be a list of non-empty strings or None")
+        if self.period_ms is not None:
+            if self.kind != AxisKind.TIME:
+                raise ValueError("period_ms is only valid for a time axis")
+            if (isinstance(self.period_ms, bool)
+                    or not isinstance(self.period_ms, (int, float))
+                    or not math.isfinite(self.period_ms) or self.period_ms <= 0):
+                raise ValueError("Axis.period_ms must be finite and positive")
+        elif self.kind == AxisKind.TIME:
+            raise ValueError("A time axis requires period_ms")
+
+    def to_dict(self):
+        result = {}
+        if self.kind is not None:
+            result["kind"] = self.kind.value if isinstance(self.kind, AxisKind) else self.kind
+        if self.names is not None:
+            result["names"] = list(self.names)
+        if self.period_ms is not None:
+            result["period_ms"] = self.period_ms
+        return result
 
 
 @dataclass
@@ -125,7 +146,7 @@ class TensorSemantics:
 
     Convention:
         - Internal fields (ref, name) are listed in _INTERNAL_FIELDS and excluded from serialization.
-        - Public fields (kind, element_names, ...) are semantic data that gets serialized to YAML.
+        - Public fields (kind, axes, ...) are semantic data that gets serialized to YAML.
     """
 
     # Fields excluded from serialization (internal use only)
@@ -135,15 +156,15 @@ class TensorSemantics:
     ref: Any = None
 
     # Semantic fields
-    kind: Optional[InputKindEnum | OutputKindEnum | str] = None
-    element_names: Optional[List] = None # deprecated
-    temporal_period_ms: Optional[float] = field(default=None, init=False)
+    kind: Optional[Kind | str] = None
     extra: Optional[Dict[str, Any]] = None
+    axes: list[Axis | None] | None = None
+    is_setpoint: bool = False
+    reference: str | None = None
+    expressed_in: ExpressionFrame | str | None = None
 
     def __post_init__(self):
         '''error checking, auto conditioning'''
-        existing_period_ms = self.temporal_period_ms
-        self.temporal_period_ms = None
         if not is_tracable_tensor_type(self.ref): # this checks for both base types and traced types
             _get_logger().fatal(
                 f"TensorSemantics 'ref' must be a traceable tensor type "
@@ -151,10 +172,38 @@ class TensorSemantics:
                 f"got {type(self.ref).__name__}",
                 error_type=TypeError,
             )
-        if self.element_names is not None:
-            self.element_names, detected_period_ms = self._normalize_element_names(
-                self.element_names, allow_temporal_sentinel=existing_period_ms is not None)
-            self.temporal_period_ms = detected_period_ms or existing_period_ms
+        if self.kind is not None and (not isinstance(self.kind, str) or not self.kind):
+            raise TypeError("kind must be a Kind, non-empty string, or None")
+        if not isinstance(self.is_setpoint, bool):
+            raise TypeError("is_setpoint must be a boolean")
+        if self.reference is not None and (
+            not isinstance(self.reference, str) or not self.reference
+        ):
+            raise TypeError("reference must be a non-empty frame name")
+        if self.expressed_in is not None and not isinstance(self.expressed_in, ExpressionFrame):
+            if not isinstance(self.expressed_in, str) or not self.expressed_in:
+                raise TypeError("expressed_in must be an ExpressionFrame or non-empty frame name")
+        if self.expressed_in == ExpressionFrame.REFERENCE and self.reference is None:
+            raise ValueError("expressed_in=REFERENCE requires reference")
+        if self.expressed_in is None and self.kind in (Kind.FRAME_TWIST, Kind.FRAME_WRENCH):
+            self.expressed_in = ExpressionFrame.SELF
+        if self.extra and set(self.extra) & {"axes", "is_setpoint", "reference", "expressed_in"}:
+            raise ValueError("Use TensorSemantics fields rather than extra for axes and spatial metadata")
+        if self.axes is not None:
+            if not isinstance(self.axes, list):
+                raise TypeError("axes must be a list or None")
+            _, shape = value_to_name_and_shape(self.ref)
+            if len(self.axes) != len(shape):
+                raise ValueError("axes must have one entry per tensor dimension")
+            for size, axis in zip(shape, self.axes):
+                if axis is None:
+                    continue
+                if not isinstance(axis, Axis):
+                    raise TypeError("axes entries must be Axis or None")
+                if axis.names is not None and len(axis.names) != size:
+                    raise ValueError("Axis label count must match its tensor dimension")
+            if sum(a is not None and a.kind == AxisKind.TIME for a in self.axes) > 1:
+                raise ValueError("A tensor may contain at most one time axis")
 
 
     def to_dict(self) -> Dict[str, Any]:
@@ -168,6 +217,13 @@ class TensorSemantics:
             if f.name in self._INTERNAL_FIELDS or f.name == 'extra':
                 continue
             value = getattr(self, f.name)
+            if f.name == "is_setpoint" and not value:
+                continue
+            if f.name == "axes" and value is not None:
+                value = [axis.to_dict() if axis is not None else None for axis in value]
+            elif f.name == "expressed_in" and value is not None:
+                value = ({"selector": value.value} if isinstance(value, ExpressionFrame)
+                         else {"frame": value})
             if value is not None:
                 result[f.name] = value
         if self.extra:
@@ -190,81 +246,12 @@ class TensorSemantics:
                 self.extra[key] = value
         self.__post_init__()
 
-    @staticmethod
-    def _normalize_element_names(element_names, allow_temporal_sentinel=False):
-        """Normalize element_names and extract temporal axis metadata."""
-        if isinstance(element_names, str):
-            if element_names == TEMPORAL_AXIS_SENTINEL:
-                if allow_temporal_sentinel:
-                    return CompactYamlList([element_names]), None
-                _get_logger().fatal(
-                    f"{TEMPORAL_AXIS_SENTINEL!r} is reserved for TemporalAxis",
-                    error_type=ValueError,
-                )
-            return CompactYamlList([CompactYamlList([element_names])]), None
-
-        if not isinstance(element_names, list):
-            return element_names, None
-
-        temporal_period_ms = None
-        normalized = CompactYamlList()
-        has_axis_descriptors = False
-        has_temporal_axis = False
-
-        for item in element_names:
-            if isinstance(item, TemporalAxis):
-                if has_temporal_axis:
-                    _get_logger().fatal(
-                        "element_names can contain at most one TemporalAxis",
-                        error_type=ValueError,
-                    )
-                has_axis_descriptors = True
-                has_temporal_axis = True
-                temporal_period_ms = item.period_ms
-                normalized.append(TEMPORAL_AXIS_SENTINEL)
-            elif isinstance(item, str):
-                if item == TEMPORAL_AXIS_SENTINEL:
-                    if not allow_temporal_sentinel:
-                        _get_logger().fatal(
-                            f"{TEMPORAL_AXIS_SENTINEL!r} is reserved for TemporalAxis",
-                            error_type=ValueError,
-                        )
-                    has_axis_descriptors = True
-                    normalized.append(TEMPORAL_AXIS_SENTINEL)
-                else:
-                    normalized.append(item)
-            elif isinstance(item, list):
-                if any(isinstance(child, TemporalAxis) for child in item):
-                    _get_logger().fatal(
-                        "TemporalAxis must be an axis item, not nested in a list",
-                        error_type=ValueError,
-                    )
-                if any(child == TEMPORAL_AXIS_SENTINEL for child in item):
-                    _get_logger().fatal(
-                        f"{TEMPORAL_AXIS_SENTINEL!r} must be a bare axis item, not nested in a list",
-                        error_type=ValueError,
-                    )
-                has_axis_descriptors = True
-                normalized.append(CompactYamlList(item))
-            elif item is None:
-                has_axis_descriptors = True
-                normalized.append(None)
-            else:
-                _get_logger().warning(
-                    "element_names has mixed types, expected names or axis descriptors")
-                return element_names, temporal_period_ms
-
-        if has_axis_descriptors:
-            return normalized, temporal_period_ms
-
-        return CompactYamlList([CompactYamlList(normalized)]), None
-
 
 class TensorDescription:
     """Describes a tensor input/output in the computational graph.
 
-    Composes TensorSemantics for semantic metadata (kind, element_names, etc.).
-    Access semantic fields directly via properties (td.kind, td.element_names)
+    Composes TensorSemantics for semantic metadata (kind, axes, etc.).
+    Access semantic fields directly via properties (td.kind, td.axes)
     or in bulk via get_semantics()/set_semantics().
     """
 

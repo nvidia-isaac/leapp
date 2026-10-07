@@ -20,10 +20,10 @@ from unittest import mock
 import yaml
 import torch
 import leapp
-from leapp import GraphConfigs, TensorSemantics, TemporalAxis
+from leapp import GraphConfigs, TensorSemantics, Axis, AxisKind
 from leapp.leapp import _MANAGER as annotate
 from leapp.utils import utils
-from leapp.utils.enums import InputKindEnum, OutputKindEnum
+from leapp.utils.enums import Kind
 from .base import LEAPPFunctionalTestBase
 
 
@@ -62,8 +62,8 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         leapp.start(name=self.TEST_GRAPH_NAME)
         traced_pos, traced_vel = annotate.input_tensors("policy", [
-            TensorSemantics(name="joint_pos", ref=joint_pos, kind=InputKindEnum.JOINT_POSITION),
-            TensorSemantics(name="joint_vel", ref=joint_vel, kind=InputKindEnum.JOINT_VELOCITY),
+            TensorSemantics(name="joint_pos", ref=joint_pos, kind=Kind.JOINT_POSITION),
+            TensorSemantics(name="joint_vel", ref=joint_vel, kind=Kind.JOINT_VELOCITY),
         ])
 
         output = traced_pos + traced_vel
@@ -80,8 +80,8 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         self.assertIsNotNone(pos_entry)
         self.assertIsNotNone(vel_entry)
-        self.assertEqual(pos_entry['kind'], "state/joint/position")
-        self.assertEqual(vel_entry['kind'], "state/joint/velocity")
+        self.assertEqual(pos_entry['kind'], "joint/position")
+        self.assertEqual(vel_entry['kind'], "joint/velocity")
         # Output without semantics should have no kind
         self.assertNotIn('kind', cmd_entry)
 
@@ -92,7 +92,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         leapp.start(name=self.TEST_GRAPH_NAME)
         traced = annotate.input_tensors(
             "single_node",
-            TensorSemantics(name="pos", ref=tensor, kind=InputKindEnum.JOINT_POSITION),
+            TensorSemantics(name="pos", ref=tensor, kind=Kind.JOINT_POSITION),
         )
 
         output = traced * 2.0
@@ -105,18 +105,18 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         pos_entry = self._find_io_by_name(inputs, "pos")
         self.assertIsNotNone(pos_entry)
-        self.assertEqual(pos_entry['kind'], "state/joint/position")
+        self.assertEqual(pos_entry['kind'], "joint/position")
         self.assertEqual(pos_entry['shape'], [1, 4])
 
-    def test_input_td_with_element_names(self):
-        """Test that element_names from input TensorSemantics appears in YAML."""
+    def test_input_td_with_axes(self):
+        """Test that axes from input TensorSemantics appears in YAML."""
         tensor = torch.randn(1, 3)
         names = ["x", "y", "z"]
 
         leapp.start(name=self.TEST_GRAPH_NAME)
         traced = annotate.input_tensors(
             "elem_node",
-            TensorSemantics(name="position", ref=tensor, element_names=names),
+            TensorSemantics(name="position", ref=tensor, axes=[None, Axis(names=names)]),
         )
 
         output = traced + 1.0
@@ -129,11 +129,11 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         pos_entry = self._find_io_by_name(inputs, "position")
         self.assertIsNotNone(pos_entry)
-        # element_names should be normalized to [["x", "y", "z"]]
-        self.assertEqual(pos_entry['element_names'], [["x", "y", "z"]])
+        # Preserve the unlabeled batch dimension.
+        self.assertEqual(pos_entry['axes'], [None, {'names': ["x", "y", "z"]}])
 
-    def test_input_td_with_kind_and_element_names(self):
-        """Test that both kind and element_names appear together in YAML."""
+    def test_input_td_with_kind_and_axes(self):
+        """Test that both kind and axes appear together in YAML."""
         tensor = torch.randn(1, 6)
         joint_names = ["hip_l", "knee_l", "ankle_l", "hip_r", "knee_r", "ankle_r"]
 
@@ -141,8 +141,8 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         traced = annotate.input_tensors(
             "full_meta_node",
             TensorSemantics(name="joint_pos", ref=tensor,
-                            kind=InputKindEnum.JOINT_POSITION,
-                            element_names=joint_names),
+                            kind=Kind.JOINT_POSITION,
+                            axes=[None, Axis(AxisKind.ELEMENT, names=joint_names)]),
         )
 
         output = traced * 0.5
@@ -155,8 +155,8 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         entry = self._find_io_by_name(inputs, "joint_pos")
         self.assertIsNotNone(entry)
-        self.assertEqual(entry['kind'], "state/joint/position")
-        self.assertEqual(entry['element_names'], [joint_names])
+        self.assertEqual(entry['kind'], "joint/position")
+        self.assertEqual(entry['axes'], [None, {'kind': 'element', 'names': joint_names}])
         self.assertEqual(entry['dtype'], "float32")
         self.assertEqual(entry['shape'], [1, 6])
 
@@ -170,7 +170,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
             TensorSemantics(
                 name="imu",
                 ref=tensor,
-                kind=InputKindEnum.BODY_ANGULAR_VELOCITY,
+                kind=Kind.FRAME_ANGULAR_VELOCITY,
             ),
         )
 
@@ -178,7 +178,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
             TensorSemantics(
                 name="filtered_imu",
                 ref=traced * 0.5,
-                kind=OutputKindEnum.BODY_ANGULAR_ACCELERATION,
+                kind=Kind.FRAME_ANGULAR_ACCELERATION,
             ),
         ])
         leapp.stop()
@@ -194,8 +194,8 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         self.assertIsNotNone(output_entry)
         self.assertNotIn("source", input_entry)
         self.assertNotIn("source", output_entry)
-        self.assertEqual(input_entry["kind"], "state/body/angular_velocity")
-        self.assertEqual(output_entry["kind"], "target/body/angular_acceleration")
+        self.assertEqual(input_entry["kind"], "frame/angular_velocity")
+        self.assertEqual(output_entry["kind"], "frame/angular_acceleration")
     
     def test_input_td_with_string_kind(self):
         """Test that a string kind appears in YAML."""
@@ -207,7 +207,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
             "full_meta_node",
             TensorSemantics(name="joint_pos", ref=tensor,
                             kind="my/custom/kind",
-                            element_names=joint_names),
+                            axes=[None, Axis(AxisKind.ELEMENT, names=joint_names)]),
         )
 
         output = traced * 0.5
@@ -221,7 +221,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         entry = self._find_io_by_name(inputs, "joint_pos")
         self.assertIsNotNone(entry)
         self.assertEqual(entry['kind'], "my/custom/kind")
-        self.assertEqual(entry['element_names'], [joint_names])
+        self.assertEqual(entry['axes'], [None, {'kind': 'element', 'names': joint_names}])
         self.assertEqual(entry['dtype'], "float32")
         self.assertEqual(entry['shape'], [1, 6])
 
@@ -239,7 +239,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         command = traced * 2.0
 
         annotate.output_tensors("out_kind_node", [
-            TensorSemantics(name="command", ref=command, kind=OutputKindEnum.JOINT_TORQUES),
+            TensorSemantics(name="command", ref=command, kind=Kind.JOINT_EFFORT),
         ])
         leapp.stop()
         leapp.compile_graph(visualize=False)
@@ -249,10 +249,10 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         cmd_entry = self._find_io_by_name(outputs, "command")
         self.assertIsNotNone(cmd_entry)
-        self.assertEqual(cmd_entry['kind'], "target/joint/torques")
+        self.assertEqual(cmd_entry['kind'], "joint/effort")
 
-    def test_output_td_with_element_names(self):
-        """Test that element_names from output TensorSemantics appears in YAML."""
+    def test_output_td_with_axes(self):
+        """Test that axes from output TensorSemantics appears in YAML."""
         tensor = torch.randn(1, 3)
 
         leapp.start(name=self.TEST_GRAPH_NAME)
@@ -261,7 +261,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         result = traced + 1.0
 
         annotate.output_tensors("out_elem_node", [
-            TensorSemantics(name="rgb", ref=result, element_names=["r", "g", "b"]),
+            TensorSemantics(name="rgb", ref=result, axes=[None, Axis(AxisKind.COMPONENT, names=["r", "g", "b"])]),
         ])
         leapp.stop()
         leapp.compile_graph(visualize=False)
@@ -271,7 +271,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         rgb_entry = self._find_io_by_name(outputs, "rgb")
         self.assertIsNotNone(rgb_entry)
-        self.assertEqual(rgb_entry['element_names'], [["r", "g", "b"]])
+        self.assertEqual(rgb_entry['axes'], [None, {'kind': 'component', 'names': ["r", "g", "b"]}])
 
     def test_static_output_td_with_kind(self):
         """Test that kind metadata from static output TensorSemantics appears in YAML."""
@@ -287,7 +287,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
             static_outputs=TensorSemantics(
                 name="command_bias",
                 ref=static_output,
-                kind=OutputKindEnum.JOINT_TORQUES,
+                kind=Kind.JOINT_EFFORT,
             ),
         )
         leapp.stop()
@@ -298,7 +298,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         static_entry = self._find_io_by_name(outputs, "command_bias")
         self.assertIsNotNone(static_entry)
-        self.assertEqual(static_entry['kind'], "target/joint/torques")
+        self.assertEqual(static_entry['kind'], "joint/effort")
 
     # =========================================================================
     # Both inputs and outputs
@@ -311,14 +311,14 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         leapp.start(name=self.TEST_GRAPH_NAME)
         traced_pos, traced_vel = annotate.input_tensors("both_node", [
-            TensorSemantics(name="pos", ref=pos, kind=InputKindEnum.JOINT_POSITION),
-            TensorSemantics(name="vel", ref=vel, kind=InputKindEnum.JOINT_VELOCITY),
+            TensorSemantics(name="pos", ref=pos, kind=Kind.JOINT_POSITION),
+            TensorSemantics(name="vel", ref=vel, kind=Kind.JOINT_VELOCITY),
         ])
 
         command = traced_pos + traced_vel
 
         annotate.output_tensors("both_node", [
-            TensorSemantics(name="torques", ref=command, kind=OutputKindEnum.JOINT_TORQUES),
+            TensorSemantics(name="torques", ref=command, kind=Kind.JOINT_EFFORT),
         ])
         leapp.stop()
         leapp.compile_graph(visualize=False)
@@ -326,9 +326,9 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         config = self._load_yaml()
         inputs, outputs = self._get_node_io_from_yaml(config, "both_node")
 
-        self.assertEqual(self._find_io_by_name(inputs, "pos")['kind'], "state/joint/position")
-        self.assertEqual(self._find_io_by_name(inputs, "vel")['kind'], "state/joint/velocity")
-        self.assertEqual(self._find_io_by_name(outputs, "torques")['kind'], "target/joint/torques")
+        self.assertEqual(self._find_io_by_name(inputs, "pos")['kind'], "joint/position")
+        self.assertEqual(self._find_io_by_name(inputs, "vel")['kind'], "joint/velocity")
+        self.assertEqual(self._find_io_by_name(outputs, "torques")['kind'], "joint/effort")
 
     def test_input_td_with_extra_fields_flattened_into_yaml(self):
         """Test that TensorSemantics.extra fields are emitted as top-level YAML keys."""
@@ -340,7 +340,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
             TensorSemantics(
                 name="joint_pos",
                 ref=tensor,
-                kind=InputKindEnum.JOINT_POSITION,
+                kind=Kind.JOINT_POSITION,
                 extra={"id": "abc", "frame": "base"},
             ),
         )
@@ -355,7 +355,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         entry = self._find_io_by_name(inputs, "joint_pos")
         self.assertIsNotNone(entry)
-        self.assertEqual(entry["kind"], "state/joint/position")
+        self.assertEqual(entry["kind"], "joint/position")
         self.assertEqual(entry["id"], "abc")
         self.assertEqual(entry["frame"], "base")
         self.assertNotIn("extra", entry)
@@ -428,7 +428,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         self.assertIsNone(dumped["warp version"])
 
     def test_temporal_period_marker_appears_in_output_yaml(self):
-        """Test TemporalAxis emits temporal axis and period metadata."""
+        """Test a time axis emits temporal axis and period metadata."""
         tensor = torch.randn(2, 3)
         names = ["hip", "knee", "ankle"]
 
@@ -439,7 +439,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
             TensorSemantics(
                 name="actions",
                 ref=traced + 1.0,
-                element_names=[TemporalAxis(period_ms=100), names],
+                axes=[Axis(AxisKind.TIME, period_ms=100), Axis(names=names)],
             ),
             TensorSemantics(name="plain_output", ref=traced - 1.0),
         ])
@@ -452,10 +452,10 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         action_entry = self._find_io_by_name(outputs, "actions")
         plain_entry = self._find_io_by_name(outputs, "plain_output")
 
-        self.assertEqual(action_entry["element_names"], ["__temporal_axis__", names])
-        self.assertEqual(action_entry["temporal_period_ms"], 100)
+        self.assertEqual(action_entry["axes"], [
+            {"kind": "time", "period_ms": 100}, {"names": names}])
         self.assertNotIn("temporal_period_ms", plain_entry)
-        self.assertNotIn("element_names", plain_entry)
+        self.assertNotIn("axes", plain_entry)
 
     # =========================================================================
     # No metadata (baseline)
@@ -481,20 +481,20 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         self.assertNotIn('kind', input_entry)
         self.assertNotIn('source', input_entry)
-        self.assertNotIn('element_names', input_entry)
+        self.assertNotIn('axes', input_entry)
         self.assertNotIn('kind', output_entry)
         self.assertNotIn('source', output_entry)
-        self.assertNotIn('element_names', output_entry)
+        self.assertNotIn('axes', output_entry)
 
     def test_tensor_semantics_rejects_temporal_period_ms_argument(self):
-        """Test temporal period is only set through TemporalAxis."""
+        """Test temporal period is only set through a time axis."""
         tensor = torch.randn(2, 3)
 
         with self.assertRaises(TypeError):
             TensorSemantics(
                 name="actions",
                 ref=tensor,
-                element_names=[["hip", "knee", "ankle"]],
+                axes=[None, Axis(names=["hip", "knee", "ankle"])],
                 temporal_period_ms=100,
             )
 
@@ -511,7 +511,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         with self.assertRaises(TypeError):
             annotate.input_tensors("fail_node", [
                 t1,
-                TensorSemantics(name="td", ref=t2, kind=InputKindEnum.JOINT_POSITION),
+                TensorSemantics(name="td", ref=t2, kind=Kind.JOINT_POSITION),
             ])
         leapp.stop()
 
@@ -539,8 +539,8 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
         leapp.start(name=self.TEST_GRAPH_NAME)
         traced_pos, traced_vel = annotate.input_tensors("struct_node", [
-            TensorSemantics(name="pos", ref=pos, kind=InputKindEnum.JOINT_POSITION),
-            TensorSemantics(name="vel", ref=vel, kind=InputKindEnum.JOINT_VELOCITY),
+            TensorSemantics(name="pos", ref=pos, kind=Kind.JOINT_POSITION),
+            TensorSemantics(name="vel", ref=vel, kind=Kind.JOINT_VELOCITY),
         ])
 
         output = traced_pos + traced_vel
@@ -564,7 +564,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         for _ in range(2):
             traced = annotate.input_tensors("policy", [
                 TensorSemantics(name="joint_pos", ref=joint_pos,
-                                kind=InputKindEnum.JOINT_POSITION),
+                                kind=Kind.JOINT_POSITION),
             ])
             out = traced * 2.0
             annotate.output_tensors("policy", {"cmd": out}, export_with="jit")
@@ -576,7 +576,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         inputs, _ = self._get_node_io_from_yaml(config, "policy")
         entry = self._find_io_by_name(inputs, "joint_pos")
         self.assertIsNotNone(entry)
-        self.assertEqual(entry['kind'], "state/joint/position")
+        self.assertEqual(entry['kind'], "joint/position")
 
     def test_semantic_output_reentry_does_not_crash(self):
         """Reentry with TensorSemantics outputs must not KeyError on semantic-only keys."""
@@ -589,7 +589,7 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
             result = traced + 1.0
             annotate.output_tensors("out_reentry", [
                 TensorSemantics(name="torques", ref=result,
-                                kind=OutputKindEnum.JOINT_TORQUES),
+                                kind=Kind.JOINT_EFFORT),
             ], export_with="jit")
 
         leapp.stop()
@@ -599,8 +599,59 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         _, outputs = self._get_node_io_from_yaml(config, "out_reentry")
         entry = self._find_io_by_name(outputs, "torques")
         self.assertIsNotNone(entry)
-        self.assertEqual(entry['kind'], "target/joint/torques")
+        self.assertEqual(entry['kind'], "joint/effort")
 
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
+
+
+class TestStructuredSemantics(LEAPPFunctionalTestBase):
+    def test_helpers_export_and_runtime(self):
+        from leapp import Axis, AxisKind, Kind, frame_twist, image, joint_effort, joint_position
+
+        q = torch.tensor([[1.0, 2.0]])
+        target = torch.tensor([[3.0, 5.0]])
+        velocity = torch.zeros(1, 1, 6)
+        pixels = torch.zeros(1, 3, 2, 2, dtype=torch.uint8)
+        joints = [Axis(AxisKind.ROBOT, names=["robot0"]),
+                  Axis(AxisKind.ELEMENT, names=["shoulder", "elbow"])]
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        tq, tt, tv, ti = leapp.annotate.input_tensors("policy", [
+            joint_position("q", q, axes=joints),
+            joint_position("target", target, axes=joints, is_setpoint=True),
+            frame_twist("twist", velocity, reference="base", axes=[
+                Axis(AxisKind.ROBOT), Axis(AxisKind.ELEMENT, names=["tool"]),
+                Axis(AxisKind.COMPONENT, names=["vx", "vy", "vz", "wx", "wy", "wz"])]),
+            image("camera", pixels, axes=[Axis(AxisKind.ROBOT), None, None, None]),
+        ])
+        command = tt - tq + tv.sum() + ti.float().sum()
+        leapp.annotate.output_tensors("policy", joint_effort("effort", command, axes=joints), export_with="jit")
+        leapp.stop()
+        self.assertTrue(leapp.compile_graph(visualize=False))
+        path = os.path.join(self.TEST_GRAPH_NAME, self.TEST_GRAPH_NAME + ".yaml")
+        with open(path) as stream:
+            config = yaml.safe_load(stream)
+        inputs = config["models"]["policy"]["inputs"]
+        self.assertEqual(inputs[1]["is_setpoint"], True)
+        self.assertNotIn("is_setpoint", inputs[0])
+        self.assertEqual(inputs[2]["expressed_in"], {"selector": "self"})
+        self.assertEqual(inputs[2]["axes"][1], {"kind": "element", "names": ["tool"]})
+        self.assertEqual(config["models"]["policy"]["outputs"][0]["kind"], Kind.JOINT_EFFORT.value)
+        runtime = leapp.InferenceManager(path)
+        result = runtime({"policy/q": q, "policy/target": target,
+                          "policy/twist": velocity, "policy/camera": pixels})
+        torch.testing.assert_close(result["policy/effort"], target - q)
+
+    def test_setpoints_rejected_on_outputs_and_static_outputs(self):
+        for static in (False, True):
+            with self.subTest(static=static):
+                leapp.start(name=self.TEST_GRAPH_NAME)
+                value = leapp.annotate.input_tensors("policy", {"x": torch.zeros(2)})
+                bad = leapp.joint_position("target", value + 1, is_setpoint=True)
+                with self.assertRaisesRegex(ValueError, "only to inputs"):
+                    if static:
+                        leapp.annotate.output_tensors("policy", {"out": value + 1}, static_outputs=bad)
+                    else:
+                        leapp.annotate.output_tensors("policy", bad)
+                leapp.stop()
