@@ -78,9 +78,18 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     _EQUIVALENT_COPY_NAMES = frozenset(
         {"clone", "detach", "contiguous", "cpu", "cuda"}
     )
-    _PLAIN_INPLACE_BINARY_NAMES = frozenset(
-        {"add_", "sub_", "mul_", "div_", "pow_"}
-    )
+    # In-place methods whose allocating torch.* counterpart has the same
+    # argument order and describes the receiver's complete post-write value.
+    # This lets one mutation path preserve receiver identity eagerly while
+    # recording the corresponding functional operation in FX.
+    _FUNCTIONAL_INPLACE_NAMES = frozenset({
+        "add_", "sub_", "mul_", "div_", "pow_",
+        "subtract_", "multiply_", "divide_", "true_divide_",
+        "floor_divide_", "remainder_", "fmod_",
+        "clamp_", "clamp_min_", "clamp_max_", "clip_", "lerp_",
+        "addcmul_", "addcdiv_",
+        "addmm_", "addmv_", "addr_", "addbmm_", "baddbmm_",
+    })
     _NATIVE_TYPE = torch.Tensor
 
     @staticmethod
@@ -374,20 +383,17 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
     @classmethod
     def _handle_plain_assignment(cls, func, args=(), kwargs=None):
-        """Promote a plain destination, then re-enter its mutating operation.
+        """Promote a plain destination, then re-enter assignment or copy.
 
         Full replacement with a matching traced source reuses that source's
-        proxy. Partial writes and in-place arithmetic register the pre-write
-        destination as a graph constant and use it as the promoted proxy.
+        proxy. Partial writes register the pre-write destination as a graph
+        constant and use it as the promoted proxy.
         """
         kwargs = kwargs or {}
         func_name = getattr(func, "__name__", "")
         is_setitem = func_name == "__setitem__" and len(args) >= 3
         is_copy = func_name == "copy_" and len(args) >= 2
-        is_inplace_binary = (
-            func_name in cls._PLAIN_INPLACE_BINARY_NAMES and len(args) >= 2
-        )
-        if not (is_setitem or is_copy or is_inplace_binary):
+        if not (is_setitem or is_copy):
             return False, None
 
         target = args[0]
@@ -402,8 +408,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         anchor.validate_status((key, value))
 
         full_replacement = (
-            not is_inplace_binary
-            and isinstance(value, TracedTensor)
+            isinstance(value, TracedTensor)
             and cls._is_full_assignment_key(key)
             and tuple(target.shape) == tuple(value.shape)
             and target.dtype == value.dtype
@@ -416,8 +421,6 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             )
         cls._promote_plain_tensor(
             target, anchor.name, anchor.context_obj, dest_proxy)
-        if is_inplace_binary:
-            return True, getattr(target, func_name)(value, **kwargs)
         if full_replacement:
             # The destination now holds exactly the source's data, so it also
             # presents the source's boundary identity to the next node.
@@ -428,6 +431,40 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             )
         target[key] = value
         return True, None
+
+    @classmethod
+    def _handle_functional_inplace(cls, func, args=(), kwargs=None):
+        """Record a supported Tensor method while preserving its receiver.
+
+        A plain receiver is first promoted with its pre-write value registered
+        as a graph constant. Already-traced receivers use the same lowering,
+        avoiding method-descriptor conversion into an allocating operation.
+        """
+        kwargs = kwargs or {}
+        func_name = getattr(func, "__name__", "")
+        if func_name not in cls._FUNCTIONAL_INPLACE_NAMES or not args:
+            return False, None
+
+        target = args[0]
+        operands = args[1:]
+        if type(target) is torch.Tensor:
+            anchor = cls.find_traced_tensor((operands, kwargs))
+            if anchor is None:
+                return False, None
+            anchor.validate_status(operands, kwargs)
+            dest_proxy = anchor._register_setitem_tensor(
+                target.clone().detach(), "_inplace_destination"
+            )
+            cls._promote_plain_tensor(
+                target, anchor.name, anchor.context_obj, dest_proxy
+            )
+        elif not isinstance(target, cls):
+            return False, None
+
+        functional = getattr(torch, func_name[:-1])
+        return True, target._apply_inplace(
+            functional, func_name, *operands, **kwargs
+        )
 
     @classmethod
     def _handle_scripted_call(
@@ -508,11 +545,15 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             if len(args) == 1 and isinstance(args[0], TracedTensor):
                 return args[0]  # Already a TracedTensor, no conversion needed
 
-        traced_tensor = TracedTensor.find_traced_tensor(args)
+        traced_tensor = TracedTensor.find_traced_tensor((args, kwargs))
 
         # A plain receiver must be promoted before method-descriptor conversion
         # turns an in-place method into an allocating function.
         handled, result = cls._handle_plain_assignment(func, args, kwargs)
+        if handled:
+            return result
+
+        handled, result = cls._handle_functional_inplace(func, args, kwargs)
         if handled:
             return result
 
@@ -830,35 +871,46 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     # In-place Arithmetic Operators (for +=, -=, etc.)
     # =========================================================================
 
-    def _apply_inplace(self, functional, inplace_name, other, **kwargs):
+    def _apply_inplace(self, functional, inplace_name, *operands, **kwargs):
         """Mutate this tensor in place, recording the operation functionally.
 
-        While tracing, the graph records the functional form and the proxy is
-        rebound, since FX cannot express a mutation. Otherwise the eager
-        in-place method is called on the unwrapped tensor, which stops
-        ``__torch_function__`` from rewriting it into its allocating form.
-        ``inplace_name`` is None for operations torch has no in-place form for.
+        Native eager execution preserves PyTorch's identity, casting, and error
+        semantics. While tracing, the same operation is also evaluated from a
+        pre-write snapshot so normal ``__torch_function__`` dispatch records
+        its allocating form and the receiver can adopt that result's proxy.
+        ``inplace_name`` is ``None`` for operations with no in-place form.
         """
         if self._shed_replaced_graph():
             if inplace_name is None:
-                return self.copy_(functional(self, other, **kwargs))
-            return getattr(self, inplace_name)(other, **kwargs)
+                return self.copy_(functional(self, *operands, **kwargs))
+            return getattr(self, inplace_name)(*operands, **kwargs)
 
-        if not self.is_tracing:
-            unwrapped = TracedData.unwrap_traced_data(other)
-            underlying = self.as_subclass(torch.Tensor)
-            if inplace_name is None:
-                underlying.copy_(functional(underlying, unwrapped, **kwargs))
-            else:
-                getattr(underlying, inplace_name)(unwrapped, **kwargs)
+        should_trace = self.validate_status(operands, kwargs)
+        underlying = self.as_subclass(torch.Tensor)
+        real_operands = TracedData.unwrap_traced_data(operands)
+        real_kwargs = TracedData.unwrap_traced_data(kwargs)
+        before = underlying.clone() if should_trace else None
+
+        if inplace_name is None:
+            underlying.copy_(
+                functional(underlying, *real_operands, **real_kwargs)
+            )
+        else:
+            getattr(underlying, inplace_name)(
+                *real_operands, **real_kwargs
+            )
+
+        if not should_trace:
             self._output_port = None
             return self
 
-        result = functional(self, other, **kwargs)
-        with torch.no_grad():
-            torch.Tensor.copy_(self, result.tensor if isinstance(result, TracedTensor) else result)
+        source = self._new(before, self.proxy)
+        result = functional(source, *operands, **kwargs)
+        if isinstance(result, TracedTensor) and result.dtype != self.dtype:
+            result = result.to(dtype=self.dtype)
         if isinstance(result, TracedTensor):
             self._proxy_view.proxy = result.proxy
+        self._output_port = None
         return self
 
     def __iadd__(self, other):
