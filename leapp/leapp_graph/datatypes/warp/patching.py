@@ -102,6 +102,8 @@ class WarpPatchBackend:
         self._readback_boundary_function_ids: set[int] = set()
         self._boundary_array_init_id: int | None = None
         self._full_copy_function_id: int | None = None
+        self._overwrite_function_ids: set[int] = set()
+        self._open_nodes: list[Any] = []
         self._cuda_oracle: WarpCudaOracle | None = None
 
     #########################################################
@@ -215,6 +217,8 @@ class WarpPatchBackend:
         self._boundary_function_ids.clear()
         self._sync_boundary_function_ids.clear()
         self._readback_boundary_function_ids.clear()
+        self._overwrite_function_ids.clear()
+        self._open_nodes.clear()
         self._boundary_array_init_id = None
         if self._session is not None:
             self._session.reset()
@@ -470,6 +474,10 @@ class WarpPatchBackend:
             if fn is to_torch or fn is array_numpy:
                 self._readback_boundary_function_ids.add(fn_id)
 
+        for overwrite in (getattr(wp.array, "fill_", None), getattr(wp.array, "zero_", None)):
+            if callable(overwrite):
+                self._overwrite_function_ids.add(id(overwrite))
+
         for sync_name in (
             "synchronize",
             "synchronize_device",
@@ -508,9 +516,30 @@ class WarpPatchBackend:
         )
         return True, None
 
+    def is_overwrite_function(self, func: Callable) -> bool:
+        return id(func) in self._overwrite_function_ids
+
+    def active_node_ref(self) -> Any | None:
+        warp_op = None if self._session is None else self._session.active_warp_op
+        return None if warp_op is None else warp_op.node_ref
+
+    def node_opened(self, node_ref: Any) -> None:
+        """Record that ``node_ref``'s ``input_tensors`` region is open."""
+        if node_ref not in self._open_nodes:
+            self._open_nodes.append(node_ref)
+
+    def clear_open_nodes(self) -> None:
+        self._open_nodes.clear()
+
+    def node_closed(self, node_ref: Any) -> None:
+        """Record that ``node_ref``'s ``output_tensors`` closed its region."""
+        if node_ref in self._open_nodes:
+            self._open_nodes.remove(node_ref)
+
     def resolve_or_begin_warp_segment(
         self,
         trace_source: Any | None,
+        func: Callable | None = None,
     ) -> Any | None:
         active_segment = None if self._session is None else self._session.active_segment
         if active_segment is not None:
@@ -523,9 +552,39 @@ class WarpPatchBackend:
             warp_op = self._begin_boundary_closeable_warp_op(trace_source)
             return None if warp_op is None else warp_op.segment
         if trace_source is None:
-            return None
+            return self._begin_untraced_overwrite_segment(func)
         warp_op = self._begin_boundary_closeable_warp_op(trace_source)
         return None if warp_op is None else warp_op.segment
+
+    def _begin_untraced_overwrite_segment(self, func: Callable | None) -> Any | None:
+        """Open a segment for an overwrite of an array that carries no trace.
+
+        Everything between a node's ``input_tensors`` and ``output_tensors``
+        belongs to that node. A fill or zero of an untraced buffer, such as the
+        reset of a persistent accumulator, defines the buffer's value without
+        reading undeclared state, so it belongs in the graph; left out, it would
+        run once during tracing and never on replay. Kernel launches on
+        untraced buffers stay out: they may read the previous contents, which
+        is undeclared state.
+        """
+        if func is None or id(func) not in self._overwrite_function_ids:
+            return None
+        open_nodes = [node for node in self._open_nodes if node.is_tracing]
+        if not open_nodes:
+            return None
+        if len(open_nodes) > 1:
+            names = ", ".join(repr(node.name) for node in open_nodes)
+            _get_logger().warning(
+                f"{self.function_qualname(func)} overwrites an untraced Warp array "
+                f"while nodes {names} are all open, so LEAPP cannot tell which "
+                "node it belongs to and does not export it. Close the other "
+                "nodes first."
+            )
+            return None
+        warp_op = self.create_warp_op(open_nodes[0]).begin(
+            call_stack=get_caller_stack_identity(),
+        )
+        return warp_op.segment
 
     def _begin_boundary_closeable_warp_op(
         self,

@@ -122,6 +122,8 @@ class ExportManager:
     def reset_nodes(self):
         self.nodes = {}
         self._next_completed_node_index = 0
+        if self.patcher.warp is not None:
+            self.patcher.warp.clear_open_nodes()
 
     def get_nodes(self):
         return self.nodes
@@ -321,6 +323,9 @@ class ExportManager:
                 tensor, tensor_name, semantics=metadata.get(tensor_name))
             traced_tensors.append(traced_tensor)
 
+        if self.patcher.warp is not None:
+            self.patcher.warp.node_opened(traced_tensors_node)
+
         # if node is tracing we return the traced tensors
         return traced_tensors[0] if len(traced_tensors) == 1 else tuple(traced_tensors)
 
@@ -343,6 +348,7 @@ class ExportManager:
         # force the warp segment to close if any.
         if self.patcher.warp is not None:
             self.patcher.warp.close_warp_segment()
+            self.patcher.warp.node_closed(traced_tensors_node)
         # process outputs
         flattened_tensors = flatten_io_structure(tensors, '')
 

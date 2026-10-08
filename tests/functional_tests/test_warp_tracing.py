@@ -799,6 +799,63 @@ class TestWarpTorchViews(WarpTestCase, LEAPPFunctionalTestBase):
             self._trace(torch.arange(10.0, device=self.DEVICE), operation)
 
 
+@wp.kernel
+def _accumulate(src: wp.array(dtype=wp.float32), total: wp.array(dtype=wp.float32)):
+    wp.atomic_add(total, 0, src[wp.tid()])
+
+
+class TestWarpUntracedOverwrite(WarpTestCase, LEAPPFunctionalTestBase):
+    """A node that resets a persistent untraced accumulator before using it."""
+
+    NODE_NAME = "node_a"
+
+    def _export_and_run(self, torch_op_between):
+        total = wp.zeros(1, dtype=wp.float32, device=self.DEVICE)
+
+        def operation(tensor):
+            total.zero_()
+            if torch_op_between:
+                tensor = tensor * 1.0
+            values = wp.from_torch(tensor)
+            wp.launch(_accumulate, dim=values.shape[0], inputs=[values],
+                      outputs=[total], device=self.DEVICE)
+            return wp.to_torch(total).clone()
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        for _ in range(2):
+            tensor = annotate.input_tensors(
+                self.NODE_NAME, {"in_a": torch.arange(4.0, device=self.DEVICE)}
+            )
+            annotate.output_tensors(
+                self.NODE_NAME, {"out_a": operation(tensor)}, export_with="onnx"
+            )
+        node = annotate.get_nodes()[self.NODE_NAME]
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        from leapp import InferenceManager
+
+        manager = InferenceManager(
+            f"{self.TEST_GRAPH_NAME}/{self.TEST_GRAPH_NAME}.yaml"
+        )
+        for scale in (1.0, -2.0, 3.0):
+            live = torch.linspace(0.5, 2.0, 4, device=self.DEVICE) * scale
+            result = manager.run_policy({f"{self.NODE_NAME}/in_a": live})
+            torch.testing.assert_close(
+                result[f"{self.NODE_NAME}/out_a"].to(self.DEVICE).reshape(-1),
+                live.sum().reshape(1),
+            )
+        return node
+
+    def test_reset_in_same_segment_runs_every_call(self):
+        node = self._export_and_run(torch_op_between=False)
+        self.assertEqual(len(node.warp_segments), 1)
+
+    def test_reset_before_torch_op_feeds_later_segment(self):
+        node = self._export_and_run(torch_op_between=True)
+        self.assertEqual(len(node.warp_segments), 2)
+
+
 class TestWarpInference(WarpTestCase, LEAPPFunctionalTestBase):
     NODE_NAME = "node_a"
 
