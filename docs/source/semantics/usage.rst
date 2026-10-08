@@ -11,6 +11,10 @@ correctly. They are useful when an exported graph must be connected to a
 robot runtime, simulator, message bus, or controller that needs to know not
 just tensor shapes, but what those tensors mean.
 
+Run ``python examples/tensor_semantics.py`` from the repository root for a
+complete example of input and output kinds, joint names, a temporal axis,
+and graph frequency in one exported bundle.
+
 .. note::
 
    Semantic annotation is only available for
