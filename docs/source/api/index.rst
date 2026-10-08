@@ -118,6 +118,18 @@ installed.
    previously captured ``from scipy.ndimage import gaussian_filter`` alias.
    Installed patches are process-global and can affect other threads.
 
+See :doc:`../guides/patching` for a walkthrough of choosing and registering a
+replacement in an existing workflow.
+
+For a complete export and replay using a user-defined patch, run
+``python examples/function_patch.py`` from the repository root. It patches
+``cv2.cvtColor`` once for a nested stereo-image workflow that converts both
+camera frames from BGR to RGB, then crosses from NumPy into torch to extract
+features. The adapter supports only three-channel BGR-to-RGB conversion without
+a destination buffer. Replay uses new frames and compares against the original
+OpenCV workflow. The example also verifies that ``leapp.stop()`` restores the
+original OpenCV function. Install ``opencv-python-headless`` to run it.
+
 Behavior
 ~~~~~~~~
 

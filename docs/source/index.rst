@@ -135,8 +135,8 @@ Documentation Map
 * See how LEAPP connects to Isaac Lab and Isaac ROS Deploy in
   :doc:`ecosystem`.
 * Add graph-structure annotations with :doc:`guides/nodes`,
-  :doc:`guides/export`, :doc:`guides/graph`, :doc:`guides/buffers`, and
-  :doc:`guides/debugging`.
+  :doc:`guides/export`, :doc:`guides/graph`, :doc:`guides/buffers`,
+  :doc:`guides/patching`, and :doc:`guides/debugging`.
 * Add semantic data annotations with :doc:`semantics/usage`.
 * See how tracing works in :doc:`tensor_libraries/torch`, and how it extends to
   other tensor libraries in :doc:`tensor_libraries/numpy` and
@@ -163,6 +163,7 @@ Documentation Map
    guides/export
    guides/graph
    guides/buffers
+   guides/patching
    guides/debugging
 
 .. toctree::

@@ -70,6 +70,7 @@ dev = [
 ]
 test = [
     "warp-lang>=1.16",
+    "opencv-python-headless>=4.8",
 ]
 warp-cu12 = [
     "warp-lang>=1.16",
