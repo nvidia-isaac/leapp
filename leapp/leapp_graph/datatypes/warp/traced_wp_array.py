@@ -14,6 +14,7 @@ from ..proxy_view import (
     may_adopt_view,
     update_view_proxy,
 )
+from ..torch.storage_root import get_storage_root, set_storage_root
 from ..traced_data import TracedData
 from leapp.utils.dtype import DtypeCodec, register_dtype_codec
 from leapp.utils.logging import _get_logger
@@ -219,9 +220,11 @@ class TracedWpArray(wp.array, TracedData):
                 view, proxy = src.proxy_view, None
             else:
                 view, proxy = None, src.proxy
-            return True, as_traced(
+            traced = as_traced(
                 raw, src.name, src.context_obj, proxy, view=view
             )
+            set_storage_root(traced, get_storage_root(src))
+            return True, traced
         return True, raw
 
     @staticmethod

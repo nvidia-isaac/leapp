@@ -27,6 +27,7 @@ from ..proxy_view import (
     update_view_proxy,
 )
 from ..traced_data import TracedData
+from .storage_root import get_storage_root, record_view, set_storage_root
 
 
 # torch dtype object -> common name string. Lives with the torch node library
@@ -154,7 +155,10 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         When not tracing, proxy can be None.
         """
         intermediate_name = self._name_from_proxy(proxy)
-        return TracedTensor(tensor, intermediate_name, self._context, proxy)
+        result = TracedTensor(tensor, intermediate_name, self._context, proxy)
+        if proxy is not None:
+            record_view(result, self)
+        return result
 
     def _new_alias(self, tensor: torch.Tensor) -> "TracedTensor":
         """Wrap ``tensor`` as a second carrier for this exact value.
@@ -166,6 +170,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         """
         alias = TracedTensor(tensor, self._name, self._context, None)
         share_view(alias, self)
+        set_storage_root(alias, get_storage_root(self))
         return alias
 
     # =========================================================================

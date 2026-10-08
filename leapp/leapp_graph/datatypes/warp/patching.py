@@ -66,12 +66,19 @@ from leapp.utils.logging import _get_logger
 
 from .._attribute_patching import AttributePatchRegistry
 from ..proxy_view import may_adopt_view
+from ..torch.storage_root import covers_storage, valid_storage_root
 from .cupti_oracle import WarpCudaOracle
 from .session import WarpTraceSession
 from .traced_wp_array import TracedWpArray
 from .warp_segment import WarpSegment
 
 _WRAPPER_MARKER = "__leapp_warp_detector_wrapper__"
+
+
+def _warp_version() -> tuple[int, int]:
+    major, minor = wp.config.version.split(".")[:2]
+    return int(major), int(minor)
+
 _ALLOWED_DUNDER_METHODS = {"__init__"}
 _MAX_CLASS_SCAN_DEPTH = 1
 
@@ -541,8 +548,52 @@ class WarpPatchBackend:
         segment.add_event({"kind": "warp_call", "qualname": qualname})
 
         for array in traced_inputs:
+            array = self._storage_input(array)
             if not segment.knows_array(array):
                 segment.add_input_ref(array)
+
+    def _storage_input(self, array: TracedWpArray) -> TracedWpArray:
+        """The traced array a segment input has to bind for ``array``.
+
+        APIC binds a Torch-backed array as its whole storage allocation, so an
+        array over part of a Torch storage is fed through the traced tensor
+        covering that storage. Every view of one storage resolves to the same
+        allocation and therefore to a single segment input.
+        """
+        owner = getattr(array, "_tensor", None)
+        if not isinstance(owner, torch.Tensor) or covers_storage(owner):
+            return array
+
+        if _warp_version() < (1, 18):
+            _get_logger().fatal(
+                f"Warp {wp.config.version} records a partial Torch view as its own "
+                "APIC region. Tracing wp.from_torch() of a view requires Warp 1.18 "
+                "or newer, which records the view's whole Torch storage.",
+                error_type=RuntimeError,
+            )
+        root = valid_storage_root(array)
+        if root is None:
+            _get_logger().fatal(
+                f"Warp segment input '{array.name}' is a view over part of a Torch "
+                "storage, and LEAPP cannot feed that whole storage to the segment: "
+                "either no traced tensor covers the storage, or the view or the "
+                "tensor covering it was modified in place after the view was taken. "
+                "Pass a tensor that owns its storage, for example view.clone().",
+                error_type=RuntimeError,
+            )
+        if root.tensor.context_obj is not array.context_obj:
+            _get_logger().fatal(
+                f"Warp segment input '{array.name}' is a view of a tensor traced "
+                "by a different LEAPP node.",
+                error_type=ValueError,
+            )
+
+        with self.pause_context():
+            storage = wp.from_torch(root.tensor.as_subclass(torch.Tensor))
+        return TracedWpArray.make_traced_in_place(
+            storage, root.tensor.name, root.tensor.context_obj,
+            view=root.tensor.proxy_view,
+        )
 
     #########################################################
     # static Helper functions
