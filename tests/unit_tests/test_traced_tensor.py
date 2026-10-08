@@ -2738,6 +2738,359 @@ class TestTracedTensor(unittest.TestCase):
         expected = input_tensor - 1.0
         self.validate_export(ctx.m, (input_tensor,), expected, "class_swap_copy")
 
+    def test_plain_destination_inplace_binary_methods(self):
+        """Plain receivers preserve mutation and trace every supported method."""
+        cases = (
+            ("add_", {"alpha": 2}),
+            ("sub_", {"alpha": 2}),
+            ("mul_", {}),
+            ("div_", {"rounding_mode": None}),
+            ("pow_", {}),
+        )
+        initial = torch.tensor([4.0, 8.0, 16.0])
+        trace_source = torch.tensor([2.0, 4.0, 2.0])
+        runtime_source = torch.tensor([3.0, 2.0, 3.0])
+
+        for method, kwargs in cases:
+            with self.subTest(method=method):
+                ctx = TracedTensorNode(name="test", node_index=0)
+                source = ctx.create_input(trace_source, name="source")
+                destination = initial.clone()
+
+                result = getattr(destination, method)(source, **kwargs)
+
+                self.assertIs(result, destination)
+                self.assertIsInstance(destination, TracedTensor)
+                eager_expected = initial.clone()
+                getattr(eager_expected, method)(trace_source, **kwargs)
+                self.assertTrue(torch.allclose(destination.tensor, eager_expected))
+
+                ctx.compile_trace({"out": destination})
+                runtime_expected = initial.clone()
+                getattr(runtime_expected, method)(runtime_source, **kwargs)
+                self.validate_export(
+                    ctx.m,
+                    (runtime_source,),
+                    runtime_expected,
+                    f"plain_destination_{method.rstrip('_')}",
+                )
+
+    def _validate_plain_inplace_method(
+        self,
+        method,
+        initial,
+        trace_operands,
+        runtime_operands,
+        *,
+        extra_args=(),
+        kwargs=None,
+        verify_legacy_onnx=True,
+        verify_dynamo_onnx=False,
+    ):
+        """Validate one registered method with positional traced operands."""
+        kwargs = kwargs or {}
+        ctx = TracedTensorNode(name="test", node_index=0)
+        traced_operands = tuple(
+            ctx.create_input(value.clone(), name=f"operand_{index}")
+            for index, value in enumerate(trace_operands)
+        )
+        destination = initial.clone()
+
+        result = getattr(destination, method)(
+            *traced_operands, *extra_args, **kwargs
+        )
+
+        self.assertIs(result, destination)
+        self.assertIsInstance(destination, TracedTensor)
+        eager_expected = initial.clone()
+        getattr(eager_expected, method)(
+            *trace_operands, *extra_args, **kwargs
+        )
+        self.assertEqual(destination.dtype, eager_expected.dtype)
+        self.assertTrue(torch.allclose(destination.tensor, eager_expected))
+
+        ctx.compile_trace({"out": destination})
+        runtime_expected = initial.clone()
+        getattr(runtime_expected, method)(
+            *runtime_operands, *extra_args, **kwargs
+        )
+        self.validate_export(
+            ctx.m,
+            runtime_operands,
+            runtime_expected,
+            f"plain_destination_{method.rstrip('_')}",
+            verify_legacy_onnx=verify_legacy_onnx,
+            verify_dynamo_onnx=verify_dynamo_onnx,
+        )
+
+    def test_plain_destination_registered_pointwise_methods(self):
+        """Arithmetic aliases and pointwise methods use one mutation path."""
+        initial = torch.tensor([16.0, 9.0, 5.0])
+        trace_source = torch.tensor([3.0, 2.0, 4.0])
+        runtime_source = torch.tensor([5.0, 4.0, 3.0])
+        cases = (
+            ("subtract_", {"alpha": 2}),
+            ("multiply_", {}),
+            ("divide_", {}),
+            ("true_divide_", {}),
+            ("floor_divide_", {}),
+            ("remainder_", {}),
+            ("fmod_", {}),
+        )
+
+        for method, kwargs in cases:
+            with self.subTest(method=method):
+                self._validate_plain_inplace_method(
+                    method,
+                    initial,
+                    (trace_source,),
+                    (runtime_source,),
+                    kwargs=kwargs,
+                )
+
+    def test_plain_destination_registered_clamp_methods(self):
+        """Tensor-valued clamp bounds preserve and trace the destination."""
+        initial = torch.tensor([-4.0, 1.0, 8.0])
+        trace_bound = torch.tensor([-2.0, 2.0, 6.0])
+        runtime_bound = torch.tensor([-3.0, 0.0, 7.0])
+
+        for method in ("clamp_", "clamp_min_", "clamp_max_", "clip_"):
+            with self.subTest(method=method):
+                self._validate_plain_inplace_method(
+                    method,
+                    initial,
+                    (trace_bound,),
+                    (runtime_bound,),
+                )
+
+    def test_plain_destination_clamp_accepts_traced_keyword_bound(self):
+        """A traced operand in kwargs still anchors plain-destination tracing."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        trace_bound = torch.tensor([-2.0, 2.0, 6.0])
+        bound = ctx.create_input(trace_bound, name="bound")
+        initial = torch.tensor([-4.0, 1.0, 8.0])
+        destination = initial.clone()
+
+        result = destination.clamp_(min=bound)
+
+        self.assertIs(result, destination)
+        self.assertIsInstance(destination, TracedTensor)
+        eager_expected = initial.clone().clamp_(min=trace_bound)
+        self.assertTrue(torch.allclose(destination.tensor, eager_expected))
+
+        ctx.compile_trace({"out": destination})
+        runtime_bound = torch.tensor([-3.0, 0.0, 7.0])
+        runtime_expected = initial.clone().clamp_(min=runtime_bound)
+        self.validate_export(
+            ctx.m,
+            (runtime_bound,),
+            runtime_expected,
+            "plain_destination_clamp_keyword",
+        )
+
+    def test_plain_destination_registered_fused_methods(self):
+        """Multi-operand elementwise methods use the shared mutation path."""
+        initial = torch.tensor([4.0, 8.0, 16.0])
+        trace_left = torch.tensor([2.0, 4.0, 2.0])
+        trace_right = torch.tensor([3.0, 2.0, 4.0])
+        runtime_left = torch.tensor([1.0, 3.0, 5.0])
+        runtime_right = torch.tensor([2.0, 6.0, 4.0])
+
+        cases = (
+            ("lerp_", (trace_left,), (runtime_left,), (0.25,), {}, True),
+            (
+                "addcmul_",
+                (trace_left, trace_right),
+                (runtime_left, runtime_right),
+                (),
+                {"value": 0.5},
+                True,
+            ),
+            (
+                "addcdiv_",
+                (trace_left, trace_right),
+                (runtime_left, runtime_right),
+                (),
+                {"value": 0.5},
+                False,
+            ),
+        )
+
+        for (
+            method,
+            trace_values,
+            runtime_values,
+            extra_args,
+            kwargs,
+            verify_legacy_onnx,
+        ) in cases:
+            with self.subTest(method=method):
+                self._validate_plain_inplace_method(
+                    method,
+                    initial,
+                    trace_values,
+                    runtime_values,
+                    extra_args=extra_args,
+                    kwargs=kwargs,
+                    verify_legacy_onnx=verify_legacy_onnx,
+                    verify_dynamo_onnx=not verify_legacy_onnx,
+                )
+
+    def test_plain_destination_registered_matrix_methods(self):
+        """Matrix accumulation methods trace all operands functionally."""
+        cases = (
+            (
+                "addmm_",
+                torch.ones(2, 2),
+                (torch.arange(6.0).reshape(2, 3), torch.ones(3, 2)),
+                (torch.ones(2, 3), torch.arange(6.0).reshape(3, 2)),
+                True,
+            ),
+            (
+                "addmv_",
+                torch.ones(2),
+                (torch.arange(6.0).reshape(2, 3), torch.ones(3)),
+                (torch.ones(2, 3), torch.arange(3.0)),
+                False,
+            ),
+            (
+                "addr_",
+                torch.ones(2, 3),
+                (torch.arange(2.0), torch.arange(3.0)),
+                (torch.tensor([2.0, 3.0]), torch.tensor([1.0, 2.0, 3.0])),
+                False,
+            ),
+            (
+                "addbmm_",
+                torch.ones(2, 2),
+                (torch.ones(2, 2, 3), torch.arange(12.0).reshape(2, 3, 2)),
+                (torch.arange(12.0).reshape(2, 2, 3), torch.ones(2, 3, 2)),
+                False,
+            ),
+            (
+                "baddbmm_",
+                torch.ones(2, 2, 2),
+                (torch.ones(2, 2, 3), torch.arange(12.0).reshape(2, 3, 2)),
+                (torch.arange(12.0).reshape(2, 2, 3), torch.ones(2, 3, 2)),
+                True,
+            ),
+        )
+
+        for (
+            method,
+            initial,
+            trace_values,
+            runtime_values,
+            verify_legacy_onnx,
+        ) in cases:
+            with self.subTest(method=method):
+                self._validate_plain_inplace_method(
+                    method,
+                    initial,
+                    trace_values,
+                    runtime_values,
+                    kwargs={"beta": 0.5, "alpha": 0.25},
+                    verify_legacy_onnx=verify_legacy_onnx,
+                    verify_dynamo_onnx=not verify_legacy_onnx,
+                )
+
+    def test_registered_inplace_method_mutates_traced_receiver(self):
+        """Discarding an inherited method's return still updates its receiver."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        receiver = ctx.create_input(torch.tensor([5.0, 7.0, 9.0]), name="x")
+        other = ctx.create_input(torch.tensor([2.0, 4.0, 5.0]), name="other")
+
+        result = receiver.remainder_(other)
+
+        self.assertIs(result, receiver)
+        self.assertTrue(
+            torch.allclose(receiver.tensor, torch.tensor([1.0, 3.0, 4.0]))
+        )
+        ctx.compile_trace({"out": receiver})
+        runtime_receiver = torch.tensor([8.0, 11.0, 14.0])
+        runtime_other = torch.tensor([3.0, 5.0, 6.0])
+        self.validate_export(
+            ctx.m,
+            (runtime_receiver, runtime_other),
+            runtime_receiver.remainder(runtime_other),
+            "traced_receiver_remainder",
+        )
+
+    def test_registered_inplace_method_preserves_destination_dtype(self):
+        """Functional lowering casts back to the in-place receiver dtype."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        source = ctx.create_input(
+            torch.tensor([0.5, 1.5], dtype=torch.float64), name="source"
+        )
+        destination = torch.tensor([1.0, 2.0], dtype=torch.float32)
+
+        destination.add_(source)
+
+        self.assertEqual(destination.dtype, torch.float32)
+        ctx.compile_trace({"out": destination})
+        runtime_source = torch.tensor([2.5, 3.5], dtype=torch.float64)
+        expected = torch.tensor([1.0, 2.0], dtype=torch.float32)
+        expected.add_(runtime_source)
+        self.validate_export(
+            ctx.m,
+            (runtime_source,),
+            expected,
+            "plain_destination_add_mixed_dtype",
+        )
+
+    def test_registered_inplace_method_preserves_native_cast_error(self):
+        """The template must not turn an invalid native write into a cast."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        source = ctx.create_input(torch.tensor([2, 2]), name="source")
+        destination = torch.tensor([3, 5])
+
+        with self.assertRaisesRegex(RuntimeError, "can't be cast"):
+            destination.div_(source)
+
+        self.assertTrue(torch.equal(destination.tensor, torch.tensor([3, 5])))
+
+    def test_plain_accumulator_reused_after_graph_reset(self):
+        ctx = TracedTensorNode(name="test", node_index=0)
+        first = ctx.create_input(torch.ones(3), name="x")
+        accumulator = torch.zeros(3)
+        accumulator.add_(first)
+
+        ctx.reset_trace_state()
+        accumulator.zero_()
+        second = ctx.create_input(torch.ones(3), name="x")
+        accumulator.add_(second)
+        ctx.compile_trace({"y": accumulator * 2.0})
+
+        result = ctx.m(torch.tensor([4.0, 5.0, 6.0]))
+        self.assertTrue(torch.allclose(result, torch.tensor([8.0, 10.0, 12.0])))
+
+    def test_stale_accumulator_adds_live_value_after_graph_reset(self):
+        ctx = TracedTensorNode(name="test", node_index=0)
+        first = ctx.create_input(torch.ones(3), name="x")
+        accumulator = torch.zeros(3)
+        accumulator.add_(first)
+
+        ctx.reset_trace_state()
+        second = ctx.create_input(torch.ones(3), name="x")
+        accumulator.add_(second)
+        ctx.compile_trace({"y": accumulator * 2.0})
+
+        result = ctx.m(torch.tensor([4.0, 5.0, 6.0]))
+        self.assertTrue(torch.allclose(result, torch.tensor([10.0, 12.0, 14.0])))
+
+    def test_stale_nonreceiver_tensor_is_constant_in_new_graph(self):
+        ctx = TracedTensorNode(name="test", node_index=0)
+        first = ctx.create_input(torch.ones(3), name="x")
+        constant = torch.ones_like(first)
+
+        ctx.reset_trace_state()
+        second = ctx.create_input(torch.ones(3), name="x")
+        y = torch.where(second > 0, constant, second)
+        ctx.compile_trace({"y": y})
+
+        result = ctx.m(torch.tensor([-1.0, 2.0, -3.0]))
+        self.assertTrue(torch.allclose(result, torch.tensor([-1.0, 1.0, -3.0])))
+
     def test_class_swap_multidim(self):
         """2-D buf[:] = traced works for higher-rank tensors."""
         ctx = TracedTensorNode(name="test", node_index=0)

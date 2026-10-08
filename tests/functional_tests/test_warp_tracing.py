@@ -103,6 +103,43 @@ class TestWarpOp(WarpTestCase, LEAPPFunctionalTestBase):
         self.assertIsNotNone(node.warp_segments[0].apic_graph)
         self.verify_all_models_exist("node_a")
 
+    def test_warp_write_to_plain_torch_alias_is_traced(self):
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        source = torch.tensor([1.0, 2.0, 3.0], device=self.DEVICE)
+
+        for _ in range(2):
+            inp = annotate.input_tensors("node_a", {"in_a": source})
+            out = torch.zeros(3, device=self.DEVICE)
+            self.assertIs(type(out), torch.Tensor)
+            wp.launch(
+                self.kernels.add_scalar,
+                dim=3,
+                inputs=[wp.from_torch(inp), wp.float32(2.0)],
+                outputs=[wp.from_torch(out)],
+                device=self.DEVICE,
+            )
+            annotate.output_tensors(
+                "node_a", {"out_a": out * 3.0}, export_with="onnx"
+            )
+
+        node = annotate.get_nodes()["node_a"]
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+        self.assertFalse(node.has_pending_warp_segments)
+        self.verify_node_io(node, inputs=1, outputs=1)
+        self.verify_inference_manager(
+            source_inputs={
+                "node_a/in_a": torch.tensor(
+                    [10.0, 20.0, 30.0], device=self.DEVICE
+                )
+            },
+            source_outputs={
+                "node_a/out_a": torch.tensor(
+                    [36.0, 66.0, 96.0], device=self.DEVICE
+                )
+            },
+        )
+
     def test_persistent_warp_state_buffer_survives_both_passes(self):
         """A Warp buffer reused across steps is re-declared on the second pass.
 
