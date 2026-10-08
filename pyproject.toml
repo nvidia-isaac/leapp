@@ -21,7 +21,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "leapp"
-version = "0.7.1"
+version = "0.7.2"
 description = "LEAPP - Lightweight Export Annotations for Policy Pipelines: A Python package for tracing and exporting computational graphs from PyTorch code"
 readme = "README.md"
 license = "Apache-2.0"
@@ -70,6 +70,7 @@ dev = [
 ]
 test = [
     "warp-lang>=1.16",
+    "opencv-python-headless>=4.8",
 ]
 warp-cu12 = [
     "warp-lang>=1.16",

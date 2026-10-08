@@ -88,6 +88,7 @@ Warp. The learned policy stays in torch.
        return action
 
    def main(sim):
+       wp.init()
        policy = Policy().eval().cuda()
 
        leapp.start(name="warp_robot_pipeline")

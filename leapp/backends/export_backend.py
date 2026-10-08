@@ -355,7 +355,8 @@ def prepare_tensors_for_export(tensors):
     which causes torch.export.export() (used by dynamo) to fail with:
     "RuntimeError: Inference tensors cannot be saved for backward."
 
-    Cloning creates new tensors that are not marked as inference tensors.
+    Cloning with inference mode disabled creates normal tensors even when
+    the caller is inside an inference-mode context.
 
     Args:
         tensors: A sequence of tensors (or other values) to prepare.
@@ -364,14 +365,15 @@ def prepare_tensors_for_export(tensors):
         A tuple of prepared tensors (cloned if they were torch.Tensor).
     """
     prepared = []
-    for t in tensors:
-        if isinstance(t, torch.Tensor):
-            if hasattr(t, 'original_clone'):
-                prepared.append(t.original_clone())
+    with torch.inference_mode(False):
+        for t in tensors:
+            if isinstance(t, torch.Tensor):
+                if hasattr(t, 'original_clone'):
+                    prepared.append(t.original_clone())
+                else:
+                    prepared.append(t.clone())
             else:
-                prepared.append(t.clone())
-        else:
-            prepared.append(t)
+                prepared.append(t)
     return tuple(prepared)
 
 
