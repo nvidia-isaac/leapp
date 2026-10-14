@@ -1,0 +1,16 @@
+[package]
+name = "leapp-runtime-cxx"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+leapp-runtime = { path = "../.." }
+cxx = "=1.0.205"
+
+[build-dependencies]
+cxx-build = "=1.0.205"

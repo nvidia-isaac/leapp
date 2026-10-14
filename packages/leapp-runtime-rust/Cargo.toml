@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[workspace]
+members = ["bindings/python", "bindings/cxx"]
+default-members = ["."]
+resolver = "2"
+
+[package]
+name = "leapp-runtime"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Backend-independent LEAPP bundle loading and inspection"
+
+[dependencies]
+anyhow = "1"
+indexmap = { version = "2", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_path_to_error = "0.1"
+serde_yaml_ng = "=0.10.0"
+serde_json = "1"
+sha2 = "0.10"
+safetensors = "=0.6.2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[[test]]
+name = "binding_lifecycle"
+path = "bindings/common/tests/lifecycle.rs"

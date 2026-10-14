@@ -1,0 +1,39 @@
+# C++ bundle API
+
+The C++20 facade uses a private cxx bridge to the Rust loader. Public headers
+contain no Rust transport types. Rust, CMake 3.22+, and a C++20 compiler are
+required on Linux or macOS; inference SDKs are unnecessary.
+
+From the Rust package directory:
+
+```sh
+cmake -S bindings/cxx -B target/cxx -DCMAKE_BUILD_TYPE=Release
+cmake --build target/cxx --parallel
+ctest --test-dir target/cxx --output-on-failure
+cmake --install target/cxx --prefix "$PWD/target/install"
+cmake -S bindings/cxx/tests/consumer -B target/consumer \
+  -DCMAKE_PREFIX_PATH="$PWD/target/install"
+cmake --build target/consumer --parallel
+./target/consumer/consumer
+```
+
+Consumers use `find_package(leapp_runtime CONFIG REQUIRED)` and link
+`leapp::runtime`. Include `leapp/bundle.h` for inspection or `leapp/data_type.h`
+for scalar type declarations.
+
+```cpp
+leapp::Bundle bundle;
+auto status = leapp::Bundle::Open("export/policy.yaml", &bundle);
+if (!status.ok()) {
+  // status.code(), status.phase(), and status.message() describe the failure.
+  return 1;
+}
+for (const auto& [name, spec] : bundle.pipeline_outputs()) {
+  // Inspect the optional PortSpec and its typed Metadata.
+}
+```
+
+`Bundle` copies retain a shared immutable snapshot. Getter references remain
+valid while any copy owns the snapshot. Concurrent reads are safe; assignment
+or destruction of the same handle requires synchronization. `Open` requires an
+empty destination and leaves it unchanged on failure.
