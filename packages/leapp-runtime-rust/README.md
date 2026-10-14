@@ -38,7 +38,7 @@ execution.
 Bundle loading validates graph ports and connections, artifacts, and optional
 initial-value files. It does not check whether an inference engine can execute
 the graph. Declared external inputs can remain unresolved, matching the source
-implementations' inspection contract.
+implementations' inspection contract. Python represents missing input descriptors as `None`.
 
 The loader normalizes known backend aliases, accepts custom nonempty backend
 names, and leaves adapter availability to execution.
@@ -67,6 +67,16 @@ source against a small test-only runtime API.
 
 See [common lifecycle sources](bindings/common/README.md) for integration and
 testing instructions.
+
+## Python bindings
+
+The PyO3 binding exposes bundle inspection, detached metadata and port
+descriptors, typed stubs, and structured exceptions. Building it requires a
+Rust toolchain and Python 3.10 or newer. See
+[Python bindings](bindings/python/README.md) for installation and tests.
+
+This distribution shares the `leapp_runtime` import name with the full runtime
+implementations; install it in a separate environment.
 
 ## Extraction provenance
 

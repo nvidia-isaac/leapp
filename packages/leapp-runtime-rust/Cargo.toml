@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [workspace]
-members = []
+members = ["bindings/python"]
 default-members = ["."]
 resolver = "2"
 
