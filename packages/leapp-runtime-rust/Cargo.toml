@@ -26,3 +26,7 @@ safetensors = "=0.6.2"
 
 [dev-dependencies]
 tempfile = "3"
+
+[[test]]
+name = "binding_lifecycle"
+path = "bindings/common/tests/lifecycle.rs"

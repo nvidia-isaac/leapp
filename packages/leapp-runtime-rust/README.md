@@ -57,6 +57,17 @@ cargo fmt --all --check
 The default workspace member is the core crate. Its inspection tests use opaque
 artifact bytes and require no inference SDK.
 
+## Common lifecycle sources
+
+The original shared `RuntimeHandle`, `SessionHandle`, and lifecycle errors are
+retained unchanged for integration with either runtime implementation. These
+sources depend on concrete execution types and are not a separate compiled
+crate in this bundle-only checkout. Three regression tests compile the lifecycle
+source against a small test-only runtime API.
+
+See [common lifecycle sources](bindings/common/README.md) for integration and
+testing instructions.
+
 ## Extraction provenance
 
 This package is the common foundation extracted from the existing Triton-based
