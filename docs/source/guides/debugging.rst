@@ -176,3 +176,27 @@ Disable session patches
 LEAPP patches for the tracing session (for example NumPy and torch
 interop). Use this only to test whether those patches are involved in
 a failure.
+
+TensorRT catalog and rewrite
+============================
+
+TensorRT op-catalog checks, GraphSurgeon rewrites, and DAG merge live in
+the in-tree ``isaac_deploy_trt`` package (also the ``graph-surgery`` extra),
+not in the LEAPP tracing CLI. After ``compile_graph()``, rewrite exported
+ONNX in place with ``leapp.optimize_graph(trt_compatible=True)``. That
+updates YAML checksums and ``parameters.tensorrt_compatible``.
+
+.. code-block:: bash
+
+   pip install -e ".[graph-surgery]"
+   isaac_deploy_trt check --onnx path/to/model.onnx --strict
+   isaac_deploy_trt check --onnx-dir path/to/export_dir --build --strict
+   isaac_deploy_trt rewrite-dir path/to/export_dir -o path/to/export_dir_trt
+   isaac_deploy_trt merge-pipeline path/to/export.yaml -o pipeline.onnx --rewrite
+
+``--build`` also runs TensorRT parse/build (requires ``tensorrt``).
+``--strict`` exits non-zero if catalog or TensorRT checks fail.
+
+Set ``backend_params={"annotate_tensorrt_compatible": False}`` to omit the
+YAML field, or ``{"validate_tensorrt": True, "validate_tensorrt_build": True}``
+to require a TensorRT parse/build before marking ``true``.
