@@ -713,6 +713,149 @@ class TestWarpCompoundType(WarpTestCase, LEAPPFunctionalTestBase):
 
 
 
+@wp.kernel
+def _add_one(src: wp.array(dtype=wp.float32), dst: wp.array(dtype=wp.float32)):
+    i = wp.tid()
+    dst[i] = src[i] + 1.0
+
+
+@wp.kernel
+def _dot_rows(
+    first: wp.array(dtype=wp.vec3),
+    second: wp.array(dtype=wp.vec3),
+    dst: wp.array(dtype=wp.float32),
+):
+    i = wp.tid()
+    dst[i] = wp.dot(first[i], second[i])
+
+
+class TestWarpTorchViews(WarpTestCase, LEAPPFunctionalTestBase):
+    """Warp segments reading ``wp.from_torch`` of a view of a traced tensor."""
+
+    NODE_NAME = "node_a"
+
+    def _trace(self, source, operation):
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        for _ in range(2):
+            tensor = annotate.input_tensors(self.NODE_NAME, {"in_a": source})
+            annotate.output_tensors(
+                self.NODE_NAME, {"out_a": operation(tensor)}, export_with="onnx"
+            )
+        node = annotate.get_nodes()[self.NODE_NAME]
+        leapp.stop()
+        return node
+
+    def test_offset_view_reads_live_input(self):
+        def operation(tensor):
+            values = wp.from_torch(tensor[5:10])
+            output = wp.empty(5, dtype=wp.float32, device=self.DEVICE)
+            wp.launch(_add_one, dim=5, inputs=[values], outputs=[output],
+                      device=self.DEVICE)
+            return wp.to_torch(output)
+
+        self._trace(torch.arange(10.0, device=self.DEVICE), operation)
+        leapp.compile_graph(visualize=False)
+
+        live = torch.linspace(-3.0, 4.0, 10, device=self.DEVICE)
+        self.verify_inference_manager(
+            source_inputs={f"{self.NODE_NAME}/in_a": live},
+            source_outputs={f"{self.NODE_NAME}/out_a": live[5:10] + 1.0},
+        )
+
+    def test_strided_views_of_one_storage_are_one_segment_input(self):
+        def operation(tensor):
+            first = wp.from_torch(tensor[:, 0:3], dtype=wp.vec3)
+            second = wp.from_torch(tensor[:, 3:6], dtype=wp.vec3)
+            output = wp.empty(4, dtype=wp.float32, device=self.DEVICE)
+            wp.launch(_dot_rows, dim=4, inputs=[first, second], outputs=[output],
+                      device=self.DEVICE)
+            return wp.to_torch(output)
+
+        node = self._trace(
+            torch.arange(32.0, device=self.DEVICE).reshape(4, 8), operation
+        )
+        leapp.compile_graph(visualize=False)
+        self.assertEqual(len(node.warp_segments[0].input_refs), 1)
+
+        live = torch.linspace(-1.0, 2.0, 32, device=self.DEVICE).reshape(4, 8)
+        self.verify_inference_manager(
+            source_inputs={f"{self.NODE_NAME}/in_a": live},
+            source_outputs={
+                f"{self.NODE_NAME}/out_a": (live[:, 0:3] * live[:, 3:6]).sum(dim=1)
+            },
+        )
+
+    def test_view_modified_in_place_fails(self):
+        def operation(tensor):
+            view = tensor[5:10]
+            view.add_(1.0)
+            values = wp.from_torch(view)
+            output = wp.empty(5, dtype=wp.float32, device=self.DEVICE)
+            wp.launch(_add_one, dim=5, inputs=[values], outputs=[output],
+                      device=self.DEVICE)
+            return wp.to_torch(output)
+
+        with self.assertRaisesRegex(RuntimeError, "modified in place"):
+            self._trace(torch.arange(10.0, device=self.DEVICE), operation)
+
+
+@wp.kernel
+def _accumulate(src: wp.array(dtype=wp.float32), total: wp.array(dtype=wp.float32)):
+    wp.atomic_add(total, 0, src[wp.tid()])
+
+
+class TestWarpUntracedOverwrite(WarpTestCase, LEAPPFunctionalTestBase):
+    """A node that resets a persistent untraced accumulator before using it."""
+
+    NODE_NAME = "node_a"
+
+    def _export_and_run(self, torch_op_between):
+        total = wp.zeros(1, dtype=wp.float32, device=self.DEVICE)
+
+        def operation(tensor):
+            total.zero_()
+            if torch_op_between:
+                tensor = tensor * 1.0
+            values = wp.from_torch(tensor)
+            wp.launch(_accumulate, dim=values.shape[0], inputs=[values],
+                      outputs=[total], device=self.DEVICE)
+            return wp.to_torch(total).clone()
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        for _ in range(2):
+            tensor = annotate.input_tensors(
+                self.NODE_NAME, {"in_a": torch.arange(4.0, device=self.DEVICE)}
+            )
+            annotate.output_tensors(
+                self.NODE_NAME, {"out_a": operation(tensor)}, export_with="onnx"
+            )
+        node = annotate.get_nodes()[self.NODE_NAME]
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        from leapp import InferenceManager
+
+        manager = InferenceManager(
+            f"{self.TEST_GRAPH_NAME}/{self.TEST_GRAPH_NAME}.yaml"
+        )
+        for scale in (1.0, -2.0, 3.0):
+            live = torch.linspace(0.5, 2.0, 4, device=self.DEVICE) * scale
+            result = manager.run_policy({f"{self.NODE_NAME}/in_a": live})
+            torch.testing.assert_close(
+                result[f"{self.NODE_NAME}/out_a"].to(self.DEVICE).reshape(-1),
+                live.sum().reshape(1),
+            )
+        return node
+
+    def test_reset_in_same_segment_runs_every_call(self):
+        node = self._export_and_run(torch_op_between=False)
+        self.assertEqual(len(node.warp_segments), 1)
+
+    def test_reset_before_torch_op_feeds_later_segment(self):
+        node = self._export_and_run(torch_op_between=True)
+        self.assertEqual(len(node.warp_segments), 2)
+
+
 class TestWarpInference(WarpTestCase, LEAPPFunctionalTestBase):
     NODE_NAME = "node_a"
 

@@ -14,12 +14,28 @@ from ..proxy_view import (
     may_adopt_view,
     update_view_proxy,
 )
+from ..torch.storage_root import get_storage_root, set_storage_root
 from ..traced_data import TracedData
 from leapp.utils.dtype import DtypeCodec, register_dtype_codec
 from leapp.utils.logging import _get_logger
 
 
 _MAX_PARAM_SCAN_DEPTH = 16
+
+
+class _UntracedWriteSource:
+    """Trace source for an overwrite of a Warp array that carries no trace.
+
+    The overwritten array joins the node with no proxy yet. Closing the segment
+    binds it to the runner output, so later readers depend on the runner rather
+    than on a write that ran only once during tracing.
+    """
+
+    proxy = None
+
+    def __init__(self, node_ref: Any) -> None:
+        self.context_obj = node_ref
+        self.name = f"{node_ref.name}_warp_state"
 
 
 # Register the Warp dtype codec so leapp core can convert warp dtypes to common
@@ -166,7 +182,13 @@ class TracedWpArray(wp.array, TracedData):
             args, kwargs
         )
         trace_source = cls._select_trace_source(qualname, traced_inputs)
-        segment = backend.resolve_or_begin_warp_segment(trace_source)
+        segment = backend.resolve_or_begin_warp_segment(trace_source, func)
+        if (
+            trace_source is None
+            and segment is not None
+            and backend.is_overwrite_function(func)
+        ):
+            trace_source = _UntracedWriteSource(backend.active_node_ref())
 
         if segment is not None:
             backend.record_segment_inputs(segment, qualname, traced_inputs)
@@ -219,9 +241,11 @@ class TracedWpArray(wp.array, TracedData):
                 view, proxy = src.proxy_view, None
             else:
                 view, proxy = None, src.proxy
-            return True, as_traced(
+            traced = as_traced(
                 raw, src.name, src.context_obj, proxy, view=view
             )
+            set_storage_root(traced, get_storage_root(src))
+            return True, traced
         return True, raw
 
     @staticmethod
