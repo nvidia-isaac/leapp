@@ -25,6 +25,7 @@ from .base_example_test import BaseExampleTest
 
 def run_example(**inputs):
     from examples.wbc_obj import WBC
+
     wbc = WBC()
     return wbc.run_model(**inputs)
 
@@ -36,51 +37,48 @@ class TestWBCObj(BaseExampleTest):
         """Test that wbc_obj.py runs without errors and generates expected files."""
 
         # Expected output files - these should be similar to wbc_plain but for sample_wbc_obj
-        expected_files = [
-            'wbc_obj.onnx',
-            'sample_wbc_obj.png',
-            'sample_wbc_obj.yaml'
-        ]
+        expected_files = ["wbc_obj.onnx", "sample_wbc_obj.png", "sample_wbc_obj.yaml"]
 
         # Run the test
         self._run_and_verify_example(
-            script_name='wbc_obj.py',
-            output_dir_name='sample_wbc_obj',
+            script_name="wbc_obj.py",
+            output_dir_name="sample_wbc_obj",
             expected_files=expected_files,
-            test_description='Testing wbc_obj.py'
+            test_description="Testing wbc_obj.py",
         )
 
         # Test that the exported pipeline produces the same outputs as the original
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        device = "cuda" if torch.cuda.is_available() else "cpu"
         inputs = {
-            'joint_pos': torch.randn(19, device=device, dtype=torch.float32),
-            'joint_vel': torch.randn(19, device=device, dtype=torch.float32),
-            'velocity_commands': torch.randn(3, device=device, dtype=torch.float32),
-            'lin_vel_I': torch.randn(3, device=device, dtype=torch.float32),
-            'ang_vel_I': torch.randn(3, device=device, dtype=torch.float32),
-            'q_IB': torch.randn(4, device=device, dtype=torch.float32),
+            "joint_pos": torch.randn(19, device=device, dtype=torch.float32),
+            "joint_vel": torch.randn(19, device=device, dtype=torch.float32),
+            "velocity_commands": torch.randn(3, device=device, dtype=torch.float32),
+            "lin_vel_I": torch.randn(3, device=device, dtype=torch.float32),
+            "ang_vel_I": torch.randn(3, device=device, dtype=torch.float32),
+            "q_IB": torch.randn(4, device=device, dtype=torch.float32),
         }
         exported_pipeline_inputs = {
-            'wbc_obj/velocity_commands': inputs['velocity_commands'].clone(),
-            'wbc_obj/joint_vel': inputs['joint_vel'].clone(),
-            'wbc_obj/joint_pos': inputs['joint_pos'].clone(),
-            'wbc_obj/lin_vel_I': inputs['lin_vel_I'].clone(),
-            'wbc_obj/ang_vel_I': inputs['ang_vel_I'].clone(),
-            'wbc_obj/q_IB': inputs['q_IB'].clone(),
+            "wbc_obj/velocity_commands": inputs["velocity_commands"].clone(),
+            "wbc_obj/joint_vel": inputs["joint_vel"].clone(),
+            "wbc_obj/joint_pos": inputs["joint_pos"].clone(),
+            "wbc_obj/lin_vel_I": inputs["lin_vel_I"].clone(),
+            "wbc_obj/ang_vel_I": inputs["ang_vel_I"].clone(),
+            "wbc_obj/q_IB": inputs["q_IB"].clone(),
         }
-
 
         outputs = run_example(**inputs)
 
         # Load and run the exported pipeline
-        exported_example = InferenceManager('sample_wbc_obj/sample_wbc_obj.yaml')
+        exported_example = InferenceManager("sample_wbc_obj/sample_wbc_obj.yaml")
         exported_outputs = exported_example.run_policy(exported_pipeline_inputs)
-        exported_action = exported_outputs['wbc_obj/actions']
+        exported_action = exported_outputs["wbc_obj/actions"]
 
         try:
             if torch.cuda.is_available():
                 torch.cuda.synchronize()  # Wait for GPU operations to complete
-            self.assertTrue(torch.allclose(outputs, exported_action, rtol=1e-6, atol=1e-6))
+            self.assertTrue(
+                torch.allclose(outputs, exported_action, rtol=1e-6, atol=1e-6)
+            )
         except AssertionError as e:
             print("Outputs do not match:")
             print(f"Outputs: {outputs}")
@@ -88,5 +86,5 @@ class TestWBCObj(BaseExampleTest):
             raise e
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -48,17 +48,25 @@ class Policy(torch.nn.Module):
 
 
 def preprocess(joint_pos, joint_vel) -> torch.Tensor:
-    pos, vel = annotate.input_tensors("preprocess", {
-        "joint_pos": joint_pos,
-        "joint_vel": joint_vel,
-    })
+    pos, vel = annotate.input_tensors(
+        "preprocess",
+        {
+            "joint_pos": joint_pos,
+            "joint_vel": joint_vel,
+        },
+    )
 
     pos_n = wp.empty_like(pos)
     vel_n = wp.empty_like(vel)
-    wp.launch(scale_and_clip, dim=pos.size,
-              inputs=[pos, pos_n, 1.0, 5.0], device=pos.device)
-    wp.launch(scale_and_clip, dim=vel.size,
-              inputs=[vel, vel_n, 1.0 / VEL_SCALE, 1.0], device=vel.device)
+    wp.launch(
+        scale_and_clip, dim=pos.size, inputs=[pos, pos_n, 1.0, 5.0], device=pos.device
+    )
+    wp.launch(
+        scale_and_clip,
+        dim=vel.size,
+        inputs=[vel, vel_n, 1.0 / VEL_SCALE, 1.0],
+        device=vel.device,
+    )
 
     obs = torch.cat([wp.to_torch(pos_n), wp.to_torch(vel_n)])
     annotate.output_tensors("preprocess", {"obs": obs}, export_with="onnx")

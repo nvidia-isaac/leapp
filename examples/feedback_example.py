@@ -35,7 +35,9 @@ def compute_action(hidden: torch.Tensor) -> torch.Tensor:
     return torch.clamp(hidden * 2.0, min=-1.0, max=1.0)
 
 
-def blend_feedback(hidden: torch.Tensor, previous_feedback: torch.Tensor) -> torch.Tensor:
+def blend_feedback(
+    hidden: torch.Tensor, previous_feedback: torch.Tensor
+) -> torch.Tensor:
     return 0.8 * previous_feedback + 0.2 * hidden
 
 
@@ -45,10 +47,13 @@ def main():
     policy_memory = torch.tensor([0.0])
 
     for step in range(2):  # needed for inferred cross-node feedback detection
-        policy_inputs = annotate.input_tensors("policy_step", {
-            "observation_scalar": torch.tensor([1.0 + step]),
-            "policy_memory_in": policy_memory,
-        })
+        policy_inputs = annotate.input_tensors(
+            "policy_step",
+            {
+                "observation_scalar": torch.tensor([1.0 + step]),
+                "policy_memory_in": policy_memory,
+            },
+        )
         policy_context = mix_with_feedback(policy_inputs[0], policy_inputs[1])
         control_action = compute_action(policy_context)
         annotate.output_tensors(
@@ -57,10 +62,13 @@ def main():
             export_with="jit",
         )
 
-        feedback_inputs = annotate.input_tensors("feedback_update", {
-            "policy_context": policy_context,
-            "policy_memory_prev": policy_memory,
-        })
+        feedback_inputs = annotate.input_tensors(
+            "feedback_update",
+            {
+                "policy_context": policy_context,
+                "policy_memory_prev": policy_memory,
+            },
+        )
         policy_memory = blend_feedback(feedback_inputs[0], feedback_inputs[1])
         annotate.output_tensors(
             "feedback_update",

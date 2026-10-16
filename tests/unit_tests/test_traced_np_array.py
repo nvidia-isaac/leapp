@@ -27,14 +27,10 @@ from tests.unit_tests.export_format_validation import (
 
 Array = np.ndarray | TracedNpArray
 
-warnings.filterwarnings(
-    "ignore", message=".*legacy TorchScript-based ONNX export.*")
-warnings.filterwarnings(
-    "ignore", message=".*on empty non-base types in `__init__`.*")
-warnings.filterwarnings(
-    "ignore", message=".*feature will be removed.*")
-warnings.filterwarnings(
-    "ignore", message=".*Casting complex values to real.*")
+warnings.filterwarnings("ignore", message=".*legacy TorchScript-based ONNX export.*")
+warnings.filterwarnings("ignore", message=".*on empty non-base types in `__init__`.*")
+warnings.filterwarnings("ignore", message=".*feature will be removed.*")
+warnings.filterwarnings("ignore", message=".*Casting complex values to real.*")
 
 
 class NpArrayArithmeticFunctions:
@@ -47,7 +43,7 @@ class NpArrayArithmeticFunctions:
         c = b - 2
         d = c * 3
         e = d / 4
-        f = e ** 5
+        f = e**5
         return f
 
     @staticmethod
@@ -57,7 +53,7 @@ class NpArrayArithmeticFunctions:
         c = 2 - b
         d = 3 * c
         e = 4 / d
-        f = 5 ** e
+        f = 5**e
         return f
 
     @staticmethod
@@ -77,7 +73,7 @@ class NpArrayArithmeticFunctions:
         a = a - 1
         a = a * 3
         a = a / 4
-        a = a ** 5
+        a = a**5
         return a
 
     @staticmethod
@@ -362,7 +358,7 @@ class TestTracedNpArray(unittest.TestCase):
         """Test power."""
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
-        y = x ** 2
+        y = x**2
         self.assertIsInstance(y, TracedNpArray)
         np.testing.assert_array_almost_equal(y, np.array([1.0, 4.0, 9.0]))
 
@@ -421,7 +417,7 @@ class TestTracedNpArray(unittest.TestCase):
     def test_np_sin(self):
         """Test np.sin ufunc."""
         ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([0.0, np.pi/2, np.pi]), name="x")
+        x = ctx.create_input(np.array([0.0, np.pi / 2, np.pi]), name="x")
         y = np.sin(x)
         self.assertIsInstance(y, TracedNpArray)
         np.testing.assert_array_almost_equal(y, np.array([0.0, 1.0, 0.0]), decimal=5)
@@ -429,7 +425,7 @@ class TestTracedNpArray(unittest.TestCase):
     def test_np_cos(self):
         """Test np.cos ufunc."""
         ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([0.0, np.pi/2, np.pi]), name="x")
+        x = ctx.create_input(np.array([0.0, np.pi / 2, np.pi]), name="x")
         y = np.cos(x)
         self.assertIsInstance(y, TracedNpArray)
         np.testing.assert_array_almost_equal(y, np.array([1.0, 0.0, -1.0]), decimal=5)
@@ -743,9 +739,9 @@ class TestTracedNpArray(unittest.TestCase):
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
         y = x.copy() * 2  # Use copied array in computation
-        
-        ctx.compile_trace({'output': y})
-        
+
+        ctx.compile_trace({"output": y})
+
         # Test compiled graph works
         input_tensor = torch.tensor([4.0, 5.0, 6.0])
         expected = input_tensor.clone() * 2  # clone is torch equivalent of copy
@@ -760,9 +756,9 @@ class TestTracedNpArray(unittest.TestCase):
         x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
         y = x + 1
         z = y * 2
-        
+
         # Compile and verify graph exists
-        ctx.compile_trace({'output': z})
+        ctx.compile_trace({"output": z})
         self.assertIsNotNone(ctx.m)
         self.assertIsNotNone(ctx.graph)
 
@@ -772,9 +768,9 @@ class TestTracedNpArray(unittest.TestCase):
         x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
         y = x + 1
         z = y * 2
-        
-        ctx.compile_trace({'output': z})
-        
+
+        ctx.compile_trace({"output": z})
+
         # Check graph has nodes
         nodes = list(ctx.graph.nodes)
         self.assertGreater(len(nodes), 0)
@@ -785,8 +781,8 @@ class TestTracedNpArray(unittest.TestCase):
         x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
         y = ctx.create_input(np.array([4.0, 5.0, 6.0]), name="y")
         z = x + y
-        
-        ctx.compile_trace({'output': z})
+
+        ctx.compile_trace({"output": z})
         self.assertIsNotNone(ctx.m)
 
     # ==================== Operations After Compile Tests ====================
@@ -797,7 +793,7 @@ class TestTracedNpArray(unittest.TestCase):
         x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
         y = x * 2
 
-        ctx.compile_trace({'y': y})
+        ctx.compile_trace({"y": y})
 
         # After compilation, is_tracing should be False
         self.assertFalse(ctx.is_tracing)
@@ -857,7 +853,7 @@ class TestTracedNpArray(unittest.TestCase):
             )
             self.assertTrue(np.array_equal(result.view(np.ndarray), [1.0, 2.0, 3.0]))
 
-        ctx.compile_trace({'aliased': aliased, 'copied': copied})
+        ctx.compile_trace({"aliased": aliased, "copied": copied})
 
         # Each copy is recorded, while the alias reuses its source proxy
         targets = [node.target for node in ctx.graph.nodes]
@@ -881,18 +877,19 @@ class TestTracedNpArray(unittest.TestCase):
         finally:
             patcher.uninstall()
 
-        for result, expected in ((positional, np.float32),
-                                 (keyword, np.float32),
-                                 (widened, np.int64)):
+        for result, expected in (
+            (positional, np.float32),
+            (keyword, np.float32),
+            (widened, np.int64),
+        ):
             self.assertIsInstance(result, TracedNpArray)
             self.assertEqual(result.dtype, expected)
 
-        ctx.compile_trace({'positional': positional, 'widened': widened})
+        ctx.compile_trace({"positional": positional, "widened": widened})
 
         # Each output cast is a real node rather than a reuse of the source proxy
         casts = [node for node in ctx.graph.nodes if node.target == "to"]
-        self.assertEqual([node.args[1] for node in casts],
-                         [torch.float32, torch.int64])
+        self.assertEqual([node.args[1] for node in casts], [torch.float32, torch.int64])
 
         # A float64 input proves the recorded cast changes dtype rather than
         # coincidentally matching torch's float32 default.
@@ -906,9 +903,9 @@ class TestTracedNpArray(unittest.TestCase):
         x = ctx.create_input(np.array([1.0, 2.0, 3.0, 4.0, 5.0]), name="x")
         # Use slice to get array output (scalar indexing returns np.float64, not array)
         y = x[0:2]
-        
-        ctx.compile_trace({'y': y})
-        
+
+        ctx.compile_trace({"y": y})
+
         z = x[2:4]
         self.assertNotIsInstance(z, TracedNpArray)
         self.assertIsInstance(z, np.ndarray)
@@ -920,10 +917,10 @@ class TestTracedNpArray(unittest.TestCase):
         """Test that mixing contexts raises an error."""
         ctx1 = TracedTensorNode(name="test1", node_index=0)
         ctx2 = TracedTensorNode(name="test2", node_index=1)
-        
+
         x = ctx1.create_input(np.array([1.0, 2.0, 3.0]), name="x")
         y = ctx2.create_input(np.array([4.0, 5.0, 6.0]), name="y")
-        
+
         # Mixing arrays from different contexts should raise
         with self.assertRaises(Exception):
             _ = x + y
@@ -934,9 +931,9 @@ class TestTracedNpArray(unittest.TestCase):
         """Test chained operations."""
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
-        
+
         result = ((x + 1) * 2 - 3) / 4
-        
+
         self.assertIsInstance(result, TracedNpArray)
         expected = ((np.array([1.0, 2.0, 3.0]) + 1) * 2 - 3) / 4
         np.testing.assert_array_almost_equal(result, expected)
@@ -945,12 +942,12 @@ class TestTracedNpArray(unittest.TestCase):
         """Test complex computation chain."""
         ctx = TracedTensorNode(name="test", node_index=0)
         x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
-        
+
         # Multiple operations
         y = np.sin(x)
         z = np.cos(x)
-        w = y ** 2 + z ** 2  # Should be ~1.0
-        
+        w = y**2 + z**2  # Should be ~1.0
+
         self.assertIsInstance(w, TracedNpArray)
         np.testing.assert_array_almost_equal(w, np.ones(3), decimal=5)
 
@@ -967,18 +964,18 @@ class TestArithmeticFunctions(unittest.TestCase):
         """Helper to test a function produces correct results."""
         # Get expected result from regular numpy
         expected = func(self.test_data.copy())
-        
+
         # Create traced version
         ctx = TracedTensorNode(name=f"test_{name}", node_index=0)
         traced_input = ctx.create_input(self.test_data.copy(), name="input")
         traced_result = func(traced_input)
-        
+
         # Compare results
         if isinstance(traced_result, TracedNpArray):
             actual = traced_result
         else:
             actual = np.array(traced_result)
-        
+
         if isinstance(expected, np.ndarray):
             np.testing.assert_array_almost_equal(actual, expected, decimal=5)
         else:
@@ -986,15 +983,22 @@ class TestArithmeticFunctions(unittest.TestCase):
 
     def test_scalar_arithmetic(self):
         """Test scalar arithmetic function."""
-        self._test_function(NpArrayArithmeticFunctions.scalar_arithmetic, "scalar_arithmetic")
+        self._test_function(
+            NpArrayArithmeticFunctions.scalar_arithmetic, "scalar_arithmetic"
+        )
 
     def test_scalar_arithmetic_reverse(self):
         """Test reverse scalar arithmetic function."""
-        self._test_function(NpArrayArithmeticFunctions.scalar_arithmetic_reverse, "scalar_arithmetic_reverse")
+        self._test_function(
+            NpArrayArithmeticFunctions.scalar_arithmetic_reverse,
+            "scalar_arithmetic_reverse",
+        )
 
     def test_array_arithmetic(self):
         """Test array arithmetic function."""
-        self._test_function(NpArrayArithmeticFunctions.array_arithmetic, "array_arithmetic")
+        self._test_function(
+            NpArrayArithmeticFunctions.array_arithmetic, "array_arithmetic"
+        )
 
     def test_sum_method(self):
         """Test sum method."""
@@ -1018,7 +1022,9 @@ class TestArithmeticFunctions(unittest.TestCase):
 
     def test_reshape_function(self):
         """Test reshape function."""
-        self._test_function(NpArrayArithmeticFunctions.reshape_function, "reshape_function")
+        self._test_function(
+            NpArrayArithmeticFunctions.reshape_function, "reshape_function"
+        )
 
 
 # Suppress TracerWarning from setitem tests where torch.tensor/torch.as_tensor constants
@@ -1027,7 +1033,7 @@ class TestArithmeticFunctions(unittest.TestCase):
 @pytest.mark.filterwarnings("ignore::torch.jit.TracerWarning")
 class TestCompiledGraphExecution(unittest.TestCase):
     """Test that traced numpy operations compile and execute correctly.
-    
+
     These tests verify that:
     1. The FX graph module produces correct output
     2. TorchScript export works and produces correct output
@@ -1035,10 +1041,16 @@ class TestCompiledGraphExecution(unittest.TestCase):
     4. ExportedProgram export works and produces correct output
     """
 
-    def _test_operation(self, op_name: str, np_func, input_data: np.ndarray, 
-                        expected_output: np.ndarray, atol: float = 1e-5):
+    def _test_operation(
+        self,
+        op_name: str,
+        np_func,
+        input_data: np.ndarray,
+        expected_output: np.ndarray,
+        atol: float = 1e-5,
+    ):
         """Helper to test a single operation through all export formats.
-        
+
         Args:
             op_name: Name of the operation (for error messages)
             np_func: Function that takes TracedNpArray and returns result
@@ -1050,44 +1062,47 @@ class TestCompiledGraphExecution(unittest.TestCase):
         ctx = TracedTensorNode(name=f"test_{op_name}", node_index=0)
         traced_input = ctx.create_input(input_data.copy(), name="input")
         traced_result = np_func(traced_input)
-        
-        self.assertIsInstance(traced_result, TracedNpArray,
-                              f"{op_name}: result should be TracedNpArray, got {type(traced_result)}")
-        
+
+        self.assertIsInstance(
+            traced_result,
+            TracedNpArray,
+            f"{op_name}: result should be TracedNpArray, got {type(traced_result)}",
+        )
+
         # Compile the trace
-        ctx.compile_trace({'output': traced_result})
+        ctx.compile_trace({"output": traced_result})
         graph_module = ctx.m
-        
+
         # Convert input to torch tensor for execution
         input_tensor = torch.from_numpy(input_data.copy()).float()
-        
+
         # Test 1: FX GraphModule execution
         try:
             graph_output = graph_module(input_tensor)
             graph_output_np = graph_output.detach().numpy()
             np.testing.assert_allclose(
-                graph_output_np.flatten(), 
-                expected_output.flatten(), 
+                graph_output_np.flatten(),
+                expected_output.flatten(),
                 atol=atol,
-                err_msg=f"{op_name}: FX GraphModule output doesn't match expected"
+                err_msg=f"{op_name}: FX GraphModule output doesn't match expected",
             )
         except Exception as e:
             self.fail(f"{op_name}: FX GraphModule execution failed: {e}")
-        
+
         # Test 2: TorchScript export and execution
         try:
             scripted = torch.jit.script(graph_module)
             script_output = scripted(input_tensor)
             script_output_np = script_output.detach().numpy()
             np.testing.assert_allclose(
-                script_output_np.flatten(), 
-                expected_output.flatten(), 
+                script_output_np.flatten(),
+                expected_output.flatten(),
                 atol=atol,
-                err_msg=f"{op_name}: TorchScript output doesn't match expected"
+                err_msg=f"{op_name}: TorchScript output doesn't match expected",
             )
         except Exception as e:
             self.fail(f"{op_name}: TorchScript export/execution failed: {e}")
-        
+
         # Test 3: ONNX export and execution
         try:
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -1100,18 +1115,20 @@ class TestCompiledGraphExecution(unittest.TestCase):
                     export_params=True,
                     opset_version=17,
                     do_constant_folding=True,
-                    input_names=['input'],
-                    output_names=['output'],
+                    input_names=["input"],
+                    output_names=["output"],
                 )
-                
+
                 session = ort.InferenceSession(str(onnx_path))
-                onnx_output = session.run(None, {"input": input_data.astype(np.float32)})[0]
-                
+                onnx_output = session.run(
+                    None, {"input": input_data.astype(np.float32)}
+                )[0]
+
                 np.testing.assert_allclose(
-                    onnx_output.flatten(), 
-                    expected_output.flatten(), 
+                    onnx_output.flatten(),
+                    expected_output.flatten(),
                     atol=atol,
-                    err_msg=f"{op_name}: ONNX output doesn't match expected"
+                    err_msg=f"{op_name}: ONNX output doesn't match expected",
                 )
         except Exception as e:
             self.fail(f"{op_name}: ONNX export/execution failed: {e}")
@@ -1156,21 +1173,24 @@ class TestCompiledGraphExecution(unittest.TestCase):
         input_data = np.array([1.0, 2.0, 3.0], dtype=np.float32)
         expected = input_data * np.float32(2.0)
         self._test_operation(
-            "mul_np_float32", lambda x: x * np.float32(2.0), input_data, expected)
+            "mul_np_float32", lambda x: x * np.float32(2.0), input_data, expected
+        )
 
     def test_mul_np_float64(self):
         """Test: x * np.float64(2.0) — numpy scalars must not leak into the FX graph."""
         input_data = np.array([1.0, 2.0, 3.0])
         expected = input_data * np.float64(2.0)
         self._test_operation(
-            "mul_np_float64", lambda x: x * np.float64(2.0), input_data, expected)
+            "mul_np_float64", lambda x: x * np.float64(2.0), input_data, expected
+        )
 
     def test_div_norm(self):
         """Test: x / np.linalg.norm(x) — unmapped norm returns a numpy scalar."""
         input_data = np.array([3.0, 4.0], dtype=np.float32)
         expected = input_data / np.linalg.norm(input_data)
         self._test_operation(
-            "div_norm", lambda x: x / np.linalg.norm(x), input_data, expected)
+            "div_norm", lambda x: x / np.linalg.norm(x), input_data, expected
+        )
 
     def test_div_scalar(self):
         """Test: x / 2"""
@@ -1181,8 +1201,8 @@ class TestCompiledGraphExecution(unittest.TestCase):
     def test_pow_scalar(self):
         """Test: x ** 2"""
         input_data = np.array([1.0, 2.0, 3.0])
-        expected = input_data ** 2
-        self._test_operation("pow_scalar", lambda x: x ** 2, input_data, expected)
+        expected = input_data**2
+        self._test_operation("pow_scalar", lambda x: x**2, input_data, expected)
 
     def test_neg(self):
         """Test: -x"""
@@ -1272,7 +1292,9 @@ class TestCompiledGraphExecution(unittest.TestCase):
         """Test: np.mean(x) returning a scalar — must stay traced."""
         input_data = np.array([1.0, 2.0, 3.0])
         expected = np.asarray(np.mean(input_data))
-        self._test_operation("np_mean_scalar", lambda x: np.mean(x), input_data, expected)
+        self._test_operation(
+            "np_mean_scalar", lambda x: np.mean(x), input_data, expected
+        )
 
     def test_np_var_scalar(self):
         """Test: np.var(x) returning a scalar — must stay traced."""
@@ -1290,13 +1312,17 @@ class TestCompiledGraphExecution(unittest.TestCase):
         """Test: np.prod(x) returning a scalar — must stay traced."""
         input_data = np.array([1.0, 2.0, 3.0])
         expected = np.asarray(np.prod(input_data))
-        self._test_operation("np_prod_scalar", lambda x: np.prod(x), input_data, expected)
+        self._test_operation(
+            "np_prod_scalar", lambda x: np.prod(x), input_data, expected
+        )
 
     def test_np_prod_axis(self):
         """Test: np.prod(x, axis=1) — axis must be renamed to dim for aten."""
         input_data = np.array([[1.0, 2.0], [3.0, 4.0]])
         expected = np.prod(input_data, axis=1)
-        self._test_operation("np_prod_axis", lambda x: np.prod(x, axis=1), input_data, expected)
+        self._test_operation(
+            "np_prod_axis", lambda x: np.prod(x, axis=1), input_data, expected
+        )
 
     def test_np_max_scalar(self):
         """Test: np.max(x) returning a scalar — must stay traced."""
@@ -1314,72 +1340,95 @@ class TestCompiledGraphExecution(unittest.TestCase):
         """Test: np.sum(x, keepdims=True) - tests keepdims→keepdim conversion"""
         input_data = np.array([1.0, 2.0, 3.0])
         expected = np.sum(input_data, keepdims=True)
-        self._test_operation("np_sum_keepdims", lambda x: np.sum(x, keepdims=True), input_data, expected)
+        self._test_operation(
+            "np_sum_keepdims", lambda x: np.sum(x, keepdims=True), input_data, expected
+        )
 
     def test_np_mean_keepdims(self):
         """Test: np.mean(x, keepdims=True) - tests keepdims→keepdim conversion"""
         input_data = np.array([1.0, 2.0, 3.0])
         expected = np.mean(input_data, keepdims=True)
-        self._test_operation("np_mean_keepdims", lambda x: np.mean(x, keepdims=True), input_data, expected)
+        self._test_operation(
+            "np_mean_keepdims",
+            lambda x: np.mean(x, keepdims=True),
+            input_data,
+            expected,
+        )
 
     def test_np_max_axis(self):
         """Test: np.max(x, axis=0)"""
         input_data = np.array([[1.0, 3.0, 2.0], [4.0, 2.0, 5.0]])
         expected = np.max(input_data, axis=0)
-        self._test_operation("np_max_axis", lambda x: np.max(x, axis=0), input_data, expected)
+        self._test_operation(
+            "np_max_axis", lambda x: np.max(x, axis=0), input_data, expected
+        )
 
     def test_np_min_axis(self):
         """Test: np.min(x, axis=0)"""
         input_data = np.array([[1.0, 3.0, 2.0], [4.0, 2.0, 5.0]])
         expected = np.min(input_data, axis=0)
-        self._test_operation("np_min_axis", lambda x: np.min(x, axis=0), input_data, expected)
+        self._test_operation(
+            "np_min_axis", lambda x: np.min(x, axis=0), input_data, expected
+        )
 
     def test_np_stack_axis(self):
         """Test: np.stack([x, x], axis=0) — axis must be renamed to dim for aten."""
         input_data = np.array([1.0, 2.0, 3.0])
         expected = np.stack([input_data, input_data], axis=0)
         self._test_operation(
-            "np_stack_axis", lambda x: np.stack([x, x], axis=0), input_data, expected)
+            "np_stack_axis", lambda x: np.stack([x, x], axis=0), input_data, expected
+        )
 
     def test_np_split_axis(self):
         """Test: np.split(x, 2, axis=0) — axis must be renamed to dim for aten."""
         input_data = np.array([[1.0, 2.0], [3.0, 4.0]])
         expected = np.split(input_data, 2, axis=0)[0]
         self._test_operation(
-            "np_split_axis", lambda x: np.split(x, 2, axis=0)[0], input_data, expected)
+            "np_split_axis", lambda x: np.split(x, 2, axis=0)[0], input_data, expected
+        )
 
     def test_np_array_split_axis(self):
         """Test: np.array_split(x, 2, axis=0) — axis must be renamed to dim for aten."""
         input_data = np.array([[1.0, 2.0], [3.0, 4.0]])
         expected = np.array_split(input_data, 2, axis=0)[0]
         self._test_operation(
-            "np_array_split_axis", lambda x: np.array_split(x, 2, axis=0)[0],
-            input_data, expected)
+            "np_array_split_axis",
+            lambda x: np.array_split(x, 2, axis=0)[0],
+            input_data,
+            expected,
+        )
 
     def test_np_flip_axis(self):
         """Test: np.flip(x, axis=1) — axis becomes dims as a tuple."""
         input_data = np.array([[1.0, 2.0], [3.0, 4.0]])
         expected = np.ascontiguousarray(np.flip(input_data, axis=1))
-        self._test_operation("np_flip_axis", lambda x: np.flip(x, axis=1), input_data, expected)
+        self._test_operation(
+            "np_flip_axis", lambda x: np.flip(x, axis=1), input_data, expected
+        )
 
     def test_np_flip_positional(self):
         """Test: np.flip(x, 1) — integer dims must be wrapped for torch.flip."""
         input_data = np.array([[1.0, 2.0], [3.0, 4.0]])
         expected = np.ascontiguousarray(np.flip(input_data, 1))
-        self._test_operation("np_flip_positional", lambda x: np.flip(x, 1), input_data, expected)
+        self._test_operation(
+            "np_flip_positional", lambda x: np.flip(x, 1), input_data, expected
+        )
 
     def test_np_flip_all_axes(self):
         """Test: np.flip(x) — omitted axis reverses every dimension."""
         input_data = np.array([1.0, 2.0, 3.0])
         expected = np.ascontiguousarray(np.flip(input_data))
-        self._test_operation("np_flip_all_axes", lambda x: np.flip(x), input_data, expected)
+        self._test_operation(
+            "np_flip_all_axes", lambda x: np.flip(x), input_data, expected
+        )
 
     def test_np_roll_axis(self):
         """Test: np.roll(x, 1, axis=1) — axis becomes dims, not dim."""
         input_data = np.array([[1.0, 2.0], [3.0, 4.0]])
         expected = np.roll(input_data, 1, axis=1)
         self._test_operation(
-            "np_roll_axis", lambda x: np.roll(x, 1, axis=1), input_data, expected)
+            "np_roll_axis", lambda x: np.roll(x, 1, axis=1), input_data, expected
+        )
 
     # ==================== Shape Operations ====================
 
@@ -1387,20 +1436,29 @@ class TestCompiledGraphExecution(unittest.TestCase):
         """Test: np.reshape(x, (2, 3))"""
         input_data = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
         expected = np.reshape(input_data, (2, 3))
-        self._test_operation("reshape", lambda x: np.reshape(x, (2, 3)), input_data, expected)
+        self._test_operation(
+            "reshape", lambda x: np.reshape(x, (2, 3)), input_data, expected
+        )
 
     def test_transpose_no_axes(self):
         """Test: np.transpose(x) - tests automatic axes reversal for torch.permute"""
         input_data = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
         # No axes specified - numpy reverses all dims, framework should handle this
         expected = np.transpose(input_data)
-        self._test_operation("transpose_no_axes", lambda x: np.transpose(x), input_data, expected)
+        self._test_operation(
+            "transpose_no_axes", lambda x: np.transpose(x), input_data, expected
+        )
 
     def test_transpose_with_axes(self):
         """Test: np.transpose(x, axes) - explicit axes"""
         input_data = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
         expected = np.transpose(input_data, (1, 0))
-        self._test_operation("transpose_with_axes", lambda x: np.transpose(x, (1, 0)), input_data, expected)
+        self._test_operation(
+            "transpose_with_axes",
+            lambda x: np.transpose(x, (1, 0)),
+            input_data,
+            expected,
+        )
 
     def test_squeeze(self):
         """Test: np.squeeze(x)"""
@@ -1414,19 +1472,25 @@ class TestCompiledGraphExecution(unittest.TestCase):
         """Test: (x + 1) * 2 - 3"""
         input_data = np.array([1.0, 2.0, 3.0])
         expected = (input_data + 1) * 2 - 3
-        self._test_operation("chained_arithmetic", lambda x: (x + 1) * 2 - 3, input_data, expected)
+        self._test_operation(
+            "chained_arithmetic", lambda x: (x + 1) * 2 - 3, input_data, expected
+        )
 
     def test_chained_ufuncs(self):
         """Test: np.exp(np.sin(x))"""
         input_data = np.array([0.0, 0.5, 1.0])
         expected = np.exp(np.sin(input_data))
-        self._test_operation("chained_ufuncs", lambda x: np.exp(np.sin(x)), input_data, expected)
+        self._test_operation(
+            "chained_ufuncs", lambda x: np.exp(np.sin(x)), input_data, expected
+        )
 
     def test_complex_computation(self):
         """Test: np.sqrt(x**2 + 1)"""
         input_data = np.array([1.0, 2.0, 3.0])
         expected = np.sqrt(input_data**2 + 1)
-        self._test_operation("complex_computation", lambda x: np.sqrt(x**2 + 1), input_data, expected)
+        self._test_operation(
+            "complex_computation", lambda x: np.sqrt(x**2 + 1), input_data, expected
+        )
 
     # ==================== Indexing Operations ====================
 
@@ -1442,8 +1506,9 @@ class TestCompiledGraphExecution(unittest.TestCase):
         """Test: x > 2"""
         input_data = np.array([1.0, 2.0, 3.0])
         expected = (input_data > 2).astype(np.float32)
-        self._test_operation("greater_than", lambda x: (x > 2).astype(np.float32), 
-                            input_data, expected)
+        self._test_operation(
+            "greater_than", lambda x: (x > 2).astype(np.float32), input_data, expected
+        )
 
     # ==================== Clip Operation ====================
 
@@ -1451,21 +1516,25 @@ class TestCompiledGraphExecution(unittest.TestCase):
         """Test: np.clip(x, 1.5, 2.5)"""
         input_data = np.array([1.0, 2.0, 3.0])
         expected = np.clip(input_data, 1.5, 2.5)
-        self._test_operation("np_clip", lambda x: np.clip(x, 1.5, 2.5), input_data, expected)
+        self._test_operation(
+            "np_clip", lambda x: np.clip(x, 1.5, 2.5), input_data, expected
+        )
 
     def test_np_maximum_scalar(self):
         """Test: np.maximum(x, 3.0) — torch.maximum requires tensor operands."""
         input_data = np.array([1.0, 4.0, 2.0])
         expected = np.maximum(input_data, 3.0)
         self._test_operation(
-            "np_maximum_scalar", lambda x: np.maximum(x, 3.0), input_data, expected)
+            "np_maximum_scalar", lambda x: np.maximum(x, 3.0), input_data, expected
+        )
 
     def test_np_minimum_scalar(self):
         """Test: np.minimum(x, 3.0) — torch.minimum requires tensor operands."""
         input_data = np.array([1.0, 4.0, 2.0])
         expected = np.minimum(input_data, 3.0)
         self._test_operation(
-            "np_minimum_scalar", lambda x: np.minimum(x, 3.0), input_data, expected)
+            "np_minimum_scalar", lambda x: np.minimum(x, 3.0), input_data, expected
+        )
 
     def test_np_round(self):
         """Test: np.round(x) — dispatches as a function, not a ufunc."""
@@ -1480,14 +1549,14 @@ class TestCompiledGraphExecution(unittest.TestCase):
         input_data = np.array([[1.0, 2.0], [3.0, 4.0]])
         expected = np.matmul(input_data, input_data.T)
         self._test_operation(
-            "np_matmul", lambda x: np.matmul(x, x.T), input_data, expected)
+            "np_matmul", lambda x: np.matmul(x, x.T), input_data, expected
+        )
 
     def test_matmul_operator(self):
         """Test: x @ x.T — the operator form routes through the same ufunc."""
         input_data = np.array([[1.0, 2.0], [3.0, 4.0]])
         expected = input_data @ input_data.T
-        self._test_operation(
-            "matmul_operator", lambda x: x @ x.T, input_data, expected)
+        self._test_operation("matmul_operator", lambda x: x @ x.T, input_data, expected)
 
     def test_np_tensordot_axes(self):
         """Test: np.tensordot(x, x, axes=...) — torch.tensordot takes dims."""
@@ -1495,7 +1564,10 @@ class TestCompiledGraphExecution(unittest.TestCase):
         expected = np.tensordot(input_data, input_data, axes=([1], [1]))
         self._test_operation(
             "np_tensordot_axes",
-            lambda x: np.tensordot(x, x, axes=([1], [1])), input_data, expected)
+            lambda x: np.tensordot(x, x, axes=([1], [1])),
+            input_data,
+            expected,
+        )
 
     # ==================== Sorting and Searching Operations ====================
 
@@ -1509,44 +1581,66 @@ class TestCompiledGraphExecution(unittest.TestCase):
         """Test: np.sort(x, axis=1)"""
         input_data = np.array([[3.0, 1.0, 2.0], [6.0, 4.0, 5.0]])
         expected = np.sort(input_data, axis=1)
-        self._test_operation("np_sort_axis", lambda x: np.sort(x, axis=1), input_data, expected)
+        self._test_operation(
+            "np_sort_axis", lambda x: np.sort(x, axis=1), input_data, expected
+        )
 
     def test_np_argsort(self):
         """Test: np.argsort(x)"""
         input_data = np.array([3.0, 1.0, 4.0, 1.0, 5.0])
-        expected = np.argsort(input_data).astype(np.float32)  # Convert to float for comparison
+        expected = np.argsort(input_data).astype(
+            np.float32
+        )  # Convert to float for comparison
         # Note: argsort returns indices as int64, but we compare as float for consistency
-        self._test_operation("np_argsort", lambda x: np.argsort(x).astype(np.float32), 
-                            input_data, expected)
+        self._test_operation(
+            "np_argsort",
+            lambda x: np.argsort(x).astype(np.float32),
+            input_data,
+            expected,
+        )
 
     def test_np_where_compiled(self):
         """Test: np.where(x > 2, x, 0)"""
         input_data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
         expected = np.where(input_data > 2, input_data, 0.0)
-        self._test_operation("np_where", lambda x: np.where(x > 2, x, 0.0), input_data, expected)
+        self._test_operation(
+            "np_where", lambda x: np.where(x > 2, x, 0.0), input_data, expected
+        )
 
     def test_np_nonzero_rows(self):
         """Test: np.nonzero(x)[0] — numpy returns one index array per dimension."""
         input_data = np.array([[0.0, 0.0, 1.0], [1.0, 0.0, 1.0]])
         expected = np.nonzero(input_data)[0].astype(np.float32)
         self._test_operation(
-            "np_nonzero_rows", lambda x: np.nonzero(x)[0].astype(np.float32),
-            input_data, expected)
+            "np_nonzero_rows",
+            lambda x: np.nonzero(x)[0].astype(np.float32),
+            input_data,
+            expected,
+        )
 
     def test_np_nonzero_cols(self):
         """Test: np.nonzero(x)[1] — the second element indexes the last dimension."""
         input_data = np.array([[0.0, 0.0, 1.0], [1.0, 0.0, 1.0]])
         expected = np.nonzero(input_data)[1].astype(np.float32)
         self._test_operation(
-            "np_nonzero_cols", lambda x: np.nonzero(x)[1].astype(np.float32),
-            input_data, expected)
+            "np_nonzero_cols",
+            lambda x: np.nonzero(x)[1].astype(np.float32),
+            input_data,
+            expected,
+        )
 
     # ==================== Setitem Operations ====================
 
-    def _test_setitem(self, test_name: str, input_data: np.ndarray, 
-                      setitem_func, expected_output: np.ndarray, atol: float = 1e-5):
+    def _test_setitem(
+        self,
+        test_name: str,
+        input_data: np.ndarray,
+        setitem_func,
+        expected_output: np.ndarray,
+        atol: float = 1e-5,
+    ):
         """Helper to test setitem operations through all export formats.
-        
+
         Args:
             test_name: Name of the test (for error messages and ONNX filename)
             input_data: Input numpy array
@@ -1558,36 +1652,36 @@ class TestCompiledGraphExecution(unittest.TestCase):
         ctx = TracedTensorNode(name=f"test_{test_name}", node_index=0)
         traced_input = ctx.create_input(input_data.copy(), name="input")
         traced_result = setitem_func(traced_input)
-        
+
         # Compile the trace
-        ctx.compile_trace({'output': traced_result})
+        ctx.compile_trace({"output": traced_result})
         graph_module = ctx.m
-        
+
         # Convert input to torch tensor for execution
         torch_input = torch.from_numpy(input_data.copy()).float()
         torch_expected = torch.from_numpy(expected_output).float()
-        
+
         # Test 1: FX GraphModule execution
         try:
             output = graph_module(torch_input)
             self.assertTrue(
                 torch.allclose(output, torch_expected, atol=atol),
-                f"{test_name}: FX GraphModule execution failed - output doesn't match"
+                f"{test_name}: FX GraphModule execution failed - output doesn't match",
             )
         except Exception as e:
             self.fail(f"{test_name}: FX GraphModule execution failed: {e}")
-        
+
         # Test 2: TorchScript export
         try:
             scripted = torch.jit.script(graph_module)
             output_ts = scripted(torch_input)
             self.assertTrue(
                 torch.allclose(output_ts, torch_expected, atol=atol),
-                f"{test_name}: TorchScript output doesn't match"
+                f"{test_name}: TorchScript output doesn't match",
             )
         except Exception as e:
             self.fail(f"{test_name}: TorchScript export/execution failed: {e}")
-        
+
         # Test 3: ONNX export
         try:
             with tempfile.TemporaryDirectory() as tmpdir:
@@ -1599,14 +1693,14 @@ class TestCompiledGraphExecution(unittest.TestCase):
                     dynamo=False,
                     export_params=True,
                     opset_version=17,
-                    input_names=['input'],
-                    output_names=['output'],
+                    input_names=["input"],
+                    output_names=["output"],
                 )
                 session = ort.InferenceSession(str(onnx_path))
                 output_onnx = session.run(None, {"input": torch_input.numpy()})[0]
                 self.assertTrue(
                     np.allclose(output_onnx, expected_output, atol=atol),
-                    f"{test_name}: ONNX output doesn't match"
+                    f"{test_name}: ONNX output doesn't match",
                 )
         except Exception as e:
             self.fail(f"{test_name}: ONNX export/execution failed: {e}")
@@ -1624,47 +1718,46 @@ class TestCompiledGraphExecution(unittest.TestCase):
     def test_setitem_single_index(self):
         """Test: x[0] = 10"""
         input_data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-        
+
         def setitem_func(x):
             x[0] = 10.0
             return x * 2
-        
+
         expected = np.array([20.0, 4.0, 6.0, 8.0, 10.0])
         self._test_setitem("setitem_single", input_data, setitem_func, expected)
 
     def test_setitem_slice(self):
         """Test: x[1:3] = [10, 20]"""
         input_data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-        
+
         def setitem_func(x):
             x[1:3] = np.array([10.0, 20.0])
             return x * 2
-        
+
         expected = np.array([2.0, 20.0, 40.0, 8.0, 10.0])
         self._test_setitem("setitem_slice", input_data, setitem_func, expected)
 
     def test_setitem_full_slice(self):
         """Test: x[:] = constant"""
         input_data = np.array([1.0, 2.0, 3.0])
-        
+
         def setitem_func(x):
             x[:] = np.array([10.0, 20.0, 30.0])
             return x * 2
-        
+
         expected = np.array([20.0, 40.0, 60.0])
         self._test_setitem("setitem_full", input_data, setitem_func, expected)
 
     def test_setitem_step_slice(self):
         """Test: x[::2] = [10, 30, 50] with step"""
         input_data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-        
+
         def setitem_func(x):
             x[::2] = np.array([10.0, 30.0, 50.0])  # Assigns to indices 0, 2, 4
             return x * 2
-        
+
         expected = np.array([20.0, 4.0, 60.0, 8.0, 100.0])
         self._test_setitem("setitem_step", input_data, setitem_func, expected)
-
 
     def _validate_dynamic_setitem(self, graph_module, inputs, expected, test_name):
         """Validate export-first backends for traced NumPy index inputs."""
@@ -1675,9 +1768,7 @@ class TestCompiledGraphExecution(unittest.TestCase):
         scripted_actual = scripted(*inputs)
         self.assertTrue(torch.allclose(scripted_actual, expected, atol=1e-5))
 
-        verify_onnx_dynamo(
-            self, graph_module, inputs, expected, test_name=test_name
-        )
+        verify_onnx_dynamo(self, graph_module, inputs, expected, test_name=test_name)
         verify_exported_program(
             self, graph_module, inputs, expected, test_name=test_name
         )
@@ -1685,12 +1776,8 @@ class TestCompiledGraphExecution(unittest.TestCase):
     def test_setitem_traced_integer_index_augmented_assignment(self):
         """NumPy x[:, indices] += source uses shared getitem/setitem lowering."""
         ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(
-            np.arange(8, dtype=np.float32).reshape(2, 4), name="x"
-        )
-        indices = ctx.create_input(
-            np.array([0, 2], dtype=np.int64), name="indices"
-        )
+        x = ctx.create_input(np.arange(8, dtype=np.float32).reshape(2, 4), name="x")
+        indices = ctx.create_input(np.array([0, 2], dtype=np.int64), name="indices")
         source = ctx.create_input(
             np.array([[10.0, 20.0], [30.0, 40.0]], dtype=np.float32),
             name="source",
@@ -1717,12 +1804,8 @@ class TestCompiledGraphExecution(unittest.TestCase):
     def test_setitem_traced_boolean_mask_augmented_assignment(self):
         """NumPy x[:, mask] *= scalar uses shared getitem/setitem lowering."""
         ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(
-            np.arange(8, dtype=np.float32).reshape(2, 4), name="x"
-        )
-        mask = ctx.create_input(
-            np.array([True, False, True, False]), name="mask"
-        )
+        x = ctx.create_input(np.arange(8, dtype=np.float32).reshape(2, 4), name="x")
+        mask = ctx.create_input(np.array([True, False, True, False]), name="mask")
 
         x[:, mask] *= 3.0
         result = x + 1.0
@@ -1744,12 +1827,8 @@ class TestCompiledGraphExecution(unittest.TestCase):
     def test_setitem_traced_index_plain_numpy_source(self):
         """A traced NumPy destination accepts a constant ndarray source."""
         ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(
-            np.arange(8, dtype=np.float32).reshape(2, 4), name="x"
-        )
-        indices = ctx.create_input(
-            np.array([0, 2], dtype=np.int64), name="indices"
-        )
+        x = ctx.create_input(np.arange(8, dtype=np.float32).reshape(2, 4), name="x")
+        indices = ctx.create_input(np.array([0, 2], dtype=np.int64), name="indices")
         source = np.array([[11.0, 12.0], [13.0, 14.0]], dtype=np.float32)
 
         x[:, indices] = source
@@ -1772,4 +1851,3 @@ class TestCompiledGraphExecution(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

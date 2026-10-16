@@ -27,7 +27,9 @@ from leapp import InferenceManager, annotate
 def traced_cvt_color(src, code, dst=None, dstCn=0):
     """Trace BGR-to-RGB conversion for three-channel HWC images."""
     if code != cv2.COLOR_BGR2RGB or dst is not None or dstCn not in (0, 3):
-        raise ValueError("This adapter supports only BGR2RGB without a destination buffer")
+        raise ValueError(
+            "This adapter supports only BGR2RGB without a destination buffer"
+        )
     if src.ndim != 3 or src.shape[-1] != 3:
         raise ValueError("This adapter expects an HWC image with three channels")
     return torch.from_numpy(src).flip((-1,)).numpy()
@@ -68,7 +70,9 @@ def main():
         traced = annotate.input_tensors("camera_preprocess", sample)
         features = stereo_features(*traced)
         annotate.output_tensors(
-            "camera_preprocess", {"stereo_features": features}, export_with="jit",
+            "camera_preprocess",
+            {"stereo_features": features},
+            export_with="jit",
         )
         # Ordinary arrays still take the original OpenCV path during tracing.
         torch.testing.assert_close(stereo_features(*sample.values()), ordinary_result)

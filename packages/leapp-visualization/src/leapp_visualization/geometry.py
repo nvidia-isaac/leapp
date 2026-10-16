@@ -115,13 +115,14 @@ def truncate_text(text: str, max_chars: int) -> str:
     return text[: max_chars - 1] + "..."
 
 
-def resolve_geometry(graph: VisualGraph, layout: LayoutResult, graph_name: str) -> GraphGeometry:
+def resolve_geometry(
+    graph: VisualGraph, layout: LayoutResult, graph_name: str
+) -> GraphGeometry:
     visual_sizes = _measure_visual_sizes(graph)
     centers = _expand_layout_centers(layout.centers, visual_sizes)
     graph = _order_ports_for_geometry(graph, centers)
     node_geometries = {
-        node.id: _build_node_geometry(node, centers[node.id])
-        for node in graph.nodes
+        node.id: _build_node_geometry(node, centers[node.id]) for node in graph.nodes
     }
 
     port_geometries: dict[str, PortGeometry] = {}
@@ -129,7 +130,9 @@ def resolve_geometry(graph: VisualGraph, layout: LayoutResult, graph_name: str) 
         port_geometries.update(_build_port_geometries(node, node_geometries[node.id]))
 
     terminal_geometries = {
-        terminal.id: _build_terminal_geometry(terminal, centers[terminal.id], port_geometries[terminal.port_id])
+        terminal.id: _build_terminal_geometry(
+            terminal, centers[terminal.id], port_geometries[terminal.port_id]
+        )
         for terminal in graph.terminals
     }
 
@@ -138,8 +141,12 @@ def resolve_geometry(graph: VisualGraph, layout: LayoutResult, graph_name: str) 
         + [geometry.rect for geometry in terminal_geometries.values()]
     )
 
-    feedback_edge_ids = tuple(sorted(edge.id for edge in graph.edges if edge.kind == "feedback"))
-    feedback_lane_index = {edge_id: index for index, edge_id in enumerate(feedback_edge_ids)}
+    feedback_edge_ids = tuple(
+        sorted(edge.id for edge in graph.edges if edge.kind == "feedback")
+    )
+    feedback_lane_index = {
+        edge_id: index for index, edge_id in enumerate(feedback_edge_ids)
+    }
 
     edge_geometries = {
         edge.id: _build_edge_geometry(
@@ -199,7 +206,9 @@ def resolve_geometry(graph: VisualGraph, layout: LayoutResult, graph_name: str) 
             id=geometry.id,
             kind=geometry.kind,
             label=geometry.label,
-            points=tuple(_shift_point(point, shift_x, shift_y) for point in geometry.points),
+            points=tuple(
+                _shift_point(point, shift_x, shift_y) for point in geometry.points
+            ),
         )
         for edge_id, geometry in edge_geometries.items()
     }
@@ -222,7 +231,9 @@ def resolve_geometry(graph: VisualGraph, layout: LayoutResult, graph_name: str) 
     )
 
 
-def _order_ports_for_geometry(graph: VisualGraph, centers: dict[str, Point]) -> VisualGraph:
+def _order_ports_for_geometry(
+    graph: VisualGraph, centers: dict[str, Point]
+) -> VisualGraph:
     original_port_indices = _collect_original_port_indices(graph.nodes)
     input_order_keys: dict[str, list[tuple[float, float]]] = {}
 
@@ -231,17 +242,23 @@ def _order_ports_for_geometry(graph: VisualGraph, centers: dict[str, Point]) -> 
             continue
         if edge.source_port_id is None or edge.target_port_id is None:
             continue
-        source_key = _connected_port_order_key(edge.source_id, edge.source_port_id, centers, original_port_indices)
+        source_key = _connected_port_order_key(
+            edge.source_id, edge.source_port_id, centers, original_port_indices
+        )
         input_order_keys.setdefault(edge.target_port_id, []).append(source_key)
 
     ordered_nodes = tuple(
         replace(
             node,
-            inputs=_reorder_connected_ports(node.inputs, input_order_keys, original_port_indices),
+            inputs=_reorder_connected_ports(
+                node.inputs, input_order_keys, original_port_indices
+            ),
         )
         for node in graph.nodes
     )
-    return VisualGraph(nodes=ordered_nodes, terminals=graph.terminals, edges=graph.edges)
+    return VisualGraph(
+        nodes=ordered_nodes, terminals=graph.terminals, edges=graph.edges
+    )
 
 
 def _collect_original_port_indices(nodes: tuple[VisualNode, ...]) -> dict[str, int]:
@@ -269,7 +286,9 @@ def _reorder_connected_ports(
     order_keys: dict[str, list[tuple[float, float]]],
     original_port_indices: dict[str, int],
 ) -> tuple[VisualPort, ...]:
-    connected_slots = [index for index, port in enumerate(ports) if port.id in order_keys]
+    connected_slots = [
+        index for index, port in enumerate(ports) if port.id in order_keys
+    ]
     if len(connected_slots) < 2:
         return ports
 
@@ -311,7 +330,9 @@ def _build_node_geometry(node: VisualNode, center: Point) -> NodeGeometry:
     )
 
 
-def _build_terminal_geometry(terminal: VisualTerminal, center: Point, connected_port: PortGeometry) -> TerminalGeometry:
+def _build_terminal_geometry(
+    terminal: VisualTerminal, center: Point, connected_port: PortGeometry
+) -> TerminalGeometry:
     width = _measure_terminal_width(terminal)
     rect = Rect(
         x=center.x - (width / 2.0),
@@ -330,7 +351,9 @@ def _build_terminal_geometry(terminal: VisualTerminal, center: Point, connected_
     )
 
 
-def _build_port_geometries(node: VisualNode, node_geometry: NodeGeometry) -> dict[str, PortGeometry]:
+def _build_port_geometries(
+    node: VisualNode, node_geometry: NodeGeometry
+) -> dict[str, PortGeometry]:
     port_geometries: dict[str, PortGeometry] = {}
     input_slot_width = _measure_side_slot_width(node.inputs)
     output_slot_width = _measure_side_slot_width(node.outputs)
@@ -340,27 +363,43 @@ def _build_port_geometries(node: VisualNode, node_geometry: NodeGeometry) -> dic
     for index in range(row_count):
         row_y = first_row_y + (index * _PORT_ROW_HEIGHT)
         if index < len(node.inputs):
-            geometry = _build_port_geometry(node.inputs[index], node_geometry, row_y, input_slot_width)
+            geometry = _build_port_geometry(
+                node.inputs[index], node_geometry, row_y, input_slot_width
+            )
             port_geometries[geometry.id] = geometry
         if index < len(node.outputs):
-            geometry = _build_port_geometry(node.outputs[index], node_geometry, row_y, output_slot_width)
+            geometry = _build_port_geometry(
+                node.outputs[index], node_geometry, row_y, output_slot_width
+            )
             port_geometries[geometry.id] = geometry
 
     return port_geometries
 
 
-def _build_port_geometry(port: VisualPort, node_geometry: NodeGeometry, row_y: float, slot_width: float) -> PortGeometry:
+def _build_port_geometry(
+    port: VisualPort, node_geometry: NodeGeometry, row_y: float, slot_width: float
+) -> PortGeometry:
     name = truncate_text(port.name, _PORT_NAME_MAX_CHARS)
     detail = truncate_text(_port_detail_text(port), _PORT_DETAIL_MAX_CHARS)
-    full_label = "\n".join(part for part in (port.name, _port_detail_text(port), port.kind) if part)
-    rect_x = node_geometry.rect.x if port.side == "input" else node_geometry.rect.x + node_geometry.rect.width - slot_width
+    full_label = "\n".join(
+        part for part in (port.name, _port_detail_text(port), port.kind) if part
+    )
+    rect_x = (
+        node_geometry.rect.x
+        if port.side == "input"
+        else node_geometry.rect.x + node_geometry.rect.width - slot_width
+    )
     rect = Rect(
         x=rect_x,
         y=row_y,
         width=slot_width,
         height=_PORT_ROW_HEIGHT,
     )
-    anchor_x = node_geometry.rect.x if port.side == "input" else node_geometry.rect.x + node_geometry.rect.width
+    anchor_x = (
+        node_geometry.rect.x
+        if port.side == "input"
+        else node_geometry.rect.x + node_geometry.rect.width
+    )
     anchor = Point(anchor_x, rect.y + (rect.height / 2.0))
     return PortGeometry(
         id=port.id,
@@ -436,7 +475,9 @@ def _measure_visual_sizes(graph: VisualGraph) -> dict[str, _Size]:
     return sizes
 
 
-def _expand_layout_centers(centers: dict[str, Point], sizes: dict[str, _Size]) -> dict[str, Point]:
+def _expand_layout_centers(
+    centers: dict[str, Point], sizes: dict[str, _Size]
+) -> dict[str, Point]:
     if not centers:
         return {}
 
@@ -447,8 +488,14 @@ def _expand_layout_centers(centers: dict[str, Point], sizes: dict[str, _Size]) -
     layer_x: dict[float, float] = {}
     previous_right: float | None = None
     for layer_key in sorted(layer_ids):
-        half_width = max(sizes[visual_id].width / 2.0 for visual_id in layer_ids[layer_key])
-        center_x = half_width if previous_right is None else previous_right + _LAYER_GAP + half_width
+        half_width = max(
+            sizes[visual_id].width / 2.0 for visual_id in layer_ids[layer_key]
+        )
+        center_x = (
+            half_width
+            if previous_right is None
+            else previous_right + _LAYER_GAP + half_width
+        )
         layer_x[layer_key] = center_x
         previous_right = center_x + half_width
 
@@ -458,7 +505,10 @@ def _expand_layout_centers(centers: dict[str, Point], sizes: dict[str, _Size]) -
         for visual_id in sorted(visual_ids, key=lambda item: (centers[item].y, item)):
             half_height = sizes[visual_id].height / 2.0
             center_y = centers[visual_id].y
-            if previous_bottom is not None and center_y - half_height < previous_bottom + _LAYER_ITEM_GAP:
+            if (
+                previous_bottom is not None
+                and center_y - half_height < previous_bottom + _LAYER_ITEM_GAP
+            ):
                 center_y = previous_bottom + _LAYER_ITEM_GAP + half_height
             adjusted[visual_id] = Point(layer_x[layer_key], center_y)
             previous_bottom = center_y + half_height
@@ -469,7 +519,9 @@ def _expand_layout_centers(centers: dict[str, Point], sizes: dict[str, _Size]) -
 def _measure_node_size(node: VisualNode) -> _Size:
     input_slot_width = _measure_side_slot_width(node.inputs)
     output_slot_width = _measure_side_slot_width(node.outputs)
-    port_widths = [width for width in (input_slot_width, output_slot_width) if width > 0.0]
+    port_widths = [
+        width for width in (input_slot_width, output_slot_width) if width > 0.0
+    ]
     if len(port_widths) == 2:
         port_width = input_slot_width + _PORT_COLUMN_GAP + output_slot_width
     elif port_widths:
@@ -479,7 +531,9 @@ def _measure_node_size(node: VisualNode) -> _Size:
 
     width = max(_MIN_NODE_WIDTH, _measure_node_header_width(node), port_width)
     row_count = max(len(node.inputs), len(node.outputs))
-    height = _HEADER_HEIGHT + _NODE_PADDING + (row_count * _PORT_ROW_HEIGHT) + _NODE_PADDING
+    height = (
+        _HEADER_HEIGHT + _NODE_PADDING + (row_count * _PORT_ROW_HEIGHT) + _NODE_PADDING
+    )
     return _Size(width, height)
 
 
@@ -507,7 +561,8 @@ def _measure_side_slot_width(ports: tuple[VisualPort, ...]) -> float:
 def _measure_port_content_width(port: VisualPort) -> float:
     widths = [
         len(truncate_text(port.name, _PORT_NAME_MAX_CHARS)) * _PORT_PRIMARY_CHAR_WIDTH,
-        len(truncate_text(_port_detail_text(port), _PORT_DETAIL_MAX_CHARS)) * _PORT_DETAIL_CHAR_WIDTH,
+        len(truncate_text(_port_detail_text(port), _PORT_DETAIL_MAX_CHARS))
+        * _PORT_DETAIL_CHAR_WIDTH,
     ]
     visible_kind = _visible_port_kind(port)
     if visible_kind:

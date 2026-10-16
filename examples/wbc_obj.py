@@ -19,12 +19,12 @@ import torch
 import os
 import leapp
 from leapp import annotate
+
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DTYPE = torch.float32
 
 
-def quat_to_rot_matrix(quat:
-                       torch.Tensor) -> torch.Tensor:
+def quat_to_rot_matrix(quat: torch.Tensor) -> torch.Tensor:
     dtype = quat.dtype
     device = quat.device
     q = quat.clone().to(dtype=dtype, device=device)
@@ -37,27 +37,39 @@ def quat_to_rot_matrix(quat:
 
     # Identity matrix
     identity = torch.tensor(
-        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
-        dtype=dtype, device=device
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], dtype=dtype, device=device
     )
 
     # Regular calculation
-    q_scaled = q * torch.sqrt(torch.tensor(2.0, dtype=dtype, device=q.device) /
-                              torch.clamp(nq, min=1e-10))
+    q_scaled = q * torch.sqrt(
+        torch.tensor(2.0, dtype=dtype, device=q.device) / torch.clamp(nq, min=1e-10)
+    )
     q_outer = torch.outer(q_scaled, q_scaled)
 
     # Create rotation matrix using torch.stack (TorchScript-friendly)
-    row0 = torch.stack([1.0 - q_outer[2, 2] - q_outer[3, 3],
-                        q_outer[1, 2] - q_outer[3, 0],
-                        q_outer[1, 3] + q_outer[2, 0]])
+    row0 = torch.stack(
+        [
+            1.0 - q_outer[2, 2] - q_outer[3, 3],
+            q_outer[1, 2] - q_outer[3, 0],
+            q_outer[1, 3] + q_outer[2, 0],
+        ]
+    )
 
-    row1 = torch.stack([q_outer[1, 2] + q_outer[3, 0],
-                        1.0 - q_outer[1, 1] - q_outer[3, 3],
-                        q_outer[2, 3] - q_outer[1, 0]])
+    row1 = torch.stack(
+        [
+            q_outer[1, 2] + q_outer[3, 0],
+            1.0 - q_outer[1, 1] - q_outer[3, 3],
+            q_outer[2, 3] - q_outer[1, 0],
+        ]
+    )
 
-    row2 = torch.stack([q_outer[1, 3] - q_outer[2, 0],
-                        q_outer[2, 3] + q_outer[1, 0],
-                        1.0 - q_outer[1, 1] - q_outer[2, 2]])
+    row2 = torch.stack(
+        [
+            q_outer[1, 3] - q_outer[2, 0],
+            q_outer[2, 3] + q_outer[1, 0],
+            1.0 - q_outer[1, 1] - q_outer[2, 2],
+        ]
+    )
 
     regular = torch.stack([row0, row1, row2])
 
@@ -69,15 +81,36 @@ class WBC:
     def __init__(self):
         self.action_scaling = torch.tensor(0.5)
 
-        self.default_pos = torch.tensor([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
-                                        0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-        model_path = os.path.join(os.path.dirname(
-            __file__), "models", "isaac_velocity_flat_h1_v0.pt")
+        self.default_pos = torch.tensor(
+            [
+                1.0,
+                1.0,
+                1.0,
+                1.0,
+                1.0,
+                1.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            ]
+        )
+        model_path = os.path.join(
+            os.path.dirname(__file__), "models", "isaac_velocity_flat_h1_v0.pt"
+        )
         self.model = torch.jit.load(model_path, map_location=DEVICE)
         self.previous_actions = torch.zeros(19, device=DEVICE, dtype=DTYPE)
 
-    def quat_to_rot_matrix(self, quat:
-                           torch.Tensor) -> torch.Tensor:
+    def quat_to_rot_matrix(self, quat: torch.Tensor) -> torch.Tensor:
         dtype = quat.dtype
         device = quat.device
         q = quat.clone().to(dtype=dtype, device=device)
@@ -91,26 +124,40 @@ class WBC:
         # Identity matrix
         identity = torch.tensor(
             [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
-            dtype=dtype, device=device
+            dtype=dtype,
+            device=device,
         )
 
         # Regular calculation
-        q_scaled = q * torch.sqrt(torch.tensor(2.0, dtype=dtype, device=q.device) /
-                                  torch.clamp(nq, min=1e-10))
+        q_scaled = q * torch.sqrt(
+            torch.tensor(2.0, dtype=dtype, device=q.device) / torch.clamp(nq, min=1e-10)
+        )
         q_outer = torch.outer(q_scaled, q_scaled)
 
         # Create rotation matrix using torch.stack (TorchScript-friendly)
-        row0 = torch.stack([1.0 - q_outer[2, 2] - q_outer[3, 3],
-                            q_outer[1, 2] - q_outer[3, 0],
-                            q_outer[1, 3] + q_outer[2, 0]])
+        row0 = torch.stack(
+            [
+                1.0 - q_outer[2, 2] - q_outer[3, 3],
+                q_outer[1, 2] - q_outer[3, 0],
+                q_outer[1, 3] + q_outer[2, 0],
+            ]
+        )
 
-        row1 = torch.stack([q_outer[1, 2] + q_outer[3, 0],
-                            1.0 - q_outer[1, 1] - q_outer[3, 3],
-                            q_outer[2, 3] - q_outer[1, 0]])
+        row1 = torch.stack(
+            [
+                q_outer[1, 2] + q_outer[3, 0],
+                1.0 - q_outer[1, 1] - q_outer[3, 3],
+                q_outer[2, 3] - q_outer[1, 0],
+            ]
+        )
 
-        row2 = torch.stack([q_outer[1, 3] - q_outer[2, 0],
-                            q_outer[2, 3] + q_outer[1, 0],
-                            1.0 - q_outer[1, 1] - q_outer[2, 2]])
+        row2 = torch.stack(
+            [
+                q_outer[1, 3] - q_outer[2, 0],
+                q_outer[2, 3] + q_outer[1, 0],
+                1.0 - q_outer[1, 1] - q_outer[2, 2],
+            ]
+        )
 
         regular = torch.stack([row0, row1, row2])
 
@@ -118,21 +165,22 @@ class WBC:
         return weight_scalar * identity + (1 - weight_scalar) * regular
 
     def post_process_actions(self, actions):
-        action_scaling = self.action_scaling.to(
-            actions.dtype).to(actions.device)
-        default_pos = self.default_pos.to(
-            actions.dtype).to(actions.device)
+        action_scaling = self.action_scaling.to(actions.dtype).to(actions.device)
+        default_pos = self.default_pos.to(actions.dtype).to(actions.device)
         actions = actions.squeeze()
         actions = actions * action_scaling + default_pos
         return actions
 
-    def process_odom(self, lin_vel_I: torch.Tensor, ang_vel_I: torch.Tensor, q_IB: torch.Tensor):
+    def process_odom(
+        self, lin_vel_I: torch.Tensor, ang_vel_I: torch.Tensor, q_IB: torch.Tensor
+    ):
         R_IB = self.quat_to_rot_matrix(q_IB)
         R_BI = R_IB.transpose(0, 1)
         lin_vel_b = torch.matmul(R_BI, lin_vel_I)
         ang_vel_b = torch.matmul(R_BI, ang_vel_I)
-        downward_tensor = torch.tensor([0.0, 0.0, -1.0],
-                                       dtype=R_BI.dtype, device=R_BI.device)
+        downward_tensor = torch.tensor(
+            [0.0, 0.0, -1.0], dtype=R_BI.dtype, device=R_BI.device
+        )
         projected_gravity_b = torch.matmul(R_BI, downward_tensor)
 
         return lin_vel_b, ang_vel_b, projected_gravity_b
@@ -140,17 +188,24 @@ class WBC:
     def process_joint_pos(self, joint_pos):
         return joint_pos - self.default_pos.to(joint_pos.dtype).to(joint_pos.device)
 
-    def run_model(self, joint_pos, joint_vel, velocity_commands, lin_vel_I, ang_vel_I, q_IB):
-        lin_vel_b, ang_vel_b, gravity_b = self.process_odom(
-            lin_vel_I, ang_vel_I, q_IB)
+    def run_model(
+        self, joint_pos, joint_vel, velocity_commands, lin_vel_I, ang_vel_I, q_IB
+    ):
+        lin_vel_b, ang_vel_b, gravity_b = self.process_odom(lin_vel_I, ang_vel_I, q_IB)
         processed_joint_pos = self.process_joint_pos(joint_pos)
 
-
-        concatenated_tensor = torch.cat([lin_vel_b, ang_vel_b,
-                                        gravity_b, velocity_commands,
-                                        processed_joint_pos, joint_vel, self.previous_actions])
-        transformed = concatenated_tensor.view(
-            1, -1).float().to(dtype=torch.float32)
+        concatenated_tensor = torch.cat(
+            [
+                lin_vel_b,
+                ang_vel_b,
+                gravity_b,
+                velocity_commands,
+                processed_joint_pos,
+                joint_vel,
+                self.previous_actions,
+            ]
+        )
+        transformed = concatenated_tensor.view(1, -1).float().to(dtype=torch.float32)
         if len(transformed.shape) == 1:
             transformed = transformed.unsqueeze(0)
         actions = self.model(transformed).detach().view(-1)
@@ -168,11 +223,16 @@ def main():
         "velocity_commands": torch.randn(3, device=DEVICE, dtype=DTYPE),
         "lin_vel_I": torch.randn(3, device=DEVICE, dtype=DTYPE),
         "ang_vel_I": torch.randn(3, device=DEVICE, dtype=DTYPE),
-        "q_IB": torch.randn(4, device=DEVICE, dtype=DTYPE)}
+        "q_IB": torch.randn(4, device=DEVICE, dtype=DTYPE),
+    }
 
     for i in range(5):
-        observation_data = annotate.input_tensors("wbc_obj", {"": mock_observation_data})
-        wbc.previous_actions = annotate.state_tensors("wbc_obj", {"previous_actions": wbc.previous_actions})
+        observation_data = annotate.input_tensors(
+            "wbc_obj", {"": mock_observation_data}
+        )
+        wbc.previous_actions = annotate.state_tensors(
+            "wbc_obj", {"previous_actions": wbc.previous_actions}
+        )
         actions = wbc.run_model(**observation_data)
         annotate.update_state("wbc_obj", {"previous_actions": wbc.previous_actions})
         annotate.output_tensors("wbc_obj", {"actions": actions}, export_with="onnx")

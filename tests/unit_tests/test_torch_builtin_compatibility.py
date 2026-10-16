@@ -33,26 +33,35 @@ import torch.nn.functional as F
 from leapp.leapp_graph.traced_node import TracedTensorNode
 from leapp.leapp_graph.datatypes import TracedTensor
 
-from tests.unit_tests.export_format_validation import verify_exported_program_on_random_inputs
-
+from tests.unit_tests.export_format_validation import (
+    verify_exported_program_on_random_inputs,
+)
 
 
 @pytest.mark.filterwarnings("ignore::torch.jit.TracerWarning")
 class TestFunctional(unittest.TestCase):
     """Test torch.nn.functional operations trace and compile correctly."""
-    
+
     # Number of random inputs to test after compiling
     NUM_TEST_INPUTS = 5
 
-    def _run_trace_and_compile(self, func, input_shape, test_name,
-                               skip_torchscript=False, skip_onnx=False,
-                               skip_exported_program=False,
-                               onnx_opset=17, atol=1e-5, **func_kwargs):
+    def _run_trace_and_compile(
+        self,
+        func,
+        input_shape,
+        test_name,
+        skip_torchscript=False,
+        skip_onnx=False,
+        skip_exported_program=False,
+        onnx_opset=17,
+        atol=1e-5,
+        **func_kwargs,
+    ):
         """Helper to trace a function and verify compiled output matches.
-        
+
         Compiles once, then tests with NUM_TEST_INPUTS random inputs.
         Tests FX GraphModule, TorchScript, and ONNX exports.
-        
+
         Args:
             func: Function to apply (e.g., F.relu, or partial(F.linear, weight=w))
             input_shape: Shape of input tensor
@@ -63,28 +72,28 @@ class TestFunctional(unittest.TestCase):
             **func_kwargs: Additional kwargs to pass to func
         """
         input_tensor = torch.randn(*input_shape)
-        
+
         ctx = TracedTensorNode(name=test_name, node_index=0)
         traced_input = ctx.create_input(input_tensor.clone(), name="x")
-        
+
         output = func(traced_input, **func_kwargs)
         self.assertIsInstance(output, TracedTensor)
-        
-        ctx.compile_trace({'output': output})
+
+        ctx.compile_trace({"output": output})
         graph_module = ctx.m
-        
+
         # Test with multiple random inputs across all export formats
         for i in range(self.NUM_TEST_INPUTS):
             test_input = torch.randn(*input_shape)
             expected = func(test_input, **func_kwargs)
-            
+
             # Test 1: FX GraphModule execution
             actual_fx = graph_module(test_input)
             self.assertTrue(
                 torch.allclose(actual_fx, expected, atol=atol),
-                f"{test_name}: FX output mismatch on input {i+1}/{self.NUM_TEST_INPUTS}"
+                f"{test_name}: FX output mismatch on input {i + 1}/{self.NUM_TEST_INPUTS}",
             )
-        
+
         # Test 2: TorchScript export and execution (compile once, test with all inputs)
         if not skip_torchscript:
             try:
@@ -95,11 +104,11 @@ class TestFunctional(unittest.TestCase):
                     actual_ts = scripted(test_input)
                     self.assertTrue(
                         torch.allclose(actual_ts, expected, atol=atol),
-                        f"{test_name}: TorchScript output mismatch on input {i+1}"
+                        f"{test_name}: TorchScript output mismatch on input {i + 1}",
                     )
             except Exception as e:
                 self.fail(f"{test_name}: TorchScript export/execution failed: {e}")
-        
+
         # Test 3: ONNX export and execution
         if not skip_onnx:
             try:
@@ -113,18 +122,20 @@ class TestFunctional(unittest.TestCase):
                         dynamo=False,
                         export_params=True,
                         opset_version=onnx_opset,
-                        input_names=['input'],
-                        output_names=['output'],
+                        input_names=["input"],
+                        output_names=["output"],
                     )
                     session = ort.InferenceSession(str(onnx_path))
-                    
+
                     for i in range(self.NUM_TEST_INPUTS):
                         test_input = torch.randn(*input_shape)
                         expected = func(test_input, **func_kwargs)
-                        output_onnx = session.run(None, {"input": test_input.numpy()})[0]
+                        output_onnx = session.run(None, {"input": test_input.numpy()})[
+                            0
+                        ]
                         self.assertTrue(
                             np.allclose(output_onnx, expected.numpy(), atol=atol),
-                            f"{test_name}: ONNX output mismatch on input {i+1}"
+                            f"{test_name}: ONNX output mismatch on input {i + 1}",
                         )
             except Exception as e:
                 self.fail(f"{test_name}: ONNX export/execution failed: {e}")
@@ -145,7 +156,7 @@ class TestFunctional(unittest.TestCase):
     # =========================================================================
     # Linear
     # =========================================================================
-    
+
     def test_linear(self):
         """Test F.linear with weight and bias."""
         weight = torch.randn(16, 8)
@@ -179,8 +190,7 @@ class TestFunctional(unittest.TestCase):
     def test_leaky_relu_custom_slope(self):
         """Test F.leaky_relu with custom negative_slope."""
         self._run_trace_and_compile(
-            F.leaky_relu, (4, 8), "test_leaky_relu_custom", 
-            negative_slope=0.2
+            F.leaky_relu, (4, 8), "test_leaky_relu_custom", negative_slope=0.2
         )
 
     def test_gelu(self):
@@ -218,8 +228,7 @@ class TestFunctional(unittest.TestCase):
     def test_hardtanh_custom_range(self):
         """Test F.hardtanh with custom min/max values."""
         self._run_trace_and_compile(
-            F.hardtanh, (4, 8), "test_hardtanh_custom",
-            min_val=-2.0, max_val=2.0
+            F.hardtanh, (4, 8), "test_hardtanh_custom", min_val=-2.0, max_val=2.0
         )
 
     def test_hardswish(self):
@@ -281,15 +290,13 @@ class TestFunctional(unittest.TestCase):
     def test_normalize_l2_dim1(self):
         """Test F.normalize with L2 norm along dim=1."""
         self._run_trace_and_compile(
-            F.normalize, (4, 8), "test_normalize_l2", 
-            p=2.0, dim=1
+            F.normalize, (4, 8), "test_normalize_l2", p=2.0, dim=1
         )
 
     def test_normalize_l1(self):
         """Test F.normalize with L1 norm."""
         self._run_trace_and_compile(
-            F.normalize, (4, 8), "test_normalize_l1", 
-            p=1.0, dim=1
+            F.normalize, (4, 8), "test_normalize_l1", p=1.0, dim=1
         )
 
     def test_layer_norm(self):
@@ -297,7 +304,9 @@ class TestFunctional(unittest.TestCase):
         normalized_shape = [8]
         weight = torch.ones(8)
         bias = torch.zeros(8)
-        func = partial(F.layer_norm, normalized_shape=normalized_shape, weight=weight, bias=bias)
+        func = partial(
+            F.layer_norm, normalized_shape=normalized_shape, weight=weight, bias=bias
+        )
         self._run_trace_and_compile(func, (4, 8), "test_layer_norm")
 
     def test_layer_norm_2d(self):
@@ -305,12 +314,14 @@ class TestFunctional(unittest.TestCase):
         normalized_shape = [8, 8]
         weight = torch.ones(8, 8)
         bias = torch.zeros(8, 8)
-        func = partial(F.layer_norm, normalized_shape=normalized_shape, weight=weight, bias=bias)
+        func = partial(
+            F.layer_norm, normalized_shape=normalized_shape, weight=weight, bias=bias
+        )
         self._run_trace_and_compile(func, (4, 8, 8), "test_layer_norm_2d")
 
     def test_batch_norm(self):
         """Test F.batch_norm in eval mode (training=False).
-        
+
         Uses fixed running_mean/running_var which are required when training=False.
         Running stats become constants captured in the trace.
         """
@@ -320,8 +331,12 @@ class TestFunctional(unittest.TestCase):
         weight = torch.ones(num_features)
         bias = torch.zeros(num_features)
         func = partial(
-            F.batch_norm, running_mean=running_mean, running_var=running_var,
-            weight=weight, bias=bias, training=False
+            F.batch_norm,
+            running_mean=running_mean,
+            running_var=running_var,
+            weight=weight,
+            bias=bias,
+            training=False,
         )
         self._run_trace_and_compile(func, (2, 3, 8, 8), "test_batch_norm")
 
@@ -333,14 +348,18 @@ class TestFunctional(unittest.TestCase):
         weight = torch.ones(num_features)
         bias = torch.zeros(num_features)
         func = partial(
-            F.batch_norm, running_mean=running_mean, running_var=running_var,
-            weight=weight, bias=bias, training=False
+            F.batch_norm,
+            running_mean=running_mean,
+            running_var=running_var,
+            weight=weight,
+            bias=bias,
+            training=False,
         )
         self._run_trace_and_compile(func, (4, 8), "test_batch_norm_1d")
 
     def test_instance_norm(self):
         """Test F.instance_norm.
-        
+
         Uses default use_input_stats=True (computes stats from input).
         """
         num_features = 3
@@ -357,8 +376,12 @@ class TestFunctional(unittest.TestCase):
         weight = torch.ones(num_features)
         bias = torch.zeros(num_features)
         func = partial(
-            F.instance_norm, running_mean=running_mean, running_var=running_var,
-            weight=weight, bias=bias, use_input_stats=False
+            F.instance_norm,
+            running_mean=running_mean,
+            running_var=running_var,
+            weight=weight,
+            bias=bias,
+            use_input_stats=False,
         )
         self._run_trace_and_compile(func, (2, 3, 8, 8), "test_instance_norm_running")
 
@@ -383,8 +406,7 @@ class TestFunctional(unittest.TestCase):
     def test_dropout_eval(self):
         """Test F.dropout in eval mode (training=False) - should be identity."""
         self._run_trace_and_compile(
-            F.dropout, (4, 8), "test_dropout_eval", 
-            p=0.5, training=False
+            F.dropout, (4, 8), "test_dropout_eval", p=0.5, training=False
         )
 
     # =========================================================================
@@ -446,8 +468,12 @@ class TestFunctional(unittest.TestCase):
         """Test F.conv_transpose2d with stride for upsampling."""
         weight = torch.randn(3, 16, 4, 4)
         bias = torch.randn(16)
-        func = partial(F.conv_transpose2d, weight=weight, bias=bias, stride=2, padding=1)
-        self._run_trace_and_compile(func, (2, 3, 16, 16), "test_conv_transpose2d_stride")
+        func = partial(
+            F.conv_transpose2d, weight=weight, bias=bias, stride=2, padding=1
+        )
+        self._run_trace_and_compile(
+            func, (2, 3, 16, 16), "test_conv_transpose2d_stride"
+        )
 
     # =========================================================================
     # Pooling
@@ -519,24 +545,30 @@ class TestFunctional(unittest.TestCase):
 
     def test_interpolate_nearest(self):
         """Test F.interpolate with nearest neighbor mode."""
-        func = partial(F.interpolate, size=(32, 32), mode='nearest')
+        func = partial(F.interpolate, size=(32, 32), mode="nearest")
         self._run_trace_and_compile(func, (2, 3, 16, 16), "test_interpolate_nearest")
 
     def test_interpolate_bilinear(self):
         """Test F.interpolate with bilinear mode."""
-        func = partial(F.interpolate, size=(32, 32), mode='bilinear', align_corners=False)
+        func = partial(
+            F.interpolate, size=(32, 32), mode="bilinear", align_corners=False
+        )
         self._run_trace_and_compile(func, (2, 3, 16, 16), "test_interpolate_bilinear")
 
     def test_interpolate_scale_factor(self):
         """Test F.interpolate with scale_factor."""
         # Note: scale_factor must be float (2.0) not int (2) for TorchScript compatibility
-        func = partial(F.interpolate, scale_factor=2.0, mode='nearest')
+        func = partial(F.interpolate, scale_factor=2.0, mode="nearest")
         self._run_trace_and_compile(func, (2, 3, 16, 16), "test_interpolate_scale")
 
     def test_interpolate_trilinear(self):
         """Test F.interpolate with trilinear mode for 3D."""
-        func = partial(F.interpolate, size=(16, 32, 32), mode='trilinear', align_corners=False)
-        self._run_trace_and_compile(func, (2, 3, 8, 16, 16), "test_interpolate_trilinear")
+        func = partial(
+            F.interpolate, size=(16, 32, 32), mode="trilinear", align_corners=False
+        )
+        self._run_trace_and_compile(
+            func, (2, 3, 8, 16, 16), "test_interpolate_trilinear"
+        )
 
     # =========================================================================
     # Padding
@@ -545,23 +577,23 @@ class TestFunctional(unittest.TestCase):
     def test_pad_constant(self):
         """Test F.pad with constant padding."""
         # Note: value must be float (0.0) not int (0) for TorchScript compatibility
-        func = partial(F.pad, pad=(1, 1, 1, 1), mode='constant', value=0.0)
+        func = partial(F.pad, pad=(1, 1, 1, 1), mode="constant", value=0.0)
         self._run_trace_and_compile(func, (2, 3, 16, 16), "test_pad_constant")
 
     def test_pad_reflect(self):
         """Test F.pad with reflect padding."""
-        func = partial(F.pad, pad=(1, 1, 1, 1), mode='reflect')
+        func = partial(F.pad, pad=(1, 1, 1, 1), mode="reflect")
         self._run_trace_and_compile(func, (2, 3, 16, 16), "test_pad_reflect")
 
     def test_pad_replicate(self):
         """Test F.pad with replicate padding."""
-        func = partial(F.pad, pad=(1, 1, 1, 1), mode='replicate')
+        func = partial(F.pad, pad=(1, 1, 1, 1), mode="replicate")
         self._run_trace_and_compile(func, (2, 3, 16, 16), "test_pad_replicate")
 
     def test_pad_1d(self):
         """Test F.pad on 1D input."""
         # Note: value must be float (0.0) not int (0) for TorchScript compatibility
-        func = partial(F.pad, pad=(2, 2), mode='constant', value=0.0)
+        func = partial(F.pad, pad=(2, 2), mode="constant", value=0.0)
         self._run_trace_and_compile(func, (2, 3, 32), "test_pad_1d")
 
     # =========================================================================
@@ -581,7 +613,7 @@ class TestFunctional(unittest.TestCase):
 
     def test_fold(self):
         """Test F.fold (col2im) - combines sliding local blocks into a tensor.
-        
+
         Fold is the inverse of unfold. Input shape must match the output of
         an equivalent unfold operation.
         Note: aten::col2im requires ONNX opset 18+.
@@ -593,18 +625,22 @@ class TestFunctional(unittest.TestCase):
 
     def test_unfold_fold_roundtrip(self):
         """Test unfold → fold roundtrip (with divisor correction).
-        
+
         Unfold then fold doesn't produce identity without normalizing by the
         overlap count. This test verifies the ops compose correctly.
         Note: aten::col2im (fold) requires ONNX opset 18+.
         """
         kernel_size = 3
+
         def unfold_fold(x):
             # x: (N, C, H, W)
             unfolded = F.unfold(x, kernel_size=kernel_size)
             folded = F.fold(unfolded, output_size=(8, 8), kernel_size=kernel_size)
             return folded
-        self._run_trace_and_compile(unfold_fold, (2, 3, 8, 8), "test_unfold_fold", onnx_opset=18)
+
+        self._run_trace_and_compile(
+            unfold_fold, (2, 3, 8, 8), "test_unfold_fold", onnx_opset=18
+        )
 
     # =========================================================================
     # Loss Functions
@@ -626,9 +662,11 @@ class TestFunctional(unittest.TestCase):
     def test_nll_loss(self):
         """Test F.nll_loss (negative log likelihood)."""
         target = torch.randint(0, 8, (4,))
+
         # NLL loss expects log-probabilities, so wrap with log_softmax
         def nll_with_logsoftmax(x, target):
             return F.nll_loss(F.log_softmax(x, dim=-1), target)
+
         func = partial(nll_with_logsoftmax, target=target)
         self._run_trace_and_compile(func, (4, 8), "test_nll_loss")
 
@@ -637,13 +675,14 @@ class TestFunctional(unittest.TestCase):
         target = torch.rand(4, 8)  # Binary targets in [0, 1]
         func = partial(F.binary_cross_entropy_with_logits, target=target)
         self._run_trace_and_compile(func, (4, 8), "test_bce_logits")
+
     # =========================================================================
     # Embedding
     # =========================================================================
 
     def test_embedding(self):
         """Test F.embedding (lookup table).
-        
+
         Note: Uses a custom test flow because embedding requires integer (LongTensor)
         inputs, not the float tensors generated by _run_trace_and_compile.
         """
@@ -652,23 +691,23 @@ class TestFunctional(unittest.TestCase):
         weight = torch.randn(vocab_size, embed_dim)
 
         input_indices = torch.randint(0, vocab_size, (4, 8))
-        
+
         ctx = TracedTensorNode(name="test_embedding", node_index=0)
         traced_input = ctx.create_input(input_indices.clone(), name="x")
-        
+
         output = F.embedding(traced_input, weight)
         self.assertIsInstance(output, TracedTensor)
-        
-        ctx.compile_trace({'output': output})
+
+        ctx.compile_trace({"output": output})
         graph_module = ctx.m
-        
+
         for i in range(self.NUM_TEST_INPUTS):
             test_input = torch.randint(0, vocab_size, (4, 8))
             expected = F.embedding(test_input, weight)
             actual_fx = graph_module(test_input)
             self.assertTrue(
                 torch.allclose(actual_fx, expected, atol=1e-5),
-                f"test_embedding: FX output mismatch on input {i+1}/{self.NUM_TEST_INPUTS}"
+                f"test_embedding: FX output mismatch on input {i + 1}/{self.NUM_TEST_INPUTS}",
             )
 
     # =========================================================================
@@ -677,7 +716,7 @@ class TestFunctional(unittest.TestCase):
 
     def test_scaled_dot_product_attention(self):
         """Test F.scaled_dot_product_attention (PyTorch 2.0+).
-        
+
         Only query is traced; key and value are fixed via partial.
         Note: skip_onnx=True because SDPA may not be supported in ONNX opset 17.
         """
@@ -685,44 +724,46 @@ class TestFunctional(unittest.TestCase):
         key = torch.randn(2, 4, 8, 16)
         value = torch.randn(2, 4, 8, 16)
         func = partial(F.scaled_dot_product_attention, key=key, value=value)
-        self._run_trace_and_compile(
-            func, (2, 4, 8, 16), "test_sdpa",
-            skip_onnx=True
-        )
+        self._run_trace_and_compile(func, (2, 4, 8, 16), "test_sdpa", skip_onnx=True)
 
     def test_multi_head_attention(self):
         """Test F.multi_head_attention_forward (self-attention).
-        
+
         Wraps the forward function to return only the output tensor (not attention weights).
         Note: skip_onnx=True because MHA decomposition may not be supported in ONNX opset 17.
         """
         embed_dim = 32
         num_heads = 4
-        
+
         in_proj_weight = torch.randn(3 * embed_dim, embed_dim)
         in_proj_bias = torch.randn(3 * embed_dim)
         out_proj_weight = torch.randn(embed_dim, embed_dim)
         out_proj_bias = torch.randn(embed_dim)
-        
+
         def mha_self_attention(query):
             # Input shape: (seq_len, batch_size, embed_dim) — seq_len first
             output, _ = F.multi_head_attention_forward(
-                query, query, query,  # self-attention: Q=K=V
-                embed_dim, num_heads,
-                in_proj_weight, in_proj_bias,
-                None, None,  # bias_k, bias_v
+                query,
+                query,
+                query,  # self-attention: Q=K=V
+                embed_dim,
+                num_heads,
+                in_proj_weight,
+                in_proj_bias,
+                None,
+                None,  # bias_k, bias_v
                 False,  # add_zero_attn
                 0.0,  # dropout_p
-                out_proj_weight, out_proj_bias,
+                out_proj_weight,
+                out_proj_bias,
                 training=False,
                 need_weights=False,
             )
             return output
-        
+
         # Shape: (seq_len, batch_size, embed_dim)
         self._run_trace_and_compile(
-            mha_self_attention, (8, 2, embed_dim), "test_mha",
-            skip_onnx=True
+            mha_self_attention, (8, 2, embed_dim), "test_mha", skip_onnx=True
         )
 
     # =========================================================================
@@ -731,7 +772,7 @@ class TestFunctional(unittest.TestCase):
 
     def test_grid_sample(self):
         """Test F.grid_sample.
-        
+
         Grid values are in [-1, 1] range for normalized coordinates.
         """
         # grid shape: (N, H_out, W_out, 2)
@@ -742,13 +783,18 @@ class TestFunctional(unittest.TestCase):
     def test_grid_sample_bilinear(self):
         """Test F.grid_sample with bilinear interpolation (default)."""
         grid = torch.rand(2, 8, 8, 2) * 2 - 1
-        func = partial(F.grid_sample, grid=grid, mode='bilinear', 
-                       padding_mode='zeros', align_corners=False)
+        func = partial(
+            F.grid_sample,
+            grid=grid,
+            mode="bilinear",
+            padding_mode="zeros",
+            align_corners=False,
+        )
         self._run_trace_and_compile(func, (2, 3, 16, 16), "test_grid_sample_bilinear")
 
     def test_affine_grid(self):
         """Test F.affine_grid.
-        
+
         Generates a sampling grid from an affine transformation matrix (theta).
         Input theta shape: (N, 2, 3) for 2D spatial transforms.
         Note: aten::affine_grid_generator requires ONNX opset 20+.
@@ -758,16 +804,22 @@ class TestFunctional(unittest.TestCase):
 
     def test_affine_grid_and_grid_sample(self):
         """Test F.affine_grid → F.grid_sample pipeline (common in STN).
-        
+
         Note: aten::affine_grid_generator requires ONNX opset 20+.
         """
         source = torch.randn(2, 3, 16, 16)
-        
+
         def stn_transform(theta):
             grid = F.affine_grid(theta, source.size(), align_corners=True)
             return F.grid_sample(source, grid, align_corners=True)
-        
-        self._run_trace_and_compile(stn_transform, (2, 2, 3), "test_affine_grid_sample", onnx_opset=20, atol=1e-4)
+
+        self._run_trace_and_compile(
+            stn_transform,
+            (2, 2, 3),
+            "test_affine_grid_sample",
+            onnx_opset=20,
+            atol=1e-4,
+        )
 
     # =========================================================================
     # Torch Operations (not F.*)
@@ -783,24 +835,30 @@ class TestFunctional(unittest.TestCase):
     def test_einsum_matmul(self):
         """Test torch.einsum for matrix multiplication."""
         other = torch.randn(8, 16)
+
         def einsum_matmul(x, other):
-            return torch.einsum('bi,ij->bj', x, other)
+            return torch.einsum("bi,ij->bj", x, other)
+
         func = partial(einsum_matmul, other=other)
         self._run_trace_and_compile(func, (4, 8), "test_einsum_matmul")
 
     def test_einsum_batched(self):
         """Test torch.einsum for batched operations."""
         other = torch.randn(4, 8, 16)
+
         def einsum_batched(x, other):
-            return torch.einsum('bik,bkj->bij', x, other)
+            return torch.einsum("bik,bkj->bij", x, other)
+
         func = partial(einsum_batched, other=other)
         self._run_trace_and_compile(func, (4, 4, 8), "test_einsum_batched")
 
     def test_where(self):
         """Test torch.where (conditional selection)."""
         y = torch.randn(4, 8)
+
         def where_positive(x, y):
             return torch.where(x > 0, x, y)
+
         func = partial(where_positive, y=y)
         self._run_trace_and_compile(func, (4, 8), "test_where")
 
@@ -815,9 +873,11 @@ class TestFunctional(unittest.TestCase):
 
     def test_sqrt(self):
         """Test torch.sqrt (on positive inputs)."""
+
         # Use abs to ensure positive inputs
         def sqrt_safe(x):
             return torch.sqrt(torch.abs(x) + 1e-6)
+
         self._run_trace_and_compile(sqrt_safe, (4, 8), "test_sqrt")
 
     def test_exp(self):
@@ -826,8 +886,10 @@ class TestFunctional(unittest.TestCase):
 
     def test_log(self):
         """Test torch.log (on positive inputs)."""
+
         def log_safe(x):
             return torch.log(torch.abs(x) + 1e-6)
+
         self._run_trace_and_compile(log_safe, (4, 8), "test_log")
 
     def test_pow(self):
@@ -837,38 +899,48 @@ class TestFunctional(unittest.TestCase):
 
     def test_sin_cos(self):
         """Test torch.sin and torch.cos."""
+
         def sin_cos(x):
             return torch.sin(x) + torch.cos(x)
+
         self._run_trace_and_compile(sin_cos, (4, 8), "test_sin_cos")
 
     def test_stack(self):
         """Test torch.stack."""
         other = torch.randn(4, 8)
+
         def stack_with_other(x, other):
             return torch.stack([x, other], dim=0)
+
         func = partial(stack_with_other, other=other)
         self._run_trace_and_compile(func, (4, 8), "test_stack")
 
     def test_cat(self):
         """Test torch.cat."""
         other = torch.randn(4, 8)
+
         def cat_with_other(x, other):
             return torch.cat([x, other], dim=0)
+
         func = partial(cat_with_other, other=other)
         self._run_trace_and_compile(func, (4, 8), "test_cat")
 
     def test_split(self):
         """Test torch.split."""
+
         def split_and_sum(x):
             parts = torch.split(x, 4, dim=1)
             return parts[0] + parts[1]
+
         self._run_trace_and_compile(split_and_sum, (4, 8), "test_split")
 
     def test_chunk(self):
         """Test torch.chunk."""
+
         def chunk_and_sum(x):
             parts = torch.chunk(x, 2, dim=1)
             return parts[0] + parts[1]
+
         self._run_trace_and_compile(chunk_and_sum, (4, 8), "test_chunk")
 
 
@@ -904,6 +976,5 @@ class TestFunctional(unittest.TestCase):
 # =============================================================================
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
-

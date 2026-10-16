@@ -33,6 +33,7 @@ from leapp import annotate
 
 # ── Model: pure PyTorch, no LEAPP awareness ─────────────────────────────────
 
+
 class GRUPolicy(nn.Module):
     """Policy with GRU hidden state stored as a registered buffer.
 
@@ -59,6 +60,7 @@ class GRUPolicy(nn.Module):
 
 # ── Export: generic call-site, works with any model that uses register_buffer ─
 
+
 def main():
     output_dir = "stateful_gru_export"
     if os.path.exists(output_dir):
@@ -80,8 +82,9 @@ def main():
     action = model(obs_traced)
 
     # Output — state outputs (h_state_out) are added automatically
-    annotate.output_tensors("policy", {"action": action},
-                            export_with="onnx-torchscript")
+    annotate.output_tensors(
+        "policy", {"action": action}, export_with="onnx-torchscript"
+    )
 
     leapp.stop()
     leapp.compile_graph(visualize=False)
@@ -90,19 +93,20 @@ def main():
     onnx_path = os.path.join(output_dir, "stateful_gru", "policy.onnx")
     if os.path.exists(onnx_path):
         import onnx
+
         m = onnx.load(onnx_path)
         init_names = {i.name for i in m.graph.initializer}
         print("\nONNX model I/O:")
         print("  Inputs:")
         for inp in m.graph.input:
             if inp.name not in init_names:
-                dims = [d.dim_value or d.dim_param
-                        for d in inp.type.tensor_type.shape.dim]
+                dims = [
+                    d.dim_value or d.dim_param for d in inp.type.tensor_type.shape.dim
+                ]
                 print(f"    {inp.name}: {dims}")
         print("  Outputs:")
         for out in m.graph.output:
-            dims = [d.dim_value or d.dim_param
-                    for d in out.type.tensor_type.shape.dim]
+            dims = [d.dim_value or d.dim_param for d in out.type.tensor_type.shape.dim]
             print(f"    {out.name}: {dims}")
 
     # Clean up

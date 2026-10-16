@@ -43,12 +43,14 @@ _NUMPY_DTYPE_TO_NAME = dict(
     for dtype in (scalar, np.dtype(scalar))
 )
 
-register_dtype_codec(DtypeCodec(
-    backend="numpy",
-    matches=lambda v: isinstance(v, np.ndarray),
-    value_dtype=lambda v: v.dtype,
-    dtype_to_name=_NUMPY_DTYPE_TO_NAME,
-))
+register_dtype_codec(
+    DtypeCodec(
+        backend="numpy",
+        matches=lambda v: isinstance(v, np.ndarray),
+        value_dtype=lambda v: v.dtype,
+        dtype_to_name=_NUMPY_DTYPE_TO_NAME,
+    )
+)
 
 
 def _torch_dtype_for(dtype):
@@ -79,25 +81,21 @@ NUMPY_UFUNC_TO_TORCH = {
     np.mod: torch.remainder,
     np.remainder: torch.remainder,
     np.fmod: torch.fmod,
-
     # Absolute and sign
     np.absolute: torch.abs,
     np.abs: torch.abs,
     np.sign: torch.sign,
-
     # Powers and roots
     np.sqrt: torch.sqrt,
     np.square: torch.square,
     np.exp: torch.exp,
     np.exp2: lambda x: torch.pow(2, x),
     np.expm1: torch.expm1,
-
     # Logarithms
     np.log: torch.log,
     np.log2: torch.log2,
     np.log10: torch.log10,
     np.log1p: torch.log1p,
-
     # Trigonometric functions
     np.sin: torch.sin,
     np.cos: torch.cos,
@@ -107,7 +105,6 @@ NUMPY_UFUNC_TO_TORCH = {
     np.arctan: torch.atan,
     np.arctan2: torch.atan2,
     np.hypot: torch.hypot,
-
     # Hyperbolic functions
     np.sinh: torch.sinh,
     np.cosh: torch.cosh,
@@ -115,13 +112,11 @@ NUMPY_UFUNC_TO_TORCH = {
     np.arcsinh: torch.asinh,
     np.arccosh: torch.acosh,
     np.arctanh: torch.atanh,
-
     # Rounding
     np.floor: torch.floor,
     np.ceil: torch.ceil,
     np.trunc: torch.trunc,
     np.rint: torch.round,
-
     # Comparison (element-wise, return boolean tensor)
     np.greater: torch.gt,
     np.greater_equal: torch.ge,
@@ -131,17 +126,14 @@ NUMPY_UFUNC_TO_TORCH = {
     np.not_equal: torch.ne,
     np.maximum: torch.maximum,
     np.minimum: torch.minimum,
-
     # Matrix multiplication. ``np.matmul`` is a ufunc, so it never reaches
     # ``__array_function__``; ``np.dot`` is not, and is mapped there instead.
     np.matmul: torch.matmul,
-
     # Logical operations
     np.logical_and: torch.logical_and,
     np.logical_or: torch.logical_or,
     np.logical_xor: torch.logical_xor,
     np.logical_not: torch.logical_not,
-
     # Bitwise operations
     np.bitwise_and: torch.bitwise_and,
     np.bitwise_or: torch.bitwise_or,
@@ -149,12 +141,10 @@ NUMPY_UFUNC_TO_TORCH = {
     np.invert: torch.bitwise_not,
     np.left_shift: torch.bitwise_left_shift,
     np.right_shift: torch.bitwise_right_shift,
-
     # Special values
     np.isnan: torch.isnan,
     np.isinf: torch.isinf,
     np.isfinite: torch.isfinite,
-
     # Clipping
     np.clip: torch.clamp,
 }
@@ -177,7 +167,6 @@ NUMPY_FUNC_TO_TORCH = {
     np.cumprod: torch.cumprod,
     np.all: torch.all,
     np.any: torch.any,
-
     # Array manipulation
     np.concatenate: torch.cat,
     np.stack: torch.stack,
@@ -196,13 +185,11 @@ NUMPY_FUNC_TO_TORCH = {
     np.flip: torch.flip,
     np.roll: torch.roll,
     np.rot90: torch.rot90,
-
     # Sorting and searching
     np.sort: torch.sort,
     np.argsort: torch.argsort,
     np.where: torch.where,
     np.nonzero: torch.nonzero,
-
     # Element-wise (also available as ufuncs)
     np.clip: torch.clamp,
     np.abs: torch.abs,
@@ -217,7 +204,6 @@ NUMPY_FUNC_TO_TORCH = {
     np.tanh: torch.tanh,
     np.round: torch.round,
     np.around: torch.round,
-
     # Linear algebra
     np.dot: torch.matmul,  # Note: torch.dot is only for 1D vectors
     np.tensordot: torch.tensordot,
@@ -226,13 +212,11 @@ NUMPY_FUNC_TO_TORCH = {
     np.diagonal: torch.diagonal,
     np.tril: torch.tril,
     np.triu: torch.triu,
-
     # Creation functions (when operating on TracedTensor)
     np.zeros_like: torch.zeros_like,
     np.ones_like: torch.ones_like,
     np.full_like: torch.full_like,
     np.empty_like: torch.empty_like,
-
     # Standalone creation (less commonly needed with TracedTensor)
     np.eye: torch.eye,
     np.zeros: torch.zeros,
@@ -285,6 +269,7 @@ SCALAR_TENSOR_FUNCTIONS = {
 # and np.ndarray's metaclass
 class _TracedNpArrayMeta(ABCMeta, type(np.ndarray)):
     """Metaclass combining ABCMeta and np.ndarray's metaclass."""
+
     pass
 
 
@@ -344,9 +329,9 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         # ndarray source and a source still mid-construction.
         bind_new_view(
             self,
-            getattr(obj, '_name', 'derived'),
-            getattr(obj, '_context', None),
-            getattr(obj, 'proxy', None),
+            getattr(obj, "_name", "derived"),
+            getattr(obj, "_context", None),
+            getattr(obj, "proxy", None),
         )
 
     # =========================================================================
@@ -423,6 +408,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
 
     def _extract_proxy(self, obj):
         """Recursively extract proxies and convert constant NumPy arrays."""
+
         def convert(item):
             if isinstance(item, TracedData):
                 return item.proxy
@@ -435,8 +421,8 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         return TracedData._map_structure(obj, convert)
 
     def _convert_numpy_call_to_torch(
-            self, proxy_args, proxy_kwargs, torch_func,
-            original_kwargs=None, args=None):
+        self, proxy_args, proxy_kwargs, torch_func, original_kwargs=None, args=None
+    ):
         """Convert numpy args/kwargs to the matching torch call.
 
         Handles:
@@ -458,26 +444,30 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
 
         # Convert axis → dim
         has_dim = False
-        if torch_func in AXIS_TO_DIM_FUNCTIONS and 'axis' in proxy_kwargs:
-            proxy_kwargs['dim'] = proxy_kwargs.pop('axis')
+        if torch_func in AXIS_TO_DIM_FUNCTIONS and "axis" in proxy_kwargs:
+            proxy_kwargs["dim"] = proxy_kwargs.pop("axis")
             has_dim = True
 
         if torch_func in AXIS_TO_DIMS_FUNCTIONS:
-            if 'axis' in proxy_kwargs:
-                dims = proxy_kwargs.pop('axis')
-                if dims is None and torch_func is torch.flip and hasattr(input_arr, 'ndim'):
+            if "axis" in proxy_kwargs:
+                dims = proxy_kwargs.pop("axis")
+                if (
+                    dims is None
+                    and torch_func is torch.flip
+                    and hasattr(input_arr, "ndim")
+                ):
                     dims = tuple(range(input_arr.ndim))
                 elif torch_func is torch.flip and isinstance(dims, int):
                     dims = (dims,)
                 if dims is not None:
-                    proxy_kwargs['dims'] = dims
+                    proxy_kwargs["dims"] = dims
             elif torch_func is torch.flip:
                 if args is not None and len(args) > 1:
                     dims = proxy_args[1]
                     if isinstance(dims, int):
                         proxy_args = (proxy_args[0], (dims,)) + proxy_args[2:]
-                elif hasattr(input_arr, 'ndim'):
-                    proxy_kwargs['dims'] = tuple(range(input_arr.ndim))
+                elif hasattr(input_arr, "ndim"):
+                    proxy_kwargs["dims"] = tuple(range(input_arr.ndim))
 
         if torch_func in SCALAR_TENSOR_FUNCTIONS:
             proxy_args = tuple(
@@ -487,27 +477,29 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
 
         # Convert keepdims → keepdim (numpy uses 's', torch doesn't)
         # Important: torch.sum/mean only support keepdim when dim is also specified
-        if 'keepdims' in proxy_kwargs:
-            keepdims_value = proxy_kwargs.pop('keepdims')
+        if "keepdims" in proxy_kwargs:
+            keepdims_value = proxy_kwargs.pop("keepdims")
             if has_dim:
                 # dim is specified, we can use keepdim
-                proxy_kwargs['keepdim'] = keepdims_value
-            elif keepdims_value and input_arr is not None and hasattr(input_arr, 'ndim'):
+                proxy_kwargs["keepdim"] = keepdims_value
+            elif (
+                keepdims_value and input_arr is not None and hasattr(input_arr, "ndim")
+            ):
                 # keepdims=True but no axis specified
                 # torch requires dim when using keepdim, so specify all dims
-                proxy_kwargs['dim'] = tuple(range(input_arr.ndim))
-                proxy_kwargs['keepdim'] = True
+                proxy_kwargs["dim"] = tuple(range(input_arr.ndim))
+                proxy_kwargs["keepdim"] = True
             # If keepdims=False without axis, we can just omit both (default behavior)
 
         # np.var/std default to ddof=0 (population), torch defaults to correction=1 (sample)
         if torch_func in (torch.var, torch.std):
-            if 'ddof' in proxy_kwargs:
-                proxy_kwargs['correction'] = proxy_kwargs.pop('ddof')
-            elif 'correction' not in proxy_kwargs:
-                proxy_kwargs['correction'] = 0
+            if "ddof" in proxy_kwargs:
+                proxy_kwargs["correction"] = proxy_kwargs.pop("ddof")
+            elif "correction" not in proxy_kwargs:
+                proxy_kwargs["correction"] = 0
 
-        if torch_func is torch.tensordot and 'axes' in proxy_kwargs:
-            proxy_kwargs['dims'] = proxy_kwargs.pop('axes')
+        if torch_func is torch.tensordot and "axes" in proxy_kwargs:
+            proxy_kwargs["dims"] = proxy_kwargs.pop("axes")
 
         # Handle np.transpose with axes=None or missing
         # torch.permute requires explicit dims, but numpy reverses all dims when axes is omitted
@@ -515,17 +507,21 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
             # Check if axes was passed as positional arg (2nd argument)
             axes_in_args = len(args) > 1 if args else False
 
-            if 'axes' in proxy_kwargs:
-                axes = proxy_kwargs.pop('axes')
-                if axes is None and input_arr is not None and hasattr(input_arr, 'ndim'):
+            if "axes" in proxy_kwargs:
+                axes = proxy_kwargs.pop("axes")
+                if (
+                    axes is None
+                    and input_arr is not None
+                    and hasattr(input_arr, "ndim")
+                ):
                     # axes=None means reverse all dimensions
-                    proxy_kwargs['dims'] = tuple(range(input_arr.ndim - 1, -1, -1))
+                    proxy_kwargs["dims"] = tuple(range(input_arr.ndim - 1, -1, -1))
                 elif axes is not None:
-                    proxy_kwargs['dims'] = axes
-            elif not axes_in_args and 'axes' not in original_kwargs:
+                    proxy_kwargs["dims"] = axes
+            elif not axes_in_args and "axes" not in original_kwargs:
                 # axes not provided at all (neither positional nor kwarg) - numpy reverses all dims
-                if input_arr is not None and hasattr(input_arr, 'ndim'):
-                    proxy_kwargs['dims'] = tuple(range(input_arr.ndim - 1, -1, -1))
+                if input_arr is not None and hasattr(input_arr, "ndim"):
+                    proxy_kwargs["dims"] = tuple(range(input_arr.ndim - 1, -1, -1))
             # If axes_in_args is True, it will be passed as positional arg, don't add to kwargs
 
         return proxy_args, proxy_kwargs
@@ -537,12 +533,9 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
     def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
         """Execute NumPy ufuncs and record them only while the source is active."""
         traced_array = TracedNpArray.find_traced_array([inputs, kwargs])
-        unwrapped_inputs = tuple(
-            TracedData.unwrap_traced_data(inp) for inp in inputs
-        )
+        unwrapped_inputs = tuple(TracedData.unwrap_traced_data(inp) for inp in inputs)
         unwrapped_kwargs = {
-            key: TracedData.unwrap_traced_data(value)
-            for key, value in kwargs.items()
+            key: TracedData.unwrap_traced_data(value) for key, value in kwargs.items()
         }
 
         if method != "__call__":
@@ -605,12 +598,12 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
             return None
 
         input_array = args[0]
-        dim = kwargs.get('axis', -1)
+        dim = kwargs.get("axis", -1)
         if dim is None:
             dim = -1
         k = input_array.shape[dim]
 
-        topk_kwargs = {'dim': dim, 'largest': False, 'sorted': True}
+        topk_kwargs = {"dim": dim, "largest": False, "sorted": True}
         proxy_out = traced_array._context.tracer.create_proxy(
             "call_function", torch.topk, (proxy_args[0], k), topk_kwargs
         )
@@ -623,12 +616,9 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
     def __array_function__(self, func, types, args, kwargs):
         """Execute NumPy functions and record them only while the source is active."""
         traced_array = TracedNpArray.find_traced_array([args, kwargs])
-        unwrapped_args = tuple(
-            TracedData.unwrap_traced_data(arg) for arg in args
-        )
+        unwrapped_args = tuple(TracedData.unwrap_traced_data(arg) for arg in args)
         unwrapped_kwargs = {
-            key: TracedData.unwrap_traced_data(value)
-            for key, value in kwargs.items()
+            key: TracedData.unwrap_traced_data(value) for key, value in kwargs.items()
         }
         result_array = func(*unwrapped_args, **unwrapped_kwargs)
 
@@ -872,8 +862,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         if proxy_out is None:
             proxy_key = self._extract_proxy(key)
             proxy_out = self._context.tracer.create_proxy(
-                "call_function", operator.getitem,
-                (self.proxy, proxy_key), {}
+                "call_function", operator.getitem, (self.proxy, proxy_key), {}
             )
 
         if isinstance(result, np.ndarray):
@@ -883,9 +872,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
     def _record_assignment(self, key, value, real_value):
         """Record one functional assignment and update this object's proxy."""
         value_proxy = value.proxy if isinstance(value, TracedData) else value
-        if self._update_setitem_proxy(
-            key, value_proxy, real_value=real_value
-        ):
+        if self._update_setitem_proxy(key, value_proxy, real_value=real_value):
             return True
 
         if isinstance(key, tuple):
@@ -1029,10 +1016,10 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
 
     def __array__(self, dtype=None, copy=None):
         """Convert to numpy array (NumPy array protocol).
-        
+
         Returns self (or a converted TracedNpArray) for both active and inactive
         traced values so representation conversion cannot silently demote it.
-        
+
         Args:
             dtype: Optional dtype for the resulting array
             copy: Optional copy flag (NumPy 2.0+)
@@ -1042,7 +1029,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         """
         # Check if dtype change requires a copy
         needs_dtype_copy = dtype is not None and dtype != self.dtype
-        
+
         # copy=False but copy is required → raise error (NumPy 2.0 semantics)
         if copy is False and needs_dtype_copy:
             _get_logger().fatal(
@@ -1050,7 +1037,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
                 f"from array with dtype {self.dtype}.",
                 error_type=ValueError,
             )
-        
+
         # Preserve the carrier even after its source context stops tracing.
         # astype() and copy() already retain the complete tracing state.
 
@@ -1065,7 +1052,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
 
     def tolist(self):
         """Convert to Python list.
-        
+
         Warning: During tracing, this extracts concrete values and breaks the trace.
         If used in a conditional, the graph will only capture one branch.
         """
@@ -1079,7 +1066,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
 
     def item(self):
         """Return scalar value.
-        
+
         Warning: During tracing, this extracts a concrete scalar and breaks the trace.
         If used in a conditional, the graph will only capture one branch.
         """
@@ -1096,7 +1083,9 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
     # =========================================================================
 
     def __repr__(self):
-        return f"TracedNpArray(name={self._name}, shape={self.shape}, dtype={self.dtype})"
+        return (
+            f"TracedNpArray(name={self._name}, shape={self.shape}, dtype={self.dtype})"
+        )
 
     def __str__(self):
         return f"TracedNpArray({self.view(np.ndarray)})"

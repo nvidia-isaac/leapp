@@ -41,9 +41,16 @@ class FunctionDecoratorNode(LeappNode):
     an nn.Module via ModuleBuilder for export.
     """
 
-    def __init__(self, name, backend=None,
-                 backend_params=None, inputs=None, outputs=None,
-                 environment_constants=None, register_buffers=None):
+    def __init__(
+        self,
+        name,
+        backend=None,
+        backend_params=None,
+        inputs=None,
+        outputs=None,
+        environment_constants=None,
+        register_buffers=None,
+    ):
         super().__init__(name)
 
         if inputs is not None:
@@ -79,12 +86,12 @@ class FunctionDecoratorNode(LeappNode):
         self.setup_backend(backend, backend_params)
 
         self.executed_lines = {
-            'filename': None,
-            'function_name': None,
-            'min_line': None,
-            'max_line': None,
-            'lines': set(),
-            'source_code': None,
+            "filename": None,
+            "function_name": None,
+            "min_line": None,
+            "max_line": None,
+            "lines": set(),
+            "source_code": None,
         }
 
         self.input_namespace = None
@@ -104,8 +111,8 @@ class FunctionDecoratorNode(LeappNode):
             )
 
         func_code = unwrapped_func.__code__
-        self.executed_lines['filename'] = func_code.co_filename
-        self.executed_lines['function_name'] = func_code.co_name
+        self.executed_lines["filename"] = func_code.co_filename
+        self.executed_lines["function_name"] = func_code.co_name
 
         try:
             func_lines, start_line = inspect.getsourcelines(unwrapped_func)
@@ -115,25 +122,32 @@ class FunctionDecoratorNode(LeappNode):
                 f"If this function is wrapped by another decorator, try reordering so @annotate._method() "
                 f"is the innermost decorator.",
                 error_type=OSError,
-                cause=e)
+                cause=e,
+            )
 
-        self.executed_lines['min_line'] = start_line
-        self.executed_lines['max_line'] = start_line + len(func_lines) - 1
+        self.executed_lines["min_line"] = start_line
+        self.executed_lines["max_line"] = start_line + len(func_lines) - 1
 
     def create_trace_function(self, skip_file, entry_hook=None):
         """Create a trace function for use with sys.settrace."""
+
         def trace_function(frame, event, arg):
-            if event == 'call':
+            if event == "call":
                 code = frame.f_code
                 if os.path.basename(code.co_filename) == skip_file:
                     return trace_function
 
-                if (code.co_filename == self.executed_lines['filename'] and
-                        self.executed_lines['min_line'] <= frame.f_lineno <= self.executed_lines['max_line']):
+                if (
+                    code.co_filename == self.executed_lines["filename"]
+                    and self.executed_lines["min_line"]
+                    <= frame.f_lineno
+                    <= self.executed_lines["max_line"]
+                ):
                     namespace = frame_to_namespace(frame)
                     self.output_namespace = namespace
 
             return trace_function
+
         return trace_function
 
     # ── function input / output inspection ───────────────────────────────
@@ -147,12 +161,11 @@ class FunctionDecoratorNode(LeappNode):
 
         for param_name, param_value in bound_args.arguments.items():
             self._check_for_active_traced_tensors(param_value, param_name)
-            if param_name == 'self':
+            if param_name == "self":
                 continue
             param = sig.parameters[param_name]
-            was_provided = (
-                param_name in kwargs or
-                param_names.index(param_name) < len(args)
+            was_provided = param_name in kwargs or param_names.index(param_name) < len(
+                args
             )
             if was_provided:
                 self.add_input(param_name, param_name, param_value)
@@ -168,7 +181,8 @@ class FunctionDecoratorNode(LeappNode):
         if not is_tracable_tensor_type(value):
             _get_logger().warning(
                 f"\033[93mWarning: output '{port}' of node '{self.name}' has "
-                f"unconnectable type {type(value)}\033[0m")
+                f"unconnectable type {type(value)}\033[0m"
+            )
             return value
         promoted = promote_in_place(value, port, self, None)
         return super().publish_output_port(promoted, port)
@@ -183,11 +197,9 @@ class FunctionDecoratorNode(LeappNode):
                 if i < len(return_names):
                     output_name = return_names[i]
                 else:
-                    output_name = f"output{i+1}"
-                descriptions = self.add_output(
-                    output_name, output_name, result[i])
-                self.publish_output_ports(
-                    result[i], output_name, descriptions)
+                    output_name = f"output{i + 1}"
+                descriptions = self.add_output(output_name, output_name, result[i])
+                self.publish_output_ports(result[i], output_name, descriptions)
         else:
             if not len(return_names) == 1:
                 _get_logger().fatal(
@@ -195,8 +207,7 @@ class FunctionDecoratorNode(LeappNode):
                     " outputs, but only one output is detected",
                     error_type=Exception,
                 )
-            descriptions = self.add_output(
-                return_names[0], return_names[0], result)
+            descriptions = self.add_output(return_names[0], return_names[0], result)
             self.publish_output_ports(result, return_names[0], descriptions)
 
     # ── validation (re-entry) ────────────────────────────────────────────
@@ -208,24 +219,28 @@ class FunctionDecoratorNode(LeappNode):
         func_lines, start_line = inspect.getsourcelines(unwrapped_func)
 
         new_boundaries = {
-            'filename': func_code.co_filename,
-            'function_name': func_code.co_name,
-            'min_line': start_line,
-            'max_line': start_line + len(func_lines) - 1
+            "filename": func_code.co_filename,
+            "function_name": func_code.co_name,
+            "min_line": start_line,
+            "max_line": start_line + len(func_lines) - 1,
         }
 
-        for key in ('filename', 'function_name', 'min_line', 'max_line'):
+        for key in ("filename", "function_name", "min_line", "max_line"):
             if self.executed_lines.get(key) != new_boundaries[key]:
-                original_data = {k: self.executed_lines.get(k) for k in (
-                    'filename', 'function_name', 'min_line', 'max_line')}
+                original_data = {
+                    k: self.executed_lines.get(k)
+                    for k in ("filename", "function_name", "min_line", "max_line")
+                }
                 _get_logger().fatal(
                     f"Error: {self.name} seen twice but function boundaries do not match\n"
                     f"Original: {original_data}\n"
                     f"New: {new_boundaries}",
-                    error_type=Exception)
+                    error_type=Exception,
+                )
 
-        self.executed_lines['lines'] = set(
-            range(start_line, start_line + len(func_lines)))
+        self.executed_lines["lines"] = set(
+            range(start_line, start_line + len(func_lines))
+        )
 
     def validate_function_inputs(self, func, args, kwargs):
         """Validate function inputs on re-entry against previously captured inputs."""
@@ -237,16 +252,16 @@ class FunctionDecoratorNode(LeappNode):
 
         for param_name, param_value in bound_args.arguments.items():
             self._check_for_active_traced_tensors(param_value, param_name)
-            if param_name == 'self':
+            if param_name == "self":
                 continue
             param = sig.parameters[param_name]
-            was_provided = (
-                param_name in kwargs or
-                param_names.index(param_name) < len(args)
+            was_provided = param_name in kwargs or param_names.index(param_name) < len(
+                args
             )
             if was_provided:
                 self.validate_input_and_update_sources(
-                    param_name, param_name, param_value)
+                    param_name, param_name, param_value
+                )
 
     def validate_function_outputs(self, func, result):
         """Validate function outputs on re-entry against previously captured outputs."""
@@ -259,9 +274,10 @@ class FunctionDecoratorNode(LeappNode):
                 if i < len(return_names):
                     output_name = return_names[i]
                 else:
-                    output_name = f"output{i+1}"
+                    output_name = f"output{i + 1}"
                 self.validate_output_and_update_sources(
-                    output_name, output_name, result[i])
+                    output_name, output_name, result[i]
+                )
         else:
             if not len(return_names) == 1:
                 _get_logger().fatal(
@@ -270,7 +286,8 @@ class FunctionDecoratorNode(LeappNode):
                     error_type=Exception,
                 )
             self.validate_output_and_update_sources(
-                return_names[0], return_names[0], result)
+                return_names[0], return_names[0], result
+            )
 
     # ── namespace capture / validation ───────────────────────────────────
 
@@ -278,15 +295,16 @@ class FunctionDecoratorNode(LeappNode):
         """Capture declared inputs from a namespace dictionary."""
         try:
             for input_name in self._declared_inputs:
-                final_input_name, final_input_value = self._capture_specified_value_from_namespace(
-                    input_name, namespace)
-                self.add_input(final_input_name, input_name,
-                               final_input_value)
+                final_input_name, final_input_value = (
+                    self._capture_specified_value_from_namespace(input_name, namespace)
+                )
+                self.add_input(final_input_name, input_name, final_input_value)
         except Exception as e:
             _get_logger().fatal(
                 f"Error capturing inputs from namespace: {e}",
                 error_type=type(e),
-                cause=e)
+                cause=e,
+            )
         self.input_namespace = namespace
 
     def capture_outputs_from_namespace(self, namespace):
@@ -296,46 +314,55 @@ class FunctionDecoratorNode(LeappNode):
                 # The namespace still holds the object the caller will use, while
                 # the captured value is a snapshot, so the port goes on the former.
                 obj, _ = get_attribute_value_from_namespace(namespace, output_name)
-                final_output_name, final_output_value = self._capture_specified_value_from_namespace(
-                    output_name, namespace)
-                descriptions = self.add_output(final_output_name,
-                                               output_name, final_output_value)
+                final_output_name, final_output_value = (
+                    self._capture_specified_value_from_namespace(output_name, namespace)
+                )
+                descriptions = self.add_output(
+                    final_output_name, output_name, final_output_value
+                )
                 self.publish_output_ports(obj, final_output_name, descriptions)
         except Exception as e:
             _get_logger().fatal(
                 f"Error capturing outputs from namespace: {e}",
                 error_type=type(e),
-                cause=e)
+                cause=e,
+            )
         self.output_namespace = namespace
 
     def validate_inputs_from_namespace(self, namespace):
         """Validate declared inputs against a namespace dictionary."""
         try:
             for input_name in self._declared_inputs:
-                final_input_name, final_input_value = self._capture_specified_value_from_namespace(
-                    input_name, namespace)
+                final_input_name, final_input_value = (
+                    self._capture_specified_value_from_namespace(input_name, namespace)
+                )
                 self.validate_input_and_update_sources(
-                    final_input_name, input_name, final_input_value)
+                    final_input_name, input_name, final_input_value
+                )
         except Exception as e:
             _get_logger().fatal(
                 f"Error validating inputs from namespace: {e}",
                 error_type=type(e),
-                cause=e)
+                cause=e,
+            )
         self.input_namespace = namespace
 
     def validate_outputs_from_namespace(self, namespace):
         """Validate declared outputs against a namespace dictionary."""
         try:
             for output_name in self._declared_outputs:
-                final_output_name, final_output_value = self._capture_specified_value_from_namespace(
-                    output_name, namespace)
+                final_output_name, final_output_value = (
+                    self._capture_specified_value_from_namespace(output_name, namespace)
+                )
                 self.validate_output_and_update_sources(
-                    final_output_name, output_name, final_output_value)
+                    final_output_name, output_name, final_output_value
+                )
         except Exception as e:
             _get_logger().fatal(
                 f"Error validating outputs from namespace: {e}",
                 error_type=type(e),
-                cause=e)
+                cause=e,
+            )
         self.output_namespace = namespace
 
     # ── buffer / constant snapshot ───────────────────────────────────────
@@ -357,7 +384,8 @@ class FunctionDecoratorNode(LeappNode):
     def _capture_specified_value_from_namespace(self, variable_name, namespace):
         """Extract a variable value from a namespace dictionary."""
         obj, final_variable_name = get_attribute_value_from_namespace(
-            namespace, variable_name)
+            namespace, variable_name
+        )
         self._check_for_active_traced_tensors(obj, variable_name)
         return final_variable_name, safe_deepcopy(obj)
 
@@ -374,12 +402,15 @@ class FunctionDecoratorNode(LeappNode):
                 f"into code traced by _method().\n"
                 f"\n"
                 f"Call output_tensors() on the source node first, or use .tensor to get the underlying tensor.",
-                error_type=Exception)
+                error_type=Exception,
+            )
         elif isinstance(data, (list, tuple)):
             for i, item in enumerate(data):
                 self._check_for_active_traced_tensors(
-                    item, f"{path}[{i}]" if path else f"[{i}]")
+                    item, f"{path}[{i}]" if path else f"[{i}]"
+                )
         elif isinstance(data, dict):
             for key, value in data.items():
                 self._check_for_active_traced_tensors(
-                    value, f"{path}['{key}']" if path else f"['{key}']")
+                    value, f"{path}['{key}']" if path else f"['{key}']"
+                )

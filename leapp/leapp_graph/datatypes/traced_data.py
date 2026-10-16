@@ -20,21 +20,21 @@ import torch
 
 class TracedData(ABC):
     """Abstract base class for traced data types.
-    
+
     This class provides the common infrastructure for tracing operations
     on different data types (torch.Tensor, numpy.ndarray, etc.) using torch.fx.
-    
+
     Child classes implement type-specific operation interception:
     - TracedTensor: Uses __torch_function__ for torch operations
     - TracedArray (future): Uses __array_ufunc__/__array_function__ for numpy
-    
+
     The FX graph always records torch operations, so child classes must
     map their native operations to torch equivalents for proxy recording.
     """
-    
+
     def __init__(self, value: Any, name: str, context, proxy: Proxy):
         """Initialize a TracedData instance.
-        
+
         Args:
             value: The underlying data (torch.Tensor, numpy.ndarray, etc.)
             name: Name for the data (used in ONNX export and graph)
@@ -43,7 +43,7 @@ class TracedData(ABC):
         """
         self._value = value
         bind_new_view(self, name, context, proxy)
-    
+
     # =========================================================================
     # Common Properties
     # =========================================================================
@@ -54,7 +54,7 @@ class TracedData(ABC):
         if proxy is not None:
             return str(proxy.node.name)
         return "untraced"
-    
+
     @property
     def proxy(self) -> Proxy:
         """Get the fx.Proxy for graph recording."""
@@ -69,19 +69,19 @@ class TracedData(ABC):
         a mutation in between go unseen.
         """
         return self._proxy_view
-    
+
     @property
     def name(self) -> str:
         """Get the name of this traced data."""
         return self._name
-    
+
     @property
     def context(self) -> str:
         """Get the name of the context that owns this data."""
         if self._context is None:
             return "untraced"
         return self._context.name
-    
+
     @property
     def context_obj(self):
         """Get the TraceContext that owns this data."""
@@ -100,7 +100,7 @@ class TracedData(ABC):
     @output_port.setter
     def output_port(self, port: Optional[str]) -> None:
         self._output_port = port
-    
+
     @property
     def is_tracing(self) -> bool:
         """Get the tracing status of the context that owns this data."""
@@ -124,7 +124,7 @@ class TracedData(ABC):
         # no provenance to shed.
         graph = getattr(self._context, "graph", None)
         return graph is not None and proxy.node.graph is not graph
-    
+
     @property
     @abstractmethod
     def tensor(self) -> torch.Tensor:
@@ -144,18 +144,19 @@ class TracedData(ABC):
         mapping lives with that backend rather than in leapp core.
         """
         return dtype_to_name(self.data.dtype)
+
     # =========================================================================
     # Abstract Methods - Must be implemented by child classes
     # =========================================================================
-    
+
     @abstractmethod
     def _new(self, value: Any, proxy: Proxy = None) -> "TracedData":
         """Create a new TracedData of the same type in the same context.
-        
+
         Args:
             value: The new underlying value
             proxy: The proxy for the new data (can be None if not tracing)
-            
+
         Returns:
             A new TracedData instance of the same type
         """
@@ -164,14 +165,14 @@ class TracedData(ABC):
     # =========================================================================
     # Common Static Methods
     # =========================================================================
-    
+
     @staticmethod
     def find_traced_data(obj):
         """Find the first TracedData in a supported nested structure.
-        
+
         Args:
             obj: Object to search (can be TracedData, list, tuple, dict, or other)
-            
+
         Returns:
             The first TracedData found, or None if not found
         """
@@ -185,7 +186,7 @@ class TracedData(ABC):
 
         TracedData._map_structure(obj, visit)
         return found
-    
+
     @staticmethod
     def _map_structure(obj, leaf_fn):
         """Recursively apply leaf_fn while preserving common containers."""
@@ -196,9 +197,7 @@ class TracedData(ABC):
                 TracedData._map_structure(obj.step, leaf_fn),
             )
         if isinstance(obj, (list, tuple)):
-            mapped = tuple(
-                TracedData._map_structure(item, leaf_fn) for item in obj
-            )
+            mapped = tuple(TracedData._map_structure(item, leaf_fn) for item in obj)
             if hasattr(obj, "_fields"):
                 # namedtuples take their fields positionally. Plain sequences and
                 # torch's structseq return types instead take a single sequence.
@@ -214,10 +213,10 @@ class TracedData(ABC):
     @staticmethod
     def unwrap_traced_data(obj):
         """Recursively unwrap TracedData to get raw values.
-        
+
         Args:
             obj: Object to unwrap (can be TracedData, list, tuple, dict, or other)
-            
+
         Returns:
             The unwrapped value with all TracedData replaced by their raw values
         """
@@ -225,15 +224,15 @@ class TracedData(ABC):
             obj,
             lambda item: item.data if isinstance(item, TracedData) else item,
         )
-    
+
     @staticmethod
     def find_all_contexts(obj, contexts: Optional[Set[str]] = None) -> Set[str]:
         """Recursively find all unique context names.
-        
+
         Args:
             obj: Object to search
             contexts: Set to accumulate context names (created if None)
-            
+
         Returns:
             Set of context names found
         """
@@ -247,14 +246,14 @@ class TracedData(ABC):
 
         TracedData._map_structure(obj, collect)
         return contexts
-    
+
     @staticmethod
     def extract_proxy(obj):
         """Recursively extract proxies from TracedData objects.
-        
+
         Args:
             obj: Object to extract proxies from
-            
+
         Returns:
             Object with TracedData replaced by their proxies
         """
@@ -262,26 +261,26 @@ class TracedData(ABC):
             obj,
             lambda item: item.proxy if isinstance(item, TracedData) else item,
         )
-    
+
     # =========================================================================
     # Common Validation
     # =========================================================================
-    
+
     def validate_status(self, args=None, kwargs=None) -> bool:
         """Validate that this TracedData can be used in the current context.
-        
+
         Checks:
         1. If not tracing, returns False (operation should not be recorded)
         2. If tracing inside a traced function, raises an error
         3. If mixing TracedData from different contexts, raises an error
-        
+
         Args:
             args: Positional arguments to check for other TracedData
             kwargs: Keyword arguments to check for other TracedData
-            
+
         Returns:
             True if tracing should proceed, False if not tracing
-            
+
         Raises:
             Exception: If TracedData is used inside a traced function
             Exception: If TracedData from multiple contexts are mixed
@@ -296,7 +295,7 @@ class TracedData(ABC):
         if kwargs is not None:
             for kwarg in kwargs.values():
                 contexts = TracedData.find_all_contexts(kwarg, contexts)
-        
+
         if len(contexts) > 1:
             cls_name = self.__class__.__name__
             _get_logger().fatal(
@@ -307,7 +306,8 @@ class TracedData(ABC):
                 "\n"
                 "1. call output_tensors() to finalize one of the nodes first\n"
                 "2. combine both nodes into a single node by calling input_tensors() with the same node name",
-                error_type=Exception)
+                error_type=Exception,
+            )
         return True
 
     # =========================================================================
@@ -392,9 +392,7 @@ class TracedData(ABC):
             and tuple(value.shape) == tuple(self.shape)
             and value.dtype == self.dtype
         ):
-            update_view_proxy(
-                self, value.name, value.context_obj, value.proxy
-            )
+            update_view_proxy(self, value.name, value.context_obj, value.proxy)
             self._output_port = value.output_port
             return
         self._output_port = None
@@ -402,14 +400,14 @@ class TracedData(ABC):
     # =========================================================================
     # Common Magic Methods
     # =========================================================================
-    
+
     def __len__(self) -> int:
         """Length operator."""
         return len(self._value)
-    
+
     def __bool__(self) -> bool:
         """Boolean conversion for TracedNpArray.
-        
+
         During tracing, this indicates tensor-dependent control flow which
         produces a silently incorrect graph. Logs an error to alert the user.
         """
@@ -434,15 +432,15 @@ class TracedData(ABC):
                 f"     then start a new input_tensors() after it"
             )
         return bool(self.data)
-    
+
     def __str__(self) -> str:
         """String representation."""
         return f"{type(self).__name__}({self._value})"
-    
+
     def __repr__(self) -> str:
         """String representation."""
         return f"{type(self).__name__}({self._value})"
-    
+
     def __format__(self, format_spec: str) -> str:
         """Format the TracedData by delegating to the underlying value."""
         return self._value.__format__(format_spec)
@@ -450,7 +448,7 @@ class TracedData(ABC):
     # =========================================================================
     # Setitem Proxy Generation
     # =========================================================================
-    
+
     def _register_setitem_tensor(self, value: torch.Tensor, prefix: str):
         """Register a tensor constant and return its get_attr proxy."""
         attr_base = f"{prefix}_{id(value)}"
@@ -459,12 +457,8 @@ class TracedData(ABC):
         while hasattr(self._context.tracer.root, attr_name):
             attr_name = f"{attr_base}_{suffix}"
             suffix += 1
-        self._context.tracer.root.register_buffer(
-            attr_name, value.clone().detach()
-        )
-        return self._context.tracer.create_proxy(
-            "get_attr", attr_name, (), {}
-        )
+        self._context.tracer.root.register_buffer(attr_name, value.clone().detach())
+        return self._context.tracer.create_proxy("get_attr", attr_name, (), {})
 
     @staticmethod
     def _tensor_index_key(key):
@@ -476,6 +470,7 @@ class TracedData(ABC):
 
     def _proxy_index_key(self, key):
         """Replace tensor indices with graph values or registered constants."""
+
         def convert(item):
             if isinstance(item, TracedData):
                 return item.proxy
@@ -577,8 +572,10 @@ class TracedData(ABC):
             return proxy
         residual_key = tuple(residual) if isinstance(key, tuple) else residual[0]
         return self._context.tracer.create_proxy(
-            "call_function", operator.getitem,
-            (proxy, self._proxy_index_key(residual_key)), {}
+            "call_function",
+            operator.getitem,
+            (proxy, self._proxy_index_key(residual_key)),
+            {},
         )
 
     def _create_getitem_proxy(self, key):
@@ -626,17 +623,25 @@ class TracedData(ABC):
                 dtype=destination.dtype,
                 device=destination.device,
             )
-            if source_tensor.numel() != 1 and tuple(source_tensor.shape) != target_shape:
+            if (
+                source_tensor.numel() != 1
+                and tuple(source_tensor.shape) != target_shape
+            ):
                 source_tensor = torch.broadcast_to(source_tensor, target_shape).clone()
             source_proxy = self._register_setitem_tensor(
                 source_tensor, "_setitem_value"
             )
         else:
             source_numel = getattr(real_value, "numel", lambda: 1)()
-            if source_numel != 1 and tuple(getattr(real_value, "shape", ())) != target_shape:
+            if (
+                source_numel != 1
+                and tuple(getattr(real_value, "shape", ())) != target_shape
+            ):
                 source_proxy = self._context.tracer.create_proxy(
-                    "call_function", torch.broadcast_to,
-                    (source_proxy, target_shape), {}
+                    "call_function",
+                    torch.broadcast_to,
+                    (source_proxy, target_shape),
+                    {},
                 )
 
         destination_proxy = self.proxy
@@ -650,8 +655,10 @@ class TracedData(ABC):
             "call_method", "reshape", (destination_proxy, (-1,)), {}
         )
         updated_proxy = self._context.tracer.create_proxy(
-            "call_function", torch.index_put,
-            (flat_destination_proxy, (indices_proxy,), flat_source_proxy), {}
+            "call_function",
+            torch.index_put,
+            (flat_destination_proxy, (indices_proxy,), flat_source_proxy),
+            {},
         )
         return self._context.tracer.create_proxy(
             "call_method", "reshape", (updated_proxy, tensor_shape), {}
@@ -659,9 +666,7 @@ class TracedData(ABC):
 
     def _update_setitem_proxy(self, key, value_proxy, real_value=None):
         """Record a functional assignment and install its resulting proxy."""
-        proxy_out = self._create_setitem_proxy(
-            key, value_proxy, real_value=real_value
-        )
+        proxy_out = self._create_setitem_proxy(key, value_proxy, real_value=real_value)
         if proxy_out is None:
             return False
         self._proxy_view.proxy = proxy_out

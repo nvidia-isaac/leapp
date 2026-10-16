@@ -61,7 +61,10 @@ import torch
 import warp as wp
 from warp._src.context import Function as WarpKernelLanguageFunction
 
-from leapp.utils.caller_identity import caller_identity_has_same_anchor, get_caller_stack_identity
+from leapp.utils.caller_identity import (
+    caller_identity_has_same_anchor,
+    get_caller_stack_identity,
+)
 from leapp.utils.logging import _get_logger
 
 from .._attribute_patching import AttributePatchRegistry
@@ -191,9 +194,7 @@ class WarpPatchBackend:
         return id(func) == self._full_copy_function_id
 
     def function_qualname(self, func: Callable) -> str:
-        return self._qualnames_by_original_id.get(
-            id(func), f"warp.{func.__qualname__}"
-        )
+        return self._qualnames_by_original_id.get(id(func), f"warp.{func.__qualname__}")
 
     def uninstall(self) -> None:
         """Restore every attribute patched by this detector."""
@@ -293,7 +294,9 @@ class WarpPatchBackend:
                 # this is not a namespace; maybe it is a callable we should wrap, otherwise ignore it.
                 self._patch_callable_attr(owner, attr_name, value, attr_qualname)
 
-    def _should_scan_class(self, cls: Any, owner_module_name: str, class_depth: int) -> bool:
+    def _should_scan_class(
+        self, cls: Any, owner_module_name: str, class_depth: int
+    ) -> bool:
         # Class scan criteria:
         # - The depth is not too deep.
         # - Only scan actual class objects.
@@ -318,7 +321,9 @@ class WarpPatchBackend:
 
         return True
 
-    def _patch_callable_attr(self, owner: Any, attr_name: str, raw_value: Any, qualname: str) -> None:
+    def _patch_callable_attr(
+        self, owner: Any, attr_name: str, raw_value: Any, qualname: str
+    ) -> None:
         # Patch only safe callable attributes:
         # - Preserve staticmethod/classmethod binding by unwrapping, wrapping, then
         #   restoring the original descriptor type.
@@ -336,9 +341,13 @@ class WarpPatchBackend:
 
         if attr_name.startswith("__") and attr_name not in _ALLOWED_DUNDER_METHODS:
             return
-        if callable_original is None or getattr(callable_original, _WRAPPER_MARKER, False):
+        if callable_original is None or getattr(
+            callable_original, _WRAPPER_MARKER, False
+        ):
             return
-        if inspect.isclass(callable_original) or isinstance(callable_original, property):
+        if inspect.isclass(callable_original) or isinstance(
+            callable_original, property
+        ):
             return
         if isinstance(callable_original, WarpKernelLanguageFunction):
             """In Warp, symbols like these often look callable from Python:
@@ -380,7 +389,11 @@ class WarpPatchBackend:
             return
 
         wrapper_func = self._get_or_make_wrapper(qualname, callable_original)
-        wrapper = descriptor_type(wrapper_func) if descriptor_type is not None else wrapper_func
+        wrapper = (
+            descriptor_type(wrapper_func)
+            if descriptor_type is not None
+            else wrapper_func
+        )
 
         try:
             self._patches.install(

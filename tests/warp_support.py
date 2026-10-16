@@ -212,12 +212,12 @@ class WarpTestCase(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        os.environ[
-            "LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY"
-        ] = ensure_warp_onnx_custom_op_library()
-        os.environ[
-            "LEAPP_WARP_PT2_CUSTOM_OP_LIBRARY"
-        ] = ensure_warp_pt2_custom_op_library()
+        os.environ["LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY"] = (
+            ensure_warp_onnx_custom_op_library()
+        )
+        os.environ["LEAPP_WARP_PT2_CUSTOM_OP_LIBRARY"] = (
+            ensure_warp_pt2_custom_op_library()
+        )
         # Most Warp entry points initialize the runtime on first use, but the
         # Torch conversions read it directly, so a test whose first Warp call is
         # ``wp.from_torch`` would fail on an uninitialized runtime.
