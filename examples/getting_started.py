@@ -39,13 +39,10 @@ def capture_joint_observations():
     # Simulates reading live joint sensors each time this function is called.
     JOINT_POS = torch.randn(6)
     JOINT_VEL = torch.randn(6)
-    return annotate.input_tensors(
-        "obs_processor",
-        {
-            "joint_pos": JOINT_POS,
-            "joint_vel": JOINT_VEL,
-        },
-    )
+    return annotate.input_tensors("obs_processor", {
+        "joint_pos": JOINT_POS,
+        "joint_vel": JOINT_VEL,
+    })
 
 
 def capture_context():
@@ -53,25 +50,20 @@ def capture_context():
     # Simulates reading live orientation and command context each call.
     ORIENTATION = torch.tensor([1.0, 0.0, 0.0, 0.0])
     CMD_VEL = torch.tensor([0.5, 0.0, 0.1])
-    return annotate.input_tensors(
-        "obs_processor",
-        {
-            "orientation": ORIENTATION,
-            "cmd_vel": CMD_VEL,
-        },
-    )
+    return annotate.input_tensors("obs_processor", {
+        "orientation": ORIENTATION,
+        "cmd_vel": CMD_VEL,
+    })
 
 
 def project_gravity(quat: torch.Tensor) -> torch.Tensor:
     """Project world gravity into body frame from a (w,x,y,z) quaternion."""
     w, x, y, z = quat[0], quat[1], quat[2], quat[3]
-    return torch.stack(
-        [
-            2.0 * (x * z - w * y),
-            2.0 * (y * z + w * x),
-            1.0 - 2.0 * (x * x + y * y),
-        ]
-    )
+    return torch.stack([
+        2.0 * (x * z - w * y),
+        2.0 * (y * z + w * x),
+        1.0 - 2.0 * (x * x + y * y),
+    ])
 
 
 _ACTION_SCALE = 0.25
@@ -105,12 +97,9 @@ def main():
     )
 
     # Node 2: tiny policy + post-processing.
-    feat = annotate.input_tensors(
-        "policy",
-        {
-            "obs_features": obs_features,
-        },
-    )
+    feat = annotate.input_tensors("policy", {
+        "obs_features": obs_features,
+    })
     raw_action = feat @ _W + _b
     joint_targets = scale_and_clip(raw_action)
 

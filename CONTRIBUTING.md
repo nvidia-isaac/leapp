@@ -18,6 +18,9 @@ need formatting. Run `ruff format .` locally and include the resulting changes
 in your PR. No local Git hook is required. You can also enable format on save
 with the Ruff editor extension.
 
+The `examples/` directory is excluded from formatting to preserve the examples'
+existing layout, including when files are passed explicitly to Ruff.
+
 Keep the Ruff version in `pyproject.toml` and `.github/workflows/ci.yml` in sync
 and regenerate `uv.lock` when upgrading. Formatting does not run lint fixes or
 sort imports.

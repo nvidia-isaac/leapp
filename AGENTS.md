@@ -86,16 +86,15 @@ ruff format .
 ruff format --check .
 ```
 
-This covers the main package, visualization package, tests, examples, Python
+This covers the main package, visualization package, tests, Python
 docs configuration, and `scripts/leapp-build-warp-runtime`. The separate
 `Ruff formatting` CI job runs `ruff format --check .` on pull requests and
 fails if formatting changes are needed. No local Git hook is required.
 
-For numeric vectors or matrices in examples, use narrowly scoped `# fmt: off`
-and `# fmt: on` comments around the complete assignment when a compact layout
-is easier to read. Keep the rest of the example formatted. When formatting
-changes example line numbers, check documentation excerpts and source links;
-prefer function names or text boundaries over fixed line ranges.
+The entire `examples/` directory is excluded from Ruff formatting, including
+when example files are passed explicitly. Preserve their existing layout.
+When editing examples, check documentation excerpts and source links; prefer
+function names or text boundaries over fixed line ranges.
 
 Use the pinned Ruff version instead of Black. Formatting does not include
 lint fixes or import sorting; keep those changes out of formatting-only work.
