@@ -147,7 +147,9 @@ ordinary ``TensorSemantics`` and accept ``axes=None`` and
 
 Helpers additionally validate supplied pose, orientation, position, and velocity
 component labels; permutations are allowed. The generic constructor performs
-structural metadata validation, allowing custom conventions. Missing axes are
+structural metadata validation, allowing custom conventions. Explicit non-``None``
+spatial fields are preserved even when the kind does not normally use them;
+consumers decide which combinations they support. Missing axes are
 not inferred, and importers decide what metadata they require. Images do not
 assume channel order, colour encoding, or normalization. Acceleration and wrench
 component conventions remain consumer-defined in this POC.

@@ -220,15 +220,21 @@ class TensorSemantics:
                 value = [axis.to_dict() if axis is not None else None for axis in value]
             if value is not None:
                 result[f.name] = value
+        spatial = {}
         if self.kind is not None and self.kind.startswith("frame/"):
-            spatial = {}
             if self.kind not in (Kind.FRAME_WRENCH, Kind.FORCE_APPLICATION_POSITION):
                 spatial["reference"] = self.reference
             if self.kind not in (Kind.FRAME_POSE, Kind.FRAME_POSITION, Kind.FRAME_ORIENTATION):
-                spatial["expressed_in"] = (
-                    {"selector": self.expressed_in.value} if isinstance(self.expressed_in, ExpressionFrame)
-                    else {"frame": self.expressed_in} if self.expressed_in is not None else None
-                )
+                spatial["expressed_in"] = None
+        # Preserve supplied metadata regardless of the quantity's conventions.
+        if self.reference is not None:
+            spatial["reference"] = self.reference
+        if self.expressed_in is not None:
+            spatial["expressed_in"] = (
+                {"selector": self.expressed_in.value} if isinstance(self.expressed_in, ExpressionFrame)
+                else {"frame": self.expressed_in}
+            )
+        if spatial:
             result["spatial"] = spatial
         if self.extra:
             result.update(self.extra)

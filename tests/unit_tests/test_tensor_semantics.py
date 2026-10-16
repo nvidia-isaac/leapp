@@ -84,6 +84,24 @@ def test_direct_spatial_defaults(kind):
     assert TensorSemantics("x", torch.zeros(6), kind=kind).to_dict()["spatial"]["expressed_in"] is None
 
 
+@pytest.mark.parametrize("kind", [
+    Kind.FRAME_POSE, "frame/position", Kind.FRAME_ORIENTATION,
+    Kind.FRAME_WRENCH, "frame/force_application_position",
+    "custom_quantity", None,
+])
+@pytest.mark.parametrize("expression, expected", [
+    ("base", {"frame": "base"}),
+    (ExpressionFrame.SELF, {"selector": "self"}),
+])
+def test_generic_spatial_metadata_survives_yaml_export(kind, expression, expected):
+    ref = torch.zeros(3)
+    annotation = TensorSemantics(
+        "value", ref, kind=kind, reference="base", expressed_in=expression,
+    )
+    entry = yaml.safe_load(yaml.dump(TensorDescription("value", ref, annotation).dict()))
+    assert entry["spatial"] == {"reference": "base", "expressed_in": expected}
+
+
 def test_spatial_helper_signatures_and_required_arguments():
     ref = torch.zeros(6)
     with pytest.raises(TypeError):
