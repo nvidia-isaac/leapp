@@ -22,7 +22,7 @@ import torch
 import warp as wp
 import leapp
 from leapp.leapp import _MANAGER as annotate
-from leapp.utils.enums import InputKindEnum
+from leapp.utils.enums import Kind
 from leapp.utils.tensor_description import TensorSemantics
 from .base import LEAPPFunctionalTestBase
 from tests.warp_support import WarpTestCase
@@ -262,7 +262,7 @@ class TestTorchSharedMemory(LEAPPFunctionalTestBase):
         traced_buffer = annotate.input_tensors("policy", {"buffer": buffer})
         annotate.input_tensors("policy", [
             TensorSemantics(
-                name="alias", ref=alias, kind=InputKindEnum.JOINT_POSITION),
+                name="alias", ref=alias, kind=Kind.JOINT_POSITION),
         ])
         annotate.output_tensors(
             "policy", {"action": traced_buffer * 2.0}, export_with="jit")
@@ -272,7 +272,7 @@ class TestTorchSharedMemory(LEAPPFunctionalTestBase):
         ports = [description.name_str for description in node.inputs]
         self.assertEqual(ports, ["buffer"], "adoption changed the exported port")
         self.assertEqual(
-            node.inputs[0].semantics.kind, InputKindEnum.JOINT_POSITION,
+            node.inputs[0].semantics.kind, Kind.JOINT_POSITION,
             "the adopted declaration's semantics were dropped")
 
     def test_output_alias_with_a_surviving_different_root_faults(self):
