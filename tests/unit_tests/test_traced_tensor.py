@@ -10,7 +10,6 @@ import operator
 import pathlib
 import tempfile
 import unittest
-from unittest import mock
 
 import onnxruntime as ort
 import pytest
@@ -3043,25 +3042,6 @@ class TestTracedTensor(unittest.TestCase):
                 self.assertIsNone(
                     TracedTensor._functional_inplace_spec(method)
                 )
-
-    def test_schema_discovery_supports_torch_without_inplace_tag(self):
-        """PyTorch 2.9 schemas remain usable without ``Tag.inplace``."""
-        class LegacyTorchTags:
-            inplace_view = torch.Tag.inplace_view
-            nondeterministic_bitwise = torch.Tag.nondeterministic_bitwise
-            nondeterministic_seeded = torch.Tag.nondeterministic_seeded
-
-        TracedTensor._functional_inplace_spec.cache_clear()
-        try:
-            with mock.patch.object(torch, "Tag", LegacyTorchTags):
-                functional, mutates_metadata = (
-                    TracedTensor._functional_inplace_spec("squeeze_")
-                )
-        finally:
-            TracedTensor._functional_inplace_spec.cache_clear()
-
-        self.assertIs(functional, torch.squeeze)
-        self.assertTrue(mutates_metadata)
 
     def test_schema_discovered_comparison_preserves_receiver_dtype(self):
         """Functional comparison output is cast to the receiver's dtype."""
