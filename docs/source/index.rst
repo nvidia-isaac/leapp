@@ -87,11 +87,10 @@ checkpoint. It is a strong fit when you need to:
       Keep preprocessing, postprocessing, constants, and tensor operations
       around the learned model.
 
-   .. grid-item-card:: Avoid specialized export-only implementations
+   .. grid-item-card:: Reuse existing computation
       :class-card: leapp-fit-card sd-rounded-3
 
-      Eliminate the need for a separate export-only implementation of the same
-      computation.
+      Reuse supported computation directly from your application.
 
    .. grid-item-card:: Move between runtimes
       :class-card: leapp-fit-card sd-rounded-3
@@ -156,6 +155,10 @@ LEAPP traces :doc:`PyTorch <tensor_libraries/torch>` and supported
 them. Experimental :doc:`Warp <tensor_libraries/warp>` support captures kernel
 regions with an additional runtime adapter. :doc:`guides/graph` covers explicit
 feedback state and automatic tracking of reassigned registered module buffers.
+
+For unsupported module-level functions, :doc:`guides/patching` lets you register
+a traceable replacement while keeping existing callers. The replacement must
+preserve the behavior your application uses and rely on supported operations.
 
 Capture follows the executed path: data-dependent Python branches and loops
 are not exported as dynamic control flow. See the tensor-library limitations
