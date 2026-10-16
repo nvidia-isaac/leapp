@@ -248,7 +248,10 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             functional_packet = getattr(torch.ops.aten, functional_name)
             inplace_schemas = inplace_packet._schemas
             functional_schemas = functional_packet._schemas
-            inplace_tag = torch.Tag.inplace
+            # ``inplace`` was added after PyTorch 2.9. Older supported
+            # versions still expose the schema alias/write information used
+            # by ``_schemas_are_functional_twins``.
+            inplace_tag = getattr(torch.Tag, "inplace", None)
             inplace_view_tag = torch.Tag.inplace_view
             nondeterministic_tags = {
                 torch.Tag.nondeterministic_bitwise,
@@ -275,7 +278,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                 return None
             # Operator packets can include internal helper overloads (for
             # example ``index_put_.hacked_twin``) that are not Tensor methods.
-            if inplace_tag not in inplace_tags:
+            if inplace_tag is not None and inplace_tag not in inplace_tags:
                 continue
             if inplace_tags & nondeterministic_tags:
                 return None
