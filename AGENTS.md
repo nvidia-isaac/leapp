@@ -74,6 +74,29 @@ Narrower (use these while iterating):
 | Visualization | `pytest packages/leapp-visualization/tests/ -v` (Python 3.11+) |
 | Warp tracing | see `warp_support.md` |
 
+### Python formatting
+
+Use Ruff for Python formatting. The pinned development dependency and
+`[tool.ruff]` configuration in `pyproject.toml` set an 88-character line width
+and Python 3.10 compatibility. Run these commands from the repository root
+after editing Python code and before handing off changes:
+
+```bash
+ruff format .
+ruff format --check .
+```
+
+This covers the main package, visualization package, tests, examples, Python
+docs configuration, and `scripts/leapp-build-warp-runtime`. The separate
+`Ruff formatting` CI job runs `ruff format --check .` on pull requests and
+fails if formatting changes are needed. No local Git hook is required.
+
+Use the pinned Ruff version instead of Black. Formatting does not include
+lint fixes or import sorting; keep those changes out of formatting-only work.
+When upgrading Ruff, update the dependency and `required-version` in
+`pyproject.toml`, the install pin in `.github/workflows/ci.yml`, and `uv.lock`
+together.
+
 ### Warp runtime build
 
 Pip distributions ship the native sources under
