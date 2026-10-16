@@ -81,29 +81,12 @@ class WBC:
     def __init__(self):
         self.action_scaling = torch.tensor(0.5)
 
-        self.default_pos = torch.tensor(
-            [
-                1.0,
-                1.0,
-                1.0,
-                1.0,
-                1.0,
-                1.0,
-                1.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-            ]
-        )
+        # fmt: off
+        self.default_pos = torch.tensor([
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        ])
+        # fmt: on
         model_path = os.path.join(
             os.path.dirname(__file__), "models", "isaac_velocity_flat_h1_v0.pt"
         )

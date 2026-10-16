@@ -91,6 +91,12 @@ docs configuration, and `scripts/leapp-build-warp-runtime`. The separate
 `Ruff formatting` CI job runs `ruff format --check .` on pull requests and
 fails if formatting changes are needed. No local Git hook is required.
 
+For numeric vectors or matrices in examples, use narrowly scoped `# fmt: off`
+and `# fmt: on` comments around the complete assignment when a compact layout
+is easier to read. Keep the rest of the example formatted. When formatting
+changes example line numbers, check documentation excerpts and source links;
+prefer function names or text boundaries over fixed line ranges.
+
 Use the pinned Ruff version instead of Black. Formatting does not include
 lint fixes or import sorting; keep those changes out of formatting-only work.
 When upgrading Ruff, update the dependency and `required-version` in

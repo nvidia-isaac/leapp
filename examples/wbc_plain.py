@@ -62,29 +62,12 @@ def get_robot_params():
 
     action_scaling = torch.tensor(0.5)
 
-    default_pos = torch.tensor(
-        [
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            1.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-        ]
-    )
+    # fmt: off
+    default_pos = torch.tensor([
+        1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    ])
+    # fmt: on
 
     return joint_names, observations, actions, action_scaling, default_pos
 
