@@ -10,6 +10,7 @@ torch.Tensor (for tensor operations), enabling seamless operation interception
 and graph recording.
 """
 
+import functools
 import operator
 from abc import ABCMeta
 
@@ -78,18 +79,6 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     _EQUIVALENT_COPY_NAMES = frozenset(
         {"clone", "detach", "contiguous", "cpu", "cuda"}
     )
-    # In-place methods whose allocating torch.* counterpart has the same
-    # argument order and describes the receiver's complete post-write value.
-    # This lets one mutation path preserve receiver identity eagerly while
-    # recording the corresponding functional operation in FX.
-    _FUNCTIONAL_INPLACE_NAMES = frozenset({
-        "add_", "sub_", "mul_", "div_", "pow_",
-        "subtract_", "multiply_", "divide_", "true_divide_",
-        "floor_divide_", "remainder_", "fmod_",
-        "clamp_", "clamp_min_", "clamp_max_", "clip_", "lerp_",
-        "addcmul_", "addcdiv_",
-        "addmm_", "addmv_", "addr_", "addbmm_", "baddbmm_",
-    })
     _NATIVE_TYPE = torch.Tensor
 
     @staticmethod
@@ -173,6 +162,150 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     # =========================================================================
 
     @staticmethod
+    def _schema_arguments_match(inplace_arg, functional_arg) -> bool:
+        """Whether two schema arguments expose the same Python call contract."""
+        if (
+            inplace_arg.name != functional_arg.name
+            or str(inplace_arg.type) != str(functional_arg.type)
+            or inplace_arg.kwarg_only != functional_arg.kwarg_only
+            or inplace_arg.has_default_value()
+                != functional_arg.has_default_value()
+        ):
+            return False
+        if not inplace_arg.has_default_value():
+            return True
+        return inplace_arg.default_value == functional_arg.default_value
+
+    @classmethod
+    def _schemas_are_functional_twins(
+        cls, inplace_schema, functional_schema
+    ) -> bool:
+        """Check that a functional schema describes one receiver-only write."""
+        if (
+            not inplace_schema.is_mutable
+            or functional_schema.is_mutable
+            or len(inplace_schema.arguments) != len(functional_schema.arguments)
+            or len(inplace_schema.returns) != 1
+            or len(functional_schema.returns) != 1
+            or str(inplace_schema.returns[0].type) != "Tensor"
+            or str(functional_schema.returns[0].type) != "Tensor"
+        ):
+            return False
+
+        if not all(
+            cls._schema_arguments_match(inplace_arg, functional_arg)
+            for inplace_arg, functional_arg in zip(
+                inplace_schema.arguments, functional_schema.arguments
+            )
+        ):
+            return False
+
+        writes = [
+            index
+            for index, argument in enumerate(inplace_schema.arguments)
+            if argument.alias_info is not None
+            and argument.alias_info.is_write
+        ]
+        if writes != [0] or any(
+            argument.alias_info is not None
+            and argument.alias_info.is_write
+            for argument in functional_schema.arguments
+        ):
+            return False
+
+        receiver_alias = inplace_schema.arguments[0].alias_info
+        return_alias = inplace_schema.returns[0].alias_info
+        if receiver_alias is None or return_alias is None:
+            return False
+        return bool(
+            receiver_alias.after_set & return_alias.after_set
+            or receiver_alias.before_set & return_alias.before_set
+        )
+
+    @staticmethod
+    def _schema_tags(packet, overload_name):
+        overload = getattr(packet, overload_name or "default")
+        return set(overload.tags)
+
+    @classmethod
+    @functools.lru_cache(maxsize=None)
+    def _functional_inplace_spec(cls, func_name):
+        """Return ``(torch functional, mutates metadata)`` when schemas prove it."""
+        if (
+            not func_name.endswith("_")
+            or func_name.startswith("_")
+            or len(func_name) == 1
+        ):
+            return None
+
+        functional_name = func_name[:-1]
+        functional = getattr(torch, functional_name, None)
+        if not callable(functional):
+            return None
+
+        try:
+            inplace_packet = getattr(torch.ops.aten, func_name)
+            functional_packet = getattr(torch.ops.aten, functional_name)
+            inplace_schemas = inplace_packet._schemas
+            functional_schemas = functional_packet._schemas
+            inplace_tag = torch.Tag.inplace
+            inplace_view_tag = torch.Tag.inplace_view
+            nondeterministic_tags = {
+                torch.Tag.nondeterministic_bitwise,
+                torch.Tag.nondeterministic_seeded,
+            }
+        except (AttributeError, RuntimeError):
+            return None
+
+        tensor_inplace_schemas = [
+            (overload_name, schema)
+            for overload_name, schema in inplace_schemas.items()
+            if schema.arguments
+            and str(schema.arguments[0].type) == "Tensor"
+            and len(schema.returns) == 1
+            and str(schema.returns[0].type) == "Tensor"
+        ]
+        metadata_flags = []
+        for overload_name, inplace_schema in tensor_inplace_schemas:
+            try:
+                inplace_tags = cls._schema_tags(
+                    inplace_packet, overload_name
+                )
+            except AttributeError:
+                return None
+            # Operator packets can include internal helper overloads (for
+            # example ``index_put_.hacked_twin``) that are not Tensor methods.
+            if inplace_tag not in inplace_tags:
+                continue
+            if inplace_tags & nondeterministic_tags:
+                return None
+
+            matched = False
+            for functional_overload, functional_schema in (
+                functional_schemas.items()
+            ):
+                try:
+                    functional_tags = cls._schema_tags(
+                        functional_packet, functional_overload
+                    )
+                except AttributeError:
+                    continue
+                if functional_tags & nondeterministic_tags:
+                    continue
+                if cls._schemas_are_functional_twins(
+                    inplace_schema, functional_schema
+                ):
+                    matched = True
+                    break
+            if not matched:
+                return None
+            metadata_flags.append(inplace_view_tag in inplace_tags)
+
+        if not metadata_flags or len(set(metadata_flags)) != 1:
+            return None
+        return functional, metadata_flags[0]
+
+    @staticmethod
     def _convert_method_descriptor(func, context=None):
         """Convert torch.Tensor method descriptors to torch.* function equivalents.
 
@@ -192,14 +325,6 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                 torch_func = getattr(torch, func_name, None)
                 if torch_func is not None and callable(torch_func):
                     return torch_func
-
-                # Handle in-place operations (e.g., add_ -> torch.add)
-                # In-place methods end with '_' but torch.* functions don't
-                if func_name.endswith('_') and len(func_name) > 1:
-                    base_name = func_name[:-1]  # Remove trailing underscore
-                    torch_func = getattr(torch, base_name, None)
-                    if torch_func is not None and callable(torch_func):
-                        return torch_func
 
                 if context is not None:
                     _get_logger().debug(
@@ -451,10 +576,29 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         """
         kwargs = kwargs or {}
         func_name = getattr(func, "__name__", "")
-        if func_name not in cls._FUNCTIONAL_INPLACE_NAMES or not args:
+        if not args:
             return False, None
 
         target = args[0]
+        if type(target) is not torch.Tensor and not isinstance(target, cls):
+            return False, None
+
+        spec = cls._functional_inplace_spec(func_name)
+        if spec is None:
+            exact_inplace = getattr(torch, func_name, None)
+            functional = getattr(torch, func_name[:-1], None)
+            if callable(exact_inplace) and not callable(functional):
+                return False, None
+            if func_name.endswith("_") and not func_name.startswith("__"):
+                _get_logger().fatal(
+                    f"TracedTensor cannot safely lower in-place method "
+                    f"{func_name}: no deterministic functional ATen schema "
+                    f"with the same call contract was found.",
+                    error_type=NotImplementedError,
+                )
+            return False, None
+
+        functional, mutates_metadata = spec
         operands = args[1:]
         if type(target) is torch.Tensor:
             anchor = cls.find_traced_tensor((operands, kwargs))
@@ -470,9 +614,12 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         elif not isinstance(target, cls):
             return False, None
 
-        functional = getattr(torch, func_name[:-1])
         return True, target._apply_inplace(
-            functional, func_name, *operands, **kwargs
+            functional,
+            func_name,
+            *operands,
+            _mutates_metadata=mutates_metadata,
+            **kwargs,
         )
 
     @classmethod
@@ -562,6 +709,12 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         if traced_tensor is not None:
             cls._close_warp_segment()
 
+        # A carrier is an alias, which Torch refuses to detach in place, and the
+        # autograd state detach_ edits is never read while tracing.
+        if (getattr(func, "__name__", "") == "detach_"
+                and args and isinstance(args[0], TracedTensor)):
+            return args[0]
+
         # A plain receiver must be promoted before method-descriptor conversion
         # turns an in-place method into an allocating function.
         handled, result = cls._handle_plain_assignment(func, args, kwargs)
@@ -580,12 +733,6 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         if traced_tensor is None:
             # Fallback to default behavior if no TracedTensor found
             return NotImplemented
-
-        # A carrier is an alias, which Torch refuses to detach in place, and the
-        # autograd state detach_ edits is never read while tracing.
-        if (getattr(func, "__name__", "") == "detach_"
-                and args and isinstance(args[0], TracedTensor)):
-            return args[0]
 
         # Extract real tensors for actual computation
         real_args = tuple(TracedTensor.unwrap_traced_tensor(arg) for arg in args)
@@ -886,7 +1033,14 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     # In-place Arithmetic Operators (for +=, -=, etc.)
     # =========================================================================
 
-    def _apply_inplace(self, functional, inplace_name, *operands, **kwargs):
+    def _apply_inplace(
+        self,
+        functional,
+        inplace_name,
+        *operands,
+        _mutates_metadata=False,
+        **kwargs,
+    ):
         """Mutate this tensor in place, recording the operation functionally.
 
         Native eager execution preserves PyTorch's identity, casting, and error
@@ -910,6 +1064,13 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             underlying.copy_(
                 functional(underlying, *real_operands, **real_kwargs)
             )
+        elif _mutates_metadata:
+            # Shape/view mutations change the receiver's tensor metadata, not
+            # its storage, so mutating an ``as_subclass`` alias is insufficient.
+            with torch._C.DisableTorchFunction():
+                getattr(torch.Tensor, inplace_name)(
+                    self, *real_operands, **real_kwargs
+                )
         else:
             getattr(underlying, inplace_name)(
                 *real_operands, **real_kwargs
@@ -992,6 +1153,14 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
         # Descriptor conversion would otherwise discard the receiver mutation.
         return self.copy_(torch.index_add(self, dim, index, source, alpha=alpha))
+
+    def polygamma_(self, n):
+        """Handle the functional form's reversed ``n, input`` arguments."""
+        return self._apply_inplace(
+            lambda tensor, order: torch.polygamma(order, tensor),
+            "polygamma_",
+            n,
+        )
 
     def copy_(self, src, non_blocking=False):
         """Copy ``src`` into this tensor and record a full functional write."""

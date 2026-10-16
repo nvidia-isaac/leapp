@@ -3065,6 +3065,274 @@ class TestTracedTensor(unittest.TestCase):
             "traced_receiver_remainder",
         )
 
+    def test_schema_discovered_view_methods_mutate_traced_receiver(self):
+        """View mutations preserve identity and export their functional form."""
+        cases = (
+            ("squeeze_", (2, 3, 1), (-1,)),
+            ("unsqueeze_", (2, 3), (-1,)),
+            ("transpose_", (2, 3), (0, 1)),
+            ("t_", (2, 3), ()),
+            ("swapaxes_", (2, 3), (0, 1)),
+            ("swapdims_", (2, 3), (0, 1)),
+        )
+
+        for method, shape, args in cases:
+            with self.subTest(method=method):
+                trace_input = torch.arange(
+                    torch.tensor(shape).prod(), dtype=torch.float32
+                ).reshape(shape)
+                ctx = TracedTensorNode(name="test", node_index=0)
+                receiver = ctx.create_input(trace_input.clone(), name="x")
+
+                result = getattr(receiver, method)(*args)
+
+                expected = trace_input.clone()
+                getattr(expected, method)(*args)
+                self.assertIs(result, receiver)
+                self.assertEqual(receiver.shape, expected.shape)
+                self.assertTrue(torch.equal(receiver.tensor, expected))
+
+                ctx.compile_trace({"out": receiver})
+                runtime_input = trace_input + 10
+                runtime_expected = runtime_input.clone()
+                getattr(runtime_expected, method)(*args)
+                self.validate_export(
+                    ctx.m,
+                    runtime_input,
+                    runtime_expected,
+                    f"traced_receiver_{method.rstrip('_')}",
+                )
+
+    def test_inplace_squeeze_transit_invalidates_port(self):
+        """A post-capture squeeze mutates the carrier and drops provenance."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        receiver = ctx.create_input(torch.ones(2, 3, 1), name="x")
+        ctx.compile_trace({"out": receiver})
+        ctx.publish_output_port(receiver, "out")
+
+        result = receiver.squeeze_(-1)
+
+        self.assertIs(result, receiver)
+        self.assertEqual(receiver.shape, torch.Size([2, 3]))
+        self.assertIsNone(receiver.output_port)
+
+    def test_inplace_masked_fill_exports_functionally(self):
+        """A discarded masked_fill_ result still updates receiver and graph."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        trace_input = torch.tensor([1.0, 2.0, 3.0, 4.0])
+        trace_mask = torch.tensor([True, False, True, False])
+        receiver = ctx.create_input(trace_input.clone(), name="x")
+        mask = ctx.create_input(trace_mask, name="mask")
+
+        result = receiver.masked_fill_(mask, -1.0)
+
+        self.assertIs(result, receiver)
+        self.assertTrue(
+            torch.equal(receiver.tensor, torch.tensor([-1., 2., -1., 4.]))
+        )
+        ctx.compile_trace({"out": receiver})
+        runtime_input = torch.tensor([10.0, 20.0, 30.0, 40.0])
+        runtime_mask = torch.tensor([False, True, True, False])
+        expected = runtime_input.masked_fill(runtime_mask, -1.0)
+        self.validate_export(
+            ctx.m,
+            (runtime_input, runtime_mask),
+            expected,
+            "traced_receiver_masked_fill",
+        )
+
+    def test_inplace_index_copy_exports_functionally(self):
+        """index_copy_ preserves identity and replays runtime index and source."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        trace_input = torch.zeros(4, 2)
+        trace_index = torch.tensor([0, 2])
+        trace_source = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+        receiver = ctx.create_input(trace_input.clone(), name="x")
+        index = ctx.create_input(trace_index, name="index")
+        source = ctx.create_input(trace_source, name="source")
+
+        result = receiver.index_copy_(0, index, source)
+
+        expected = trace_input.index_copy(0, trace_index, trace_source)
+        self.assertIs(result, receiver)
+        self.assertTrue(torch.equal(receiver.tensor, expected))
+        ctx.compile_trace({"out": receiver})
+        runtime_input = torch.full((4, 2), 5.0)
+        runtime_index = torch.tensor([1, 3])
+        runtime_source = torch.tensor([[10.0, 20.0], [30.0, 40.0]])
+        runtime_expected = runtime_input.index_copy(
+            0, runtime_index, runtime_source
+        )
+        self.validate_export(
+            ctx.m,
+            (runtime_input, runtime_index, runtime_source),
+            runtime_expected,
+            "traced_receiver_index_copy",
+            verify_legacy_onnx=False,
+            verify_dynamo_onnx=True,
+        )
+
+    def test_inplace_cumsum_exports_functionally(self):
+        """cumsum_ preserves identity and records torch.cumsum for replay."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        trace_input = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+        receiver = ctx.create_input(trace_input.clone(), name="x")
+
+        result = receiver.cumsum_(1)
+
+        self.assertIs(result, receiver)
+        self.assertTrue(torch.equal(receiver.tensor, trace_input.cumsum(1)))
+        ctx.compile_trace({"out": receiver})
+        runtime_input = torch.tensor([[2.0, 1.0, 4.0], [3.0, 6.0, 5.0]])
+        self.validate_export(
+            ctx.m,
+            runtime_input,
+            runtime_input.cumsum(1),
+            "traced_receiver_cumsum",
+        )
+
+    def test_inplace_schema_discovery_is_conservative(self):
+        """ATen schemas identify safe functions, views, and exclusions."""
+        expected = {
+            "add_": ("add", False),
+            "sqrt_": ("sqrt", False),
+            "eq_": ("eq", False),
+            "index_put_": ("index_put", False),
+            "scatter_add_": ("scatter_add", False),
+            "squeeze_": ("squeeze", True),
+        }
+        for method, expected_spec in expected.items():
+            with self.subTest(method=method):
+                functional, mutates_metadata = (
+                    TracedTensor._functional_inplace_spec(method)
+                )
+                self.assertEqual(
+                    (functional.__name__, mutates_metadata), expected_spec
+                )
+
+        for method in (
+            "normal_", "bernoulli_", "polygamma_", "resize_"
+        ):
+            with self.subTest(method=method):
+                self.assertIsNone(
+                    TracedTensor._functional_inplace_spec(method)
+                )
+
+    def test_schema_discovered_pointwise_methods_export_functionally(self):
+        """Exact and base-only pointwise mutations share schema lowering."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        trace_input = torch.tensor([1.0, 4.0, 9.0])
+        trace_other = torch.tensor([1.0, 3.0, 3.0])
+        receiver = ctx.create_input(trace_input.clone(), name="x")
+        other = ctx.create_input(trace_other, name="other")
+
+        self.assertIs(receiver.sqrt_(), receiver)
+        self.assertIs(receiver.eq_(other), receiver)
+        expected = trace_input.sqrt().eq(trace_other).to(trace_input.dtype)
+        self.assertTrue(torch.equal(receiver.tensor, expected))
+
+        ctx.compile_trace({"out": receiver})
+        runtime_input = torch.tensor([4.0, 16.0, 25.0])
+        runtime_other = torch.tensor([2.0, 5.0, 5.0])
+        runtime_expected = (
+            runtime_input.sqrt().eq(runtime_other).to(runtime_input.dtype)
+        )
+        self.validate_export(
+            ctx.m,
+            (runtime_input, runtime_other),
+            runtime_expected,
+            "schema_inplace_pointwise",
+        )
+
+    def test_schema_discovered_scatter_add_exports_functionally(self):
+        """Indexed mutations replay runtime index and source tensors."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        trace_input = torch.zeros(3, 2)
+        trace_index = torch.tensor([[0, 1], [1, 0], [2, 1]])
+        trace_source = torch.tensor([[1., 2.], [3., 4.], [5., 6.]])
+        receiver = ctx.create_input(trace_input.clone(), name="x")
+        index = ctx.create_input(trace_index, name="index")
+        source = ctx.create_input(trace_source, name="source")
+
+        result = receiver.scatter_add_(0, index, source)
+
+        expected = trace_input.scatter_add(0, trace_index, trace_source)
+        self.assertIs(result, receiver)
+        self.assertTrue(torch.equal(receiver.tensor, expected))
+        ctx.compile_trace({"out": receiver})
+        runtime_input = torch.ones(3, 2)
+        runtime_index = torch.tensor([[2, 0], [0, 2], [1, 1]])
+        runtime_source = torch.tensor([[2., 3.], [4., 5.], [6., 7.]])
+        runtime_expected = runtime_input.scatter_add(
+            0, runtime_index, runtime_source
+        )
+        self.validate_export(
+            ctx.m,
+            (runtime_input, runtime_index, runtime_source),
+            runtime_expected,
+            "schema_inplace_scatter_add",
+            verify_legacy_onnx=False,
+            verify_dynamo_onnx=True,
+        )
+
+    def test_schema_discovered_triu_exports_functionally(self):
+        """Matrix mutations discovered from schemas preserve identity."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        trace_input = torch.arange(9.0).reshape(3, 3)
+        receiver = ctx.create_input(trace_input.clone(), name="x")
+
+        result = receiver.triu_(1)
+
+        self.assertIs(result, receiver)
+        self.assertTrue(torch.equal(receiver.tensor, trace_input.triu(1)))
+        ctx.compile_trace({"out": receiver})
+        runtime_input = torch.arange(10.0, 19.0).reshape(3, 3)
+        self.validate_export(
+            ctx.m,
+            runtime_input,
+            runtime_input.triu(1),
+            "schema_inplace_triu",
+        )
+
+    def test_inplace_polygamma_uses_argument_adapter(self):
+        """polygamma_ handles the functional API's reversed arguments."""
+        ctx = TracedTensorNode(name="test", node_index=0)
+        trace_input = torch.tensor([1.0, 2.0, 3.0])
+        receiver = ctx.create_input(trace_input.clone(), name="x")
+
+        result = receiver.polygamma_(1)
+
+        self.assertIs(result, receiver)
+        self.assertTrue(
+            torch.allclose(receiver.tensor, torch.polygamma(1, trace_input))
+        )
+        ctx.compile_trace({"out": receiver})
+        runtime_input = torch.tensor([1.5, 2.5, 3.5])
+        self.validate_export(
+            ctx.m,
+            runtime_input,
+            torch.polygamma(1, runtime_input),
+            "inplace_polygamma",
+            verify_legacy_onnx=False,
+        )
+
+    def test_nondeterministic_inplace_methods_fail_before_mutation(self):
+        """Random mutations without safe functional semantics fail clearly."""
+        cases = (("normal_", (0.0, 1.0)), ("bernoulli_", (0.5,)))
+        for method, args in cases:
+            with self.subTest(method=method):
+                ctx = TracedTensorNode(name="test", node_index=0)
+                receiver = ctx.create_input(torch.ones(3), name="x")
+                before = receiver.tensor.clone()
+
+                with self.assertRaisesRegex(
+                    NotImplementedError,
+                    f"cannot safely lower in-place method {method}",
+                ):
+                    getattr(receiver, method)(*args)
+
+                self.assertTrue(torch.equal(receiver.tensor, before))
+
     def test_registered_inplace_method_preserves_destination_dtype(self):
         """Functional lowering casts back to the in-place receiver dtype."""
         ctx = TracedTensorNode(name="test", node_index=0)
