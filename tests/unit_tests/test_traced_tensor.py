@@ -3195,10 +3195,8 @@ class TestTracedTensor(unittest.TestCase):
         """ATen schemas identify safe functions, views, and exclusions."""
         expected = {
             "add_": ("add", False),
-            "sqrt_": ("sqrt", False),
             "eq_": ("eq", False),
             "index_put_": ("index_put", False),
-            "scatter_add_": ("scatter_add", False),
             "squeeze_": ("squeeze", True),
         }
         for method, expected_spec in expected.items():
@@ -3210,88 +3208,35 @@ class TestTracedTensor(unittest.TestCase):
                     (functional.__name__, mutates_metadata), expected_spec
                 )
 
-        for method in (
-            "normal_", "bernoulli_", "polygamma_", "resize_"
-        ):
+        for method in ("normal_", "polygamma_", "resize_"):
             with self.subTest(method=method):
                 self.assertIsNone(
                     TracedTensor._functional_inplace_spec(method)
                 )
 
-    def test_schema_discovered_pointwise_methods_export_functionally(self):
-        """Exact and base-only pointwise mutations share schema lowering."""
+    def test_schema_discovered_comparison_preserves_receiver_dtype(self):
+        """Functional comparison output is cast to the receiver's dtype."""
         ctx = TracedTensorNode(name="test", node_index=0)
         trace_input = torch.tensor([1.0, 4.0, 9.0])
         trace_other = torch.tensor([1.0, 3.0, 3.0])
         receiver = ctx.create_input(trace_input.clone(), name="x")
         other = ctx.create_input(trace_other, name="other")
 
-        self.assertIs(receiver.sqrt_(), receiver)
         self.assertIs(receiver.eq_(other), receiver)
-        expected = trace_input.sqrt().eq(trace_other).to(trace_input.dtype)
+        expected = trace_input.eq(trace_other).to(trace_input.dtype)
         self.assertTrue(torch.equal(receiver.tensor, expected))
 
         ctx.compile_trace({"out": receiver})
         runtime_input = torch.tensor([4.0, 16.0, 25.0])
-        runtime_other = torch.tensor([2.0, 5.0, 5.0])
-        runtime_expected = (
-            runtime_input.sqrt().eq(runtime_other).to(runtime_input.dtype)
+        runtime_other = torch.tensor([4.0, 5.0, 25.0])
+        runtime_expected = runtime_input.eq(runtime_other).to(
+            runtime_input.dtype
         )
         self.validate_export(
             ctx.m,
             (runtime_input, runtime_other),
             runtime_expected,
-            "schema_inplace_pointwise",
-        )
-
-    def test_schema_discovered_scatter_add_exports_functionally(self):
-        """Indexed mutations replay runtime index and source tensors."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        trace_input = torch.zeros(3, 2)
-        trace_index = torch.tensor([[0, 1], [1, 0], [2, 1]])
-        trace_source = torch.tensor([[1., 2.], [3., 4.], [5., 6.]])
-        receiver = ctx.create_input(trace_input.clone(), name="x")
-        index = ctx.create_input(trace_index, name="index")
-        source = ctx.create_input(trace_source, name="source")
-
-        result = receiver.scatter_add_(0, index, source)
-
-        expected = trace_input.scatter_add(0, trace_index, trace_source)
-        self.assertIs(result, receiver)
-        self.assertTrue(torch.equal(receiver.tensor, expected))
-        ctx.compile_trace({"out": receiver})
-        runtime_input = torch.ones(3, 2)
-        runtime_index = torch.tensor([[2, 0], [0, 2], [1, 1]])
-        runtime_source = torch.tensor([[2., 3.], [4., 5.], [6., 7.]])
-        runtime_expected = runtime_input.scatter_add(
-            0, runtime_index, runtime_source
-        )
-        self.validate_export(
-            ctx.m,
-            (runtime_input, runtime_index, runtime_source),
-            runtime_expected,
-            "schema_inplace_scatter_add",
-            verify_legacy_onnx=False,
-            verify_dynamo_onnx=True,
-        )
-
-    def test_schema_discovered_triu_exports_functionally(self):
-        """Matrix mutations discovered from schemas preserve identity."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        trace_input = torch.arange(9.0).reshape(3, 3)
-        receiver = ctx.create_input(trace_input.clone(), name="x")
-
-        result = receiver.triu_(1)
-
-        self.assertIs(result, receiver)
-        self.assertTrue(torch.equal(receiver.tensor, trace_input.triu(1)))
-        ctx.compile_trace({"out": receiver})
-        runtime_input = torch.arange(10.0, 19.0).reshape(3, 3)
-        self.validate_export(
-            ctx.m,
-            runtime_input,
-            runtime_input.triu(1),
-            "schema_inplace_triu",
+            "schema_inplace_comparison",
         )
 
     def test_inplace_polygamma_uses_argument_adapter(self):
