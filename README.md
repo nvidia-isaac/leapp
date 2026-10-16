@@ -5,17 +5,18 @@ SPDX-License-Identifier: Apache-2.0
 
 # LEAPP — Lightweight Export Annotations for Policy Pipelines
 
+[Full LEAPP docs](https://nvidia-isaac.github.io/leapp/)
+
 **Export the policy code you already run — preprocessing, model inference, and action processing together.**
 
 LEAPP traces supported PyTorch and NumPy computation across existing functions and objects. Export the complete path as **one ONNX, TorchScript, or PT2 model**, or choose separate stages when useful.
 
-- **[State](https://nvidia-isaac.github.io/leapp/guides/graph.html):** export explicit feedback or track reassigned registered PyTorch buffers.
-- **[Deployment metadata](https://nvidia-isaac.github.io/leapp/semantics/usage.html):** attach tensor roles, joint names, and timing information.
-- **[FunctionPatch](https://nvidia-isaac.github.io/leapp/guides/patching.html):** supply traceable replacements for unsupported module-level calls while keeping existing callers.
-- **[Validation](https://nvidia-isaac.github.io/leapp/guides/debugging.html):** compare exported outputs against captured samples and replay bundles in Python.
-- **[Warp](https://nvidia-isaac.github.io/leapp/tensor_libraries/warp.html):** capture kernel regions with an additional runtime adapter.
+Mark where inputs enter and outputs leave, then run your application. Inputs can enter at different call sites; helper functions and class boundaries do not force separate models. No prescribed RL environment interface is required. [See annotation patterns](https://nvidia-isaac.github.io/leapp/guides/nodes.html).
 
-**Isaac Lab** [adds annotations automatically](https://isaac-sim.github.io/IsaacLab/release/3.0.0/source/policy_deployment/05_leapp/exporting_policies_with_leapp.html) for supported manager-based environments. Custom pipelines use the annotations directly.
+- **Keep processing with the policy.** Capture supported NumPy preprocessing, conversions into PyTorch, and action transforms together. [Warp kernel regions](https://nvidia-isaac.github.io/leapp/tensor_libraries/warp.html) can also be captured into ONNX or PT2 with an additional runtime adapter.
+- **Adapt unsupported calls with [FunctionPatch](https://nvidia-isaac.github.io/leapp/guides/patching.html).** Register a faithful replacement built from supported operations; existing module-level callers can stay in place.
+- **Describe the deployment interface.** Attach tensor roles, joint names, and timing information with [semantic metadata](https://nvidia-isaac.github.io/leapp/semantics/usage.html), so downstream applications can interpret model inputs and outputs.
+- **Inspect and validate the export.** View the captured graph and compare exported outputs against Python samples. [Validation tools](https://nvidia-isaac.github.io/leapp/guides/debugging.html) and bundle replay help check the computation before integration.
 
 ## Quick start
 
@@ -56,7 +57,7 @@ leapp.stop()
 leapp.compile_graph(validate=True)
 ```
 
-Produces **`robot_policy/control.onnx`**, a YAML interface specification, and a graph PNG on Python 3.11+. This stateless model runs directly in ONNX Runtime; [InferenceManager](https://nvidia-isaac.github.io/leapp/leapp_runtime.html) loads the bundle for Python replay. See [Isaac ROS Deploy](https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_deploy/index.html) for ROS 2 deployment.
+Produces **`robot_policy/control.onnx`**, a YAML interface specification, and a graph PNG on Python 3.11+. This stateless model runs directly in ONNX Runtime; [InferenceManager](https://nvidia-isaac.github.io/leapp/leapp_runtime.html) loads the bundle for Python replay. Other applications can consume the exported artifacts through their chosen backend runtime.
 
 ## Capture scope
 
