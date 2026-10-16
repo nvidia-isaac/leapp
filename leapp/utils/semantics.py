@@ -15,11 +15,12 @@
 # limitations under the License.
 #
 
-from .enums import Kind, AxisKind, ExpressionFrame
+from .enums import Kind, AxisKind
 from .tensor_description import TensorSemantics
 
 
 _COMPONENTS = {
+    Kind.FORCE_APPLICATION_POSITION: ("x", "y", "z"),
     Kind.FRAME_POSE: ("x", "y", "z", "qx", "qy", "qz", "qw"),
     Kind.FRAME_POSITION: ("x", "y", "z"),
     Kind.FRAME_ORIENTATION: ("qx", "qy", "qz", "qw"),
@@ -30,10 +31,6 @@ _COMPONENTS = {
 
 
 def _annotate(kind, name, ref, *, axes, is_setpoint, **spatial):
-    if "reference" in spatial and spatial["reference"] is None:
-        raise ValueError("A spatial reference frame is required")
-    if "expressed_in" in spatial and spatial["expressed_in"] is None:
-        raise ValueError("An expression frame is required")
     annotation = TensorSemantics(name=name, ref=ref, kind=kind, axes=axes,
                                  is_setpoint=is_setpoint, **spatial)
     components = _COMPONENTS.get(kind)
@@ -73,56 +70,63 @@ def image(name, ref, *, axes=None, is_setpoint=False) -> TensorSemantics:
     return _annotate(Kind.IMAGE, name, ref, axes=axes, is_setpoint=is_setpoint)
 
 
-def frame_pose(name, ref, *, reference, axes=None, is_setpoint=False) -> TensorSemantics:
+def frame_pose(name, ref, *, reference=None, axes=None, is_setpoint=False) -> TensorSemantics:
     return _annotate(Kind.FRAME_POSE, name, ref, axes=axes, is_setpoint=is_setpoint, reference=reference)
 
 
-def frame_position(name, ref, *, reference, axes=None, is_setpoint=False) -> TensorSemantics:
+def frame_position(name, ref, *, reference=None, axes=None, is_setpoint=False) -> TensorSemantics:
     return _annotate(Kind.FRAME_POSITION, name, ref, axes=axes, is_setpoint=is_setpoint, reference=reference)
 
 
-def frame_orientation(name, ref, *, reference, axes=None, is_setpoint=False) -> TensorSemantics:
+def frame_orientation(name, ref, *, reference=None, axes=None, is_setpoint=False) -> TensorSemantics:
     return _annotate(Kind.FRAME_ORIENTATION, name, ref,
                      axes=axes, is_setpoint=is_setpoint, reference=reference)
 
 
-def frame_twist(name, ref, *, reference,
-                expressed_in=ExpressionFrame.SELF, axes=None, is_setpoint=False) -> TensorSemantics:
+def frame_twist(name, ref, *, reference=None,
+                expressed_in=None, axes=None, is_setpoint=False) -> TensorSemantics:
     return _annotate(Kind.FRAME_TWIST, name, ref,
                      axes=axes, is_setpoint=is_setpoint, reference=reference, expressed_in=expressed_in)
 
 
-def frame_linear_velocity(name, ref, *, reference,
-                expressed_in=ExpressionFrame.SELF, axes=None, is_setpoint=False) -> TensorSemantics:
+def frame_linear_velocity(name, ref, *, reference=None,
+                expressed_in=None, axes=None, is_setpoint=False) -> TensorSemantics:
     return _annotate(Kind.FRAME_LINEAR_VELOCITY, name, ref,
                      axes=axes, is_setpoint=is_setpoint, reference=reference, expressed_in=expressed_in)
 
 
-def frame_angular_velocity(name, ref, *, reference,
-                expressed_in=ExpressionFrame.SELF, axes=None, is_setpoint=False) -> TensorSemantics:
+def frame_angular_velocity(name, ref, *, reference=None,
+                expressed_in=None, axes=None, is_setpoint=False) -> TensorSemantics:
     return _annotate(Kind.FRAME_ANGULAR_VELOCITY, name, ref,
                      axes=axes, is_setpoint=is_setpoint, reference=reference, expressed_in=expressed_in)
 
 
-def frame_acceleration(name, ref, *, reference,
-                expressed_in=ExpressionFrame.SELF, axes=None, is_setpoint=False) -> TensorSemantics:
+def frame_acceleration(name, ref, *, reference=None,
+                expressed_in=None, axes=None, is_setpoint=False) -> TensorSemantics:
     return _annotate(Kind.FRAME_ACCELERATION, name, ref,
                      axes=axes, is_setpoint=is_setpoint, reference=reference, expressed_in=expressed_in)
 
 
-def frame_linear_acceleration(name, ref, *, reference,
-                expressed_in=ExpressionFrame.SELF, axes=None, is_setpoint=False) -> TensorSemantics:
+def frame_linear_acceleration(name, ref, *, reference=None,
+                expressed_in=None, axes=None, is_setpoint=False) -> TensorSemantics:
     return _annotate(Kind.FRAME_LINEAR_ACCELERATION, name, ref,
                      axes=axes, is_setpoint=is_setpoint, reference=reference, expressed_in=expressed_in)
 
 
-def frame_angular_acceleration(name, ref, *, reference,
-                expressed_in=ExpressionFrame.SELF, axes=None, is_setpoint=False) -> TensorSemantics:
+def frame_angular_acceleration(name, ref, *, reference=None,
+                expressed_in=None, axes=None, is_setpoint=False) -> TensorSemantics:
     return _annotate(Kind.FRAME_ANGULAR_ACCELERATION, name, ref,
                      axes=axes, is_setpoint=is_setpoint, reference=reference, expressed_in=expressed_in)
 
 
 def frame_wrench(name, ref, *,
-                expressed_in=ExpressionFrame.SELF, axes=None, is_setpoint=False) -> TensorSemantics:
+                expressed_in=None, axes=None, is_setpoint=False) -> TensorSemantics:
     return _annotate(Kind.FRAME_WRENCH, name, ref,
+                     axes=axes, is_setpoint=is_setpoint, expressed_in=expressed_in)
+
+
+def force_application_position(name, ref, *,
+                               expressed_in=None, axes=None, is_setpoint=False) -> TensorSemantics:
+    """Position where a force acts, paired by element name with its wrench."""
+    return _annotate(Kind.FORCE_APPLICATION_POSITION, name, ref,
                      axes=axes, is_setpoint=is_setpoint, expressed_in=expressed_in)

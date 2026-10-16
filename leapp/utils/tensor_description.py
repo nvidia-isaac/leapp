@@ -46,6 +46,7 @@ from leapp.utils.utils import safe_deepcopy
 from leapp.utils.enums import Kind, AxisKind, ExpressionFrame
 
 
+
 class CompactYamlList(list):
     """Custom list class for tensor shapes that enables compact YAML formatting
     This class will behave exactly like a list. The only difference is that it will be
@@ -176,18 +177,14 @@ class TensorSemantics:
             raise TypeError("kind must be a Kind, non-empty string, or None")
         if not isinstance(self.is_setpoint, bool):
             raise TypeError("is_setpoint must be a boolean")
-        if self.reference is not None and (
-            not isinstance(self.reference, str) or not self.reference
-        ):
-            raise TypeError("reference must be a non-empty frame name")
+        if self.reference is not None and (not isinstance(self.reference, str) or not self.reference):
+            raise TypeError("reference must be a non-empty frame name or None (world)")
         if self.expressed_in is not None and not isinstance(self.expressed_in, ExpressionFrame):
             if not isinstance(self.expressed_in, str) or not self.expressed_in:
                 raise TypeError("expressed_in must be an ExpressionFrame or non-empty frame name")
-        if self.expressed_in == ExpressionFrame.REFERENCE and self.reference is None:
-            raise ValueError("expressed_in=REFERENCE requires reference")
-        if self.expressed_in is None and self.kind in (Kind.FRAME_TWIST, Kind.FRAME_WRENCH):
-            self.expressed_in = ExpressionFrame.SELF
-        if self.extra and set(self.extra) & {"axes", "is_setpoint", "reference", "expressed_in"}:
+        if self.kind in (Kind.FRAME_WRENCH, Kind.FORCE_APPLICATION_POSITION) and self.expressed_in is ExpressionFrame.REFERENCE:
+            raise ValueError("A wrench cannot use REFERENCE")
+        if self.extra and set(self.extra) & {"axes", "is_setpoint", "reference", "expressed_in", "spatial"}:
             raise ValueError("Use TensorSemantics fields rather than extra for axes and spatial metadata")
         if self.axes is not None:
             if not isinstance(self.axes, list):
@@ -214,18 +211,25 @@ class TensorSemantics:
         """
         result = {}
         for f in fields(self):
-            if f.name in self._INTERNAL_FIELDS or f.name == 'extra':
+            if f.name in self._INTERNAL_FIELDS or f.name in ("extra", "reference", "expressed_in"):
                 continue
             value = getattr(self, f.name)
             if f.name == "is_setpoint" and not value:
                 continue
             if f.name == "axes" and value is not None:
                 value = [axis.to_dict() if axis is not None else None for axis in value]
-            elif f.name == "expressed_in" and value is not None:
-                value = ({"selector": value.value} if isinstance(value, ExpressionFrame)
-                         else {"frame": value})
             if value is not None:
                 result[f.name] = value
+        if self.kind is not None and self.kind.startswith("frame/"):
+            spatial = {}
+            if self.kind not in (Kind.FRAME_WRENCH, Kind.FORCE_APPLICATION_POSITION):
+                spatial["reference"] = self.reference
+            if self.kind not in (Kind.FRAME_POSE, Kind.FRAME_POSITION, Kind.FRAME_ORIENTATION):
+                spatial["expressed_in"] = (
+                    {"selector": self.expressed_in.value} if isinstance(self.expressed_in, ExpressionFrame)
+                    else {"frame": self.expressed_in} if self.expressed_in is not None else None
+                )
+            result["spatial"] = spatial
         if self.extra:
             result.update(self.extra)
         return result

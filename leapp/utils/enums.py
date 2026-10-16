@@ -31,6 +31,7 @@ class Kind(str, Enum):
     FRAME_ACCELERATION = "frame/acceleration"
     FRAME_LINEAR_ACCELERATION = "frame/linear_acceleration"
     FRAME_ANGULAR_ACCELERATION = "frame/angular_acceleration"
+    FORCE_APPLICATION_POSITION = "frame/force_application_position"
     FRAME_WRENCH = "frame/wrench"
     VECTOR3D = "vector3d"
     KP = "kp"

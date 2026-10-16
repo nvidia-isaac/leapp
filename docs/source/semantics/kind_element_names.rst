@@ -52,6 +52,9 @@ kinds and ``kind=None`` are also accepted.
    * - ``FRAME_WRENCH``
      - ``frame/wrench``
      - ``frame_wrench(...)``
+   * - ``FORCE_APPLICATION_POSITION``
+     - ``frame/force_application_position``
+     - ``force_application_position(...)``
    * - ``VECTOR3D``
      - ``vector3d``
      - ``vector3d(...)``
@@ -95,14 +98,17 @@ Spatial metadata
 ``expressed_in`` identifies the coordinate basis: a literal frame name,
 ``ExpressionFrame.SELF`` (the element's own frame), or
 ``ExpressionFrame.REFERENCE`` (the frame named by ``reference``).
-Twists and wrenches default to ``SELF``. A literal frame named ``self`` is
-not the same as the enum selector.
+Twists and wrenches default to ``None`` (global). A literal frame named ``self`` is
+not the same as the enum selector. ``None`` means the global frame for both
+fields. Spatial fields serialize together under ``spatial``; missing YAML fields
+also mean global.
 
 .. code-block:: yaml
 
    kind: frame/twist
-   reference: base
-   expressed_in: {selector: self}
+   spatial:
+     reference: base
+     expressed_in: {selector: self}
    axes:
    - {kind: element, names: [tool]}
    - {kind: component, names: [vx, vy, vz, wx, wy, wz]}
@@ -110,16 +116,25 @@ not the same as the enum selector.
 A literal expression frame serializes as ``expressed_in: {frame: world}``.
 Poses use ``reference`` only; wrenches use ``expressed_in`` only. Twist linear
 velocity is evaluated at the element frame's origin; wrench moments are taken
-about that origin. These annotations do not transform tensor values.
+about that origin unless a separate application position is supplied. These annotations do not transform tensor values.
+
+``force_application_position`` describes an optional XYZ position paired with a
+wrench by element name and input/output purpose. Both use the same
+``expressed_in`` (default ``None``, global). ``SELF`` means an offset from the element
+origin; ``None`` means an absolute global position; a named frame supplies the
+position's origin and axes. No ``reference`` is used, and ``REFERENCE`` is invalid.
+With an application position, the wrench's moment is the supplied torque;
+applying the offset force adds its lever-arm moment. Without one, the force acts
+at the element origin.
 
 Convenience helpers
 -------------------
 
 Every built-in Kind has a helper exported from ``leapp``. Helpers return
 ordinary ``TensorSemantics`` and accept ``axes=None`` and
-``is_setpoint=False``. Spatial helpers require ``reference`` except for
-``frame_wrench``. Motion and wrench helpers accept ``expressed_in`` with
-``SELF`` as the default; pose, position, and orientation helpers do not.
+``is_setpoint=False``. Pose and motion helpers default ``reference`` to
+``None`` (global frame); ``frame_wrench`` has no reference argument. Motion and wrench helpers accept ``expressed_in`` with
+``None`` (global) as the default; pose, position, and orientation helpers do not.
 
 .. code-block:: python
 

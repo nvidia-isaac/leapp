@@ -76,12 +76,12 @@ def test_time_axis_metadata_and_constraints():
 ])
 def test_expression_selector_is_distinct_from_frame_name(expressed_in, expected):
     annotation = leapp.frame_twist("v", torch.zeros(6), reference="base", expressed_in=expressed_in)
-    assert annotation.to_dict()["expressed_in"] == expected
+    assert annotation.to_dict()["spatial"]["expressed_in"] == expected
 
 
 @pytest.mark.parametrize("kind", [Kind.FRAME_TWIST, Kind.FRAME_WRENCH, "frame/twist"])
 def test_direct_spatial_defaults(kind):
-    assert TensorSemantics("x", torch.zeros(6), kind=kind).to_dict()["expressed_in"] == {"selector": "self"}
+    assert TensorSemantics("x", torch.zeros(6), kind=kind).to_dict()["spatial"]["expressed_in"] is None
 
 
 def test_spatial_helper_signatures_and_required_arguments():
@@ -90,10 +90,16 @@ def test_spatial_helper_signatures_and_required_arguments():
         leapp.frame_pose("pose", ref, reference="world", expressed_in="world")
     with pytest.raises(TypeError):
         leapp.frame_wrench("w", ref, reference="world")
-    with pytest.raises(ValueError, match="requires reference"):
+    with pytest.raises(ValueError, match="cannot use REFERENCE"):
         leapp.frame_wrench("w", ref, expressed_in=ExpressionFrame.REFERENCE)
-    with pytest.raises(ValueError, match="required"):
-        leapp.frame_twist("v", ref, reference=None)
+    assert leapp.frame_twist("v", ref).to_dict()["spatial"] == {
+        "reference": None, "expressed_in": None,
+    }
+    assert leapp.frame_twist("v", ref, expressed_in=None).to_dict()["spatial"] == {
+        "reference": None, "expressed_in": None,
+    }
+    assert leapp.frame_twist("v", ref, expressed_in=ExpressionFrame.REFERENCE).reference is None
+    assert leapp.frame_pose("p", torch.zeros(7)).to_dict()["spatial"] == {"reference": None}
 
 
 @pytest.mark.parametrize("axis_kind", [AxisKind.COMPONENT, "component"])
@@ -152,7 +158,29 @@ def test_warp_image_metadata_without_native_export_runtime():
 def test_update_preserves_spatial_defaults_and_custom_metadata():
     annotation = leapp.frame_twist("v", torch.zeros(6), reference="base")
     annotation.update({"axes": [Axis("component")], "description": "measured"})
-    assert annotation.to_dict()["expressed_in"] == {"selector": "self"}
+    assert annotation.to_dict()["spatial"]["expressed_in"] is None
     assert annotation.to_dict()["description"] == "measured"
     with pytest.raises(TypeError, match="kind must"):
         TensorSemantics("x", torch.zeros(1), kind=42)
+
+
+@pytest.mark.parametrize("expression", [ExpressionFrame.SELF, None, "base"])
+def test_force_application_position(expression):
+    axes = [Axis(AxisKind.ELEMENT, names=["tool"]), Axis(AxisKind.COMPONENT, names=["z", "x", "y"])]
+    annotation = leapp.force_application_position("point", torch.zeros(1, 3), axes=axes, expressed_in=expression)
+    assert annotation.kind == Kind.FORCE_APPLICATION_POSITION
+    assert annotation.expressed_in == expression
+    with pytest.raises(ValueError, match="REFERENCE"):
+        leapp.force_application_position("point", torch.zeros(1, 3), expressed_in=ExpressionFrame.REFERENCE)
+    axes[1] = Axis(AxisKind.COMPONENT, names=["vx", "vy", "vz"])
+    with pytest.raises(ValueError, match="components"):
+        leapp.force_application_position("point", torch.zeros(1, 3), axes=axes)
+
+
+@pytest.mark.parametrize("helper", [leapp.frame_twist, leapp.frame_wrench, leapp.force_application_position])
+def test_omission_and_none_both_mean_world(helper):
+    ref = torch.zeros(3)
+    assert helper("value", ref).to_dict() == helper("value", ref, expressed_in=None).to_dict()
+    assert helper("value", ref).expressed_in is None
+    assert helper("value", ref, expressed_in=ExpressionFrame.SELF).expressed_in is ExpressionFrame.SELF
+    assert helper("value", ref, expressed_in="world").to_dict()["spatial"]["expressed_in"] == {"frame": "world"}

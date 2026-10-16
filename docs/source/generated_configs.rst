@@ -228,12 +228,23 @@ Unspecified dimensions use ``null``; omit ``axes`` when all metadata is absent.
    - {kind: time, period_ms: 100}
    - {kind: element, names: [hip, knee, ankle]}
 
-``reference`` and ``expressed_in``
-------------------------------------------
+``spatial``
+-----------
 
-``reference`` is a literal frame name. ``expressed_in`` is a tagged mapping:
+Spatial fields are grouped in one tensor-level ``spatial`` mapping.
+``reference`` is a literal frame name or ``null`` for the global frame.
+``expressed_in`` is ``null`` for the global basis, or a tagged mapping:
 ``{selector: self}``, ``{selector: reference}``, or ``{frame: world}``.
-Twists and wrenches explicitly serialize their default ``self`` selector.
+Twists and wrenches serialize their default global expression frame as ``null``.
+Missing spatial fields have the same meaning as ``null``: the global frame.
+Use ``{selector: self}`` explicitly for local coordinates.
+
+.. code-block:: yaml
+
+   spatial:
+     reference: null
+     expressed_in: {selector: self}
+
 
 See :doc:`semantics/kind_element_names` for spatial meanings, custom metadata,
 and helper functions, and :doc:`semantics/temporal` for time axes.

@@ -39,6 +39,7 @@ from .utils.semantics import (
     frame_twist, frame_linear_velocity, frame_angular_velocity,
     frame_acceleration, frame_linear_acceleration, frame_angular_acceleration,
     frame_wrench,
+    force_application_position,
 )
 
 __version__ = "0.7.2"
@@ -63,4 +64,5 @@ __all__ = [
     "frame_twist", "frame_linear_velocity", "frame_angular_velocity",
     "frame_acceleration", "frame_linear_acceleration", "frame_angular_acceleration",
     "frame_wrench",
+    "force_application_position",
 ]

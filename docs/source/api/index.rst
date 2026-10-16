@@ -353,9 +353,10 @@ Parameters
 * ``kind`` (Kind | str, optional): Quantity represented by the tensor.
 * ``axes`` (list, optional): One ``Axis`` or ``None`` per tensor dimension.
 * ``is_setpoint`` (bool): Marks setpoint inputs; ``True`` is invalid on outputs.
-* ``reference`` (str, optional): Spatial reference frame name.
-* ``expressed_in`` (ExpressionFrame | str, optional): Coordinate basis selector
-  or literal frame name. Twists and wrenches default to ``ExpressionFrame.SELF``.
+* ``reference`` (str | None, optional): Spatial reference frame; ``None`` means global.
+* ``expressed_in`` (ExpressionFrame | str | None, optional): Coordinate basis selector
+  or literal frame name; omitted or ``None`` means global. Use
+  ``ExpressionFrame.SELF`` explicitly for local components. Both fields serialize under ``spatial``.
 * ``extra`` (dict, optional): Additional semantic fields. Keys are flattened
   into the tensor YAML entry rather than serialized under an ``extra`` key.
 
@@ -441,9 +442,8 @@ optional; ``None`` in the ``axes`` list leaves an entire dimension unspecified.
    SELF = self
    REFERENCE = reference
 
-* ``SELF``: the frame identified by the element name. This is the default
-  for twists and wrenches.
-* ``REFERENCE``: the frame named by ``reference``; that field must be supplied.
+* ``SELF``: the frame identified by the element name. Request this explicitly for local components.
+* ``REFERENCE``: the frame named by ``reference`` (global when ``None``).
 
 An explicit frame name is also accepted. Selectors and literal names have
 distinct YAML representations:
@@ -451,12 +451,12 @@ distinct YAML representations:
 .. code-block:: yaml
 
    # ExpressionFrame.SELF
-   expressed_in: {selector: self}
+   spatial: {reference: null, expressed_in: {selector: self}}
 
 .. code-block:: yaml
 
    # A literal frame named "self"
-   expressed_in: {frame: self}
+   spatial: {reference: null, expressed_in: {frame: self}}
 
 Pose helpers accept ``reference`` only; wrench helpers accept ``expressed_in``
 only. Twist helpers accept both. Wrench helpers cannot use ``REFERENCE``
