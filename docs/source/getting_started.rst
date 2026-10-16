@@ -11,8 +11,8 @@ Installation
 
 LEAPP requires Python 3.10+ and PyTorch 2.6.0+. Graph visualization requires
 Python 3.11+; on Python 3.10, LEAPP warns and skips PNG generation while
-completing the rest of the export. The full dependency list is
-in the :doc:`/index`.
+completing the rest of the export. The full dependency list is in
+`pyproject.toml <https://github.com/nvidia-isaac/leapp/blob/develop/pyproject.toml>`_.
 
 .. note::
 
@@ -214,7 +214,8 @@ artifacts and the metadata needed to wire them together.
 Try it yourself
 ===============
 
-1. Run the maintained example: ``python examples/getting_started.py``
+1. In a repository checkout, run ``python examples/getting_started.py``;
+   with a pip-only installation, save and run the code above instead.
 2. Open the generated ``sample_pipeline/`` directory.
 3. Inspect the files to see your exported pipeline.
 

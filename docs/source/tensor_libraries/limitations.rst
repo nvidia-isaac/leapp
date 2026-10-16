@@ -140,9 +140,9 @@ Extracting Python values
 captured at trace time and drop out of the graph. Each logs a warning.
 
 Using an array in a boolean context, such as ``if array.any():``, records only
-the branch taken during tracing and logs an error. An exported graph is a
-static structure and cannot hold a data-dependent branch; use ``np.where`` for
-element-wise choices, or split the node around the decision.
+the branch taken during tracing and logs an error. LEAPP's capture does not
+preserve data-dependent Python branches; use ``np.where`` for element-wise
+choices, or split the node around the decision.
 
 Casts are limited to the shared dtypes
 ======================================
