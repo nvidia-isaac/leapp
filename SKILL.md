@@ -167,7 +167,7 @@ Supported NumPy/Torch conversions such as `torch.from_numpy()` and `.numpy()` ca
 
 Add semantics when a user requests them or an identified downstream consumer needs tensor meaning to bind observations, map joint order, interpret commands, or apply action chunks. They are not required for tracing, export, numerical validation, or state feedback. Default to named raw tensors for ordinary internal node connections; do not annotate every intermediate value or add nodes solely for metadata.
 
-When needed, read [deployment semantics](references/semantics.md). **Prefer standard `InputKindEnum` / `OutputKindEnum` kinds** over custom strings or `extra`. Keep annotations compact: reuse existing ordered names, specify only consumed fields, and avoid repeated wrappers or metadata factories. Do not guess physical meaning for normalized features, latent vectors, or mixed observations. State/reset contracts are covered separately in [state](references/state.md).
+When needed, read [deployment semantics](references/semantics.md). **Prefer the standard quantity helpers** (such as `joint_position`) or `Kind` over custom strings or `extra`. Input/output registration determines direction; use `is_setpoint=True` for setpoint inputs. Keep annotations compact: reuse existing ordered names, specify only consumed fields, and avoid repeated wrappers or metadata factories. Do not guess physical meaning for normalized features, latent vectors, or mixed observations. State/reset contracts are covered separately in [state](references/state.md).
 
 ## Warp setup and export (experimental)
 
