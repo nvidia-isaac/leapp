@@ -635,7 +635,10 @@ class TestStructuredSemantics(LEAPPFunctionalTestBase):
         inputs = config["models"]["policy"]["inputs"]
         self.assertEqual(inputs[1]["is_setpoint"], True)
         self.assertNotIn("is_setpoint", inputs[0])
-        self.assertEqual(inputs[2]["expressed_in"], {"selector": "self"})
+        self.assertEqual(
+            inputs[2]["spatial"],
+            {"reference": "base", "expressed_in": None},
+        )
         self.assertEqual(inputs[2]["axes"][1], {"kind": "element", "names": ["tool"]})
         self.assertEqual(config["models"]["policy"]["outputs"][0]["kind"], Kind.JOINT_EFFORT.value)
         runtime = leapp.InferenceManager(path)
