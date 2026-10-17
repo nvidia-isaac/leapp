@@ -11,7 +11,7 @@ SPDX-License-Identifier: Apache-2.0
 
 LEAPP traces supported PyTorch and NumPy computation across existing functions and objects. Export the complete path as **one ONNX, TorchScript, or PT2 model**, or choose separate stages when useful.
 
-Mark where inputs enter and outputs leave, then run your application. Inputs can enter at different call sites; helper functions and class boundaries do not force separate models. No prescribed RL environment interface is required. [See annotation patterns](https://nvidia-isaac.github.io/leapp/guides/nodes.html).
+Input and output annotations capture computation as your application runs. A single model can capture computation across multiple input call sites, helper functions, and class methods. The annotations work directly in application code without a prescribed RL environment interface. [See annotation patterns](https://nvidia-isaac.github.io/leapp/guides/nodes.html).
 
 - **Keep processing with the policy.** Capture supported NumPy preprocessing, conversions into PyTorch, and action transforms together. [Warp kernel regions](https://nvidia-isaac.github.io/leapp/tensor_libraries/warp.html) can also be captured into ONNX or PT2 with an additional runtime adapter.
 - **Adapt unsupported calls with [FunctionPatch](https://nvidia-isaac.github.io/leapp/guides/patching.html).** Register a faithful replacement built from supported operations; existing module-level callers can stay in place.
