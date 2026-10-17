@@ -71,9 +71,6 @@ integration; see :doc:`ecosystem`.
    agent's skills directory. Keep the ``references`` folder beside ``SKILL.md``
    so the linked guides remain available. No local LEAPP checkout is needed.
 
-   The `agent documentation index <llms.txt>`_ links to the skill and guides
-   by task. The Python package and import name are both ``leapp``.
-
 Is LEAPP a Fit?
 ===============
 
