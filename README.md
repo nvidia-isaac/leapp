@@ -3,11 +3,11 @@ SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All 
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# LEAPP — Lightweight Export Annotations for Policy Pipelines
+# LEAPP: Lightweight Export Annotations for Policy Pipelines
 
 [Full LEAPP docs](https://nvidia-isaac.github.io/leapp/)
 
-**Export the policy code you already run — preprocessing, model inference, and action processing together.**
+**Export the policy code you already run: preprocessing, model inference, and action processing together.**
 
 LEAPP traces supported PyTorch and NumPy computation across existing functions and objects. Export the complete path as **one ONNX, TorchScript, or PT2 model**, or choose separate stages when useful.
 
