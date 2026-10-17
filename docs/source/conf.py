@@ -81,7 +81,7 @@ linkcheck_retries = 2
 # -- HTML output -------------------------------------------------------------
 
 html_theme = 'nvidia_sphinx_theme'
-html_title = 'Isaac LEAPP: robotics policy pipeline export'
+html_title = 'Isaac LEAPP: machine learning pipeline export'
 html_short_title = 'Isaac LEAPP'
 html_baseurl = 'https://nvidia-isaac.github.io/leapp/'
 

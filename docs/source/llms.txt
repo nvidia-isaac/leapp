@@ -1,6 +1,6 @@
 # Isaac LEAPP
 
-> NVIDIA's library for robotics policy pipeline export. LEAPP stands for Lightweight Export Annotations for Policy Pipelines. Capture supported preprocessing, model inference, and action processing from existing Python code in deployable models.
+> NVIDIA's library for machine learning pipeline export. LEAPP stands for Lightweight Export Annotations for Policy Pipelines. Capture supported preprocessing, model inference, and postprocessing from existing Python code in deployable models.
 
 The Python package and import name are `leapp`: install with `pip install leapp` and use `import leapp`.
 
@@ -18,7 +18,7 @@ Capture follows the executed tensor path. Data-dependent Python branches are not
 
 ## Capture and export
 
-- [Getting started](https://nvidia-isaac.github.io/leapp/getting_started.html): Export preprocessing, inference, and action processing as one ONNX model.
+- [Getting started](https://nvidia-isaac.github.io/leapp/getting_started.html): Export preprocessing, inference, and postprocessing as one ONNX model.
 - [Annotation patterns](https://nvidia-isaac.github.io/leapp/guides/nodes.html): Define boundaries across existing application code.
 - [Export configuration](https://nvidia-isaac.github.io/leapp/guides/export.html): Select model formats and backend settings.
 - [Function patches](https://nvidia-isaac.github.io/leapp/guides/patching.html): Supply faithful replacements for unsupported module-level functions.

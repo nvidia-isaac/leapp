@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0
 
 **Export the policy code you already run: preprocessing, model inference, and action processing together.**
 
-Isaac LEAPP is NVIDIA's library for robotics policy pipeline export. It traces supported PyTorch and NumPy computation across existing functions and objects. Export the complete path as **one ONNX, TorchScript, or PT2 model**, or choose separate stages when useful.
+Isaac LEAPP is NVIDIA's library for machine learning pipeline export. It traces supported PyTorch and NumPy computation across existing functions and objects. Export the complete path as **one ONNX, TorchScript, or PT2 model**, or choose separate stages when useful.
 
 Input and output annotations capture computation as your application runs. A single model can capture computation across multiple input call sites, helper functions, and class methods. The annotations work directly in application code without a prescribed RL environment interface. [See annotation patterns](https://nvidia-isaac.github.io/leapp/guides/nodes.html).
 
