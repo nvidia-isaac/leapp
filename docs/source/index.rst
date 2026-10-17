@@ -147,24 +147,6 @@ How LEAPP Fits In
            </div>
          </div>
 
-Supported computation
-=====================
-
-LEAPP traces :doc:`PyTorch <tensor_libraries/torch>` and supported
-:doc:`NumPy <tensor_libraries/numpy>` operations, including conversions between
-them. Experimental :doc:`Warp <tensor_libraries/warp>` support captures kernel
-regions with an additional runtime adapter. :doc:`guides/graph` covers explicit
-feedback state and automatic tracking of reassigned registered module buffers.
-
-For unsupported module-level functions, :doc:`guides/patching` lets you register
-a traceable replacement while keeping existing callers. The replacement must
-preserve the behavior your application uses and rely on supported operations.
-
-Capture follows the executed path: data-dependent Python branches and loops
-are not exported as dynamic control flow. See the tensor-library limitations
-and :doc:`guides/debugging` for validation guidance.
-
-
 Documentation Map
 =================
 
