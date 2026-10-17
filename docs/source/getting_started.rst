@@ -234,9 +234,7 @@ captured the external inputs and final outputs you intended.
 Graph specification file
 ------------------------
 
-The YAML also describes model paths, shapes, dtypes, and backend settings.
-Its pipeline section has four external inputs, one output, and no connections
-between models because the whole computation is in one model. More details in
+LEAPP also generates a complete specification of the pipeline. More details in
 :doc:`Understanding the Generated Configs <generated_configs>`:
 
 .. code-block:: yaml
@@ -249,23 +247,12 @@ between models because the whole computation is in one model. More details in
      data_flow: {}
      feedback_flow: {}
 
-Validate on fresh inputs
-========================
+The complete YAML contains:
 
-``compile_graph(validate=True)`` checks captured inputs. Also compare replay
-against the original computation on new observations so values accidentally
-frozen during tracing are easier to detect. See :doc:`guides/debugging` for
-capturing multiple samples and :doc:`leapp_runtime` for loading the bundle.
-
-When to use separate models
-===========================
-
-Start with one node for the full computation. Use separate nodes when you need
-independently deployed components or different export backends. Python function
-boundaries alone do not require separate models; see :doc:`guides/nodes`.
-
-If a library function cannot be traced, check :doc:`guides/patching` for a
-traceable replacement before introducing an external computation boundary.
+* Complete node specifications with input/output tensor descriptions.
+* Shape and dtype information for all tensors.
+* Graph structure metadata ready for deployment systems.
+* Model paths and export backend settings.
 
 Next steps
 ==========
