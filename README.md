@@ -16,7 +16,7 @@ Mark where inputs enter and outputs leave, then run your application. Inputs can
 - **Keep processing with the policy.** Capture supported NumPy preprocessing, conversions into PyTorch, and action transforms together. [Warp kernel regions](https://nvidia-isaac.github.io/leapp/tensor_libraries/warp.html) can also be captured into ONNX or PT2 with an additional runtime adapter.
 - **Adapt unsupported calls with [FunctionPatch](https://nvidia-isaac.github.io/leapp/guides/patching.html).** Register a faithful replacement built from supported operations; existing module-level callers can stay in place.
 - **Describe the deployment interface.** Attach tensor roles, joint names, and timing information with [semantic metadata](https://nvidia-isaac.github.io/leapp/semantics/usage.html), so downstream applications can interpret model inputs and outputs.
-- **Inspect and validate the export.** View the captured graph and compare exported outputs against Python samples. [Validation tools](https://nvidia-isaac.github.io/leapp/guides/debugging.html) and bundle replay help check the computation before integration.
+- **Inspect and validate the export.** Compare exported outputs, including state updates, against cached samples from consecutive Python iterations. Configure sample coverage, inspect the graph, and use [sequential replay](https://nvidia-isaac.github.io/leapp/guides/debugging.html#stateful-transitions-and-sequential-replay) to check accumulated drift and runtime feedback.
 
 ## Quick start
 

@@ -180,6 +180,8 @@ Warp is part of this skill. **Before integrating Warp, read [the complete Warp g
 
 ## Validate the whole exported pipeline
 
+`compile_graph(validate=True)` compares all cached node outputs, including exported state updates. Consecutive samples validate the original pipeline's stateful transitions, not just its actions. Each sample supplies recorded reference inputs/state; sequential runtime replay instead feeds exported state forward and checks accumulated numerical drift and runtime feedback/reset handling. Cache size controls transition coverage, not feedback replay. See [stateful validation](https://nvidia-isaac.github.io/leapp/guides/debugging.html#stateful-transitions-and-sequential-replay).
+
 1. Compare the original application and annotated execution using the same inputs, weights, state, execution mode, and random seeds where relevant. Check function adapters against original functions separately.
 2. Run `compile_graph(validate=True, strict=True)` with justified tolerances. Inspect warnings and generated YAML: expected external inputs, final outputs, forward/feedback edges, initial values, backend types, and existing artifact paths. Explain any unexpected dangling input.
 3. Load the bundle with `InferenceManager` and compare **fresh representative inputs not used during tracing** against the original pipeline. A mock-input smoke test alone is insufficient. Include realistic value ranges and relevant branches/shapes; for stateful pipelines compare a sequence from matching initial/reset state.
