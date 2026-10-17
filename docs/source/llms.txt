@@ -1,0 +1,40 @@
+# Isaac LEAPP
+
+> NVIDIA's library for robotics policy pipeline export. LEAPP stands for Lightweight Export Annotations for Policy Pipelines. Capture supported preprocessing, model inference, and action processing from existing Python code in deployable models.
+
+The Python package and import name are `leapp`: install with `pip install leapp` and use `import leapp`.
+
+One exported ONNX, TorchScript, or PT2 model can span existing helper functions, class methods, and multiple input call sites. Separate models are optional. Capture supports PyTorch and supported NumPy operations, including conversions between them. Warp kernel regions require an additional runtime adapter.
+
+LEAPP is a standalone library with ecosystem integrations, including Isaac Lab and Isaac ROS Deploy. Its Python `InferenceManager` provides bundle replay; exported artifacts can also run in compatible backend runtimes, including C++ applications. Runtime operator support and any custom adapters must match the export.
+
+Capture follows the executed tensor path. Data-dependent Python branches are not preserved dynamically, and unsupported operations or scalar extraction can freeze values. Cached validation includes exported state updates; sequential replay checks accumulated drift and runtime feedback. Check the installed version against the documentation before using an API.
+
+## Agent integration instructions
+
+- [Integration skill](https://raw.githubusercontent.com/nvidia-isaac/leapp/main/SKILL.md): Markdown workflow for annotating existing code, exporting, and validating a pipeline.
+- [Skill bundle](https://nvidia-isaac.github.io/leapp/_downloads/leapp-integrate.zip): Download the skill with its supporting Markdown references.
+- [Project overview](https://github.com/nvidia-isaac/leapp): Source repository, installation, and a complete single-model example.
+
+## Capture and export
+
+- [Getting started](https://nvidia-isaac.github.io/leapp/getting_started.html): Export preprocessing, inference, and action processing as one ONNX model.
+- [Annotation patterns](https://nvidia-isaac.github.io/leapp/guides/nodes.html): Define boundaries across existing application code.
+- [Export configuration](https://nvidia-isaac.github.io/leapp/guides/export.html): Select model formats and backend settings.
+- [Function patches](https://nvidia-isaac.github.io/leapp/guides/patching.html): Supply faithful replacements for unsupported module-level functions.
+- [State and feedback](https://nvidia-isaac.github.io/leapp/guides/graph.html): Expose state inputs, updates, and feedback connections.
+- [API reference](https://nvidia-isaac.github.io/leapp/api/index.html): Public signatures and parameters.
+
+## Validation and deployment
+
+- [Validation guide](https://nvidia-isaac.github.io/leapp/guides/debugging.html): Cached samples, fresh inputs, sequential replay, and tracing diagnostics.
+- [Generated configuration](https://nvidia-isaac.github.io/leapp/generated_configs.html): Model paths, tensor interfaces, and graph connections in the YAML bundle.
+- [Python bundle runtime](https://nvidia-isaac.github.io/leapp/leapp_runtime.html): Load and replay bundles with InferenceManager.
+- [Deployment semantics](https://nvidia-isaac.github.io/leapp/semantics/usage.html): Describe tensor roles, element names, and timing for downstream integrations.
+- [Ecosystem integrations](https://nvidia-isaac.github.io/leapp/ecosystem.html): Isaac Lab export and Isaac ROS Deploy runtime documentation.
+
+## Capture limits
+
+- [PyTorch limitations](https://nvidia-isaac.github.io/leapp/tensor_libraries/torch_limitations.html): Control flow, scalar extraction, and other tracing restrictions.
+- [NumPy limitations](https://nvidia-isaac.github.io/leapp/tensor_libraries/limitations.html): Supported computation boundaries and trace-loss risks.
+- [Warp capture](https://nvidia-isaac.github.io/leapp/tensor_libraries/warp.html): Kernel capture and runtime adapter requirements.

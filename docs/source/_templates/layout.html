@@ -1,0 +1,32 @@
+{#
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+#}
+{% extends "!layout.html" %}
+
+{% block extrahead %}
+{{ super() }}
+<link rel="describedby" type="text/plain" href="{{ pathto('llms.txt', 1) }}">
+{% if pagename == 'index' %}
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "@id": "https://nvidia-isaac.github.io/leapp/#software",
+  "name": "Isaac LEAPP",
+  "alternateName": ["LEAPP", "Lightweight Export Annotations for Policy Pipelines"],
+  "description": "Isaac LEAPP is NVIDIA's library for robotics policy pipeline export. Capture supported preprocessing, inference, and action processing in ONNX, TorchScript, or PT2 models.",
+  "applicationCategory": "DeveloperApplication",
+  "applicationSubCategory": "Robotics policy pipeline export",
+  "url": "https://nvidia-isaac.github.io/leapp/",
+  "sameAs": ["https://github.com/nvidia-isaac/leapp", "https://pypi.org/project/leapp/"],
+  "publisher": {
+    "@type": "Organization",
+    "name": "NVIDIA",
+    "url": "https://www.nvidia.com/"
+  },
+  "license": "https://www.apache.org/licenses/LICENSE-2.0"
+}
+</script>
+{% endif %}
+{% endblock %}

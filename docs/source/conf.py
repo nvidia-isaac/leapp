@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.abspath('../..'))
 
 # -- Project information -----------------------------------------------------
 
-project = 'LEAPP'
+project = 'Isaac LEAPP'
 author = 'NVIDIA Corporation'
 copyright = f'{datetime.now().year}, NVIDIA Corporation'
 
@@ -81,6 +81,9 @@ linkcheck_retries = 2
 # -- HTML output -------------------------------------------------------------
 
 html_theme = 'nvidia_sphinx_theme'
+html_title = 'Isaac LEAPP: robotics policy pipeline export'
+html_short_title = 'Isaac LEAPP'
+html_baseurl = 'https://nvidia-isaac.github.io/leapp/'
 
 html_theme_options = {
     'copyright_override': {
@@ -91,7 +94,7 @@ html_theme_options = {
 }
 
 html_static_path = ['_static']
-html_extra_path = ['_redirects']
+html_extra_path = ['_redirects', 'llms.txt']
 html_css_files = ['css/leapp.css']
 
 html_last_updated_fmt = '%b %d, %Y'

@@ -1,12 +1,15 @@
-=====
-LEAPP
-=====
+===========
+Isaac LEAPP
+===========
+
+.. meta::
+   :description: Isaac LEAPP is NVIDIA's library for robotics policy pipeline export. Capture supported preprocessing, inference, and action processing in ONNX, TorchScript, or PT2 models.
 
 .. raw:: html
 
    <header class="leapp-hero">
      <div class="leapp-hero-copy">
-       <h1>LEAPP</h1>
+       <h1>Isaac LEAPP</h1>
        <p>Lightweight Export Annotations<br />for Policy Pipelines</p>
      </div>
      <div class="leapp-hero-action">
@@ -25,7 +28,9 @@ LEAPP
 
 Export the whole policy pipeline, not just the model weights.
 
-LEAPP exports the policy code you already run into ONNX, TorchScript, or
+Isaac LEAPP is NVIDIA's library for robotics policy pipeline export.
+LEAPP stands for Lightweight Export Annotations for Policy Pipelines.
+It exports the policy code you already run into ONNX, TorchScript, or
 PyTorch ExportedProgram models. Capture preprocessing, model inference, and
 action processing together in **one model**, even when the computation spans
 helper functions, class methods, and supported PyTorch and NumPy operations.
@@ -65,6 +70,9 @@ integration; see :doc:`ecosystem`.
    ``leapp-integrate/SKILL.md``, or place the ``leapp-integrate`` folder in your
    agent's skills directory. Keep the ``references`` folder beside ``SKILL.md``
    so the linked guides remain available. No local LEAPP checkout is needed.
+
+   The `agent documentation index <llms.txt>`_ links to the skill and guides
+   by task. The Python package and import name are both ``leapp``.
 
 Is LEAPP a Fit?
 ===============
