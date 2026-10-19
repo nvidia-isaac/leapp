@@ -25,224 +25,38 @@ from tests.unit_tests.export_format_validation import (
     verify_onnx_dynamo,
 )
 
-Array = np.ndarray | TracedNpArray
-
 warnings.filterwarnings("ignore", message=".*legacy TorchScript-based ONNX export.*")
 warnings.filterwarnings("ignore", message=".*on empty non-base types in `__init__`.*")
 warnings.filterwarnings("ignore", message=".*feature will be removed.*")
 warnings.filterwarnings("ignore", message=".*Casting complex values to real.*")
 
 
-class NpArrayArithmeticFunctions:
-    """NumPy array arithmetic functions for testing."""
+def _assert_numpy_output(actual, expected, atol=1e-5):
+    torch.testing.assert_close(
+        actual,
+        torch.from_numpy(np.array(expected, copy=True)),
+        rtol=1e-7,
+        atol=atol,
+        equal_nan=True,
+    )
 
-    @staticmethod
-    def scalar_arithmetic(a: Array) -> Array:
-        """Basic arithmetic operations."""
-        b = a + 1
-        c = b - 2
-        d = c * 3
-        e = d / 4
-        f = e**5
-        return f
 
-    @staticmethod
-    def scalar_arithmetic_reverse(a: Array) -> Array:
-        """Reverse arithmetic where scalar comes first."""
-        b = 1 + a
-        c = 2 - b
-        d = 3 * c
-        e = 4 / d
-        f = 5**e
-        return f
-
-    @staticmethod
-    def array_arithmetic(a: Array) -> Array:
-        """Array-array arithmetic operations."""
-        b = np.array([4.0, 5.0, 6.0])
-        c = np.array([7.0, 8.0, 9.0])
-        d = a + 2 * b - 0.5 * c
-        return d
-
-    @staticmethod
-    def array_arithmetic_reuse(a: Array) -> Array:
-        """Array self arithmetic operations."""
-        b = np.array([4.0, 5.0, 6.0])
-        a = a + b
-        a = a + 2
-        a = a - 1
-        a = a * 3
-        a = a / 4
-        a = a**5
-        return a
-
-    @staticmethod
-    def matmul_operator(a: Array) -> Array:
-        """Matrix multiplication operator on array."""
-        b = np.array([4.0, 5.0, 6.0])
-        c = a @ b
-        return c
-
-    @staticmethod
-    def matmul_function(a: Array) -> Array:
-        """np.matmul operation."""
-        b = np.array([4.0, 5.0, 6.0])
-        c = np.matmul(a, b)
-        return c
-
-    @staticmethod
-    def sum_method(a: Array) -> Array:
-        """Sum operation via method."""
-        b = a.sum()
-        return b
-
-    @staticmethod
-    def sum_function(a: Array) -> Array:
-        """Sum operation via np.sum."""
-        b = np.sum(a)
-        return b
-
-    @staticmethod
-    def mean_method(a: Array) -> Array:
-        """Mean operation via method."""
-        b = a.mean()
-        return b
-
-    @staticmethod
-    def mean_function(a: Array) -> Array:
-        """Mean operation via np.mean."""
-        b = np.mean(a)
-        return b
-
-    @staticmethod
-    def max_method(a: Array) -> Array:
-        """Max operation via method."""
-        b = a.max()
-        return b
-
-    @staticmethod
-    def max_function(a: Array) -> Array:
-        """Max operation via np.max."""
-        b = np.max(a)
-        return b
-
-    @staticmethod
-    def min_method(a: Array) -> Array:
-        """Min operation via method."""
-        b = a.min()
-        return b
-
-    @staticmethod
-    def min_function(a: Array) -> Array:
-        """Min operation via np.min."""
-        b = np.min(a)
-        return b
-
-    @staticmethod
-    def argmax_method(a: Array) -> Array:
-        """Argmax operation via method."""
-        b = a.argmax()
-        return b
-
-    @staticmethod
-    def argmax_function(a: Array) -> Array:
-        """Argmax operation via np.argmax."""
-        b = np.argmax(a)
-        return b
-
-    @staticmethod
-    def argmin_method(a: Array) -> Array:
-        """Argmin operation via method."""
-        b = a.argmin()
-        return b
-
-    @staticmethod
-    def argmin_function(a: Array) -> Array:
-        """Argmin operation via np.argmin."""
-        b = np.argmin(a)
-        return b
-
-    @staticmethod
-    def reshape_method(a: Array) -> Array:
-        """Reshape operation via method."""
-        b = a.reshape(1, 3)
-        c = b * 2
-        d = c.reshape(3)
-        return d
-
-    @staticmethod
-    def reshape_function(a: Array) -> Array:
-        """Reshape operation via np.reshape."""
-        b = np.reshape(a, (1, 3))
-        c = b * 2
-        d = np.reshape(c, (3,))
-        return d
-
-    @staticmethod
-    def transpose_method(a: Array) -> Array:
-        """array.transpose() method."""
-        b = a.reshape(3, 1)
-        c = b.transpose(1, 0)
-        d = c * 2
-        return d
-
-    @staticmethod
-    def transpose_function(a: Array) -> Array:
-        """np.transpose operation."""
-        b = a.reshape(3, 1)
-        c = np.transpose(b, (1, 0))
-        d = c * 2
-        return d
-
-    @staticmethod
-    def squeeze_method(a: Array) -> Array:
-        """array.squeeze() method."""
-        b = a.reshape(1, 3, 1)
-        c = b.squeeze()
-        d = c * 2
-        return d
-
-    @staticmethod
-    def squeeze_function(a: Array) -> Array:
-        """np.squeeze operation."""
-        b = a.reshape(1, 3, 1)
-        c = np.squeeze(b)
-        d = c * 2
-        return d
-
-    @staticmethod
-    def broadcasting_operation(a: Array) -> Array:
-        """Broadcasting operation."""
-        b = a.reshape(3, 1)
-        c = np.array([[4.0, 5.0]])
-        d = b + c
-        return d
-
-    @staticmethod
-    def indexing_single(a: Array) -> Array:
-        """Single element indexing."""
-        b = a[1]
-        return b
-
-    @staticmethod
-    def indexing_slice(a: Array) -> Array:
-        """Slice indexing."""
-        b = a[0:2]
-        c = b * 2
-        return c
-
-    @staticmethod
-    def indexing_negative(a: Array) -> Array:
-        """Negative indexing."""
-        b = a[-1]
-        return b
-
-    @staticmethod
-    def indexing_step(a: Array) -> Array:
-        """Step indexing."""
-        b = a[::2]
-        c = b * 2
-        return c
+def _capture_numpy(fn, *inputs):
+    expected = fn(*(x.copy() for x in inputs))
+    ctx = TracedTensorNode(name="numpy_operation", node_index=0)
+    result = fn(
+        *(ctx.create_input(x.copy(), name=f"x{i}") for i, x in enumerate(inputs))
+    )
+    outputs = result if isinstance(result, (tuple, list)) else (result,)
+    assert all(isinstance(x, TracedNpArray) for x in outputs)
+    references = expected if isinstance(expected, (tuple, list)) else (expected,)
+    assert len(outputs) == len(references)
+    for output, reference in zip(outputs, references):
+        _assert_numpy_output(
+            torch.from_numpy(np.array(output.data, copy=True)), reference
+        )
+    ctx.compile_trace({f"y{i}": x for i, x in enumerate(outputs)})
+    return ctx.m
 
 
 class TestTracedNpArray(unittest.TestCase):
@@ -250,34 +64,13 @@ class TestTracedNpArray(unittest.TestCase):
 
     # ==================== Basic Property Tests ====================
 
-    def test_shape(self):
-        """Test shape property."""
+    def test_array_properties(self):
         ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.random.randn(3, 4, 5), name="x")
+        x = ctx.create_input(np.arange(60, dtype=np.int32).reshape(3, 4, 5), name="x")
         self.assertEqual(x.shape, (3, 4, 5))
-
-    def test_ndim(self):
-        """Test ndim property."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.random.randn(3, 4, 5), name="x")
         self.assertEqual(x.ndim, 3)
-
-    def test_dtype(self):
-        """Test dtype property."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([1, 2, 3], dtype=np.int32), name="x")
         self.assertEqual(x.dtype, np.int32)
-
-    def test_len(self):
-        """Test len() function."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.random.randn(10, 5), name="x")
-        self.assertEqual(len(x), 10)
-
-    def test_size(self):
-        """Test size property."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.random.randn(3, 4, 5), name="x")
+        self.assertEqual(len(x), 3)
         self.assertEqual(x.size, 60)
 
     def test_T_property(self):
@@ -290,62 +83,6 @@ class TestTracedNpArray(unittest.TestCase):
 
     # ==================== Arithmetic Operation Tests ====================
 
-    def test_add(self):
-        """Test addition."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
-        y = x + 1
-        self.assertIsInstance(y, TracedNpArray)
-        np.testing.assert_array_almost_equal(y, np.array([2.0, 3.0, 4.0]))
-
-    def test_radd(self):
-        """Test reverse addition."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
-        y = 1 + x
-        self.assertIsInstance(y, TracedNpArray)
-        np.testing.assert_array_almost_equal(y, np.array([2.0, 3.0, 4.0]))
-
-    def test_sub(self):
-        """Test subtraction."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
-        y = x - 1
-        self.assertIsInstance(y, TracedNpArray)
-        np.testing.assert_array_almost_equal(y, np.array([0.0, 1.0, 2.0]))
-
-    def test_rsub(self):
-        """Test reverse subtraction."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
-        y = 10 - x
-        self.assertIsInstance(y, TracedNpArray)
-        np.testing.assert_array_almost_equal(y, np.array([9.0, 8.0, 7.0]))
-
-    def test_mul(self):
-        """Test multiplication."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
-        y = x * 2
-        self.assertIsInstance(y, TracedNpArray)
-        np.testing.assert_array_almost_equal(y, np.array([2.0, 4.0, 6.0]))
-
-    def test_rmul(self):
-        """Test reverse multiplication."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
-        y = 2 * x
-        self.assertIsInstance(y, TracedNpArray)
-        np.testing.assert_array_almost_equal(y, np.array([2.0, 4.0, 6.0]))
-
-    def test_truediv(self):
-        """Test division."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([2.0, 4.0, 6.0]), name="x")
-        y = x / 2
-        self.assertIsInstance(y, TracedNpArray)
-        np.testing.assert_array_almost_equal(y, np.array([1.0, 2.0, 3.0]))
-
     def test_rtruediv(self):
         """Test reverse division."""
         ctx = TracedTensorNode(name="test", node_index=0)
@@ -353,22 +90,6 @@ class TestTracedNpArray(unittest.TestCase):
         y = 8 / x
         self.assertIsInstance(y, TracedNpArray)
         np.testing.assert_array_almost_equal(y, np.array([8.0, 4.0, 2.0]))
-
-    def test_pow(self):
-        """Test power."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
-        y = x**2
-        self.assertIsInstance(y, TracedNpArray)
-        np.testing.assert_array_almost_equal(y, np.array([1.0, 4.0, 9.0]))
-
-    def test_neg(self):
-        """Test negation."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([1.0, -2.0, 3.0]), name="x")
-        y = -x
-        self.assertIsInstance(y, TracedNpArray)
-        np.testing.assert_array_almost_equal(y, np.array([-1.0, 2.0, -3.0]))
 
     def test_abs(self):
         """Test absolute value."""
@@ -464,59 +185,6 @@ class TestTracedNpArray(unittest.TestCase):
 
     # ==================== NumPy Function Tests ====================
 
-    def test_np_sum(self):
-        """Test np.sum function."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
-        y = np.sum(x)
-        # Result might be scalar or 0-d array
-        self.assertAlmostEqual(float(y), 6.0)
-
-    def test_np_mean(self):
-        """Test np.mean function."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
-        y = np.mean(x)
-        self.assertAlmostEqual(float(y), 2.0)
-
-    def test_np_max(self):
-        """Test np.max function."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([1.0, 3.0, 2.0]), name="x")
-        y = np.max(x)
-        self.assertAlmostEqual(float(y), 3.0)
-
-    def test_np_min(self):
-        """Test np.min function."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([1.0, 3.0, 2.0]), name="x")
-        y = np.min(x)
-        self.assertAlmostEqual(float(y), 1.0)
-
-    def test_np_reshape(self):
-        """Test np.reshape function."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]), name="x")
-        y = np.reshape(x, (2, 3))
-        self.assertIsInstance(y, TracedNpArray)
-        self.assertEqual(y.shape, (2, 3))
-
-    def test_np_transpose(self):
-        """Test np.transpose function."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.random.randn(3, 4), name="x")
-        y = np.transpose(x)
-        self.assertIsInstance(y, TracedNpArray)
-        self.assertEqual(y.shape, (4, 3))
-
-    def test_np_squeeze(self):
-        """Test np.squeeze function."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.random.randn(1, 3, 1), name="x")
-        y = np.squeeze(x)
-        self.assertIsInstance(y, TracedNpArray)
-        self.assertEqual(y.shape, (3,))
-
     def test_np_concatenate(self):
         """Test np.concatenate function."""
         ctx = TracedTensorNode(name="test", node_index=0)
@@ -551,31 +219,6 @@ class TestTracedNpArray(unittest.TestCase):
         y = np.where(condition, x, 0.0)
         self.assertIsInstance(y, TracedNpArray)
         np.testing.assert_array_almost_equal(y, np.array([1.0, 0.0, 3.0]))
-
-    def test_np_sort(self):
-        """Test np.sort function."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([3.0, 1.0, 2.0]), name="x")
-        y = np.sort(x)
-        self.assertIsInstance(y, TracedNpArray)
-        np.testing.assert_array_almost_equal(y, np.array([1.0, 2.0, 3.0]))
-
-    def test_np_sort_axis(self):
-        """Test np.sort with axis parameter."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([[3.0, 1.0], [2.0, 4.0]]), name="x")
-        y = np.sort(x, axis=1)
-        self.assertIsInstance(y, TracedNpArray)
-        expected = np.array([[1.0, 3.0], [2.0, 4.0]])
-        np.testing.assert_array_almost_equal(y, expected)
-
-    def test_np_argsort(self):
-        """Test np.argsort function."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([3.0, 1.0, 2.0]), name="x")
-        y = np.argsort(x)
-        self.assertIsInstance(y, TracedNpArray)
-        np.testing.assert_array_equal(y, np.array([1, 2, 0]))
 
     def test_np_nonzero(self):
         """Test np.nonzero function."""
@@ -761,19 +404,7 @@ class TestTracedNpArray(unittest.TestCase):
         ctx.compile_trace({"output": z})
         self.assertIsNotNone(ctx.m)
         self.assertIsNotNone(ctx.graph)
-
-    def test_graph_has_nodes(self):
-        """Test that operations are recorded in the graph."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
-        y = x + 1
-        z = y * 2
-
-        ctx.compile_trace({"output": z})
-
-        # Check graph has nodes
-        nodes = list(ctx.graph.nodes)
-        self.assertGreater(len(nodes), 0)
+        self.assertGreater(len(list(ctx.graph.nodes)), 0)
 
     def test_graph_multiple_inputs(self):
         """Test graph with multiple inputs."""
@@ -806,6 +437,7 @@ class TestTracedNpArray(unittest.TestCase):
                 x.copy(),
                 x.astype(np.float32),
                 np.array(x),
+                np.cbrt(x),
             ]
             # These alias the boundary value rather than producing new data.
             aliases = [np.asarray(x), np.asanyarray(x)]
@@ -818,6 +450,8 @@ class TestTracedNpArray(unittest.TestCase):
 
         for result in aliases:
             self.assertIs(result, x)
+
+        np.testing.assert_array_equal(derived[-1], np.cbrt(x.data))
 
         # The boundary value itself is untouched and still carries its node.
         self.assertIsInstance(x, TracedNpArray)
@@ -952,81 +586,6 @@ class TestTracedNpArray(unittest.TestCase):
         np.testing.assert_array_almost_equal(w, np.ones(3), decimal=5)
 
 
-class TestArithmeticFunctions(unittest.TestCase):
-    """Test all arithmetic functions can be traced and produce correct results."""
-
-    def setUp(self):
-        # Use [2.0, 3.0, 4.0] to avoid zeros in reverse arithmetic:
-        # b = 1 + a = [3, 4, 5], c = 2 - b = [-1, -2, -3] (no zeros)
-        self.test_data = np.array([2.0, 3.0, 4.0])
-
-    def _test_function(self, func, name):
-        """Helper to test a function produces correct results."""
-        # Get expected result from regular numpy
-        expected = func(self.test_data.copy())
-
-        # Create traced version
-        ctx = TracedTensorNode(name=f"test_{name}", node_index=0)
-        traced_input = ctx.create_input(self.test_data.copy(), name="input")
-        traced_result = func(traced_input)
-
-        # Compare results
-        if isinstance(traced_result, TracedNpArray):
-            actual = traced_result
-        else:
-            actual = np.array(traced_result)
-
-        if isinstance(expected, np.ndarray):
-            np.testing.assert_array_almost_equal(actual, expected, decimal=5)
-        else:
-            self.assertAlmostEqual(float(actual), float(expected), places=5)
-
-    def test_scalar_arithmetic(self):
-        """Test scalar arithmetic function."""
-        self._test_function(
-            NpArrayArithmeticFunctions.scalar_arithmetic, "scalar_arithmetic"
-        )
-
-    def test_scalar_arithmetic_reverse(self):
-        """Test reverse scalar arithmetic function."""
-        self._test_function(
-            NpArrayArithmeticFunctions.scalar_arithmetic_reverse,
-            "scalar_arithmetic_reverse",
-        )
-
-    def test_array_arithmetic(self):
-        """Test array arithmetic function."""
-        self._test_function(
-            NpArrayArithmeticFunctions.array_arithmetic, "array_arithmetic"
-        )
-
-    def test_sum_method(self):
-        """Test sum method."""
-        self._test_function(NpArrayArithmeticFunctions.sum_method, "sum_method")
-
-    def test_sum_function(self):
-        """Test sum function."""
-        self._test_function(NpArrayArithmeticFunctions.sum_function, "sum_function")
-
-    def test_mean_method(self):
-        """Test mean method."""
-        self._test_function(NpArrayArithmeticFunctions.mean_method, "mean_method")
-
-    def test_mean_function(self):
-        """Test mean function."""
-        self._test_function(NpArrayArithmeticFunctions.mean_function, "mean_function")
-
-    def test_reshape_method(self):
-        """Test reshape method."""
-        self._test_function(NpArrayArithmeticFunctions.reshape_method, "reshape_method")
-
-    def test_reshape_function(self):
-        """Test reshape function."""
-        self._test_function(
-            NpArrayArithmeticFunctions.reshape_function, "reshape_function"
-        )
-
-
 # Suppress TracerWarning from setitem tests where torch.tensor/torch.as_tensor constants
 # are baked into the trace (e.g. "torch.as_tensor results are registered as constants in the trace").
 # This is expected behavior for constant index/value assignments like x[0] = 10.0.
@@ -1043,105 +602,129 @@ class TestCompiledGraphExecution(unittest.TestCase):
 
     def _test_operation(
         self,
-        op_name: str,
+        op_name,
         np_func,
-        input_data: np.ndarray,
-        expected_output: np.ndarray,
-        atol: float = 1e-5,
+        input_data,
+        expected_output,
+        atol=1e-5,
+        *,
+        backends=("fx", "jit", "onnx", "pt2"),
+        replay_inputs=None,
     ):
-        """Helper to test a single operation through all export formats.
-
-        Args:
-            op_name: Name of the operation (for error messages)
-            np_func: Function that takes TracedNpArray and returns result
-            input_data: Input numpy array
-            expected_output: Expected numpy output
-            atol: Absolute tolerance for comparisons
-        """
-        # Create traced version
-        ctx = TracedTensorNode(name=f"test_{op_name}", node_index=0)
-        traced_input = ctx.create_input(input_data.copy(), name="input")
-        traced_result = np_func(traced_input)
-
-        self.assertIsInstance(
-            traced_result,
-            TracedNpArray,
-            f"{op_name}: result should be TracedNpArray, got {type(traced_result)}",
+        """Capture once; check eager and changed-input replay without dtype/shape coercion."""
+        graph_module = _capture_numpy(np_func, input_data)
+        input_tensor = torch.from_numpy(input_data.copy())
+        samples = (input_data,) + tuple(
+            (input_data + 2,) if replay_inputs is None else replay_inputs
         )
+        for backend in backends:
+            with self.subTest(operation=op_name, backend=backend):
+                model = graph_module
+                if backend == "jit":
+                    model = torch.jit.script(graph_module)
+                elif backend == "pt2":
+                    model = torch.export.export(
+                        graph_module, (input_tensor.clone(),), strict=False
+                    ).module()
+                elif backend in ("onnx", "onnx-dynamo"):
+                    if backend == "onnx-dynamo":
+                        exported = torch.onnx.export(
+                            graph_module, (input_tensor.clone(),), dynamo=True
+                        )
+                        session = ort.InferenceSession(
+                            exported.model_proto.SerializeToString(),
+                            providers=["CPUExecutionProvider"],
+                        )
+                    else:
+                        with tempfile.TemporaryDirectory() as tmpdir:
+                            path = pathlib.Path(tmpdir) / f"{op_name}.onnx"
+                            torch.onnx.export(
+                                graph_module,
+                                (input_tensor.clone(),),
+                                path,
+                                dynamo=False,
+                                opset_version=17,
+                                input_names=["input"],
+                                output_names=["output"],
+                            )
+                            session = ort.InferenceSession(
+                                str(path), providers=["CPUExecutionProvider"]
+                            )
+                for index, sample in enumerate(samples):
+                    with self.subTest(sample=index):
+                        reference = (
+                            expected_output if index == 0 else np_func(sample.copy())
+                        )
+                        if backend in ("onnx", "onnx-dynamo"):
+                            actual = torch.from_numpy(
+                                session.run(
+                                    None, {session.get_inputs()[0].name: sample.copy()}
+                                )[0]
+                            )
+                        else:
+                            actual = model(torch.from_numpy(sample.copy()))
+                        _assert_numpy_output(actual, reference, atol)
 
-        # Compile the trace
-        ctx.compile_trace({"output": traced_result})
-        graph_module = ctx.m
-
-        # Convert input to torch tensor for execution
-        input_tensor = torch.from_numpy(input_data.copy()).float()
-
-        # Test 1: FX GraphModule execution
-        try:
-            graph_output = graph_module(input_tensor)
-            graph_output_np = graph_output.detach().numpy()
-            np.testing.assert_allclose(
-                graph_output_np.flatten(),
-                expected_output.flatten(),
-                atol=atol,
-                err_msg=f"{op_name}: FX GraphModule output doesn't match expected",
-            )
-        except Exception as e:
-            self.fail(f"{op_name}: FX GraphModule execution failed: {e}")
-
-        # Test 2: TorchScript export and execution
-        try:
-            scripted = torch.jit.script(graph_module)
-            script_output = scripted(input_tensor)
-            script_output_np = script_output.detach().numpy()
-            np.testing.assert_allclose(
-                script_output_np.flatten(),
-                expected_output.flatten(),
-                atol=atol,
-                err_msg=f"{op_name}: TorchScript output doesn't match expected",
-            )
-        except Exception as e:
-            self.fail(f"{op_name}: TorchScript export/execution failed: {e}")
-
-        # Test 3: ONNX export and execution
-        try:
-            with tempfile.TemporaryDirectory() as tmpdir:
-                onnx_path = pathlib.Path(tmpdir) / f"{op_name}.onnx"
-                torch.onnx.export(
-                    graph_module,
-                    (input_tensor,),
-                    onnx_path,
-                    dynamo=False,
-                    export_params=True,
-                    opset_version=17,
-                    do_constant_folding=True,
-                    input_names=["input"],
-                    output_names=["output"],
+    def test_numpy_function_replay(self):
+        x = np.array(
+            [[3.0, 1.0, 2.0], [1.0, 4.0, 1.0], [2.0, 1.0, 5.0]], dtype=np.float32
+        )
+        corner = x.copy()
+        corner[0, 0] += 4
+        operations = {
+            "inverse": np.linalg.inv,
+            "norm": lambda x: x / np.linalg.norm(x, axis=-1, keepdims=True),
+            "cross": lambda x: np.cross(x, np.array([1.0, 2.0, 3.0], dtype=np.float32)),
+            "isclose_where": lambda x: np.where(np.isclose(x, 3.0), x, -x),
+            "sinc": np.sinc,
+            "diff": lambda x: np.diff(x, axis=-1),
+            "quantile": lambda x: np.quantile(x, 0.25, axis=1),
+            "cbrt": np.cbrt,
+            "pad": lambda x: np.pad(x, ((1, 0), (0, 2)), constant_values=-2),
+            "nanmean": lambda x: np.nanmean(x, axis=-1, keepdims=True),
+        }
+        for name, fn in operations.items():
+            backends = ("fx", "jit", "pt2")
+            if name in ("norm", "cross", "isclose_where"):
+                backends += ("onnx-dynamo",)
+            with self.subTest(operation=name):
+                self._test_operation(
+                    name,
+                    fn,
+                    x,
+                    fn(x),
+                    backends=backends,
+                    replay_inputs=(x + 2, corner, -x),
                 )
 
-                session = ort.InferenceSession(str(onnx_path))
-                onnx_output = session.run(
-                    None, {"input": input_data.astype(np.float32)}
-                )[0]
+    def test_integer_mean(self):
+        x = np.arange(6, dtype=np.int32).reshape(2, 3)
+        for fn in (np.mean, np.nanmean):
+            operation = lambda x: fn(x, axis=-1, keepdims=True)
+            self._test_operation(
+                fn.__name__,
+                operation,
+                x,
+                operation(x),
+                backends=("fx", "jit", "pt2"),
+                replay_inputs=(x + 3,),
+            )
 
-                np.testing.assert_allclose(
-                    onnx_output.flatten(),
-                    expected_output.flatten(),
-                    atol=atol,
-                    err_msg=f"{op_name}: ONNX output doesn't match expected",
-                )
-        except Exception as e:
-            self.fail(f"{op_name}: ONNX export/execution failed: {e}")
-
-        # Test 4: ExportedProgram export and execution
-        verify_exported_program(
-            self,
-            graph_module,
-            input_tensor,
-            torch.from_numpy(expected_output).float(),
-            test_name=op_name,
-            atol=atol,
-        )
+    def test_method_and_arithmetic_chains(self):
+        x = np.array([2.0, 3.0, 4.0])
+        operations = {
+            "scalar_arithmetic": lambda x: (((x + 1) - 2) * 3 / 4) ** 5,
+            "reverse_arithmetic": lambda x: 5 ** (4 / (3 * (2 - (1 + x)))),
+            "array_arithmetic": lambda x: (
+                x + 2 * np.array([4.0, 5.0, 6.0]) - 0.5 * np.array([7.0, 8.0, 9.0])
+            ),
+            "sum_method": lambda x: x.sum(),
+            "mean_method": lambda x: x.mean(),
+            "reshape_method": lambda x: (x.reshape(1, 3) * 2).reshape(3),
+            "reshape_function": lambda x: np.reshape(np.reshape(x, (1, 3)) * 2, (3,)),
+        }
+        for name, fn in operations.items():
+            self._test_operation(name, fn, x, fn(x))
 
     def test_add_scalar(self):
         """Test: x + 1"""
@@ -1185,7 +768,7 @@ class TestCompiledGraphExecution(unittest.TestCase):
         )
 
     def test_div_norm(self):
-        """Test: x / np.linalg.norm(x) — unmapped norm returns a numpy scalar."""
+        """Test: normalization retains its runtime-dependent denominator."""
         input_data = np.array([3.0, 4.0], dtype=np.float32)
         expected = input_data / np.linalg.norm(input_data)
         self._test_operation(
@@ -1578,25 +1161,26 @@ class TestCompiledGraphExecution(unittest.TestCase):
         self._test_operation("np_sort", lambda x: np.sort(x), input_data, expected)
 
     def test_np_sort_axis(self):
-        """Test: np.sort(x, axis=1)"""
-        input_data = np.array([[3.0, 1.0, 2.0], [6.0, 4.0, 5.0]])
-        expected = np.sort(input_data, axis=1)
-        self._test_operation(
-            "np_sort_axis", lambda x: np.sort(x, axis=1), input_data, expected
-        )
+        for axis in (None, 1):
+            x = np.array([[3.0, 1.0, 2.0], [6.0, 4.0, 5.0]], dtype=np.float32)
+            fn = lambda x: np.sort(x, axis=axis)
+            self._test_operation(
+                f"sort_{axis}", fn, x, fn(x), replay_inputs=(x + 2, -x)
+            )
 
     def test_np_argsort(self):
-        """Test: np.argsort(x)"""
-        input_data = np.array([3.0, 1.0, 4.0, 1.0, 5.0])
-        expected = np.argsort(input_data).astype(
-            np.float32
-        )  # Convert to float for comparison
-        # Note: argsort returns indices as int64, but we compare as float for consistency
+        # Retain the default 1-D duplicate-value case and its integer output.
+        x = np.array([3.0, 1.0, 4.0, 1.0, 5.0], dtype=np.float32)
+        self._test_operation("argsort", np.argsort, x, np.argsort(x))
+
+        x = np.array(
+            [[3.0, 1.0, 2.0], [1.0, 4.0, 1.0], [2.0, 1.0, 5.0]], dtype=np.float32
+        )
+        fn = lambda x: np.argsort(x, axis=0)
+        corner = x.copy()
+        corner[0, 0] += 4
         self._test_operation(
-            "np_argsort",
-            lambda x: np.argsort(x).astype(np.float32),
-            input_data,
-            expected,
+            "argsort_axis", fn, x, fn(x), replay_inputs=(x + 2, corner, -x)
         )
 
     def test_np_where_compiled(self):
@@ -1609,111 +1193,29 @@ class TestCompiledGraphExecution(unittest.TestCase):
 
     def test_np_nonzero_rows(self):
         """Test: np.nonzero(x)[0] — numpy returns one index array per dimension."""
-        input_data = np.array([[0.0, 0.0, 1.0], [1.0, 0.0, 1.0]])
-        expected = np.nonzero(input_data)[0].astype(np.float32)
+        # The legacy ONNX Runtime NonZero kernel requires float32 here.
+        input_data = np.array([[0.0, 0.0, 1.0], [1.0, 0.0, 1.0]], dtype=np.float32)
+        expected = np.nonzero(input_data)[0]
         self._test_operation(
             "np_nonzero_rows",
-            lambda x: np.nonzero(x)[0].astype(np.float32),
+            lambda x: np.nonzero(x)[0],
             input_data,
             expected,
         )
 
     def test_np_nonzero_cols(self):
         """Test: np.nonzero(x)[1] — the second element indexes the last dimension."""
-        input_data = np.array([[0.0, 0.0, 1.0], [1.0, 0.0, 1.0]])
-        expected = np.nonzero(input_data)[1].astype(np.float32)
+        # The legacy ONNX Runtime NonZero kernel requires float32 here.
+        input_data = np.array([[0.0, 0.0, 1.0], [1.0, 0.0, 1.0]], dtype=np.float32)
+        expected = np.nonzero(input_data)[1]
         self._test_operation(
             "np_nonzero_cols",
-            lambda x: np.nonzero(x)[1].astype(np.float32),
+            lambda x: np.nonzero(x)[1],
             input_data,
             expected,
         )
 
     # ==================== Setitem Operations ====================
-
-    def _test_setitem(
-        self,
-        test_name: str,
-        input_data: np.ndarray,
-        setitem_func,
-        expected_output: np.ndarray,
-        atol: float = 1e-5,
-    ):
-        """Helper to test setitem operations through all export formats.
-
-        Args:
-            test_name: Name of the test (for error messages and ONNX filename)
-            input_data: Input numpy array
-            setitem_func: Function that takes TracedNpArray and does setitem + returns result
-            expected_output: Expected numpy output
-            atol: Absolute tolerance for comparisons
-        """
-        # Create traced version
-        ctx = TracedTensorNode(name=f"test_{test_name}", node_index=0)
-        traced_input = ctx.create_input(input_data.copy(), name="input")
-        traced_result = setitem_func(traced_input)
-
-        # Compile the trace
-        ctx.compile_trace({"output": traced_result})
-        graph_module = ctx.m
-
-        # Convert input to torch tensor for execution
-        torch_input = torch.from_numpy(input_data.copy()).float()
-        torch_expected = torch.from_numpy(expected_output).float()
-
-        # Test 1: FX GraphModule execution
-        try:
-            output = graph_module(torch_input)
-            self.assertTrue(
-                torch.allclose(output, torch_expected, atol=atol),
-                f"{test_name}: FX GraphModule execution failed - output doesn't match",
-            )
-        except Exception as e:
-            self.fail(f"{test_name}: FX GraphModule execution failed: {e}")
-
-        # Test 2: TorchScript export
-        try:
-            scripted = torch.jit.script(graph_module)
-            output_ts = scripted(torch_input)
-            self.assertTrue(
-                torch.allclose(output_ts, torch_expected, atol=atol),
-                f"{test_name}: TorchScript output doesn't match",
-            )
-        except Exception as e:
-            self.fail(f"{test_name}: TorchScript export/execution failed: {e}")
-
-        # Test 3: ONNX export
-        try:
-            with tempfile.TemporaryDirectory() as tmpdir:
-                onnx_path = pathlib.Path(tmpdir) / f"{test_name}.onnx"
-                torch.onnx.export(
-                    graph_module,
-                    (torch_input,),
-                    onnx_path,
-                    dynamo=False,
-                    export_params=True,
-                    opset_version=17,
-                    input_names=["input"],
-                    output_names=["output"],
-                )
-                session = ort.InferenceSession(str(onnx_path))
-                output_onnx = session.run(None, {"input": torch_input.numpy()})[0]
-                self.assertTrue(
-                    np.allclose(output_onnx, expected_output, atol=atol),
-                    f"{test_name}: ONNX output doesn't match",
-                )
-        except Exception as e:
-            self.fail(f"{test_name}: ONNX export/execution failed: {e}")
-
-        # Test 4: ExportedProgram export
-        verify_exported_program(
-            self,
-            graph_module,
-            torch_input,
-            torch_expected,
-            test_name=test_name,
-            atol=atol,
-        )
 
     def test_setitem_single_index(self):
         """Test: x[0] = 10"""
@@ -1724,7 +1226,7 @@ class TestCompiledGraphExecution(unittest.TestCase):
             return x * 2
 
         expected = np.array([20.0, 4.0, 6.0, 8.0, 10.0])
-        self._test_setitem("setitem_single", input_data, setitem_func, expected)
+        self._test_operation("setitem_single", setitem_func, input_data, expected)
 
     def test_setitem_slice(self):
         """Test: x[1:3] = [10, 20]"""
@@ -1735,7 +1237,7 @@ class TestCompiledGraphExecution(unittest.TestCase):
             return x * 2
 
         expected = np.array([2.0, 20.0, 40.0, 8.0, 10.0])
-        self._test_setitem("setitem_slice", input_data, setitem_func, expected)
+        self._test_operation("setitem_slice", setitem_func, input_data, expected)
 
     def test_setitem_full_slice(self):
         """Test: x[:] = constant"""
@@ -1746,7 +1248,7 @@ class TestCompiledGraphExecution(unittest.TestCase):
             return x * 2
 
         expected = np.array([20.0, 40.0, 60.0])
-        self._test_setitem("setitem_full", input_data, setitem_func, expected)
+        self._test_operation("setitem_full", setitem_func, input_data, expected)
 
     def test_setitem_step_slice(self):
         """Test: x[::2] = [10, 30, 50] with step"""
@@ -1757,7 +1259,7 @@ class TestCompiledGraphExecution(unittest.TestCase):
             return x * 2
 
         expected = np.array([20.0, 4.0, 60.0, 8.0, 100.0])
-        self._test_setitem("setitem_step", input_data, setitem_func, expected)
+        self._test_operation("setitem_step", setitem_func, input_data, expected)
 
     def _validate_dynamic_setitem(self, graph_module, inputs, expected, test_name):
         """Validate export-first backends for traced NumPy index inputs."""
@@ -1847,6 +1349,123 @@ class TestCompiledGraphExecution(unittest.TestCase):
             expected,
             "numpy_traced_index_plain_source",
         )
+
+
+@pytest.mark.parametrize("equal_nan", [False, True])
+def test_isclose_special_values_and_broadcasting(equal_nan):
+    fn = lambda x, y: np.isclose(x, y, rtol=1e-4, atol=1e-6, equal_nan=equal_nan)
+    x = np.array([[0.0, 1.00009, np.nan, np.inf, -np.inf]], dtype=np.float64)
+    y = np.array([0.0, 1.0, np.nan, np.inf, np.inf], dtype=np.float64)
+    model = _capture_numpy(fn, x, y)
+    changed = np.array([[1e-5, 1.0002, 3.0, -np.inf, -np.inf]], dtype=np.float64)
+    for a, b in ((x, y), (changed, y), (changed, changed[0])):
+        torch.testing.assert_close(
+            model(torch.from_numpy(a), torch.from_numpy(b)), torch.from_numpy(fn(a, b))
+        )
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_cbrt_signed_zero_and_special_values(dtype):
+    x = np.array([-np.inf, -8.0, -0.0, 0.0, 27.0, np.inf, np.nan], dtype=dtype)
+    model = _capture_numpy(np.cbrt, x)
+    for sample in (x, -x):
+        actual = model(torch.from_numpy(sample))
+        expected = torch.from_numpy(np.cbrt(sample))
+        torch.testing.assert_close(actual, expected, equal_nan=True)
+        torch.testing.assert_close(
+            torch.signbit(actual[2:4]), torch.signbit(expected[2:4])
+        )
+
+
+@pytest.mark.parametrize("axis", [None, -1, (0, 1), ()])
+@pytest.mark.filterwarnings("ignore:Mean of empty slice:RuntimeWarning")
+def test_nanmean_nan_slices_and_explicit_dtype(axis):
+    fn = lambda x: np.nanmean(x, axis=axis, dtype=np.float64, keepdims=True)
+    x = np.array([[np.nan, np.nan], [1.0, np.nan]], dtype=np.float32)
+    model = _capture_numpy(fn, x)
+    changed = np.array([[2.0, 3.0], [np.nan, 4.0]], dtype=np.float32)
+    for sample in (x, changed, changed + 2):
+        torch.testing.assert_close(
+            model(torch.from_numpy(sample)),
+            torch.from_numpy(fn(sample)),
+            equal_nan=True,
+        )
+
+
+@pytest.mark.parametrize(
+    "fn",
+    [
+        lambda x: np.sort(x, stable=True),
+        lambda x: np.argsort(x, kind="mergesort"),
+        lambda x: np.pad(x, 1, mode="reflect"),
+        lambda x: np.pad(x, 1, constant_values=(1, 2)),
+    ],
+)
+def test_override_rejects_unimplemented_signatures(fn):
+    ctx = TracedTensorNode(name="unsupported_override", node_index=0)
+    x = ctx.create_input(np.array([3.0, 1.0, 2.0]), name="x")
+    before = tuple(ctx.graph.nodes)
+    with pytest.raises(NotImplementedError):
+        fn(x)
+    assert tuple(ctx.graph.nodes) == before
+
+
+def test_structured_outputs_and_constant_snapshot():
+    constant = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    fn = lambda x: (np.cross(x, constant), *np.gradient(x))
+    x = np.arange(9, dtype=np.float32).reshape(3, 3)
+    model = _capture_numpy(fn, x)
+    expected = fn(x + 2)
+    constant[:] = 100
+    for actual, reference in zip(model(torch.from_numpy(x + 2)), expected):
+        torch.testing.assert_close(actual, torch.from_numpy(reference))
+
+
+@pytest.mark.parametrize(
+    "fn, message",
+    [
+        (np.fft.fft, "dtype"),
+        (np.spacing, "no torch._numpy lowering"),
+        (lambda x: np.allclose(x, x), "ATen capture/parity check failed"),
+    ],
+)
+def test_unsupported_capture_is_explicit_and_atomic(fn, message):
+    ctx = TracedTensorNode(name="unsupported", node_index=0)
+    x = ctx.create_input(np.ones(3, dtype=np.float32), name="x")
+    before = tuple(ctx.graph.nodes)
+    with pytest.raises(NotImplementedError, match=message):
+        fn(x)
+    assert tuple(ctx.graph.nodes) == before
+
+
+@pytest.mark.parametrize("positional", [False, True])
+def test_reject_out_before_mutating_storage(positional):
+    ctx = TracedTensorNode(name="out", node_index=0)
+    x = ctx.create_input(np.array([2.0, 1.0, 3.0]), name="x")
+    out = np.zeros(2)
+    with pytest.raises(NotImplementedError, match="mutation"):
+        if positional:
+            np.take(x, [0, 2], None, out)
+        else:
+            np.take(x, [0, 2], out=out)
+    np.testing.assert_array_equal(out, np.zeros(2))
+
+
+def test_reject_mutating_call_before_changing_input():
+    ctx = TracedTensorNode(name="mutation", node_index=0)
+    original = np.array([np.nan, 1.0], dtype=np.float32)
+    x = ctx.create_input(original, name="x")
+    with pytest.raises(NotImplementedError, match="ATen capture/parity check failed"):
+        np.nan_to_num(x, copy=False)
+    np.testing.assert_array_equal(original, [np.nan, 1.0])
+
+
+def test_eager_view_keeps_numpy_storage():
+    ctx = TracedTensorNode(name="view", node_index=0)
+    x = ctx.create_input(np.arange(3, dtype=np.float32), name="x")
+    y = np.broadcast_to(x, (2, 3))
+    assert np.shares_memory(x.data, y.data)
+    assert not y.flags.writeable
 
 
 if __name__ == "__main__":

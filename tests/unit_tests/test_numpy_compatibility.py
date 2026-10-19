@@ -5,6 +5,9 @@
 
 import leapp
 from leapp.leapp import _MANAGER as annotate
+from leapp.leapp_graph.datatypes.numpy.patching import NumpyPatchBackend
+from leapp.leapp_graph.datatypes.torch.patching import TorchPatchBackend
+from leapp.leapp_graph.traced_node import TracedTensorNode
 import numpy as np
 import torch
 import unittest
@@ -231,3 +234,38 @@ class TestNumpyPatchingDisabled(unittest.TestCase):
 
         annotate.output_tensors("test_node", {"tensor": traced}, export_with="jit")
         leapp.stop()
+
+
+def test_conversion_patches_during_capture():
+    numpy_patch, torch_patch = NumpyPatchBackend(), TorchPatchBackend()
+    try:
+        numpy_patch.install()
+        torch_patch.install()
+        fn = lambda x: np.linalg.norm(x, axis=-1)
+        x = np.arange(6, dtype=np.float32).reshape(2, 3)
+        ctx = TracedTensorNode(name="numpy_patches", node_index=0)
+        traced = ctx.create_input(x.copy(), name="x")
+        ctx.compile_trace({"y": fn(traced)})
+        model = ctx.m
+    finally:
+        torch_patch.uninstall()
+        numpy_patch.uninstall()
+    torch.testing.assert_close(
+        model(torch.from_numpy(x + 2)), torch.from_numpy(fn(x + 2))
+    )
+
+
+def test_public_lifecycle_export_and_replay(tmp_path):
+    x = np.arange(1, 7, dtype=np.float32).reshape(2, 3)
+    leapp.start(name="numpy_aten", save_path=str(tmp_path))
+    try:
+        traced = leapp.annotate.input_tensors("norm", {"x": x})
+        result = np.linalg.norm(traced, axis=-1)
+        leapp.annotate.output_tensors("norm", {"y": result}, export_with="jit")
+    finally:
+        leapp.stop()
+    leapp.compile_graph(visualize=False)
+    model = torch.jit.load(str(next(tmp_path.rglob("norm.pt"))))
+    torch.testing.assert_close(
+        model(torch.from_numpy(x + 2)), torch.from_numpy(np.linalg.norm(x + 2, axis=-1))
+    )
