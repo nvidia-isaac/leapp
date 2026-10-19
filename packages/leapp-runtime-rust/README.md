@@ -8,7 +8,7 @@ SPDX-License-Identifier: Apache-2.0
 This package loads exported LEAPP bundles and executes them through embedded
 Triton. Rust bundle inspection and conversion checks require no inference SDKs.
 Enable the `triton` feature for synchronous execution on Linux with Triton 2.69.0
-and the CUDA runtime SDK. Python and C++ bindings expose bundle inspection.
+and the CUDA runtime SDK. Python bindings expose inspection and execution; C++ bindings expose inspection.
 
 ## Included code
 
@@ -17,15 +17,15 @@ and the CUDA runtime SDK. Python and C++ bindings expose bundle inspection.
 | Rust core | `Bundle`, YAML schema parsing, graph and artifact validation, SHA-256 checks, safetensors initial-state validation |
 | Public inspection types | `PortRef`, `PortSpec`, `DataType`, `Metadata`, `MetadataValue`, `BundleError`, `ErrorCode` |
 | Common lifecycle crate | `RuntimeHandle`, `SessionHandle`, error-source preservation, and cleanup after poisoned locks; five focused regression tests |
-| Python | PyO3 bundle bindings, detached metadata and port descriptors, typed stubs and structured exceptions |
+| Python | Bundle inspection, synchronous sessions, NumPy/DLPack tensors, typed stubs and structured exceptions |
 | C++ | C++20 bundle facade, typed metadata, status and data-type headers, private cxx transport, installable CMake target |
 | Tests | Rust bundle regression suite and independent Python/C++ inspection and lifetime tests |
 
 The core crate provides runtime/session ownership, graph conversion, tensors,
 and results. Native calls are contained in the `leapp-triton` crate; the core
 forbids unsafe Rust. The `bindings/common` crate provides shared close and locking
-behavior. Python and C++ inspection bindings use the core bundle implementation.
-Their inspection interfaces support Linux and macOS; native execution requires Linux.
+behavior. Python and C++ use the core bundle implementation. The Python execution extension
+requires Linux and the native SDKs. The C++ inspection binding supports Linux and macOS.
 
 ## Rust
 

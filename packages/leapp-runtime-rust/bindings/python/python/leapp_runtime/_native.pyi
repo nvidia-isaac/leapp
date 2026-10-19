@@ -2,13 +2,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from os import PathLike
-from typing import Any
+from typing import Any, final
+from collections.abc import Mapping
+
+import numpy as np
 
 class BundleError(Exception):
     code: int
     phase: str
     message: str
     path: PathLike[str]
+
+class RuntimeError(Exception):
+    code: int
+    phase: str
+    message: str
 
 class PortRef:
     @property
@@ -68,3 +76,59 @@ class Bundle:
     def input_info(self, node: str, port: str) -> PortSpec | None: ...
 
     def output_info(self, node: str, port: str) -> PortSpec | None: ...
+
+@final
+class Runtime:
+    @staticmethod
+    def open(bundle: Bundle, options: Any = None) -> Runtime: ...
+    def info(self) -> Bundle: ...
+    def create_session(self) -> Session: ...
+    def close(self) -> None: ...
+    def __enter__(self) -> Runtime: ...
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None: ...
+
+class Session:
+    def run(
+        self,
+        inputs: Mapping[str, Any],
+        *,
+        output_device: str = "cpu",
+        output_overrides: Mapping[str, str] | None = None,
+    ) -> RunResult: ...
+    def reset(self) -> None: ...
+
+class RunResult:
+    def __getitem__(self, name: str) -> Tensor: ...
+    def __len__(self) -> int: ...
+    def keys(self) -> tuple[str, ...]: ...
+    def numpy(self, name: str) -> np.ndarray: ...
+
+class Tensor:
+    @property
+    def dtype(self) -> str: ...
+    @property
+    def shape(self) -> tuple[int, ...]: ...
+    @property
+    def device(self) -> str: ...
+    def numpy(self) -> np.ndarray: ...
+    def dlpack_view(self) -> DLPackView: ...
+    def __dlpack_device__(self) -> tuple[int, int]: ...
+    def __dlpack__(
+        self,
+        *,
+        stream: int | None = None,
+        max_version: tuple[int, int] | None = None,
+        dl_device: tuple[int, int] | None = None,
+        copy: bool | None = None,
+    ) -> Any: ...
+
+class DLPackView:
+    def __dlpack_device__(self) -> tuple[int, int]: ...
+    def __dlpack__(
+        self,
+        *,
+        stream: int | None = None,
+        max_version: tuple[int, int] | None = None,
+        dl_device: tuple[int, int] | None = None,
+        copy: bool | None = None,
+    ) -> Any: ...

@@ -336,6 +336,8 @@ name = "leapp-runtime-python"
 version = "0.1.0"
 dependencies = [
  "leapp-runtime",
+ "leapp-runtime-bindings",
+ "leapp-triton",
  "pyo3",
 ]
 
