@@ -24,7 +24,7 @@ import name and should be installed in separate environments.
 | C++ | C++20 bundle facade, typed metadata, status and data-type headers, private cxx transport, installable CMake target |
 | Tests | Rust bundle regression suite and independent Python/C++ inspection and lifetime tests |
 
-Concrete engine runtimes, sessions, results, tensor/DLPack code, graph planners,
+Concrete engine runtimes, sessions, results, tensor/DLPack code,
 and backend adapters are supplied by the full runtime packages.
 Python and C++ share the core bundle implementation. The `bindings/common`
 lifecycle source depends on concrete execution types, so it is not a separate
@@ -73,6 +73,15 @@ The loader preserves ordinary YAML metadata, duplicate-key handling, and YAML
 merges. Custom YAML tags are unsupported and fail during parsing; LEAPP exports
 do not generate them.
 
+## Execution conversion
+
+The internal execution layer converts validated bundles into Triton model
+configurations, ensemble routing, and temporary model repositories. Conversion
+checks execution constraints, including competing input producers and forward
+cycles, without initializing a backend. Unsupported execution backends fail
+during conversion; bundle inspection continues to accept custom backend names.
+The model configuration schema targets Triton 2.69.0.
+
 ## Build and test
 
 Run from this directory with a Rust toolchain:
@@ -84,7 +93,7 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo fmt --all --check
 ```
 
-The default workspace member is the core crate, including the five common
+The default workspace member is the core crate, including conversion checks and the five common
 lifecycle tests. These tests require no engine or language-binding SDK. Building
 the complete workspace
 also requires a C++20 compiler and Python 3.10 or newer. See

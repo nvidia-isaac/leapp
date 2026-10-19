@@ -23,5 +23,9 @@
 mod bundle;
 mod error;
 
+// Conversion is internal and can be checked without inference SDKs.
+#[allow(dead_code)]
+mod execution;
+
 pub use bundle::{Bundle, DataType, Metadata, MetadataValue, PortRef, PortSpec};
 pub use error::{BundleError, ErrorCode};

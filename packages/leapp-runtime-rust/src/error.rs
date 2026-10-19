@@ -61,6 +61,17 @@ impl std::error::Error for BundleError {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct Unsupported(pub String);
+
+impl fmt::Display for Unsupported {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Unsupported {}
+
 pub(crate) fn in_phase<T>(
     path: &Path,
     phase: &'static str,
@@ -78,13 +89,54 @@ pub(crate) fn in_phase<T>(
 }
 
 fn classify_error(source: &anyhow::Error) -> ErrorCode {
+    if let Some(error) = source.downcast_ref::<RuntimeError>() {
+        return error.code();
+    }
     if let Some(error) = source.downcast_ref::<io::Error>() {
         if error.kind() == io::ErrorKind::NotFound {
             ErrorCode::NotFound
         } else {
             ErrorCode::Io
         }
+    } else if source.is::<Unsupported>() {
+        ErrorCode::Unsupported
     } else {
         ErrorCode::InvalidArgument
+    }
+}
+
+/// Execution failure with its phase and underlying diagnostic.
+#[derive(Debug)]
+pub struct RuntimeError {
+    phase: &'static str,
+    source: anyhow::Error,
+}
+
+#[allow(dead_code)]
+impl RuntimeError {
+    pub(crate) fn new(phase: &'static str, source: anyhow::Error) -> Self {
+        Self { phase, source }
+    }
+
+    /// Category suitable for programmatic error handling.
+    pub fn code(&self) -> ErrorCode {
+        classify_error(&self.source)
+    }
+
+    /// Operation that failed, such as `convert`, `load`, `state`, or `execute`.
+    pub fn phase(&self) -> &'static str {
+        self.phase
+    }
+}
+
+impl fmt::Display for RuntimeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {:#}", self.phase, self.source)
+    }
+}
+
+impl std::error::Error for RuntimeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
     }
 }
