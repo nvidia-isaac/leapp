@@ -11,7 +11,6 @@ from ._native import (
     MetadataMapping,
     PortRef,
     PortSpec,
-    TaggedValue,
 )
 
 
@@ -31,5 +30,4 @@ __all__ = [
     "MetadataMapping",
     "PortRef",
     "PortSpec",
-    "TaggedValue",
 ]

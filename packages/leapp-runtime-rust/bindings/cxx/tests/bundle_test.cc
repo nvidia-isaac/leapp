@@ -34,7 +34,7 @@ int main(int argc, char** argv) {
   std::filesystem::copy_file(argv[1], path);
   std::ofstream(directory / "model.bin", std::ios::binary) << "abc";
   std::ofstream(path, std::ios::app)
-      << "tagged: !sensor {axes: [x, y]}\n"
+      << "sensor: {axes: [x, y]}\n"
          "sequence_keys: {[x, y]: coordinates}\n"
          "unsigned: 18446744073709551615\n";
 
@@ -66,12 +66,8 @@ int main(int argc, char** argv) {
   Check(bundle.model_parameters("absent") == nullptr, "absent parameters");
   const auto* frequency = bundle.pipeline_configs().Find("frequency");
   Check(frequency && std::get<int64_t>(frequency->value) == 50, "typed config");
-  const auto* tag = bundle.metadata().Find("tagged");
-  Check(tag != nullptr, "tag metadata");
-  const auto& tagged =
-      std::get<std::shared_ptr<const leapp::Metadata::Tagged>>(tag->value);
-  Check(tagged->tag == "!sensor" && tagged->value.Find("axes"),
-        "tag preserved");
+  const auto* sensor = bundle.metadata().Find("sensor");
+  Check(sensor && sensor->Find("axes"), "nested mapping metadata");
   const auto* mapping = bundle.metadata().Find("sequence_keys");
   Check(mapping != nullptr, "mapping metadata");
   const auto& entries = std::get<leapp::Metadata::Mapping>(mapping->value);

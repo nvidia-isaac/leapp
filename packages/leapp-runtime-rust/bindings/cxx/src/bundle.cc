@@ -107,9 +107,6 @@ Metadata ReadMetadata(const rust::Vec<wire::MetadataNode>& nodes,
       }
       return {std::move(items)};
     }
-    case Kind::Tagged:
-      return {std::make_shared<const Metadata::Tagged>(
-          Metadata::Tagged{String(node.text), ReadMetadata(nodes, index)})};
   }
   // An unknown kind violates the private generated bridge contract.
   std::abort();

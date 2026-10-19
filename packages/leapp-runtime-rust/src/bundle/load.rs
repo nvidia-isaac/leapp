@@ -5,17 +5,13 @@ use super::{
     schema::{BundleDescription, NodeParameters},
     validate, BundleData,
 };
-use crate::{error::in_phase, BundleError, Metadata, MetadataValue, PortRef};
+use crate::{error::in_phase, BundleError, MetadataValue, PortRef};
 use anyhow::{ensure, Context, Result};
 use indexmap::IndexMap;
-use serde::{
-    de::{EnumAccess, MapAccess, SeqAccess, VariantAccess, Visitor},
-    Deserialize, Deserializer,
-};
-use serde_yaml_ng::value::{Tag, TaggedValue};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{
-    fmt, fs, io,
+    fs, io,
     path::{Component, Path, PathBuf},
 };
 
@@ -30,39 +26,8 @@ pub(crate) fn read_bundle(path: &Path) -> Result<BundleData, BundleError> {
     let mut description = in_phase(path, "parse", || {
         // PyYAML keeps the last duplicate mapping entry and expands YAML merges.
         let value = serde_yaml_ng::from_str::<YamlValue>(&yaml_text)?.into_value()?;
-        // Serde's flatten buffer cannot carry YAML tags. Deserialize known
-        // schema fields separately, then attach the original metadata values.
-        let mut schema = value.clone();
-        let metadata = take_metadata(Some(&mut schema), ROOT_FIELDS);
-        let pipeline_metadata = take_metadata(schema.get_mut("pipeline"), PIPELINE_FIELDS);
-        if let Some(models) = schema
-            .get_mut("models")
-            .and_then(MetadataValue::as_mapping_mut)
-        {
-            for node in models.values_mut() {
-                take_metadata(Some(node), MODEL_FIELDS);
-                for field in ["inputs", "outputs"] {
-                    if let Some(ports) =
-                        node.get_mut(field).and_then(MetadataValue::as_sequence_mut)
-                    {
-                        for port in ports {
-                            take_metadata(Some(port), PORT_FIELDS);
-                        }
-                    }
-                }
-            }
-        }
-        let mut description: BundleDescription = serde_path_to_error::deserialize(schema)?;
-        description.metadata = metadata;
-        description.pipeline.metadata = pipeline_metadata;
+        let mut description: BundleDescription = serde_path_to_error::deserialize(value.clone())?;
         for (name, node) in &mut description.models {
-            let mut original = value["models"][name].clone();
-            node.metadata = take_metadata(Some(&mut original), MODEL_FIELDS);
-            for (field, ports) in [("inputs", &mut node.inputs), ("outputs", &mut node.outputs)] {
-                for (index, port) in ports.iter_mut().enumerate() {
-                    port.metadata = take_metadata(original[field].get_mut(index), PORT_FIELDS);
-                }
-            }
             node.original_parameters =
                 serde_yaml_ng::from_value(value["models"][name]["parameters"].clone())?;
         }
@@ -132,36 +97,6 @@ pub(crate) fn read_bundle(path: &Path) -> Result<BundleData, BundleError> {
     })
 }
 
-const ROOT_FIELDS: &[&str] = &["models", "pipeline", "system information"];
-const PIPELINE_FIELDS: &[&str] = &[
-    "data_flow",
-    "feedback_flow",
-    "inputs",
-    "outputs",
-    "initial_values",
-    "configs",
-];
-const MODEL_FIELDS: &[&str] = &["inputs", "outputs", "parameters"];
-const PORT_FIELDS: &[&str] = &["name", "dtype", "shape", "type"];
-
-fn take_metadata(value: Option<&mut MetadataValue>, fields: &[&str]) -> Metadata {
-    let Some(mapping) = value.and_then(MetadataValue::as_mapping_mut) else {
-        // Leave malformed structure to the typed deserializer's path diagnostics.
-        return Metadata::new();
-    };
-    let mut metadata = Metadata::new();
-    mapping.retain(|key, value| {
-        if let Some(key) = key.as_str() {
-            if !fields.contains(&key) {
-                metadata.insert(key.into(), value.clone());
-                return false;
-            }
-        }
-        true
-    });
-    metadata
-}
-
 // Inspection normalizes known exporter aliases without requiring an adapter.
 pub(crate) fn backend_name(name: &str) -> &str {
     match name {
@@ -206,74 +141,13 @@ fn normalize(path: &Path) -> PathBuf {
 }
 
 // Decode mappings before Value so duplicate keys follow Python's last-value rule.
+// Serde's untagged deserializer rejects custom YAML tags, including nested keys.
+#[derive(Deserialize)]
+#[serde(untagged)]
 enum YamlValue {
     Mapping(IndexMap<MetadataValue, YamlValue>),
     Sequence(Vec<YamlValue>),
     Scalar(MetadataValue),
-    Tagged(String, Box<YamlValue>),
-}
-
-// An untagged serde enum cannot accept YAML tags. Read each value directly so
-// metadata retains tags while mappings still use Python's last-value rule.
-impl<'de> Deserialize<'de> for YamlValue {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct YamlVisitor;
-
-        impl<'de> Visitor<'de> for YamlVisitor {
-            type Value = YamlValue;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str("a YAML value")
-            }
-
-            fn visit_bool<E>(self, value: bool) -> Result<YamlValue, E> {
-                Ok(YamlValue::Scalar(MetadataValue::Bool(value)))
-            }
-
-            fn visit_i64<E>(self, value: i64) -> Result<YamlValue, E> {
-                Ok(YamlValue::Scalar(MetadataValue::Number(value.into())))
-            }
-
-            fn visit_u64<E>(self, value: u64) -> Result<YamlValue, E> {
-                Ok(YamlValue::Scalar(MetadataValue::Number(value.into())))
-            }
-
-            fn visit_f64<E>(self, value: f64) -> Result<YamlValue, E> {
-                Ok(YamlValue::Scalar(MetadataValue::Number(value.into())))
-            }
-
-            fn visit_str<E>(self, value: &str) -> Result<YamlValue, E> {
-                Ok(YamlValue::Scalar(MetadataValue::String(value.into())))
-            }
-
-            fn visit_unit<E>(self) -> Result<YamlValue, E> {
-                Ok(YamlValue::Scalar(MetadataValue::Null))
-            }
-
-            fn visit_seq<A: SeqAccess<'de>>(self, mut sequence: A) -> Result<YamlValue, A::Error> {
-                let mut values = Vec::new();
-                while let Some(value) = sequence.next_element()? {
-                    values.push(value);
-                }
-                Ok(YamlValue::Sequence(values))
-            }
-
-            fn visit_map<A: MapAccess<'de>>(self, mut mapping: A) -> Result<YamlValue, A::Error> {
-                let mut values = IndexMap::new();
-                while let Some((key, value)) = mapping.next_entry()? {
-                    values.insert(key, value);
-                }
-                Ok(YamlValue::Mapping(values))
-            }
-
-            fn visit_enum<A: EnumAccess<'de>>(self, tagged: A) -> Result<YamlValue, A::Error> {
-                let (tag, value) = tagged.variant::<String>()?;
-                Ok(YamlValue::Tagged(tag, Box::new(value.newtype_variant()?)))
-            }
-        }
-
-        deserializer.deserialize_any(YamlVisitor)
-    }
 }
 
 impl YamlValue {
@@ -296,10 +170,6 @@ impl YamlValue {
                 .collect::<Result<_, _>>()
                 .map(MetadataValue::Sequence),
             Self::Scalar(value) => Ok(value),
-            Self::Tagged(tag, value) => Ok(MetadataValue::Tagged(Box::new(TaggedValue {
-                tag: Tag::new(tag),
-                value: value.into_value()?,
-            }))),
         }
     }
 }

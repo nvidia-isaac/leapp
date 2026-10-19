@@ -35,13 +35,6 @@ class PortSpec:
     @property
     def metadata(self) -> dict[str, Any]: ...
 
-class TaggedValue:
-    @property
-    def tag(self) -> str: ...
-
-    @property
-    def value(self) -> Any: ...
-
 class MetadataMapping:
     @property
     def entries(self) -> list[tuple[Any, Any]]: ...

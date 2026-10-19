@@ -63,8 +63,9 @@ represent missing input descriptors as `None` and `std::nullopt`, respectively.
 The loader normalizes known backend aliases, accepts custom nonempty backend
 names, and leaves adapter availability to execution.
 
-The loader preserves YAML metadata, including custom tags, duplicate-key
-handling, and YAML merges.
+The loader preserves ordinary YAML metadata, duplicate-key handling, and YAML
+merges. Custom YAML tags are unsupported and fail during parsing; LEAPP exports
+do not generate them.
 
 ## Build and test
 

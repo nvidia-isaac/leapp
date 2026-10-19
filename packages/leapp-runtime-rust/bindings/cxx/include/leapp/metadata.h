@@ -5,7 +5,6 @@
 #define LEAPP_METADATA_H_
 
 #include <cstdint>
-#include <memory>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -17,13 +16,12 @@ namespace leapp {
 /// keys.
 struct Metadata {
   struct Entry;
-  struct Tagged;
 
   using Sequence = std::vector<Metadata>;
   using Mapping = std::vector<Entry>;
   using Value =
       std::variant<std::monostate, bool, int64_t, uint64_t, double, std::string,
-                   Sequence, Mapping, std::shared_ptr<const Tagged>>;
+                   Sequence, Mapping>;
 
   Value value;  ///< Defaults to null.
 
@@ -33,11 +31,6 @@ struct Metadata {
 
 struct Metadata::Entry {
   Metadata key;
-  Metadata value;
-};
-
-struct Metadata::Tagged {
-  std::string tag;
   Metadata value;
 };
 

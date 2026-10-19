@@ -20,9 +20,9 @@ for name, spec in bundle.pipeline_outputs().items():
 ```
 
 Metadata and port descriptors are detached from the immutable Rust snapshot.
-Editing returned metadata does not change later inspection results. Unknown
-YAML tags become `TaggedValue`; mappings with unhashable or colliding Python
-keys become `MetadataMapping` so no entries are lost.
+Editing returned metadata does not change later inspection results. Mappings
+with unhashable or colliding Python keys become `MetadataMapping` so no entries
+are lost. Custom YAML tags are unsupported and raise `BundleError` during parsing.
 
 `BundleError` exposes `code` (an `ErrorCode`), `phase`, `path`, and `message`.
 Only bundle inspection is exported. This distribution uses the same

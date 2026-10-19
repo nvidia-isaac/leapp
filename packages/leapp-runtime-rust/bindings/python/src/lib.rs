@@ -31,7 +31,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<bundle::PyBundle>()?;
     m.add_class::<bundle::PortRef>()?;
     m.add_class::<bundle::PortSpec>()?;
-    m.add_class::<bundle::TaggedValue>()?;
     m.add_class::<bundle::MetadataMapping>()?;
     Ok(())
 }

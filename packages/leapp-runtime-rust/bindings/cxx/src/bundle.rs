@@ -103,11 +103,7 @@ fn append(value: &MetadataValue, nodes: &mut Vec<ffi::MetadataNode>) {
             n.kind = K::Mapping;
             n.children = v.len();
         }
-        MetadataValue::Tagged(v) => {
-            n.kind = K::Tagged;
-            n.text = v.tag.to_string();
-            n.children = 1;
-        }
+        MetadataValue::Tagged(_) => unreachable!("bundle loading rejects YAML tags"),
     }
     nodes.push(n);
     match value {
@@ -122,7 +118,6 @@ fn append(value: &MetadataValue, nodes: &mut Vec<ffi::MetadataNode>) {
                 append(v, nodes);
             }
         }
-        MetadataValue::Tagged(v) => append(&v.value, nodes),
         _ => {}
     }
 }

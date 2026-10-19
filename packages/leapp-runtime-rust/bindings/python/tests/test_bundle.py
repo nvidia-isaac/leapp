@@ -70,16 +70,14 @@ def test_lossless_metadata(bundle_path):
     bundle_path.write_text(
         YAML
         + """
-tagged: !sensor {axes: [x, y], enabled: true}
+sensor: {axes: [x, y], enabled: true}
 sequence_keys: {[x, y]: coordinates}
 colliding_keys: {true: boolean, 1: integer}
 unsigned: 18446744073709551615
 """
     )
     metadata = lr.Bundle.open(bundle_path).metadata()
-    assert isinstance(metadata["tagged"], lr.TaggedValue)
-    assert metadata["tagged"].tag == "!sensor"
-    assert metadata["tagged"].value == {"axes": ["x", "y"], "enabled": True}
+    assert metadata["sensor"] == {"axes": ["x", "y"], "enabled": True}
     assert isinstance(metadata["sequence_keys"], lr.MetadataMapping)
     assert metadata["sequence_keys"].entries == [(["x", "y"], "coordinates")]
     assert isinstance(metadata["colliding_keys"], lr.MetadataMapping)

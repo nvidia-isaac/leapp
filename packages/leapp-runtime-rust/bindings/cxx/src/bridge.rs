@@ -36,7 +36,6 @@ pub mod ffi {
         String,
         Sequence,
         Mapping,
-        Tagged,
     }
 
     // Preorder nodes carry immediate child counts; mappings alternate key/value nodes.

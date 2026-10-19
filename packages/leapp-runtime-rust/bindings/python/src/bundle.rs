@@ -34,12 +34,6 @@ pub struct PortSpec {
     metadata: Py<PyAny>,
 }
 
-#[pyclass(frozen, get_all, module = "leapp_runtime")]
-pub struct TaggedValue {
-    tag: String,
-    value: Py<PyAny>,
-}
-
 /// Lossless fallback for YAML mappings containing keys Python cannot hash.
 #[pyclass(frozen, get_all, module = "leapp_runtime")]
 pub struct MetadataMapping {
@@ -95,14 +89,7 @@ pub fn value(py: Python<'_>, v: &MetadataValue) -> PyResult<Py<PyAny>> {
                 }
             }
         }
-        MetadataValue::Tagged(v) => Py::new(
-            py,
-            TaggedValue {
-                tag: v.tag.to_string(),
-                value: value(py, &v.value)?,
-            },
-        )?
-        .into_any(),
+        MetadataValue::Tagged(_) => unreachable!("bundle loading rejects YAML tags"),
     })
 }
 
