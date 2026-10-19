@@ -1,0 +1,430 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+#![cfg(feature = "triton")]
+
+use leapp_runtime::{
+    Bundle, DataType, ErrorCode, ExecutionDevice, MemoryLocation, RunOptions, RunResult, Runtime,
+    RuntimeOptions, Session, Tensor, TensorView,
+};
+use serde_json::{json, Value};
+use std::{env, fs, path::PathBuf, thread};
+
+fn fixtures(kind: &str) -> PathBuf {
+    env::var_os(format!("LEAPP_{}_FIXTURES", kind.to_uppercase()))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("target/{kind}-fixtures"))
+        })
+}
+
+fn options(device: ExecutionDevice) -> RuntimeOptions {
+    RuntimeOptions {
+        device,
+        backend_directory: env::var_os("LEAPP_TRITON_BACKENDS")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| RuntimeOptions::default().backend_directory),
+    }
+}
+
+fn devices() -> Vec<ExecutionDevice> {
+    let mut result = vec![ExecutionDevice::Cpu];
+    result.push(ExecutionDevice::Cuda { device_id: 0 });
+    result
+}
+
+fn locations() -> Vec<MemoryLocation> {
+    let mut result = vec![MemoryLocation::Cpu];
+    result.extend([
+        MemoryLocation::PinnedCpu,
+        MemoryLocation::Cuda { device_id: 0 },
+    ]);
+    result
+}
+
+fn open(name: &str, device: ExecutionDevice) -> Runtime {
+    Runtime::open(
+        &Bundle::open(fixtures("triton").join(format!("{name}.yaml"))).unwrap(),
+        options(device),
+    )
+    .unwrap()
+}
+
+fn values(result: &RunResult, name: &str) -> Vec<f32> {
+    result.get(name).unwrap().copy_to_cpu().unwrap()
+}
+
+fn step(session: &mut Session, value: f32) -> RunResult {
+    session
+        .run(&[(
+            "accumulator/observation",
+            TensorView::cpu(&[value; 4], &[4]).unwrap(),
+        )])
+        .unwrap()
+}
+
+// Modified fixtures keep artifact references absolute while their YAML remains temporary.
+fn fixture(name: &str) -> Value {
+    let root = fixtures("triton");
+    let mut value: Value =
+        serde_json::from_slice(&fs::read(root.join(format!("{name}.yaml"))).unwrap()).unwrap();
+    for model in value["models"].as_object_mut().unwrap().values_mut() {
+        model["parameters"]["model_path"] =
+            json!(root.join(model["parameters"]["model_path"].as_str().unwrap()));
+    }
+    value
+}
+
+fn bundle(value: &Value, directory: &tempfile::TempDir) -> Bundle {
+    let path = directory.path().join("bundle.yaml");
+    fs::write(&path, serde_json::to_vec(value).unwrap()).unwrap();
+    Bundle::open(path).unwrap()
+}
+
+fn initial(value: &mut Value, directory: &tempfile::TempDir, port: &str, data: &[f32]) {
+    let bytes: Vec<_> = data.iter().flat_map(|v| v.to_le_bytes()).collect();
+    let tensor =
+        safetensors::tensor::TensorView::new(safetensors::Dtype::F32, vec![data.len()], &bytes)
+            .unwrap();
+    let path = directory.path().join("initial.safetensors");
+    safetensors::serialize_to_file([(port, tensor)], None, &path).unwrap();
+    value["pipeline"]["initial_values"] = json!(path);
+}
+
+#[test]
+fn public_names_results_and_lifetimes() {
+    for device in devices() {
+        let runtime = open("policy", device);
+        assert_eq!(runtime.info().pipeline_outputs()[0].name(), "policy/action");
+        let mut session = runtime.create_session().unwrap();
+        drop(runtime);
+        let result = session
+            .run(&[
+                (
+                    "policy/bias",
+                    TensorView::cpu(&[10f32, 20., 30., 40.], &[4]).unwrap(),
+                ),
+                (
+                    "preprocess/observation",
+                    TensorView::cpu(&[1f32, 2., 3., 4.], &[4]).unwrap(),
+                ),
+            ])
+            .unwrap();
+        assert_eq!(
+            result.iter().map(|(name, _)| name).collect::<Vec<_>>(),
+            ["policy/action"]
+        );
+        assert!(result.get("policy/echo").is_none());
+        drop(session);
+        let tensor = result.get("policy/action").unwrap().clone();
+        drop(result);
+        assert_eq!(tensor.dtype(), DataType::Float32);
+        assert_eq!(tensor.as_cpu_slice::<f32>().unwrap(), [14., 29., 46., 65.]);
+    }
+}
+
+#[test]
+fn validation_failures_leave_session_usable() {
+    let mut session = open("dynamic", ExecutionDevice::Cpu)
+        .create_session()
+        .unwrap();
+    let view = TensorView::cpu(&[1f32], &[1]).unwrap();
+    for inputs in [
+        vec![],
+        vec![("bad", view)],
+        vec![("dynamic/input", view), ("dynamic/input", view)],
+    ] {
+        let error = session.run(&inputs).err().unwrap();
+        assert_eq!(error.code(), ErrorCode::InvalidArgument);
+        assert_eq!(error.phase(), "execute");
+    }
+    let mut options = RunOptions::default();
+    options
+        .output_placement
+        .overrides
+        .insert("bad".into(), MemoryLocation::Cpu);
+    assert!(session
+        .run_with_options(&[("dynamic/input", view)], &options)
+        .is_err());
+    assert!(session
+        .run(&[("dynamic/input", TensorView::cpu(&[1i32], &[1]).unwrap())])
+        .is_err());
+    let result = session.run(&[("dynamic/input", view)]).unwrap();
+    let reused = session
+        .run(&[(
+            "dynamic/input",
+            result.get("dynamic/output").unwrap().view(),
+        )])
+        .unwrap();
+    assert_eq!(values(&reused, "dynamic/output"), [1.]);
+    let empty = session
+        .run(&[("dynamic/input", TensorView::cpu::<f32>(&[], &[0]).unwrap())])
+        .unwrap();
+    assert_eq!(empty.get("dynamic/output").unwrap().shape(), [0]);
+}
+
+#[test]
+fn output_order_duplicates_and_input_output_name_collision() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut data = fixture("policy");
+    data["pipeline"]["outputs"]["policy"] = json!(["echo", "action", "echo"]);
+    data["pipeline"]["inputs"]["policy"] = json!(["bias", "bias"]);
+    let mut session = Runtime::open(&bundle(&data, &directory), options(ExecutionDevice::Cpu))
+        .unwrap()
+        .create_session()
+        .unwrap();
+    let result = session
+        .run(&[
+            ("policy/bias", TensorView::cpu(&[0f32; 4], &[4]).unwrap()),
+            (
+                "preprocess/observation",
+                TensorView::cpu(&[1f32; 4], &[4]).unwrap(),
+            ),
+        ])
+        .unwrap();
+    assert_eq!(
+        result.iter().map(|(name, _)| name).collect::<Vec<_>>(),
+        ["policy/echo", "policy/action"]
+    );
+    // The ONNX artifact permits one tensor to be both graph input and output.
+    let mut data = fixture("dynamic");
+    data["models"]["dynamic"]["outputs"][0]["name"] = json!("input");
+    data["pipeline"]["outputs"]["dynamic"] = json!(["input"]);
+    // Use a dedicated identity artifact with that interface generated by the fixture script.
+    data["models"]["dynamic"]["parameters"]["model_path"] =
+        json!(fixtures("triton").join("passthrough/model.onnx"));
+    let mut session = Runtime::open(&bundle(&data, &directory), options(ExecutionDevice::Cpu))
+        .unwrap()
+        .create_session()
+        .unwrap();
+    assert_eq!(
+        values(
+            &session
+                .run(&[("dynamic/input", TensorView::cpu(&[5f32], &[1]).unwrap())])
+                .unwrap(),
+            "dynamic/input"
+        ),
+        [5.]
+    );
+}
+
+#[test]
+fn feedback_advances_per_session_reset_and_failures_are_atomic() {
+    for device in devices() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut data = fixture("feedback");
+        initial(&mut data, &directory, "accumulator/state", &[10.; 4]);
+        // A second branch can fail during inference, after feedback computation starts.
+        let reshape = fixture("reshape");
+        data["models"]["reshape"] = reshape["models"]["reshape"].clone();
+        data["pipeline"]["inputs"]["reshape"] = json!(["input"]);
+        data["pipeline"]["outputs"]["reshape"] = json!(["output"]);
+        let runtime = Runtime::open(&bundle(&data, &directory), options(device)).unwrap();
+        fs::remove_file(directory.path().join("initial.safetensors")).unwrap();
+        let mut session = runtime.create_session().unwrap();
+        let run = |session: &mut Session, reshape: &[f32]| {
+            session.run(&[
+                (
+                    "accumulator/observation",
+                    TensorView::cpu(&[1f32; 4], &[4]).unwrap(),
+                ),
+                (
+                    "reshape/input",
+                    TensorView::cpu(reshape, &[reshape.len() as i64]).unwrap(),
+                ),
+            ])
+        };
+        let first = run(&mut session, &[1., 2.]).unwrap();
+        assert_eq!(values(&first, "accumulator/next"), [11.; 4]);
+        assert!(run(&mut session, &[1., 2., 3.]).is_err());
+        assert_eq!(
+            values(&run(&mut session, &[1., 2.]).unwrap(), "accumulator/next"),
+            [12.; 4]
+        );
+        session.reset().unwrap();
+        assert_eq!(
+            values(&run(&mut session, &[1., 2.]).unwrap(), "accumulator/next"),
+            [11.; 4]
+        );
+        assert_eq!(values(&first, "accumulator/next"), [11.; 4]);
+        let mut other = runtime.create_session().unwrap();
+        assert_eq!(
+            values(&run(&mut other, &[1., 2.]).unwrap(), "accumulator/next"),
+            [11.; 4]
+        );
+    }
+}
+
+#[test]
+fn feedback_zero_initialization_and_concurrent_sessions() {
+    let runtime = open("feedback", ExecutionDevice::Cpu);
+    let threads: Vec<_> = (1..=3)
+        .map(|i| {
+            let mut session = runtime.create_session().unwrap();
+            thread::spawn(move || {
+                for iteration in 1..=4 {
+                    assert_eq!(
+                        values(&step(&mut session, i as f32), "accumulator/next"),
+                        [(i * iteration) as f32; 4]
+                    );
+                }
+            })
+        })
+        .collect();
+    drop(runtime);
+    for thread in threads {
+        thread.join().unwrap();
+    }
+}
+
+#[test]
+fn hidden_feedback_fanout_and_default_inputs() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut data = fixture("feedback");
+    data["models"]["follower"] = data["models"]["accumulator"].clone();
+    data["pipeline"]["feedback_flow"]["accumulator/next"] =
+        json!(["accumulator/state", "follower/state"]);
+    data["pipeline"]["inputs"]["follower"] = json!(["observation"]);
+    data["pipeline"]["outputs"] = json!({"follower":["next"]});
+    let mut session = Runtime::open(&bundle(&data, &directory), options(ExecutionDevice::Cpu))
+        .unwrap()
+        .create_session()
+        .unwrap();
+    for expected in [10., 11., 12.] {
+        let result = session
+            .run(&[
+                (
+                    "accumulator/observation",
+                    TensorView::cpu(&[1f32; 4], &[4]).unwrap(),
+                ),
+                (
+                    "follower/observation",
+                    TensorView::cpu(&[10f32; 4], &[4]).unwrap(),
+                ),
+            ])
+            .unwrap();
+        assert_eq!(result.iter().count(), 1);
+        assert_eq!(values(&result, "follower/next"), [expected; 4]);
+    }
+    for seeded in [false, true] {
+        let mut data = fixture("defaults");
+        if seeded {
+            initial(&mut data, &directory, "policy/bias", &[10.; 4]);
+        }
+        let mut session = Runtime::open(&bundle(&data, &directory), options(ExecutionDevice::Cpu))
+            .unwrap()
+            .create_session()
+            .unwrap();
+        let result = session
+            .run(&[(
+                "preprocess/observation",
+                TensorView::cpu(&[1f32; 4], &[4]).unwrap(),
+            )])
+            .unwrap();
+        let bias = if seeded { 10. } else { 0. };
+        assert_eq!(
+            values(&result, "policy/action"),
+            [4. + bias, 6. + bias, 8. + bias, 10. + bias]
+        );
+    }
+}
+
+#[test]
+fn packed_tensors_and_memory_placement() {
+    for location in locations() {
+        for (dtype, bytes) in [
+            (DataType::Bool, vec![0, 1]),
+            (DataType::Float16, vec![0, 60, 0, 64]),
+            (DataType::Bfloat16, vec![128, 63, 0, 64]),
+        ] {
+            let tensor = Tensor::copy_from_cpu_bytes(&bytes, dtype, &[2], location).unwrap();
+            assert_eq!(tensor.dtype(), dtype);
+            assert_eq!(tensor.copy_to_cpu_bytes().unwrap(), bytes);
+        }
+    }
+    for device in devices() {
+        let runtime = open("feedback", device);
+        for input_location in locations() {
+            for output_location in locations() {
+                let mut session = runtime.create_session().unwrap();
+                let input = Tensor::copy_from_cpu(&[2f32; 4], &[4], input_location).unwrap();
+                let mut options = RunOptions::default();
+                options
+                    .output_placement
+                    .overrides
+                    .insert("accumulator/next".into(), output_location);
+                for expected in [2., 4.] {
+                    let result = session
+                        .run_with_options(&[("accumulator/observation", input.view())], &options)
+                        .unwrap();
+                    assert_eq!(
+                        result.get("accumulator/next").unwrap().location(),
+                        output_location
+                    );
+                    assert_eq!(values(&result, "accumulator/next"), [expected; 4]);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn dynamic_state_requires_initial_shape() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut data = fixture("feedback");
+    for direction in ["inputs", "outputs"] {
+        for port in data["models"]["accumulator"][direction]
+            .as_array_mut()
+            .unwrap()
+        {
+            port["shape"] = json!([-1]);
+        }
+    }
+    data["models"]["accumulator"]["parameters"]["model_path"] =
+        json!(fixtures("triton").join("dynamic_accumulator/model.onnx"));
+    let error = Runtime::open(&bundle(&data, &directory), options(ExecutionDevice::Cpu))
+        .err()
+        .unwrap();
+    assert_eq!(error.phase(), "state");
+    assert!(error
+        .to_string()
+        .contains("requires an exported initial value"));
+    initial(&mut data, &directory, "accumulator/state", &[10.; 4]);
+    let mut session = Runtime::open(&bundle(&data, &directory), options(ExecutionDevice::Cpu))
+        .unwrap()
+        .create_session()
+        .unwrap();
+    assert_eq!(
+        values(&step(&mut session, 1.), "accumulator/next"),
+        [11.; 4]
+    );
+}
+
+#[test]
+fn failed_backend_load_reports_an_error() {
+    const CHILD: &str = "LEAPP_TEST_FAILED_ONNX_LOAD";
+
+    // The supplied ONNX backend can leave its singleton unusable after rejecting
+    // a model's shape. Isolate the failure so other tests can still load models.
+    if env::var_os(CHILD).is_none() {
+        let status = std::process::Command::new(env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "failed_backend_load_reports_an_error",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        return;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let mut data = fixture("policy");
+    data["models"]["preprocess"]["inputs"][0]["shape"] = json!([3]);
+    let error = Runtime::open(&bundle(&data, &directory), options(ExecutionDevice::Cpu))
+        .err()
+        .unwrap();
+    assert_eq!(error.phase(), "load");
+    assert!(error.to_string().contains("failed to load"));
+}

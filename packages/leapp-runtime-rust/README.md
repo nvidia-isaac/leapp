@@ -3,15 +3,12 @@ SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All 
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# LEAPP Rust bundle API and shared lifecycle sources
+# LEAPP Rust runtime
 
-This package loads and validates exported LEAPP bundles and exposes their public
-inspection API in Rust, Python, and C++. It also provides shared runtime/session
-lifecycle sources for ownership, error handling, and shutdown. Bundle loading
-does not initialize an inference backend.
-
-The inspection and full-runtime Python distributions share the `leapp_runtime`
-import name and should be installed in separate environments.
+This package loads exported LEAPP bundles and executes them through embedded
+Triton. Rust bundle inspection and conversion checks require no inference SDKs.
+Enable the `triton` feature for synchronous execution on Linux with Triton 2.69.0
+and the CUDA runtime SDK. Python and C++ bindings expose bundle inspection.
 
 ## Included code
 
@@ -19,20 +16,16 @@ import name and should be installed in separate environments.
 | --- | --- |
 | Rust core | `Bundle`, YAML schema parsing, graph and artifact validation, SHA-256 checks, safetensors initial-state validation |
 | Public inspection types | `PortRef`, `PortSpec`, `DataType`, `Metadata`, `MetadataValue`, `BundleError`, `ErrorCode` |
-| Common lifecycle sources | `RuntimeHandle`, `SessionHandle`, error-source preservation, and cleanup after poisoned locks; five focused regression tests |
+| Common lifecycle crate | `RuntimeHandle`, `SessionHandle`, error-source preservation, and cleanup after poisoned locks; five focused regression tests |
 | Python | PyO3 bundle bindings, detached metadata and port descriptors, typed stubs and structured exceptions |
 | C++ | C++20 bundle facade, typed metadata, status and data-type headers, private cxx transport, installable CMake target |
 | Tests | Rust bundle regression suite and independent Python/C++ inspection and lifetime tests |
 
-Concrete engine runtimes, sessions, results, tensor/DLPack code,
-and backend adapters are supplied by the full runtime packages.
-Python and C++ share the core bundle implementation. The `bindings/common`
-lifecycle source depends on concrete execution types, so it is not a separate
-compiled crate in this inspection-only package. See the
-[common lifecycle sources](bindings/common/README.md) for integration and testing.
-The core inspection crate has no inference SDK or NumPy dependency.
-The C++ binding currently supports Unix platforms (Linux and macOS), using native
-path bytes.
+The core crate provides runtime/session ownership, graph conversion, tensors,
+and results. Native calls are contained in the `leapp-triton` crate; the core
+forbids unsafe Rust. The `bindings/common` crate provides shared close and locking
+behavior. Python and C++ inspection bindings use the core bundle implementation.
+Their inspection interfaces support Linux and macOS; native execution requires Linux.
 
 ## Rust
 
@@ -72,6 +65,67 @@ names, and leaves adapter availability to execution.
 The loader preserves ordinary YAML metadata, duplicate-key handling, and YAML
 merges. Custom YAML tags are unsupported and fail during parsing; LEAPP exports
 do not generate them.
+
+## Synchronous execution
+
+```rust
+use leapp_runtime::{Bundle, Runtime, RuntimeOptions, TensorView};
+
+let bundle = Bundle::open("exports/policy.yaml")?;
+let runtime = Runtime::open(&bundle, RuntimeOptions::default())?;
+let mut session = runtime.create_session()?;
+let observation = [1.0_f32, 2.0, 3.0, 4.0];
+let bias = [10.0_f32, 20.0, 30.0, 40.0];
+let result = session.run(&[
+    ("preprocess/observation", TensorView::cpu(&observation, &[4])?),
+    ("policy/bias", TensorView::cpu(&bias, &[4])?),
+])?;
+let action = result.get("policy/action").unwrap().as_cpu_slice::<f32>()?;
+session.reset()?;
+```
+
+`RuntimeOptions` selects `ExecutionDevice` and the backend installation directory
+(defaults: CPU and `/opt/tritonserver/backends`). `runtime.info()` borrows the
+retained bundle snapshot. Every public input must be supplied exactly once, using
+its LEAPP name. Generated Triton names and internal ports are hidden. Results
+contain only declared public outputs, in declaration order; repeated declarations
+share one named entry. `get` returns `None` for absent names and `iter` traverses
+names and tensors without copying data.
+
+Each session owns its delayed feedback: call N consumes the outputs from call
+N-1. Feedback and unconnected inputs start from exported safetensors values, or
+zeros when no value is exported. Dynamic state requires a concrete initial value.
+Initial values for public or forward-connected inputs are superseded by supplied
+inputs or graph routing. A successful call publishes all next-state tensors
+together; validation and inference failures leave the session's feedback unchanged.
+`reset()` restores the values captured at runtime creation, without rereading files
+or changing retained results. It does not reset model-internal state.
+
+Separate sessions share models and can run concurrently; each has independent
+feedback. `run` borrows the session mutably to prevent overlapping calls on the
+same session. Dropping the runtime handle leaves existing sessions usable. The
+last owner stops Triton and removes the temporary model repository. Results own
+their allocations and remain usable after runtime/session destruction.
+
+`TensorView::cpu` borrows typed input, while `cpu_bytes` handles packed native-endian
+numeric values (including Boolean, float16, and bfloat16). Boolean bytes must be
+0 or 1. `Tensor::copy_from_cpu` and `copy_from_cpu_bytes` create immutable CPU,
+pinned-host, or CUDA storage; copies complete before returning. Owned tensors
+can be reused as inputs through `view()` and cloned without copying storage.
+`as_cpu_slice` and `as_cpu_bytes` borrow host data; device tensors require an
+explicit `copy_to_cpu` or `copy_to_cpu_bytes`. Tensor and bundle inspection use
+the same public `DataType` enum.
+
+`run_with_options` accepts `RunOptions::output_placement`: a default location and
+per-output overrides keyed by public LEAPP names. Output placement is exact.
+Hidden feedback outputs use CPU storage; public outputs reused as feedback retain
+the requested output location. CUDA and pinned allocations are included with the `triton` feature. Execution errors expose `code()`, `phase()`, and their source chain.
+
+A runnable example uses the generated policy fixture:
+
+```sh
+cargo run --locked --features triton --example run -- target/triton-fixtures/policy.yaml
+```
 
 ## Execution conversion
 
@@ -129,12 +183,12 @@ lifecycle tests. These tests require no engine or language-binding SDK. The comp
 C++20 compiler, and Python 3.10 or newer. See
 [Python bindings](bindings/python/README.md) and
 [C++ bindings](bindings/cxx/README.md) for installation and binding tests.
-All inspection tests create opaque artifact bytes; no model generation is needed.
+Inspection tests create opaque artifact bytes. Native execution tests use the
+generated ONNX fixtures described above.
 
 ## Shared lifecycle
 
-`bindings/common/src/runtime.rs` preserves runtime error sources and completes
-shutdown cleanup even when locks are poisoned. The lifecycle regression target
-compiles this implementation against a small test-only runtime API, without
-inference SDKs. See the [session reset contract](bindings/common/README.md#session-reset)
+The common lifecycle crate preserves runtime error sources and completes
+shutdown cleanup even when locks are poisoned. The SDK-free lifecycle regression target compiles the wrapper against a small
+test-only runtime API. Native execution tests exercise session state and results. See the [session reset contract](bindings/common/README.md#session-reset)
 for state ownership and reset behavior.

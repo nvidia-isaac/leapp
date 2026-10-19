@@ -21,14 +21,25 @@
 #![forbid(unsafe_code)]
 
 #[cfg(feature = "triton")]
-#[allow(dead_code)]
 mod adapter;
 mod bundle;
 mod error;
 
 // Conversion is internal and can be checked without inference SDKs.
-#[allow(dead_code)]
+#[cfg_attr(not(feature = "triton"), allow(dead_code))]
 mod execution;
+#[cfg(feature = "triton")]
+mod runtime;
+#[cfg(feature = "triton")]
+mod tensor;
 
 pub use bundle::{Bundle, DataType, Metadata, MetadataValue, PortRef, PortSpec};
 pub use error::{BundleError, ErrorCode};
+
+#[cfg(feature = "triton")]
+pub use {
+    error::RuntimeError,
+    execution::ExecutionDevice,
+    runtime::{OutputPlacement, RunOptions, RunResult, Runtime, RuntimeOptions, Session},
+    tensor::{MemoryLocation, Tensor, TensorElement, TensorView},
+};

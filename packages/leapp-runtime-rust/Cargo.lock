@@ -316,6 +316,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "leapp-runtime-bindings"
+version = "0.1.0"
+dependencies = [
+ "leapp-runtime",
+]
+
+[[package]]
 name = "leapp-runtime-cxx"
 version = "0.1.0"
 dependencies = [

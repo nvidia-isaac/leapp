@@ -5,6 +5,8 @@
 //! Triton executes the resulting ensemble; this module does not run a node scheduler.
 
 mod config;
+#[cfg(feature = "triton")]
+pub(crate) mod initial_state;
 pub(crate) mod repository;
 #[cfg(test)]
 mod tests;

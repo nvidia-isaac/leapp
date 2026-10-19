@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [workspace]
-members = ["src/adapter/triton", "bindings/python", "bindings/cxx"]
+members = ["src/adapter/triton", "bindings/common", "bindings/python", "bindings/cxx"]
 default-members = ["."]
 resolver = "2"
 
@@ -12,7 +12,7 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 publish = false
-description = "Backend-independent LEAPP bundle loading and inspection"
+description = "LEAPP bundle inspection and synchronous Triton execution"
 
 [features]
 triton = ["dep:leapp-triton"]
@@ -36,3 +36,7 @@ protobuf-codegen = "=3.7.2"
 [[test]]
 name = "binding_lifecycle"
 path = "bindings/common/tests/lifecycle.rs"
+
+[[example]]
+name = "run"
+required-features = ["triton"]
