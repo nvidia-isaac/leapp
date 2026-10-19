@@ -53,6 +53,12 @@ def view_assignment(x, delta):
     return x, view
 
 
+def copy_different_layout(x, delta):
+    view = x.reshape(3, 4).T
+    view[:] = (x + delta).reshape(4, 3)
+    return x, view, view.reshape(12)
+
+
 def independent_copy(x, delta):
     copied = x.copy() if isinstance(x, np.ndarray) else x.clone()
     copied += delta
@@ -122,6 +128,7 @@ CASES = [
     transpose,
     base_assignment,
     view_assignment,
+    copy_different_layout,
     independent_copy,
     copying_reshape,
     returned_flat_alias,
@@ -241,3 +248,50 @@ def test_returned_alias_artifact_reload(tmp_path, library, backend):
             return tuple(torch.from_numpy(value) for value in values)
 
     check_replay(loaded, nested, library)
+
+
+@pytest.mark.parametrize("library", ["torch", "numpy"])
+def test_boolean_update_cardinality_onnx_reload(tmp_path, library):
+    patcher = TracingPatcher()
+    patcher.install()
+    try:
+        node = TracedTensorNode("masked_views")
+        x = node.create_input(native(torch.arange(12.0).reshape(3, 4), library), "x")
+        mask = node.create_input(
+            native(torch.tensor([True, False, True, False]), library), "mask"
+        )
+        delta = node.create_input(native(torch.tensor([2.0]), library), "delta")
+        x[:, mask] *= delta
+        node.compile_trace({"base": x, "selected": x[:, mask]})
+    finally:
+        patcher.uninstall()
+    path = tmp_path / "masked.onnx"
+    torch.onnx.export(
+        node.m,
+        (
+            torch.arange(12.0).reshape(3, 4),
+            torch.tensor([True, False, True, False]),
+            torch.tensor([2.0]),
+        ),
+        path,
+        dynamo=True,
+        input_names=["x", "mask", "delta"],
+    )
+    session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+    for offset, amount in VARIANTS:
+        for cardinality in (0, 1, 2, 4):
+            given = torch.arange(12.0).reshape(3, 4) + offset
+            mask = torch.arange(4) < cardinality
+            expected = given.clone()
+            expected[:, mask] *= amount
+            actual = session.run(
+                None,
+                {
+                    "x": given.numpy(),
+                    "mask": mask.numpy(),
+                    "delta": np.array([amount], dtype=np.float32),
+                },
+            )
+            torch.testing.assert_close(torch.from_numpy(actual[0]), expected)
+            torch.testing.assert_close(torch.from_numpy(actual[1]), expected[:, mask])
+            torch.testing.assert_close(given, torch.arange(12.0).reshape(3, 4) + offset)
