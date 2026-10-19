@@ -7,25 +7,27 @@ SPDX-License-Identifier: Apache-2.0
 
 This package loads exported LEAPP bundles and executes them through embedded
 Triton. Rust bundle inspection and conversion checks require no inference SDKs.
-Enable the `triton` feature for synchronous execution on Linux with Triton 2.69.0
-and the CUDA runtime SDK. Python bindings expose inspection and execution; C++ bindings expose inspection.
+Enable the `triton` feature for synchronous execution on Linux with Triton
+2.69.0 and the CUDA runtime SDK. Python and C++ bindings expose bundle
+inspection and synchronous execution.
 
 ## Included code
 
 | Layer | Contents |
 | --- | --- |
-| Rust core | `Bundle`, YAML schema parsing, graph and artifact validation, SHA-256 checks, safetensors initial-state validation |
+| Rust core | Immutable bundles, graph conversion, runtime/session ownership, feedback, tensors, and results |
 | Public inspection types | `PortRef`, `PortSpec`, `DataType`, `Metadata`, `MetadataValue`, `BundleError`, `ErrorCode` |
 | Common lifecycle crate | `RuntimeHandle`, `SessionHandle`, error-source preservation, and cleanup after poisoned locks; five focused regression tests |
 | Python | Bundle inspection, synchronous sessions, NumPy/DLPack tensors, typed stubs and structured exceptions |
-| C++ | C++20 bundle facade, typed metadata, status and data-type headers, private cxx transport, installable CMake target |
-| Tests | Rust bundle regression suite and independent Python/C++ inspection and lifetime tests |
+| C++ | C++20 bundle/runtime facade, borrowed tensor views, retained outputs, private cxx transport, installable CMake target |
+| Tests | Bundle inspection, conversion, backend execution, tensor ownership, and language-binding lifecycle tests |
 
 The core crate provides runtime/session ownership, graph conversion, tensors,
 and results. Native calls are contained in the `leapp-triton` crate; the core
-forbids unsafe Rust. The `bindings/common` crate provides shared close and locking
-behavior. Python and C++ use the core bundle implementation. The Python execution extension
-requires Linux and the native SDKs. The C++ inspection binding supports Linux and macOS.
+forbids unsafe Rust. The `bindings/common` crate provides shared close and
+locking behavior. Python and C++ use the core bundle implementation. Both
+language bindings require Linux and the native SDKs. The Rust core remains
+SDK-free unless the `triton` feature is enabled.
 
 ## Rust
 
@@ -44,7 +46,8 @@ for output in bundle.pipeline_outputs() {
 by output names, including internal ports. Names are unqualified and borrowed
 from the bundle, with declaration order and duplicates preserved. An absent
 model returns `None`; a model with no ports returns two empty lists. Use these
-names with `input_info(node, port)` and `output_info(node, port)` for descriptors.
+names with `input_info(node, port)` and `output_info(node, port)` for
+descriptors.
 
 `Bundle` is an immutable, reference-counted snapshot. Clones share the snapshot;
 inspection is safe across threads. Getters preserve declaration order and
@@ -84,22 +87,23 @@ let action = result.get("policy/action").unwrap().as_cpu_slice::<f32>()?;
 session.reset()?;
 ```
 
-`RuntimeOptions` selects `ExecutionDevice` and the backend installation directory
-(defaults: CPU and `/opt/tritonserver/backends`). `runtime.info()` borrows the
-retained bundle snapshot. Every public input must be supplied exactly once, using
-its LEAPP name. Generated Triton names and internal ports are hidden. Results
-contain only declared public outputs, in declaration order; repeated declarations
-share one named entry. `get` returns `None` for absent names and `iter` traverses
-names and tensors without copying data.
+`RuntimeOptions` selects `ExecutionDevice` and the backend installation
+directory (defaults: CPU and `/opt/tritonserver/backends`). `runtime.info()`
+borrows the retained bundle snapshot. Every public input must be supplied
+exactly once, using its LEAPP name. Generated Triton names and internal ports
+are hidden. Results contain only declared public outputs, in declaration order;
+repeated declarations share one named entry. `get` returns `None` for absent
+names and `iter` traverses names and tensors without copying data.
 
 Each session owns its delayed feedback: call N consumes the outputs from call
 N-1. Feedback and unconnected inputs start from exported safetensors values, or
-zeros when no value is exported. Dynamic state requires a concrete initial value.
-Initial values for public or forward-connected inputs are superseded by supplied
-inputs or graph routing. A successful call publishes all next-state tensors
-together; validation and inference failures leave the session's feedback unchanged.
-`reset()` restores the values captured at runtime creation, without rereading files
-or changing retained results. It does not reset model-internal state.
+zeros when no value is exported. Dynamic state requires a concrete initial
+value. Initial values for public or forward-connected inputs are superseded by
+supplied inputs or graph routing. A successful call publishes all next-state
+tensors together; validation and inference failures leave the session's feedback
+unchanged. `reset()` restores the values captured at runtime creation, without
+rereading files or changing retained results. It does not reset model-internal
+state.
 
 Separate sessions share models and can run concurrently; each has independent
 feedback. `run` borrows the session mutably to prevent overlapping calls on the
@@ -107,19 +111,21 @@ same session. Dropping the runtime handle leaves existing sessions usable. The
 last owner stops Triton and removes the temporary model repository. Results own
 their allocations and remain usable after runtime/session destruction.
 
-`TensorView::cpu` borrows typed input, while `cpu_bytes` handles packed native-endian
-numeric values (including Boolean, float16, and bfloat16). Boolean bytes must be
-0 or 1. `Tensor::copy_from_cpu` and `copy_from_cpu_bytes` create immutable CPU,
-pinned-host, or CUDA storage; copies complete before returning. Owned tensors
-can be reused as inputs through `view()` and cloned without copying storage.
-`as_cpu_slice` and `as_cpu_bytes` borrow host data; device tensors require an
-explicit `copy_to_cpu` or `copy_to_cpu_bytes`. Tensor and bundle inspection use
-the same public `DataType` enum.
+`TensorView::cpu` borrows typed input, while `cpu_bytes` handles packed
+native-endian numeric values (including Boolean, float16, and bfloat16). Boolean
+bytes must be 0 or 1. `Tensor::copy_from_cpu` and `copy_from_cpu_bytes` create
+immutable CPU, pinned-host, or CUDA storage; copies complete before returning.
+Owned tensors can be reused as inputs through `view()` and cloned without
+copying storage. `as_cpu_slice` and `as_cpu_bytes` borrow host data; device
+tensors require an explicit `copy_to_cpu` or `copy_to_cpu_bytes`. Tensor and
+bundle inspection use the same public `DataType` enum.
 
-`run_with_options` accepts `RunOptions::output_placement`: a default location and
-per-output overrides keyed by public LEAPP names. Output placement is exact.
-Hidden feedback outputs use CPU storage; public outputs reused as feedback retain
-the requested output location. CUDA and pinned allocations are included with the `triton` feature. Execution errors expose `code()`, `phase()`, and their source chain.
+`run_with_options` accepts `RunOptions::output_placement`: a default location
+and per-output overrides keyed by public LEAPP names. Output placement is exact.
+Hidden feedback outputs use CPU storage; public outputs reused as feedback
+retain the requested output location. CUDA and pinned allocations are included
+with the `triton` feature. Execution errors expose `code()`, `phase()`, and
+their source chain.
 
 A runnable example uses the generated policy fixture:
 
@@ -141,9 +147,9 @@ The model configuration schema targets Triton 2.69.0.
 The `triton` feature enables the native server adapter. It loads generated
 repositories and performs synchronous inference with exact output placement.
 Unreferenced output allocations can be reused; retained tensors keep their
-storage, and exporting a raw pointer excludes that allocation from reuse.
-Server shutdown precedes repository cleanup. The runtime checks that the loaded
-Triton version is 2.69.0, matching the bundled configuration schema.
+storage, and exporting a raw pointer excludes that allocation from reuse. Server
+shutdown precedes repository cleanup. The runtime checks that the loaded Triton
+version is 2.69.0, matching the bundled configuration schema.
 
 Generate ONNX fixtures and run the native adapter tests on Linux:
 
@@ -178,20 +184,34 @@ cargo clippy --locked -p leapp-runtime --all-targets -- -D warnings
 cargo fmt --all --check
 ```
 
-The default workspace member is the core crate, including conversion checks and the five common
-lifecycle tests. These tests require no engine or language-binding SDK. The complete workspace requires Linux, the native SDKs described above, a
-C++20 compiler, and Python 3.10 or newer. See
-[Python bindings](bindings/python/README.md) and
-[C++ bindings](bindings/cxx/README.md) for installation and binding tests.
-Inspection tests create opaque artifact bytes. Native execution tests use the
-generated ONNX fixtures described above.
+The default workspace member is the core crate, including conversion checks and
+the five common lifecycle tests. These tests require no engine or
+language-binding SDK. The complete workspace requires Linux, the native SDKs
+described above, a C++20 compiler, and Python 3.10 or newer. See [Python
+bindings](bindings/python/README.md) and [C++ bindings](bindings/cxx/README.md)
+for installation and binding tests. Inspection tests create opaque artifact
+bytes. Native execution tests use the generated ONNX fixtures described above.
+
+For a complete Linux build with the native SDKs available:
+
+```sh
+cargo check --locked --workspace
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace --features triton -- --test-threads=1
+```
+
+Generate the ONNX fixtures before running native tests. Optional backend tests
+are invoked explicitly in the backend sections below. Language-binding tests
+require building the corresponding extension or SDK.
 
 ## Shared lifecycle
 
 The common lifecycle crate preserves runtime error sources and completes
-shutdown cleanup even when locks are poisoned. The SDK-free lifecycle regression target compiles the wrapper against a small
-test-only runtime API. Native execution tests exercise session state and results. See the [session reset contract](bindings/common/README.md#session-reset)
-for state ownership and reset behavior.
+shutdown cleanup even when locks are poisoned. The SDK-free lifecycle regression
+target compiles the wrapper against a small test-only runtime API. Native
+execution tests exercise session state and results. See the [session reset
+contract](bindings/common/README.md#session-reset) for state ownership and reset
+behavior.
 
 ## PT2 execution
 
@@ -251,21 +271,22 @@ parameters:
 ```
 
 The artifact filename is preserved through `default_model_filename`, so `.plan`
-and `.engine` files work without renaming. The converter emits `backend: tensorrt`,
-`platform: tensorrt_plan`, `max_batch_size: 0`, and a GPU instance for the selected
-`ExecutionDevice::Cuda`. Port names, dtypes, and shapes must describe the engine's
-I/O. Triton validates engine compatibility and input shapes; the Rust runtime
-neither builds engines nor inspects their payloads.
+and `.engine` files work without renaming. The converter emits `backend:
+tensorrt`, `platform: tensorrt_plan`, `max_batch_size: 0`, and a GPU instance
+for the selected `ExecutionDevice::Cuda`. Port names, dtypes, and shapes must
+describe the engine's I/O. Triton validates engine compatibility and input
+shapes; the Rust runtime neither builds engines nor inspects their payloads.
 
 Install the supplied plugin at
 `<backend_directory>/tensorrt/libtriton_tensorrt.so`, with its TensorRT and CUDA
 dependencies available to the loader. Execution uses `RuntimeOptions`,
-`Session`, output placement, feedback, and reset APIs. CPU, pinned-host, and CUDA input/output buffers are supported
-with the `triton` feature. TensorRT model execution always requires a GPU.
+`Session`, output placement, feedback, and reset APIs. CPU, pinned-host, and
+CUDA input/output buffers are supported with the `triton` feature. TensorRT
+model execution always requires a GPU.
 
-Dynamic dimensions use the engine's first optimization profile (profile 0).
-This integration targets ordinary tensor I/O. Shape-tensor configuration,
-selection of additional profiles, custom TensorRT plugins, and automatic engine
+Dynamic dimensions use the engine's first optimization profile (profile 0). This
+integration targets ordinary tensor I/O. Shape-tensor configuration, selection
+of additional profiles, custom TensorRT plugins, and automatic engine
 compilation are not exposed.
 
 Build fixture engines on the target GPU with the supplied TensorRT toolchain:

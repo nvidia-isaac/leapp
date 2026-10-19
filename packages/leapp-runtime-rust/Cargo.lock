@@ -329,6 +329,8 @@ dependencies = [
  "cxx",
  "cxx-build",
  "leapp-runtime",
+ "leapp-runtime-bindings",
+ "leapp-triton",
 ]
 
 [[package]]

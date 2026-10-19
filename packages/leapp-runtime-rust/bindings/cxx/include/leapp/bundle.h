@@ -82,6 +82,7 @@ class Bundle {
                               std::string_view port) const;
 
  private:
+  friend class Runtime;
   struct Data;
   std::shared_ptr<Data> data_;
 };

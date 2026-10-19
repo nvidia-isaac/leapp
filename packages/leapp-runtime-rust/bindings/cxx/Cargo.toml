@@ -9,7 +9,9 @@ publish = false
 crate-type = ["staticlib"]
 
 [dependencies]
-leapp-runtime = { path = "../.." }
+leapp-runtime = { path = "../..", features = ["triton"] }
+leapp-runtime-bindings = { path = "../common" }
+leapp-triton = { path = "../../src/adapter/triton" }
 cxx = "=1.0.205"
 
 [build-dependencies]
