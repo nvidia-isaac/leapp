@@ -11,6 +11,7 @@ use std::{
 };
 
 /// Binding lifecycle failures preserve native execution diagnostics.
+/// Wrapped runtime failures remain accessible through [`std::error::Error::source`].
 #[derive(Debug)]
 pub enum Error {
     Closed,
@@ -47,7 +48,14 @@ impl fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Runtime(error) => Some(error),
+            Self::Closed | Self::Lock => None,
+        }
+    }
+}
 
 type SessionSlot = Mutex<Option<Session>>;
 
@@ -104,17 +112,40 @@ impl RuntimeHandle {
         })
     }
 
-    /// Wait for active native calls and close all sessions. Repeated calls succeed.
+    /// Wait for active native calls and close all sessions.
+    /// Poisoned locks are recovered only for cleanup, then reported as `Error::Lock`.
+    /// Once cleanup completes, repeated calls succeed.
     pub fn close(&self) -> Result<(), Error> {
-        let mut runtime = self.0.runtime.write().map_err(|_| Error::Lock)?;
-        let mut sessions = self.0.sessions.lock().map_err(|_| Error::Lock)?;
+        let mut poisoned = false;
+        let mut runtime = self.0.runtime.write().unwrap_or_else(|error| {
+            poisoned = true;
+            error.into_inner()
+        });
+        let mut sessions = self.0.sessions.lock().unwrap_or_else(|error| {
+            poisoned = true;
+            error.into_inner()
+        });
+        // The runtime write guard excludes active calls. Recover poisoned state
+        // only to drop it, and visit every session before reporting the failure.
         for weak in sessions.drain(..) {
             if let Some(session) = weak.upgrade() {
-                session.lock().map_err(|_| Error::Lock)?.take();
+                let mut slot = session.lock().unwrap_or_else(|error| {
+                    poisoned = true;
+                    error.into_inner()
+                });
+                slot.take();
+                session.clear_poison();
             }
         }
         runtime.take();
-        Ok(())
+        // Empty, closed state is valid again. Clear poison while holding the guards.
+        self.0.sessions.clear_poison();
+        self.0.runtime.clear_poison();
+        if poisoned {
+            Err(Error::Lock)
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -138,7 +169,9 @@ impl SessionHandle {
             .map_err(Error::Runtime)
     }
 
-    /// Restore the session's explicit feedback state.
+    /// Restore captured initial feedback and default inputs for this session.
+    /// Retained results are unaffected; files and models are not reloaded.
+    /// Backend-internal mutable state is not reset.
     pub fn reset(&self) -> Result<(), Error> {
         let guard = self.state.runtime.read().map_err(|_| Error::Lock)?;
         if guard.is_none() {

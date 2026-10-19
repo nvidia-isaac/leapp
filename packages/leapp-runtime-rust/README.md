@@ -19,7 +19,7 @@ import name and should be installed in separate environments.
 | --- | --- |
 | Rust core | `Bundle`, YAML schema parsing, graph and artifact validation, SHA-256 checks, safetensors initial-state validation |
 | Public inspection types | `PortRef`, `PortSpec`, `DataType`, `Metadata`, `MetadataValue`, `BundleError`, `ErrorCode` |
-| Common lifecycle sources | `RuntimeHandle`, `SessionHandle`, and lifecycle errors; three focused regression tests |
+| Common lifecycle sources | `RuntimeHandle`, `SessionHandle`, error-source preservation, and cleanup after poisoned locks; five focused regression tests |
 | Python | PyO3 bundle bindings, detached metadata and port descriptors, typed stubs and structured exceptions |
 | C++ | C++20 bundle facade, typed metadata, status and data-type headers, private cxx transport, installable CMake target |
 | Tests | Rust bundle regression suite and independent Python/C++ inspection and lifetime tests |
@@ -84,7 +84,7 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo fmt --all --check
 ```
 
-The default workspace member is the core crate, including the three common
+The default workspace member is the core crate, including the five common
 lifecycle tests. These tests require no engine or language-binding SDK. Building
 the complete workspace
 also requires a C++20 compiler and Python 3.10 or newer. See
@@ -94,6 +94,8 @@ All inspection tests create opaque artifact bytes; no model generation is needed
 
 ## Shared lifecycle
 
-`bindings/common/src/runtime.rs` manages session ownership, serializes calls, and
-coordinates explicit shutdown. The lifecycle regression target compiles these
-sources against a small test-only runtime API, without inference SDKs.
+`bindings/common/src/runtime.rs` preserves runtime error sources and completes
+shutdown cleanup even when locks are poisoned. The lifecycle regression target
+compiles this implementation against a small test-only runtime API, without
+inference SDKs. See the [session reset contract](bindings/common/README.md#session-reset)
+for state ownership and reset behavior.

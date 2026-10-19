@@ -14,8 +14,51 @@ use std::{
     time::Duration,
 };
 
-#[path = "../src/runtime.rs"]
-mod lifecycle;
+mod lifecycle {
+    include!("../src/runtime.rs");
+
+    #[test]
+    fn close_recovers_poisoned_locks_and_releases_every_session() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+
+        for poisoned in ["session", "registry", "runtime"] {
+            let (runtime, owner) = crate::runtime();
+            let sessions: Vec<_> = (0..3).map(|_| runtime.create_session().unwrap()).collect();
+            assert!(catch_unwind(AssertUnwindSafe(|| match poisoned {
+                "session" => {
+                    // Cleanup must visit sessions on both sides of the poisoned one.
+                    let _guard = sessions[1].slot.lock().unwrap();
+                    panic!("simulate session panic");
+                }
+                "registry" => {
+                    let _guard = runtime.0.sessions.lock().unwrap();
+                    panic!("simulate registry panic");
+                }
+                "runtime" => {
+                    let _guard = runtime.0.runtime.write().unwrap();
+                    panic!("simulate runtime panic");
+                }
+                _ => unreachable!(),
+            }))
+            .is_err());
+
+            assert!(matches!(runtime.close(), Err(Error::Lock)), "{poisoned}");
+            assert!(!runtime.is_open().unwrap());
+            assert!(owner.upgrade().is_none());
+            assert!(runtime.0.sessions.lock().unwrap().is_empty());
+            for session in &sessions {
+                assert!(session.slot.lock().unwrap().is_none());
+                assert!(matches!(session.reset(), Err(Error::Closed)));
+                assert!(matches!(
+                    session.run(&[], &RunOptions::default()),
+                    Err(Error::Closed)
+                ));
+            }
+            assert!(matches!(runtime.create_session(), Err(Error::Closed)));
+            runtime.close().unwrap();
+        }
+    }
+}
 use lifecycle::{Error, RuntimeHandle};
 
 pub type RuntimeOptions = Arc<()>;
@@ -30,7 +73,7 @@ pub struct Runtime(Arc<()>);
 pub struct Session(Weak<()>);
 
 #[derive(Debug)]
-pub struct RuntimeError;
+pub struct RuntimeError(std::io::Error);
 
 impl RuntimeError {
     pub fn code(&self) -> ErrorCode {
@@ -44,7 +87,13 @@ impl RuntimeError {
 
 impl fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("test runtime error")
+        write!(f, "test runtime error: {}", self.0)
+    }
+}
+
+impl std::error::Error for RuntimeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
     }
 }
 
@@ -98,6 +147,26 @@ fn runtime() -> (RuntimeHandle, Weak<()>) {
         RuntimeHandle::open(&Bundle::open(path).unwrap(), owner).unwrap(),
         weak,
     )
+}
+
+#[test]
+fn runtime_errors_preserve_the_source_chain_and_diagnostics() {
+    use std::error::Error as _;
+
+    let runtime = RuntimeError(std::io::Error::other("test backend error"));
+    let message = runtime.to_string();
+    let error = Error::Runtime(runtime);
+    let source = error
+        .source()
+        .unwrap()
+        .downcast_ref::<RuntimeError>()
+        .unwrap();
+    assert_eq!(error.code(), source.code());
+    assert_eq!(error.phase(), source.phase());
+    assert_eq!(error.to_string(), message);
+    assert_eq!(source.source().unwrap().to_string(), "test backend error");
+    assert!(Error::Closed.source().is_none());
+    assert!(Error::Lock.source().is_none());
 }
 
 #[test]
