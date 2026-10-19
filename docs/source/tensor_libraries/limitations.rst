@@ -20,9 +20,8 @@ result that could silently become a graph constant. For example:
    state = annotate.input_tensors("node", {"state": raw_state})
    spacing = np.spacing(state)  # no compatibility implementation
 
-The diagnostic identifies the NumPy operation and node. There is no fallback
-to the old translation tables. Ordinary arrays and inactive traced arrays
-continue to use native NumPy behavior.
+The diagnostic identifies the NumPy operation and node. Ordinary arrays and
+inactive traced arrays continue to use native NumPy behavior.
 
 Support is specific to the arguments and dtypes being captured:
 
