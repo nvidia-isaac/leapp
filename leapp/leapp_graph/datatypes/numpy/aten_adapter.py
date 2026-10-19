@@ -19,6 +19,8 @@ import torch._numpy as tnp
 from torch.fx.experimental.proxy_tensor import make_fx
 from torch.fx.node import map_arg
 
+from leapp.utils.logging import _get_logger
+
 from ..traced_data import TracedData
 from .overrides import NUMPY_OVERRIDES
 
@@ -44,37 +46,100 @@ def _implementations():
     return mappings
 
 
+class _NumpyCaptureError(Exception):
+    """A valid NumPy call whose tensor implementation could not be captured."""
+
+
+class _NumpyMutationError(NotImplementedError):
+    """An unsupported mutation cannot be treated as an unused pure branch."""
+
+
+def _failed_numpy_capture(message, *inputs):
+    """Dependency marker; live markers are rejected before graph export."""
+    raise NotImplementedError(message)
+
+
 def capture_numpy_call(source, func, args, kwargs):
-    """Return traced outputs, or fail before adding an invalid lowering."""
+    """Log recoverable translation errors and retain their output dependencies."""
     label = f"NumPy {func.__module__}.{func.__name__} in node {source.context}"
     implementation = NUMPY_OVERRIDES.get(func, _implementations().get(func))
-    if implementation is None:
-        raise NotImplementedError(f"{label}: no torch._numpy lowering")
-    # Bind the compatibility signature so positional out/overwrite_input are
-    # rejected too, before either implementation can mutate user storage.
-    bound = inspect.signature(implementation).bind(*args, **kwargs)
-    if bound.arguments.get("out") is not None or bound.arguments.get(
-        "overwrite_input", False
-    ):
-        raise NotImplementedError(
-            f"{label}: out mutation is unsupported by the ATen adapter"
-        )
-    # A NumPy call may itself be a mutator (copyto, put, etc.). Never
-    # execute an unvalidated implementation against the caller's storage.
+    # Real NumPy errors are application errors, not recoverable capture failures.
+    # Probe on copies so unsupported mutations cannot touch caller storage.
     native_args, native_kwargs = TracedData._map_structure(
         TracedData.unwrap_traced_data((args, kwargs)),
         lambda x: x.copy() if isinstance(x, np.ndarray) else x,
     )
     expected = func(*native_args, **native_kwargs)
-    # Dtype metadata is static under the existing LEAPP input contract.
     if func is np.result_type:
         return expected
 
+    try:
+        if implementation is None:
+            try:
+                native_bound = inspect.signature(func).bind(*args, **kwargs).arguments
+            except (TypeError, ValueError):
+                native_bound = kwargs
+            positional_out = isinstance(func, np.ufunc) and any(
+                value is not None for value in args[func.nin : func.nin + func.nout]
+            )
+            if (
+                expected is None
+                or native_bound.get("out") is not None
+                or native_bound.get("overwrite_input", False)
+                or (func is np.nan_to_num and not native_bound.get("copy", True))
+                or positional_out
+            ):
+                raise NotImplementedError(f"{label}: untraced mutation is unsupported")
+            raise _NumpyCaptureError(f"{label}: no torch._numpy lowering")
+        try:
+            bound = inspect.signature(implementation).bind(*args, **kwargs)
+        except TypeError as exc:
+            raise _NumpyCaptureError(f"{label}: unsupported signature: {exc}") from exc
+        if (
+            bound.arguments.get("out") is not None
+            or bound.arguments.get("overwrite_input", False)
+            or (func is np.nan_to_num and not bound.arguments.get("copy", True))
+            or expected is None
+        ):
+            raise NotImplementedError(
+                f"{label}: mutation is unsupported by the ATen adapter"
+            )
+        return _capture_numpy_call(
+            source, func, args, kwargs, implementation, expected, label
+        )
+    except _NumpyCaptureError as exc:
+        message = str(exc)
+        _get_logger().error(
+            f"{message}. Continuing eager execution; export requires this operation "
+            "to be independent of the declared outputs."
+        )
+        # A traced marker preserves dependency information until output pruning.
+        # Returning a plain ndarray here could freeze a live failed computation.
+        expected = func(
+            *TracedData.unwrap_traced_data(args),
+            **TracedData.unwrap_traced_data(kwargs),
+        )
+        inputs = []
+        TracedData._map_structure(
+            (args, kwargs),
+            lambda x: inputs.append(x.proxy) if isinstance(x, TracedData) else x,
+        )
+
+        def wrap(value):
+            proxy = source._context.tracer.create_proxy(
+                "call_function", _failed_numpy_capture, (message, *inputs), {}
+            )
+            proxy.node.meta["leapp_capture_error"] = message
+            return source._new(np.asarray(value), proxy)
+
+        return TracedData._map_structure(expected, wrap)
+
+
+def _capture_numpy_call(source, func, args, kwargs, implementation, expected, label):
     inputs = []
     TracedData._map_structure(
         (args, kwargs), lambda x: inputs.append(x) if isinstance(x, TracedData) else x
     )
-    examples = tuple(torch.from_numpy(np.array(x.data, copy=True)) for x in inputs)
 
     def lower(*tensors):
         values = iter(tensors)
@@ -99,10 +164,17 @@ def capture_numpy_call(source, func, args, kwargs):
         )
 
     try:
+        examples = tuple(torch.from_numpy(np.array(x.data, copy=True)) for x in inputs)
         captured = make_fx(lower)(*examples)
         # Composite ATen kernels (e.g. isclose) introduce temporary mutations
         # during decomposition. Functionalize the decomposed graph itself.
         captured = make_fx(torch.func.functionalize(captured))(*examples)
+        for node in captured.graph.nodes:
+            if (
+                isinstance(node.target, torch._ops.OpOverload)
+                and node.target._schema.is_mutable
+            ):
+                raise _NumpyMutationError(f"{label}: mutable operation: {node.target}")
         actual = captured(*examples)
         actual_leaves, expected_leaves = [], []
         TracedData._map_structure(actual, actual_leaves.append)
@@ -120,10 +192,11 @@ def capture_numpy_call(source, func, args, kwargs):
             if node.op == "call_function" and node.target is not operator.getitem:
                 if not isinstance(node.target, torch._ops.OpOverload):
                     raise ValueError(f"non-ATen operation: {node.target}")
-                if node.target._schema.is_mutable:
-                    raise ValueError(f"mutable operation: {node.target}")
+
+    except _NumpyMutationError:
+        raise
     except Exception as exc:
-        raise NotImplementedError(
+        raise _NumpyCaptureError(
             f"{label}: ATen capture/parity check failed: {exc}"
         ) from exc
 

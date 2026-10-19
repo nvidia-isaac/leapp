@@ -16,6 +16,7 @@ import numpy as np
 import onnxruntime as ort
 import torch
 
+from leapp.utils.logging import _get_logger
 from leapp.leapp_graph.traced_node import TracedTensorNode
 from leapp.leapp_graph.datatypes import TracedNpArray
 from leapp.leapp_graph.datatypes.patching import TracingPatcher
@@ -1392,24 +1393,6 @@ def test_nanmean_nan_slices_and_explicit_dtype(axis):
         )
 
 
-@pytest.mark.parametrize(
-    "fn",
-    [
-        lambda x: np.sort(x, stable=True),
-        lambda x: np.argsort(x, kind="mergesort"),
-        lambda x: np.pad(x, 1, mode="reflect"),
-        lambda x: np.pad(x, 1, constant_values=(1, 2)),
-    ],
-)
-def test_override_rejects_unimplemented_signatures(fn):
-    ctx = TracedTensorNode(name="unsupported_override", node_index=0)
-    x = ctx.create_input(np.array([3.0, 1.0, 2.0]), name="x")
-    before = tuple(ctx.graph.nodes)
-    with pytest.raises(NotImplementedError):
-        fn(x)
-    assert tuple(ctx.graph.nodes) == before
-
-
 def test_structured_outputs_and_constant_snapshot():
     constant = np.array([1.0, 2.0, 3.0], dtype=np.float32)
     fn = lambda x: (np.cross(x, constant), *np.gradient(x))
@@ -1421,20 +1404,69 @@ def test_structured_outputs_and_constant_snapshot():
         torch.testing.assert_close(actual, torch.from_numpy(reference))
 
 
+@pytest.mark.parametrize("backend", ["fx", "jit", "pt2"])
 @pytest.mark.parametrize(
     "fn, message",
     [
         (np.fft.fft, "dtype"),
         (np.spacing, "no torch._numpy lowering"),
         (lambda x: np.allclose(x, x), "ATen capture/parity check failed"),
+        (lambda x: np.sort(x, stable=True), "sorting"),
+        (lambda x: np.argsort(x, kind="mergesort"), "sorting"),
+        (lambda x: np.pad(x, 1, mode="reflect"), "pad"),
+        (lambda x: np.pad(x, 1, constant_values=(1, 2)), "pad"),
+        (lambda x: np.cbrt(x, order="C"), "unsupported signature"),
     ],
 )
-def test_unsupported_capture_is_explicit_and_atomic(fn, message):
-    ctx = TracedTensorNode(name="unsupported", node_index=0)
+def test_failed_capture_on_unused_branch(fn, message, backend, monkeypatch):
+    errors = []
+    monkeypatch.setattr(_get_logger(), "error", errors.append)
+    ctx = TracedTensorNode(name="unused_failure", node_index=0)
+    sample = np.array([3.0, 1.0, 2.0], dtype=np.float32)
+    x = ctx.create_input(sample.copy(), name="x")
+    unused = fn(x)
+    np.testing.assert_equal(unused.data, fn(sample))
+    # Consumers of a failed branch can also be discarded with that branch.
+    unused + 1
+    assert any(message in error and "unused_failure" in error for error in errors)
+    ctx.compile_trace({"y": np.sin(x)})
+    assert not any("leapp_capture_error" in node.meta for node in ctx.graph.nodes)
+    model = ctx.m
+    if backend == "jit":
+        model = torch.jit.script(model)
+    elif backend == "pt2":
+        model = torch.export.export(
+            model, (torch.from_numpy(sample),), strict=False
+        ).module()
+    for changed in (sample, sample + 2, -sample):
+        _assert_numpy_output(model(torch.from_numpy(changed)), np.sin(changed))
+
+
+@pytest.mark.parametrize("dependent", [False, True])
+@pytest.mark.parametrize("fn", [np.spacing, lambda x: np.pad(x, 1, mode="reflect")])
+def test_failed_capture_in_output_tree_is_rejected(fn, dependent, monkeypatch):
+    errors = []
+    monkeypatch.setattr(_get_logger(), "error", errors.append)
+    ctx = TracedTensorNode(name="required_failure", node_index=0)
+    x = ctx.create_input(np.array([3.0, 1.0, 2.0], dtype=np.float32), name="x")
+    failed = fn(x)
+    output = np.sin(failed) if dependent else failed
+    assert errors
+    with pytest.raises(
+        NotImplementedError, match="declared output depends on a failed capture"
+    ):
+        ctx.compile_trace({"y": output})
+
+
+def test_native_numpy_errors_still_propagate(monkeypatch):
+    errors = []
+    monkeypatch.setattr(_get_logger(), "error", errors.append)
+    ctx = TracedTensorNode(name="invalid_numpy", node_index=0)
     x = ctx.create_input(np.ones(3, dtype=np.float32), name="x")
     before = tuple(ctx.graph.nodes)
-    with pytest.raises(NotImplementedError, match=message):
-        fn(x)
+    with pytest.raises(ValueError):
+        np.reshape(x, (2, 2))
+    assert not errors
     assert tuple(ctx.graph.nodes) == before
 
 
@@ -1451,11 +1483,33 @@ def test_reject_out_before_mutating_storage(positional):
     np.testing.assert_array_equal(out, np.zeros(2))
 
 
+@pytest.mark.parametrize("positional", [False, True])
+def test_missing_ufunc_rejects_out_before_mutating_storage(positional):
+    ctx = TracedTensorNode(name="missing_out", node_index=0)
+    x = ctx.create_input(np.array([2.0, 1.0, 3.0]), name="x")
+    out = np.zeros(3)
+    with pytest.raises(NotImplementedError, match="mutation"):
+        if positional:
+            np.spacing(x, out)
+        else:
+            np.spacing(x, out=out)
+    np.testing.assert_array_equal(out, np.zeros(3))
+
+
+def test_reject_overwrite_input_before_changing_storage():
+    ctx = TracedTensorNode(name="overwrite", node_index=0)
+    original = np.array([3.0, 1.0, 2.0], dtype=np.float32)
+    x = ctx.create_input(original, name="x")
+    with pytest.raises(NotImplementedError, match="mutation"):
+        np.nanmedian(x, overwrite_input=True)
+    np.testing.assert_array_equal(original, [3.0, 1.0, 2.0])
+
+
 def test_reject_mutating_call_before_changing_input():
     ctx = TracedTensorNode(name="mutation", node_index=0)
     original = np.array([np.nan, 1.0], dtype=np.float32)
     x = ctx.create_input(original, name="x")
-    with pytest.raises(NotImplementedError, match="ATen capture/parity check failed"):
+    with pytest.raises(NotImplementedError, match="mutation"):
         np.nan_to_num(x, copy=False)
     np.testing.assert_array_equal(original, [np.nan, 1.0])
 

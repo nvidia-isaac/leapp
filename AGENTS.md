@@ -184,6 +184,15 @@ User-facing integration recipes belong here, not in this file.
 
 ## Guardrails when changing behavior
 
+- Tracing can enter branches that are not needed to produce the declared
+  outputs. Report recoverable capture or translation failures with
+  `_get_logger().error(...)`, which logs without raising; do not abort the
+  entire trace merely because such a branch cannot be captured. Keep this
+  distinction from `_get_logger().fatal(...)`, which raises. Test that an
+  unsupported operation on an unused branch does not prevent exporting the
+  supported output graph. Preserve failed-operation dependencies until output
+  pruning, and reject export if a declared output depends on a failed capture;
+  test direct and downstream dependencies separately.
 - Prefer extending `TracedData` once (`_map_structure`, index lowering,
   port preserve/clear) over copying logic into tensor, NumPy, and Warp
   classes. Warp value semantics live on `TracedWpArray`; `WarpPatchBackend`

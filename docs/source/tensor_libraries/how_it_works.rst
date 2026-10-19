@@ -30,9 +30,11 @@ ATen operations. The exported graph contains tensor operations, with no
 ``torch._numpy`` arrays or calls needed during replay. LEAPP still executes
 real NumPy for the eager result, including its view/storage behavior.
 
-If capture or validation fails, the call raises an error during active
-tracing. After the owning node finishes tracing, its arrays use native NumPy
-behavior again.
+A recoverable capture or validation failure logs an error and continues eager
+execution. LEAPP retains the failed operation's dependencies until it knows
+which computations produce the declared outputs. Unused failures are pruned;
+a failure needed by an output prevents export. After the owning node finishes
+tracing, its arrays use native NumPy behavior again.
 
 For example, this preprocessing node stays in NumPy at the call site:
 
@@ -82,7 +84,7 @@ They cover specific semantic or export differences:
      - Supplies the missing reduction and promotes integer inputs to float64.
    * - ``np.sort``, ``np.argsort``
      - Uses a fixed-size TopK lowering for export. Stable and structured sorting
-       are rejected.
+       cannot be captured.
 
 What gets traced
 ================

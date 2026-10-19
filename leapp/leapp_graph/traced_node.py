@@ -808,6 +808,16 @@ class TracedTensorNode(LeappNode):
         for output_node in output_nodes:
             mark_used(output_node)
 
+        # Capture can fail in work unrelated to the declared outputs. Only a
+        # failure that survives the output dependency traversal blocks export.
+        for node in self.graph.nodes:
+            if node in used_nodes and (error := node.meta.get("leapp_capture_error")):
+                _get_logger().fatal(
+                    f"Cannot export node '{self.name}': a declared output depends on "
+                    f"a failed capture. {error}",
+                    error_type=NotImplementedError,
+                )
+
         # Remove unused nodes (both placeholders and call_function nodes)
         nodes_to_remove = []
         for node in self.graph.nodes:

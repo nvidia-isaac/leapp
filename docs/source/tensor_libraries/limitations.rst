@@ -8,20 +8,31 @@ does not intercept every way that Python or a native extension can consume an
 array. Calls that fail capture and values that escape the tracing hooks need
 different handling.
 
-Unsupported calls stop active capture
-=====================================
+Capture failures are checked against outputs
+============================================
 
-An intercepted call with no implementation raises ``NotImplementedError``.
-Capture and parity failures also raise an error instead of returning an eager
-result that could silently become a graph constant. For example:
+A valid NumPy call can fail ATen capture because its implementation is missing,
+its signature is unsupported, or parity validation fails. LEAPP logs a
+recoverable error and continues eager execution. Tracing can therefore pass
+through work that is not needed by the declared outputs:
 
 .. code-block:: python
 
    state = annotate.input_tensors("node", {"state": raw_state})
-   spacing = np.spacing(state)  # no compatibility implementation
+   spacing = np.spacing(state)  # logs a capture error; NumPy still runs
+   result = np.sin(state)
+   annotate.output_tensors("node", {"result": result}, export_with="jit")
+
+The unused ``spacing`` computation is pruned. If ``spacing`` itself, or a
+traced computation that uses it, is declared as an output, graph finalization
+raises ``NotImplementedError`` with the original capture diagnostic. Retaining
+that dependency prevents a failed operation from silently becoming a constant
+in an otherwise supported output graph.
 
 The diagnostic identifies the NumPy operation and node. Ordinary arrays and
-inactive traced arrays continue to use native NumPy behavior.
+inactive traced arrays continue to use native NumPy behavior. Invalid NumPy
+calls still raise their native exceptions. Unsupported mutations still stop
+capture: a write can affect a required input even if its return value is unused.
 
 Support is specific to the arguments and dtypes being captured:
 
@@ -29,12 +40,12 @@ Support is specific to the arguments and dtypes being captured:
   caller storage. General in-place NumPy functions are not supported by this
   adapter. Indexed assignment has a separate tracing path.
 * Padding accepts static widths, constant mode, and a scalar fill value.
-  Stable or structured sorting is rejected.
+  Stable or structured sorting cannot be captured.
 * Direct ufunc calls are supported through the adapter; methods such as
   ``np.add.reduce`` are not. Use the supported reduction function where
   appropriate, such as ``np.sum``.
 * Shape, dtype, or numerical differences from NumPy cause a parity failure.
-  For example, float32 FFT capture with NumPy 2.5 and PyTorch 2.14 is rejected
+  For example, float32 FFT capture with NumPy 2.5 and PyTorch 2.14 fails parity
   because NumPy returns complex64 while the compatibility layer returns
   complex128. FFT dtype handling remains unresolved.
 

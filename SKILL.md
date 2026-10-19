@@ -155,7 +155,7 @@ Calls in NumPy, SciPy, scikit-learn, scikit-image, OpenCV, or other libraries **
 
 | Hazard | What the agent should do |
 |--------|--------------------------|
-| Unsupported NumPy/native operation | Intercepted NumPy calls use validated ATen capture and raise on missing lowerings or parity failures. Calls that bypass the hooks can still return plain values that become constants. Patch unsupported computation and compare new inputs against the original. |
+| Unsupported NumPy/native operation | Recoverable NumPy capture failures log errors and continue eager execution. Unused failures are pruned; a failed dependency in the declared output graph blocks export. Unsupported mutations remain immediate errors. Calls that bypass the hooks can still return plain values that become constants. Patch unsupported computation and compare new inputs against the original. |
 | `.item()`, `.tolist()`, `float()`, `int()` | Audit explicitly: Torch extraction can be silent. Keep dynamic data in traced operations; logs alone cannot prove correctness. |
 | NumPy indexing down to a scalar | Keep an array dimension to preserve runtime dependence. Constant NumPy scalar operands are accepted, but cannot restore a dependency lost by indexing. |
 | NumPy negative-stride slicing | Static basic reads use `flip` or normalized indices with `index_select`. Runtime bounds, mixed advanced indices, reverse assignment, and mutation through reversed views need separate support. |

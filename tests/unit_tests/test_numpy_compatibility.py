@@ -260,6 +260,7 @@ def test_public_lifecycle_export_and_replay(tmp_path):
     leapp.start(name="numpy_aten", save_path=str(tmp_path))
     try:
         traced = leapp.annotate.input_tensors("norm", {"x": x})
+        np.spacing(traced)  # A failed, unused branch must not prevent export.
         result = np.linalg.norm(traced, axis=-1)
         leapp.annotate.output_tensors("norm", {"y": result}, export_with="jit")
     finally:
