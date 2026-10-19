@@ -37,6 +37,12 @@ struct PortSpec {
 /// declaration.
 using PortMap = std::vector<std::pair<std::string, std::optional<PortSpec>>>;
 
+/// @brief Unqualified model port names in declaration order, including duplicates.
+struct ModelIO {
+  std::vector<std::string> inputs;
+  std::vector<std::string> outputs;
+};
+
 /// @brief Shared immutable bundle snapshot and retained C++ inspection values.
 /// Getter references survive while any copy retains the snapshot. Concurrent
 /// reads are safe; assignment or destruction of the same handle needs
@@ -52,6 +58,12 @@ class Bundle {
 
   const std::filesystem::path& yaml_path() const;
   const std::vector<std::string>& model_names() const;
+
+  /// @brief Borrow input/output names, including internal ports. An absent model
+  /// returns nullptr; a model with no ports has empty lists. The pointer survives
+  /// while any Bundle copy retains the snapshot.
+  const ModelIO* model_io(std::string_view node) const;
+
   const PortMap& pipeline_inputs() const;
   const PortMap& pipeline_outputs() const;
   const Metadata& pipeline_configs() const;

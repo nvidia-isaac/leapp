@@ -55,6 +55,17 @@ def test_ordered_inspection_and_detached_values(bundle_path):
     assert spec.shape == [3]
 
 
+def test_model_io_returns_detached_internal_port_names(bundle_path):
+    bundle = lr.Bundle.open(bundle_path)
+    expected = (["features", "state"], ["actions", "next_state"])
+    inputs, outputs = bundle.model_io(model_name="a_policy")
+    assert (inputs, outputs) == expected
+    assert bundle.model_io("absent") is None
+    inputs.clear()
+    outputs.append("extra")
+    assert bundle.model_io("a_policy") == expected
+
+
 def test_custom_backend_and_unresolved_input(bundle_path):
     bundle_path.write_text(
         YAML.replace("backend: pt2", "backend: custom").replace(

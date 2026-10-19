@@ -47,6 +47,12 @@ for output in bundle.pipeline_outputs() {
 # Ok::<(), leapp_runtime::BundleError>(())
 ```
 
+`model_io(node)` returns `Option<(Vec<&str>, Vec<&str>)>`: input names followed
+by output names, including internal ports. Names are unqualified and borrowed
+from the bundle, with declaration order and duplicates preserved. An absent
+model returns `None`; a model with no ports returns two empty lists. Use these
+names with `input_info(node, port)` and `output_info(node, port)` for descriptors.
+
 `Bundle` is an immutable, reference-counted snapshot. Clones share the snapshot;
 inspection is safe across threads. Getters preserve declaration order and
 unknown metadata. Exporter parameters retain their original paths and backend

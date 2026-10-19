@@ -100,6 +100,33 @@ fn inspection_preserves_order_and_metadata() {
 }
 
 #[test]
+fn model_io_preserves_internal_port_order_and_distinguishes_absent_models() {
+    let mut f = Fixture::new();
+    let model = &mut f.value["models"]["a_policy"];
+    for direction in ["inputs", "outputs"] {
+        let ports = model[direction].as_sequence_mut().unwrap();
+        ports.push(ports[0].clone());
+    }
+    let mut empty = model.clone();
+    empty["inputs"] = value("[]");
+    empty["outputs"] = value("[]");
+    f.value["models"]["empty"] = empty;
+
+    let b = f.open();
+    let (inputs, outputs) = b.model_io("a_policy").unwrap();
+    assert_eq!(inputs, ["features", "state", "features"]);
+    assert_eq!(outputs, ["actions", "next_state", "actions"]);
+    for name in inputs {
+        assert!(b.input_info("a_policy", name).is_some());
+    }
+    for name in outputs {
+        assert!(b.output_info("a_policy", name).is_some());
+    }
+    assert_eq!(b.model_io("empty"), Some((vec![], vec![])));
+    assert!(b.model_io("absent").is_none());
+}
+
+#[test]
 fn getters_preserve_unknown_fields_at_each_level() {
     let mut f = Fixture::new();
     f.value["project"] =

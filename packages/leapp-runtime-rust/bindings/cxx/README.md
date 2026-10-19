@@ -32,7 +32,19 @@ if (!status.ok()) {
 for (const auto& [name, spec] : bundle.pipeline_outputs()) {
   // Inspect the optional PortSpec and its typed Metadata.
 }
+for (const auto& model : bundle.model_names()) {
+  const auto* io = bundle.model_io(model);
+  for (const auto& name : io->inputs) {
+    const auto* spec = bundle.input_info(model, name);
+    // Inspect the internal input descriptor.
+  }
+}
 ```
+
+`model_io(node)` returns a retained `const ModelIO*` with `inputs` and `outputs`
+name lists, including internal ports. Names are unqualified; declaration order
+and duplicates are preserved. An absent model returns `nullptr`, while a model
+with no ports has empty lists.
 
 `Bundle` copies retain a shared immutable snapshot. Getter references remain
 valid while any copy owns the snapshot. Concurrent reads are safe; assignment

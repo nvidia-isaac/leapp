@@ -40,6 +40,20 @@ pub fn bundle_models(bundle: &BundleHandle) -> Vec<String> {
         .unwrap_or_default()
 }
 
+pub fn bundle_model_io(bundle: &BundleHandle, node: &[u8]) -> ffi::ModelIoData {
+    let io = bundle
+        .0
+        .as_ref()
+        .and_then(|bundle| bundle.model_io(std::str::from_utf8(node).ok()?));
+    let present = io.is_some();
+    let (inputs, outputs) = io.unwrap_or_default();
+    ffi::ModelIoData {
+        present,
+        inputs: inputs.into_iter().map(String::from).collect(),
+        outputs: outputs.into_iter().map(String::from).collect(),
+    }
+}
+
 pub fn bundle_ports(bundle: &BundleHandle, inputs: bool) -> Vec<ffi::PortName> {
     let Some(b) = &bundle.0 else {
         return Vec::new();

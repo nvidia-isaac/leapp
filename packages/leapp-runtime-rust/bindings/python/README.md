@@ -17,7 +17,16 @@ from leapp_runtime import Bundle, BundleError
 bundle = Bundle.open("export/policy.yaml")
 for name, spec in bundle.pipeline_outputs().items():
     print(name, spec.dtype, spec.shape)
+for model in bundle.model_names():
+    inputs, outputs = bundle.model_io(model)
+    for name in inputs:
+        print(model, name, bundle.input_info(model, name).shape)
 ```
+
+`model_io(model_name)` returns a tuple of detached input and output name lists,
+including internal ports. Names are unqualified; declaration order and duplicates
+are preserved. An absent model returns `None`, while a model with no ports returns
+`([], [])`.
 
 Metadata and port descriptors are detached from the immutable Rust snapshot.
 Editing returned metadata does not change later inspection results. Mappings

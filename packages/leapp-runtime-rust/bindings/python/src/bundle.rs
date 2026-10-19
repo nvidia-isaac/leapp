@@ -151,6 +151,17 @@ impl PyBundle {
             .collect()
     }
 
+    /// Detached input/output name lists in declaration order, or None if absent.
+    /// Includes internal ports and preserves duplicate, unqualified names.
+    fn model_io(&self, model_name: &str) -> Option<(Vec<String>, Vec<String>)> {
+        self.inner.model_io(model_name).map(|(inputs, outputs)| {
+            (
+                inputs.into_iter().map(String::from).collect(),
+                outputs.into_iter().map(String::from).collect(),
+            )
+        })
+    }
+
     /// Ordered mapping of qualified input names to detached port descriptors.
     fn pipeline_inputs<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let result = PyDict::new(py);

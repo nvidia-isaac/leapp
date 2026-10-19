@@ -154,6 +154,17 @@ struct Bundle::Data {
       parameters.emplace(name,
                          Field(*handle, wire::MetadataField::Parameters, name));
       models.emplace(name, Field(*handle, wire::MetadataField::Model, name));
+      const auto io = wire::bundle_model_io(*handle, Bytes(name));
+      if (io.present) {
+        ModelIO ports;
+        for (const auto& input : io.inputs) {
+          ports.inputs.push_back(String(input));
+        }
+        for (const auto& output : io.outputs) {
+          ports.outputs.push_back(String(output));
+        }
+        model_ports.emplace(name, std::move(ports));
+      }
     }
     inputs = Ports(true);
     outputs = Ports(false);
@@ -209,6 +220,7 @@ struct Bundle::Data {
   Metadata pipeline;
   std::map<std::string, Metadata, std::less<>> parameters;
   std::map<std::string, Metadata, std::less<>> models;
+  std::map<std::string, ModelIO, std::less<>> model_ports;
   // Map nodes never move; returned descriptor addresses survive later lookups.
   mutable std::mutex mutex;
   mutable std::map<std::tuple<std::string, std::string, bool>,
@@ -237,6 +249,14 @@ const std::filesystem::path& Bundle::yaml_path() const {
 const std::vector<std::string>& Bundle::model_names() const {
   static const std::vector<std::string> empty;
   return data_ ? data_->names : empty;
+}
+
+const ModelIO* Bundle::model_io(std::string_view node) const {
+  if (!data_) {
+    return nullptr;
+  }
+  const auto it = data_->model_ports.find(node);
+  return it == data_->model_ports.end() ? nullptr : &it->second;
 }
 
 const PortMap& Bundle::pipeline_inputs() const {

@@ -41,6 +41,7 @@ int main(int argc, char** argv) {
   leapp::Bundle empty;
   Check(!empty.is_valid() && empty.model_names().empty(), "empty handle");
   Check(empty.input_info("missing", "port") == nullptr, "empty descriptor");
+  Check(empty.model_io("missing") == nullptr, "empty model I/O");
   Check(!leapp::Bundle::Open(path, nullptr).ok(), "null destination");
   auto status = leapp::Bundle::Open(directory / "absent.yaml", &empty);
   Check(status.code() == leapp::ErrorCode::kNotFound, "missing YAML category");
@@ -54,6 +55,11 @@ int main(int argc, char** argv) {
   Check(bundle.model_names() ==
             std::vector<std::string>({"z_observation", "a_policy"}),
         "model declaration order");
+  const auto* io = bundle.model_io("a_policy");
+  Check(io && io->inputs == std::vector<std::string>({"features", "state"}) &&
+            io->outputs == std::vector<std::string>({"actions", "next_state"}),
+        "model I/O includes internal ports in declaration order");
+  Check(bundle.model_io("absent") == nullptr, "absent model I/O");
   Check(bundle.pipeline_inputs().size() == 1, "pipeline inputs");
   Check(bundle.pipeline_outputs().size() == 3, "pipeline outputs");
   Check(bundle.pipeline_outputs()[0].first == "a_policy/next_state",
@@ -85,6 +91,8 @@ int main(int argc, char** argv) {
   auto retained = bundle;
   bundle = {};
   std::filesystem::remove(path);
+  Check(retained.model_io("a_policy") == io && io->inputs.front() == "features",
+        "model I/O lifetime follows the retained snapshot");
   std::vector<std::thread> readers;
   for (int i = 0; i < 4; ++i) {
     readers.emplace_back([retained, port] {

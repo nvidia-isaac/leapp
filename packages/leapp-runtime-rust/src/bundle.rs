@@ -63,6 +63,23 @@ impl Bundle {
             .collect()
     }
 
+    /// Input and output names for a model, including internal ports.
+    ///
+    /// Names are unqualified and borrowed from this snapshot. Both lists preserve
+    /// declaration order and duplicates. An absent model returns `None`; a model
+    /// with no ports returns two empty lists.
+    pub fn model_io(&self, node: &str) -> Option<(Vec<&str>, Vec<&str>)> {
+        let model = self.0.description.models.get(node)?;
+        Some((
+            model.inputs.iter().map(|port| port.name.as_str()).collect(),
+            model
+                .outputs
+                .iter()
+                .map(|port| port.name.as_str())
+                .collect(),
+        ))
+    }
+
     /// Declared input references in order; these need not identify existing ports.
     pub fn pipeline_inputs(&self) -> &[PortRef] {
         &self.0.inputs
