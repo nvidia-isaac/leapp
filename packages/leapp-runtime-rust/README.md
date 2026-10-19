@@ -30,7 +30,7 @@ Python and C++ share the core bundle implementation. The `bindings/common`
 lifecycle source depends on concrete execution types, so it is not a separate
 compiled crate in this inspection-only package. See the
 [common lifecycle sources](bindings/common/README.md) for integration and testing.
-This package has no Triton, CUDA, ONNX Runtime, PyTorch, or NumPy dependency.
+The core inspection crate has no inference SDK or NumPy dependency.
 The C++ binding currently supports Unix platforms (Linux and macOS), using native
 path bytes.
 
@@ -82,21 +82,32 @@ cycles, without initializing a backend. Unsupported execution backends fail
 during conversion; bundle inspection continues to accept custom backend names.
 The model configuration schema targets Triton 2.69.0.
 
+## Native tensor storage
+
+The `leapp-triton` crate owns CPU, pinned-host, and CUDA buffers and provides
+borrowed tensor views and synchronized transfers. It requires Linux, the Triton
+SDK, and the CUDA runtime. Set `TRITON_ROOT` and `CUDA_ROOT` when they are not
+installed under `/opt/tritonserver` and `/usr/local/cuda`. Native dependencies
+must be discoverable through `LD_LIBRARY_PATH`.
+
+```sh
+cargo test --locked -p leapp-triton
+```
+
 ## Build and test
 
 Run from this directory with a Rust toolchain:
 
 ```sh
 cargo test --locked
-cargo check --locked --workspace
-cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo check --locked -p leapp-runtime
+cargo clippy --locked -p leapp-runtime --all-targets -- -D warnings
 cargo fmt --all --check
 ```
 
 The default workspace member is the core crate, including conversion checks and the five common
-lifecycle tests. These tests require no engine or language-binding SDK. Building
-the complete workspace
-also requires a C++20 compiler and Python 3.10 or newer. See
+lifecycle tests. These tests require no engine or language-binding SDK. The complete workspace requires Linux, the native SDKs described above, a
+C++20 compiler, and Python 3.10 or newer. See
 [Python bindings](bindings/python/README.md) and
 [C++ bindings](bindings/cxx/README.md) for installation and binding tests.
 All inspection tests create opaque artifact bytes; no model generation is needed.

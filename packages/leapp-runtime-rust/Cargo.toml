@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [workspace]
-members = ["bindings/python", "bindings/cxx"]
+members = ["src/adapter/triton", "bindings/python", "bindings/cxx"]
 default-members = ["."]
 resolver = "2"
 
