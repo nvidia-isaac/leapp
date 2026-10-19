@@ -155,10 +155,11 @@ Calls in NumPy, SciPy, scikit-learn, scikit-image, OpenCV, or other libraries **
 
 | Hazard | What the agent should do |
 |--------|--------------------------|
-| Unmapped NumPy/native operation | Treat the trace warning as a correctness failure. A plain result mixed back into traced data can become a constant. Patch the operation and compare new inputs against the original. |
+| Unsupported NumPy/native operation | Intercepted NumPy calls use validated ATen capture and raise on missing lowerings or parity failures. Calls that bypass the hooks can still return plain values that become constants. Patch unsupported computation and compare new inputs against the original. |
 | `.item()`, `.tolist()`, `float()`, `int()` | Audit explicitly: Torch extraction can be silent. Keep dynamic data in traced operations; logs alone cannot prove correctness. |
-| NumPy indexing down to a scalar or NumPy scalar operands | Check for loss of array tracing or unsupported operand types. Use a faithful adapter preserving the needed array computation. |
-| NumPy negative-stride slicing, unsupported `astype` dtype | Eager and exported behavior can disagree. Check the online limitations and implement supported equivalent operations within the adapter. |
+| NumPy indexing down to a scalar | Keep an array dimension to preserve runtime dependence. Constant NumPy scalar operands are accepted, but cannot restore a dependency lost by indexing. |
+| NumPy negative-stride slicing | Static basic reads use `flip` or normalized indices with `index_select`. Runtime bounds, mixed advanced indices, reverse assignment, and mutation through reversed views need separate support. |
+| Unsupported `astype` dtype | Eager and exported dtypes can disagree. Use a supported dtype and check replay against the original. |
 | Tensor-dependent Python `if`/`while` or iteration counts | Only the executed path is captured. Use a faithful traceable expression in an adapter where possible; otherwise document the supported domain or external control-flow boundary. Another exporter cannot recover a branch already lost. |
 
 Supported NumPy/Torch conversions such as `torch.from_numpy()` and `.numpy()` can preserve tracing with global patching enabled. Do not rewrite all NumPy code or treat every conversion as a trace break.

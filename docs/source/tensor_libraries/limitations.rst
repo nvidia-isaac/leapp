@@ -2,61 +2,66 @@
 Limitations
 ===========
 
-NumPy tracing records a torch graph from a lookup of equivalent operations.
-Calls that are not in that lookup, and values that leave the NumPy array type,
-are not represented in the exported model. This page covers the cases that
-follow from that.
+NumPy function capture reuses ``torch._numpy`` implementations and checks their
+captured ATen graphs against real NumPy. This expands function coverage, but
+does not intercept every way that Python or a native extension can consume an
+array. Calls that fail capture and values that escape the tracing hooks need
+different handling.
 
-Untraced results become baked-in constants
-==========================================
+Unsupported calls stop active capture
+=====================================
 
-This is the failure to watch for, because nothing stops it.
-
-When a NumPy call is not traced, its result is an ordinary ``np.ndarray`` with
-no link to the graph. If that value is later combined with traced data, LEAPP
-records it the way it records any other plain array: as a **constant**. The
-exported model then returns the value captured during tracing, for every input.
-
-Unmapped calls log a warning and then continue:
-
-.. code-block:: text
-
-   No torch equivalent for numpy function <name>. Operation will not be traced.
-
-Treat that warning as an error.
+An intercepted call with no implementation raises ``NotImplementedError``.
+Capture and parity failures also raise an error instead of returning an eager
+result that could silently become a graph constant. For example:
 
 .. code-block:: python
 
    state = annotate.input_tensors("node", {"state": raw_state})
+   spacing = np.spacing(state)  # no compatibility implementation
 
-   # np.interp has no torch equivalent, so this line is not recorded.
-   calibrated = np.interp(state, CALIB_IN, CALIB_OUT)
+The diagnostic identifies the NumPy operation and node. There is no fallback
+to the old translation tables. Ordinary arrays and inactive traced arrays
+continue to use native NumPy behavior.
 
-   result = state * 0.1 + calibrated
+Support is specific to the arguments and dtypes being captured:
 
-   annotate.output_tensors("node", {"result": result}, export_with="jit")
+* ``out=`` mutation and ``overwrite_input=True`` are rejected before modifying
+  caller storage. General in-place NumPy functions are not supported by this
+  adapter. Indexed assignment has a separate tracing path.
+* Padding accepts static widths, constant mode, and a scalar fill value.
+  Stable or structured sorting is rejected.
+* Direct ufunc calls are supported through the adapter; methods such as
+  ``np.add.reduce`` are not. Use the supported reduction function where
+  appropriate, such as ``np.sum``.
+* Shape, dtype, or numerical differences from NumPy cause a parity failure.
+  For example, float32 FFT capture with NumPy 2.5 and PyTorch 2.14 is rejected
+  because NumPy returns complex64 while the compatibility layer returns
+  complex128. FFT dtype handling remains unresolved.
 
-That node exports without an error. Replay validation passes as well, because
-validation replays the tracing inputs, which are the inputs the constant was
-captured from. The graph is wrong for every other input.
+A successful capture does not establish support for every runtime value,
+shape, device, or export backend. Compare exported results with NumPy on
+changed inputs; validating only the capture sample can miss frozen values.
 
-LEAPP only raises when the untraced value is a node output itself:
+Untraced values can still become constants
+==========================================
 
-.. code-block:: text
+The error policy applies to calls that reach the dispatch hooks. A function
+that accesses the raw buffer or otherwise bypasses those hooks can still
+return an ordinary array with no graph reference. If that result is mixed
+back into traced data, it can be recorded as a constant. Standalone array
+constructors and writes into plain ``np.ndarray`` destinations are not made
+traceable by the ATen adapter.
 
-   output_tensors() for node 'node' received non-traced tensors: {'ndarray'}
-
-.. warning::
-
-   Read the tracing log. An untraced NumPy call in the middle of a node is
-   reported once, as a warning, and never again.
+Declare runtime-dependent values as inputs, keep their computation in traced
+operations, and check replay on different inputs. Intentional plain-array
+constants, such as normalization statistics, remain valid graph operands.
 
 Third-party functions
 =====================
 
-The rule is not "NumPy yes, everything else no". It is whether the function
-decomposes into operations LEAPP can see. A helper written in Python on top of
-traced NumPy calls traces fine, even from another package:
+A helper written in Python on top of supported traced operations can be
+captured even when it comes from another package:
 
 .. code-block:: python
 
@@ -65,11 +70,10 @@ traced NumPy calls traces fine, even from another package:
        scale = np.sqrt(np.mean(centered * centered, axis=-1, keepdims=True))
        return centered / (scale + 1e-6)
 
-Anything that reaches the raw buffer instead is invisible to the tracer, and
-its result feeds the constant-folding case above. That covers compiled
-extensions such as **SciPy**, **OpenCV**, and **numba**, NumPy's own compiled routines
-including ``np.fft``, ``np.linalg.inv``, ``np.interp``, and ``np.pad``, and
-plain Python iteration over array elements.
+Code that accesses the raw buffer, including some SciPy, OpenCV, or numba
+routines, may bypass tracing. Being implemented in native code is not itself
+a reason a NumPy call fails: functions such as ``np.linalg.inv`` and supported
+``np.pad`` calls are intercepted and captured through the compatibility layer.
 
 When a faithful replacement can be expressed in supported operations, use
 :doc:`../guides/patching` to register it for the unsupported module-level
@@ -86,58 +90,48 @@ graph boundary that the deploying runtime has to fill.
 Indexing down to a scalar breaks the chain
 ==========================================
 
-NumPy returns a scalar, not an array, when indexing removes every axis. That
-scalar is a plain ``np.float32``, so tracing stops there. Torch does not have
-this problem, because ``tensor[0]`` is still a tensor.
+NumPy returns a scalar when indexing removes every axis. LEAPP still returns
+that plain scalar, losing its runtime dependency. This remains a separate
+limitation from function capture:
 
 .. code-block:: python
 
-   row = x[0]          # 2-D input: TracedNpArray, one axis left
-   corner = x[0, 0]    # 2-D input: np.float32, no longer traced
+   row = x[0]             # 2-D input: TracedNpArray, one axis left
+   corner = x[0, 0]       # plain NumPy scalar, no longer traced
+   result = x + corner   # corner can become a capture-time constant
 
-   corner = x[0:1, 0:1]  # TracedNpArray, shape (1, 1)
+   corner = x[0:1, 0:1]   # retains an array and its graph reference
 
-Only the keys that reduce to a scalar are affected, so this bites hardest on
-1-D arrays, where ``x[0]`` is already a scalar. Keep at least one axis in the
-key. Slicing that leaves an array behind, including steps, boolean masks,
-index arrays, ``None``, and ``Ellipsis``, is traced normally.
+Keep at least one axis in the index when its value must remain dynamic.
+In contrast, supported reductions such as ``np.mean(x)`` or
+``np.linalg.norm(x)`` can return traced zero-dimensional arrays. Constant
+NumPy scalar operands such as ``np.float32(2.0)`` are also accepted; accepting
+a scalar operand does not restore a dependency already lost by indexing.
 
-Reversed slicing disagrees with the graph
-=========================================
+Reverse slices require static basic indices
+===========================================
 
-``x[::-1]`` is ordinary NumPy but has no torch equivalent, since torch does not
-support negative strides. The eager value is reversed, the recorded graph is
-not, and nothing reports it at trace time. Use an index array instead:
-
-.. code-block:: python
-
-   flipped = x[::-1]                                  # graph is not reversed
-   flipped = x[np.arange(x.shape[0] - 1, -1, -1)]     # traced correctly
-
-``leapp.compile_graph(validate=True)``, the default, does catch this one:
-the exported model disagrees with the traced Python output on the same input.
-
-NumPy scalar types are not valid operands
-=========================================
-
-Python scalars and array constants are recorded as graph values; NumPy's own
-scalar types are not.
+Negative-stride reads are supported for fixed input shapes and static basic
+indices:
 
 .. code-block:: python
 
-   y = x * 2.0                        # ok
-   y = x * np.array(2.0, np.float32)  # ok
-   y = x * np.float32(2.0)            # NotImplementedError during tracing
+   flipped = x[::-1]       # full reversal lowers to torch.flip
+   selected = x[5:0:-2]   # normalized indices lower to torch.index_select
 
-This also arrives indirectly, since many NumPy calls return scalar types. For
-example ``np.linalg.norm(x)`` without an ``axis`` returns a ``np.float32``, so
-``x / np.linalg.norm(x)`` fails on the division rather than on the norm.
+Basic tuples can combine these slices with integers, ``None``, and
+``Ellipsis``. Runtime slice bounds and advanced indices combined with negative
+strides are rejected during capture. Reverse assignment and replay of
+mutations through reversed views are not supported by this read lowering.
+The eager NumPy result still has NumPy view/storage behavior; that alone does
+not establish alias-mutation behavior in the exported graph.
 
 Extracting Python values
 ========================
 
 ``.item()``, ``.tolist()``, ``float()``, and ``int()`` return concrete values
-captured at trace time and drop out of the graph. Each logs a warning.
+captured at trace time and drop out of the graph. ``.item()`` and ``.tolist()``
+log warnings; do not rely on warnings to detect every scalar conversion.
 
 Using an array in a boolean context, such as ``if array.any():``, records only
 the branch taken during tracing and logs an error. LEAPP's capture does not
@@ -150,12 +144,5 @@ Casts are limited to the shared dtypes
 ``astype`` is recorded only for dtypes that exist in both libraries:
 ``float16``, ``float32``, ``float64``, ``int8``, ``int16``, ``int32``,
 ``int64``, ``uint8``, and ``bool``. Any other target dtype casts eagerly, warns,
-and leaves the graph at the original dtype.
-
-Guidance
-========
-
-Keep the NumPy portion of a pipeline to the element-wise, reduction, and shape
-work close to the data source, and cross into torch as early as the pipeline
-allows. That is where NumPy support pays for itself, and it keeps the surface
-that has to be checked small.
+and leaves the graph at the original dtype. This method-level behavior is
+separate from the function adapter's dtype parity checks.
