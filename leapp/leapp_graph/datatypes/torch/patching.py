@@ -10,6 +10,7 @@ import functools
 import torch
 
 from .._attribute_patching import AttributePatchRegistry
+from ..proxy_view import conversion_proxy
 
 
 class TorchPatchBackend:
@@ -61,7 +62,7 @@ class TorchPatchBackend:
             is_traced = is_traced_type(data)
 
             if is_traced:
-                name, context, proxy = data.name, data.context_obj, data.proxy
+                name, context = data.name, data.context_obj
                 raw_data = data.data
             else:
                 raw_data = data
@@ -71,7 +72,9 @@ class TorchPatchBackend:
             if is_traced:
                 if result is raw_data:
                     return data
-                result = as_traced(result, name, context, proxy)
+                result = as_traced(
+                    result, name, context, conversion_proxy(data, result)
+                )
                 # A conversion that keeps shape and dtype presents the same
                 # data, so it also presents the source's boundary identity.
                 if (

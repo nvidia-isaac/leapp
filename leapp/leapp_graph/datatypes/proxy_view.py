@@ -44,24 +44,26 @@ class ProxyView:
     ``proxy`` is ``None`` when the value carries no graph provenance, which is
     the normal state outside an active trace.
 
-    Nested views over a single mutable root are how a mutation through one
-    alias becomes visible to the others; parent links and forward/backward
-    projection are added on this class later. Keeping every carrier behind it
-    now means those additions change this class and the sites that create
-    aliases, not every proxy reader.
-
-    Assigning ``proxy`` means this value was mutated in place. An out-of-place
-    operation produces an independent value and therefore a new ``ProxyView``.
+    During capture the proxy is a stable native tensor handle. Assigning a
+    functional update records a copy into that handle, preserving relationships
+    with existing views until PyTorch functionalizes the complete graph.
+    An independent allocation gets a new cell instead of mutating this one.
 
     The stored cell may itself be a ``ProxyView`` so later nesting can redirect
     through another view without rewriting every carrier that already holds this
     object. Reading ``proxy`` always walks to the underlying ``fx.Proxy``.
     """
 
-    __slots__ = ("_proxy",)
+    __slots__ = ("_proxy", "pending")
 
     def __init__(self, proxy: Optional[Union[Proxy, "ProxyView"]]):
         self._proxy = proxy
+        self.pending = False
+
+    def rebind(self, proxy: Optional[Proxy]) -> None:
+        """Replace provenance at a declaration rather than record a data write."""
+        self._proxy = proxy
+        self.pending = False
 
     @property
     def proxy(self) -> Optional[Proxy]:
@@ -72,6 +74,27 @@ class ProxyView:
 
     @proxy.setter
     def proxy(self, value: Optional[Union[Proxy, "ProxyView"]]) -> None:
+        if self.pending:
+            # A new Warp allocation borrows provenance until its segment
+            # closes; that borrowed handle is not its storage destination.
+            self._proxy = value
+            self.pending = False
+            return
+        old = self.proxy
+        new = value.proxy if isinstance(value, ProxyView) else value
+        if (
+            old is not None
+            and new is not None
+            and old.node.graph is new.node.graph
+            and getattr(old.node.graph, "recording", False)
+        ):
+            if old.node is not new.node:
+                mutation = old.tracer.create_proxy(
+                    "call_method", "copy_", (old, new), {}
+                )
+                mutation.node.meta["leapp_mutation"] = True
+                old.node.graph.requires_functionalization = True
+            return
         self._proxy = value
 
 
@@ -91,17 +114,44 @@ def bind_shared_view(carrier: Any, name: str, context, view: ProxyView) -> None:
     carrier._output_port = None
 
 
-def update_view_proxy(carrier: Any, name: str, context, proxy: Optional[Proxy]) -> None:
+def update_view_proxy(
+    carrier: Any, name: str, context, proxy: Optional[Proxy], *, rebind=False
+) -> None:
     """Write a new proxy into ``carrier``'s existing view after an in-place change."""
     carrier._name = name
     carrier._context = context
-    carrier._proxy_view.proxy = proxy
+    if rebind:
+        carrier._proxy_view.rebind(proxy)
+    else:
+        carrier._proxy_view.proxy = proxy
     carrier._output_port = None
 
 
 def share_view(carrier: Any, source: Any) -> None:
     """Make ``carrier`` use ``source``'s view, name, and context."""
     bind_shared_view(carrier, source.name, source.context_obj, source.proxy_view)
+
+
+def conversion_proxy(source, result):
+    """Preserve independent storage in representation-only conversions.
+
+    Two separate proxy cells may initially hold the same graph value. Native
+    mutation needs an actual graph copy as well when the eager conversion
+    allocated, even if device, dtype and numerical values did not change.
+    """
+    proxy = source.proxy
+    if proxy is None or not source.is_tracing:
+        return proxy
+    before, after = layout_key(source), layout_key(result)
+    if (
+        before is not None
+        and after is not None
+        and (before[0] != after[0] or before[-1] != after[-1])
+    ):
+        return source.context_obj.tracer.create_proxy(
+            "call_function", torch.clone, (proxy,), {}
+        )
+    return proxy
 
 
 def _contiguous_byte_strides(shape: tuple, dtype_name: str) -> tuple:

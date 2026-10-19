@@ -26,6 +26,8 @@ from ..proxy_view import (
     may_adopt_view,
     share_view,
     update_view_proxy,
+    bind_new_view,
+    conversion_proxy,
 )
 from ..traced_data import TracedData
 
@@ -1068,7 +1070,10 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         if isinstance(result, TracedTensor) and result.dtype != self.dtype:
             result = result.to(dtype=self.dtype)
         if isinstance(result, TracedTensor):
-            self._proxy_view.proxy = result.proxy
+            if _mutates_metadata:
+                bind_new_view(self, self.name, self._context, result.proxy)
+            else:
+                self._proxy_view.proxy = result.proxy
         self._output_port = None
         return self
 
@@ -1390,7 +1395,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         if may_adopt_view(self, np_data):
             view, proxy = self.proxy_view, None
         else:
-            view, proxy = None, self.proxy
+            view, proxy = None, conversion_proxy(self, np_data)
         return self.preserve_port(
             as_traced(np_data, self.name, self.context_obj, proxy, view=view)
         )

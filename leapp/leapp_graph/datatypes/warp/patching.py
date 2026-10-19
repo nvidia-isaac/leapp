@@ -68,7 +68,7 @@ from leapp.utils.caller_identity import (
 from leapp.utils.logging import _get_logger
 
 from .._attribute_patching import AttributePatchRegistry
-from ..proxy_view import may_adopt_view
+from ..proxy_view import may_adopt_view, conversion_proxy
 from .cupti_oracle import WarpCudaOracle
 from .session import WarpTraceSession
 from .traced_wp_array import TracedWpArray
@@ -508,7 +508,7 @@ class WarpPatchBackend:
         if may_adopt_view(src, args[0]):
             view, proxy = src.proxy_view, None
         else:
-            view, proxy = None, src.proxy
+            view, proxy = None, conversion_proxy(src, args[0])
         TracedWpArray.make_traced_in_place(
             args[0], src.name, src.context_obj, proxy, view=view
         )

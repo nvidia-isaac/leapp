@@ -95,6 +95,15 @@ torch layout, so a logical ``(2, 4)`` array of ``wp.vec3`` is recorded as a
 Heterogeneous ``@wp.struct`` arrays have no such layout and are rejected with
 ``Unsupported dtype``.
 
+Strided segment boundaries
+==========================
+
+View mutation tracking does not add strided buffer support to APIC replay.
+A non-contiguous view, such as a stepped slice, may require a storage span
+larger than its logical element count. Such views are not supported as shared
+Warp segment boundaries. Use a contiguous copy and explicitly assign its
+result back into the original view when that update is needed.
+
 A Warp call cannot span two nodes
 =================================
 

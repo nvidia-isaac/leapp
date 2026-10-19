@@ -1015,15 +1015,13 @@ class TestNumpySharedMemory(LEAPPFunctionalTestBase):
     def test_torch_mutation_reaches_the_numpy_carrier(self):
         """The reverse direction: a Torch write is visible through NumPy.
 
-        Asserted on provenance rather than through an export, because reading
-        the mutated value back out of the NumPy carrier is the same shared-cell
-        property the test above already drives end to end.
+        Validate exported behavior: native view handles remain stable while
+        functionalization resolves their recorded mutation.
         """
         leapp.start(name=self.TEST_GRAPH_NAME)
         obs = annotate.input_tensors("policy", {"obs": torch.tensor([-1.0, 2.0, -3.0])})
 
         np_view = obs.numpy()
-        placeholder_proxy = obs.proxy
         torch.relu_(obs)
 
         self.assertIs(
@@ -1031,10 +1029,12 @@ class TestNumpySharedMemory(LEAPPFunctionalTestBase):
             np_view.proxy_view,
             "the Torch mutation replaced the root instead of its proxy",
         )
-        self.assertIsNot(
-            placeholder_proxy,
-            np_view.proxy,
-            "the NumPy carrier still reports the pre-mutation proxy",
+        annotate.output_tensors("policy", {"action": np_view * 2}, export_with="jit")
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+        self.verify_inference_manager(
+            source_inputs={"policy/obs": torch.tensor([-4.0, 5.0, -6.0])},
+            source_outputs={"policy/action": torch.tensor([0.0, 10.0, 0.0])},
         )
 
 
