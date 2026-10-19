@@ -82,6 +82,25 @@ cycles, without initializing a backend. Unsupported execution backends fail
 during conversion; bundle inspection continues to accept custom backend names.
 The model configuration schema targets Triton 2.69.0.
 
+## Embedded Triton
+
+The `triton` feature enables the native server adapter. It loads generated
+repositories and performs synchronous inference with exact output placement.
+Unreferenced output allocations can be reused; retained tensors keep their
+storage, and exporting a raw pointer excludes that allocation from reuse.
+Server shutdown precedes repository cleanup. The runtime checks that the loaded
+Triton version is 2.69.0, matching the bundled configuration schema.
+
+Generate ONNX fixtures and run the native adapter tests on Linux:
+
+```sh
+python tests/generate_models.py --output target/triton-fixtures
+cargo test --locked --features triton adapter::tests -- --test-threads=1
+```
+
+`LEAPP_TRITON_FIXTURES` and `LEAPP_TRITON_BACKENDS` select fixture and backend
+directories. CPU model execution still requires the CUDA runtime SDK.
+
 ## Native tensor storage
 
 The `leapp-triton` crate owns CPU, pinned-host, and CUDA buffers and provides

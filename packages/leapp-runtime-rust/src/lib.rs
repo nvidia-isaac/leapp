@@ -20,6 +20,9 @@
 //! ```
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "triton")]
+#[allow(dead_code)]
+mod adapter;
 mod bundle;
 mod error;
 

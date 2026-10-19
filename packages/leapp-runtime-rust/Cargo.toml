@@ -14,7 +14,11 @@ license = "Apache-2.0"
 publish = false
 description = "Backend-independent LEAPP bundle loading and inspection"
 
+[features]
+triton = ["dep:leapp-triton"]
+
 [dependencies]
+leapp-triton = { path = "src/adapter/triton", optional = true }
 protobuf = "=3.7.2"
 tempfile = "3"
 anyhow = "1"

@@ -7,10 +7,14 @@
 
 mod cuda;
 mod error;
+mod output_pool;
+mod request;
+mod runtime;
 mod sys;
 mod tensor;
 
 pub use error::{Error, ErrorKind, Result};
+pub use runtime::{OutputPlacement, Runtime};
 pub use tensor::{DataType, MemoryLocation, Tensor, TensorElement, TensorView};
 
 pub use cuda::{synchronize_external_stream, HandoffStream};

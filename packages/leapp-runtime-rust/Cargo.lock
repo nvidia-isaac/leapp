@@ -303,6 +303,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "indexmap",
+ "leapp-triton",
  "protobuf",
  "protobuf-codegen",
  "safetensors",

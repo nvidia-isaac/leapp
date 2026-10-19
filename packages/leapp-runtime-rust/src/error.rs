@@ -88,9 +88,36 @@ pub(crate) fn in_phase<T>(
     })
 }
 
+#[cfg(feature = "triton")]
+#[derive(Debug)]
+pub(crate) struct Internal(pub String);
+
+#[cfg(feature = "triton")]
+impl fmt::Display for Internal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+#[cfg(feature = "triton")]
+impl std::error::Error for Internal {}
+
 fn classify_error(source: &anyhow::Error) -> ErrorCode {
     if let Some(error) = source.downcast_ref::<RuntimeError>() {
         return error.code();
+    }
+    #[cfg(feature = "triton")]
+    if source.is::<Internal>() {
+        return ErrorCode::Internal;
+    }
+    #[cfg(feature = "triton")]
+    if let Some(error) = source.downcast_ref::<leapp_triton::Error>() {
+        return match error.kind() {
+            leapp_triton::ErrorKind::InvalidArgument => ErrorCode::InvalidArgument,
+            leapp_triton::ErrorKind::NotFound => ErrorCode::NotFound,
+            leapp_triton::ErrorKind::Unsupported => ErrorCode::Unsupported,
+            leapp_triton::ErrorKind::Internal => ErrorCode::Internal,
+        };
     }
     if let Some(error) = source.downcast_ref::<io::Error>() {
         if error.kind() == io::ErrorKind::NotFound {
@@ -112,7 +139,7 @@ pub struct RuntimeError {
     source: anyhow::Error,
 }
 
-#[allow(dead_code)]
+#[cfg_attr(not(feature = "triton"), allow(dead_code))]
 impl RuntimeError {
     pub(crate) fn new(phase: &'static str, source: anyhow::Error) -> Self {
         Self { phase, source }
@@ -138,5 +165,12 @@ impl fmt::Display for RuntimeError {
 impl std::error::Error for RuntimeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(self.source.as_ref())
+    }
+}
+
+#[cfg(feature = "triton")]
+impl From<leapp_triton::Error> for RuntimeError {
+    fn from(error: leapp_triton::Error) -> Self {
+        Self::new(error.phase(), error.into())
     }
 }
