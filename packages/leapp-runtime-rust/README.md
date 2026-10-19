@@ -241,7 +241,8 @@ selects the backend installation. CUDA fixtures require an available GPU.
 The runtime configures scripted and traced artifacts for an externally installed
 `leapp_torchscript` Triton backend. Install
 `leapp_torchscript/libtriton_leapp_torchscript.so` beneath the runtime's backend
-directory, with its dependencies discoverable by the dynamic loader.
+directory, with its dependencies discoverable by the dynamic loader. See the
+[plugin build guide](src/backends/README.md#torchscript) for source builds.
 
 Models accept positional tensor arguments and return a tensor or a flat tuple
 of tensors. Conversion maps YAML port order to `INPUT__0`, `INPUT__1`, and

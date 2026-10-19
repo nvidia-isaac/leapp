@@ -69,3 +69,37 @@ checks cover weights, noncontiguous outputs, input mutation, concurrent requests
 dynamic and empty tensors, error recovery, integer tensors, incompatible archive
 devices, and ONNX/PT2 ensembles. `LEAPP_TRITON_FIXTURES` and `LEAPP_PT2_FIXTURES`
 override fixture directories.
+
+## TorchScript
+
+`torch/jit` executes scripted and traced modules with positional tensor arguments
+and a tensor or flat tuple of tensors as output. Triton ports use `INPUT__N` and
+`OUTPUT__N`; the runtime maps them to public bundle names. Each instance loads
+its own module and owns a CUDA stream when executing on a GPU.
+
+Input alias analysis permits borrowing only for read-only arguments. Arguments
+that may be mutated or retained, nested subgraphs, and unsupported analysis use
+owned storage. Fragmented buffers and transfers to a different execution device
+also use owned storage. Outputs are copied into response buffers and stream work
+finishes before request release. Session reset restores feedback and defaults;
+it does not reset mutable state inside a model.
+
+```sh
+cmake -S src/backends/torch/jit -B target/torchscript-backend \
+  -DCMAKE_BUILD_TYPE=Release -DTRITON_ROOT="$TRITON_ROOT" \
+  -DTORCH_ROOT="$TORCH_ROOT" -DBUILD_TESTING=ON
+cmake --build target/torchscript-backend -j4
+ctest --test-dir target/torchscript-backend --output-on-failure
+./target/torchscript-backend/torchscript_backend_test cuda
+cmake --install target/torchscript-backend --prefix "$PWD/target/plugins"
+python tests/generate_torchscript_models.py --output target/torchscript-fixtures
+cargo test --locked --features triton --test torchscript -- --ignored --test-threads=1
+```
+
+The installed library is
+`target/plugins/backends/leapp_torchscript/libtriton_leapp_torchscript.so`.
+Use the same backend directory and loader setup as the PT2 plugin. Integration
+checks require ONNX Runtime and PT2 for mixed ensembles. They cover positional
+ports, mutation isolation across inputs and ensemble consumers, feedback after a
+failed mutation, dynamic shapes, integer tensors, nested subgraphs, and backend
+coexistence. `LEAPP_TORCHSCRIPT_FIXTURES` overrides the fixture directory.
