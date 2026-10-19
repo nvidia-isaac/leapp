@@ -7,6 +7,7 @@
 
 from abc import ABC, abstractmethod
 import operator
+from numbers import Integral
 from typing import Any, Set, Optional
 
 from torch.fx.proxy import Proxy
@@ -578,8 +579,93 @@ class TracedData(ABC):
             {},
         )
 
+    def _lower_negative_slices(self, key):
+        """Lower static basic reverse reads before applying the remaining key.
+
+        Preselect on the original input axes: integer indices and new axes are
+        applied afterwards, so they cannot shift the dimensions being reversed.
+        General bounds are normalized against the fixed traced input shape.
+        """
+        elements = key if isinstance(key, tuple) else (key,)
+        if not any(
+            isinstance(item, slice)
+            and isinstance(item.step, Integral)
+            and item.step < 0
+            for item in elements
+        ):
+            return None
+
+        def basic(item):
+            if isinstance(item, slice):
+                return all(
+                    bound is None or isinstance(bound, Integral)
+                    for bound in (item.start, item.stop, item.step)
+                )
+            return (
+                item is None
+                or item is Ellipsis
+                or isinstance(item, Integral)
+                and not isinstance(item, bool)
+            )
+
+        if not all(basic(item) for item in elements):
+            _get_logger().fatal(
+                "Negative-stride slices require static basic indices; "
+                "runtime slice bounds and advanced indices are not supported.",
+                error_type=NotImplementedError,
+            )
+
+        shape = tuple(self.tensor.shape)
+        consumed = sum(item is not None and item is not Ellipsis for item in elements)
+        residual = []
+        for item in elements:
+            if item is Ellipsis:
+                residual.extend([slice(None)] * (len(shape) - consumed))
+            elif isinstance(item, slice):
+                residual.append(
+                    slice(
+                        *(
+                            None if bound is None else operator.index(bound)
+                            for bound in (item.start, item.stop, item.step)
+                        )
+                    )
+                )
+            else:
+                residual.append(None if item is None else operator.index(item))
+
+        proxy = self.proxy
+        axis = 0
+        for position, item in enumerate(residual):
+            if item is None:
+                continue
+            if isinstance(item, slice) and item.step is not None and item.step < 0:
+                start, stop, step = item.indices(shape[axis])
+                if (start, stop, step) == (shape[axis] - 1, -1, -1):
+                    proxy = self._context.tracer.create_proxy(
+                        "call_function", torch.flip, (proxy, (axis,)), {}
+                    )
+                else:
+                    indices = self._register_setitem_tensor(
+                        torch.tensor(list(range(start, stop, step)), dtype=torch.int64),
+                        "_slice_indices",
+                    )
+                    proxy = self._context.tracer.create_proxy(
+                        "call_function", torch.index_select, (proxy, axis, indices), {}
+                    )
+                residual[position] = slice(None)
+            axis += 1
+
+        if all(isinstance(item, slice) and item == slice(None) for item in residual):
+            return proxy
+        return self._context.tracer.create_proxy(
+            "call_function", operator.getitem, (proxy, tuple(residual)), {}
+        )
+
     def _create_getitem_proxy(self, key):
         """Create a functional getitem proxy for a supported index key."""
+        negative_slices = self._lower_negative_slices(key)
+        if negative_slices is not None:
+            return negative_slices
         if not self._is_supported_index_key(key):
             return None
         return self._lower_index_key(self.proxy, key)

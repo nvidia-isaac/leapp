@@ -705,7 +705,7 @@ class TestTracedNpArray(unittest.TestCase):
         x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
         y = x.copy()
         self.assertIsInstance(y, TracedNpArray)
-        np.testing.assert_array_almost_equal(y, x)
+        np.testing.assert_array_almost_equal(y.data, x.data)
 
     def test_method_astype(self):
         """Test .astype() method."""
@@ -714,7 +714,7 @@ class TestTracedNpArray(unittest.TestCase):
         y = x.astype(np.float32)
         self.assertIsInstance(y, TracedNpArray)
         self.assertEqual(y.dtype, np.float32)
-        np.testing.assert_array_almost_equal(y, x)
+        np.testing.assert_array_almost_equal(y.data, x.data)
 
     def test_method_astype_int(self):
         """Test .astype() to integer type."""
@@ -732,7 +732,7 @@ class TestTracedNpArray(unittest.TestCase):
         # View as same dtype should return TracedNpArray
         y = x.view(np.float64)
         self.assertIsInstance(y, TracedNpArray)
-        np.testing.assert_array_almost_equal(y, x)
+        np.testing.assert_array_almost_equal(y.data, x.data)
 
     def test_method_copy_compiled(self):
         """Test .copy() method compiles correctly."""
