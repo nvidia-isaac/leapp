@@ -428,3 +428,22 @@ fn failed_backend_load_reports_an_error() {
     assert_eq!(error.phase(), "load");
     assert!(error.to_string().contains("failed to load"));
 }
+
+#[test]
+#[ignore = "requires the installed NativeRT backend and PT2 fixtures"]
+fn public_pt2_execution() {
+    for device in devices() {
+        let suffix = match device {
+            ExecutionDevice::Cpu => "cpu",
+            _ => "cuda",
+        };
+        let bundle = Bundle::open(fixtures("pt2").join(format!("weighted_{suffix}.yaml"))).unwrap();
+        let runtime = Runtime::open(&bundle, options(device)).unwrap();
+        let mut session = runtime.create_session().unwrap();
+        let name = bundle.pipeline_inputs()[0].name();
+        let result = session
+            .run(&[(&name, TensorView::cpu(&[1f32, 2., 3., 4.], &[4]).unwrap())])
+            .unwrap();
+        assert_eq!(values(&result, "model/output_0"), [12., 26., 42., 60.]);
+    }
+}

@@ -576,3 +576,16 @@ fn repository_errors_identify_the_phase_and_reject_escaping_names() {
         assert!(error.to_string().contains("invalid Triton model version"));
     }
 }
+
+#[test]
+fn converts_pt2_and_alias_with_onnx_in_one_ensemble() {
+    for backend in ["pt2", "exported-program"] {
+        let mut f = Fixture::new();
+        f.value["models"]["a_policy"]["parameters"]["backend"] = yaml(backend);
+        let p = f.convert();
+        let backends: Vec<_> = p.models.iter().map(|m| m.config.backend.as_str()).collect();
+        assert!(backends.contains(&"leapp_pt2"));
+        assert!(backends.contains(&"onnxruntime"));
+        assert_eq!(p.ensemble.ensemble_scheduling().step.len(), 2);
+    }
+}

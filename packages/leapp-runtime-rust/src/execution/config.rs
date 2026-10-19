@@ -12,7 +12,7 @@ pub(super) fn model(
     options: &ConversionOptions,
 ) -> Result<ModelConfig> {
     require(
-        matches!(model.parameters.backend.as_str(), "onnx"),
+        matches!(model.parameters.backend.as_str(), "onnx" | "pt2"),
         format!("{node}: unsupported execution backend"),
     )?;
     require(
@@ -50,7 +50,11 @@ pub(super) fn model(
     });
     let config = ModelConfig {
         name: format!("leapp_node_{index}"),
-        backend: "onnxruntime".into(),
+        backend: match model.parameters.backend.as_str() {
+            "pt2" => "leapp_pt2",
+            _ => "onnxruntime",
+        }
+        .into(),
         default_model_filename: model
             .parameters
             .model_path

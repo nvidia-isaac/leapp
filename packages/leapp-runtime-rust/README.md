@@ -192,3 +192,25 @@ The common lifecycle crate preserves runtime error sources and completes
 shutdown cleanup even when locks are poisoned. The SDK-free lifecycle regression target compiles the wrapper against a small
 test-only runtime API. Native execution tests exercise session state and results. See the [session reset contract](bindings/common/README.md#session-reset)
 for state ownership and reset behavior.
+
+## PT2 execution
+
+The runtime configures PT2 artifacts for an externally installed `leapp_pt2`
+Triton backend. Set `RuntimeOptions::backend_directory` to a directory containing
+`leapp_pt2/libtriton_leapp_pt2.so` and any other backends used by the bundle.
+Backend implementations and their dependencies are installed separately.
+
+PT2 inputs and outputs follow exported-program order. Archive devices must match
+the selected model instance. The runtime supplies feedback, default inputs, and
+output placement through the same session API used for ONNX models.
+
+Generate fixtures with a compatible PyTorch installation and run the optional
+integration checks against the installed backend:
+
+```sh
+python tests/generate_pt2_models.py --output target/pt2-fixtures
+cargo test --locked --features triton --test execution public_pt2 -- --ignored --test-threads=1
+```
+
+`LEAPP_PT2_FIXTURES` selects the fixture directory. `LEAPP_TRITON_BACKENDS`
+selects the backend installation. CUDA fixtures require an available GPU.
