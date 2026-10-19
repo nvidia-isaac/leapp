@@ -5,16 +5,12 @@ SPDX-License-Identifier: Apache-2.0
 
 # LEAPP Rust bundle API and shared lifecycle sources
 
-This is the standalone common foundation extracted from the Triton-based
-and native runtime implementations. It loads and validates
-exported LEAPP bundles and exposes their public inspection API in Rust, Python,
-and C++. The original common runtime/session lifecycle is retained unchanged
-for integration with either engine. Bundle loading does not initialize an
-inference backend.
+This package loads and validates exported LEAPP bundles and exposes their public
+inspection API in Rust, Python, and C++. It also provides shared runtime/session
+lifecycle sources for ownership, error handling, and shutdown. Bundle loading
+does not initialize an inference backend.
 
-The package path and library names match the runtime branches to make this a
-base for either implementation. This worktree does not refactor those branches
-to depend on a new crate. The two Python distributions share the `leapp_runtime`
+The inspection and full-runtime Python distributions share the `leapp_runtime`
 import name and should be installed in separate environments.
 
 ## Included code
@@ -23,18 +19,18 @@ import name and should be installed in separate environments.
 | --- | --- |
 | Rust core | `Bundle`, YAML schema parsing, graph and artifact validation, SHA-256 checks, safetensors initial-state validation |
 | Public inspection types | `PortRef`, `PortSpec`, `DataType`, `Metadata`, `MetadataValue`, `BundleError`, `ErrorCode` |
-| Common lifecycle sources | Original `RuntimeHandle`, `SessionHandle`, and lifecycle errors; three focused regression tests |
+| Common lifecycle sources | `RuntimeHandle`, `SessionHandle`, and lifecycle errors; three focused regression tests |
 | Python | PyO3 bundle bindings, detached metadata and port descriptors, typed stubs and structured exceptions |
 | C++ | C++20 bundle facade, typed metadata, status and data-type headers, private cxx transport, installable CMake target |
-| Tests | Existing Rust bundle regression suite and independent Python/C++ inspection and lifetime tests |
+| Tests | Rust bundle regression suite and independent Python/C++ inspection and lifetime tests |
 
 Concrete engine runtimes, sessions, results, tensor/DLPack code, graph planners,
-the Triton converter, and backend adapters remain in the runtime branches.
+and backend adapters are supplied by the full runtime packages.
 Python and C++ share the core bundle implementation. The `bindings/common`
 lifecycle source depends on concrete execution types, so it is not a separate
-compiled crate in this bundle-only checkout. See the
+compiled crate in this inspection-only package. See the
 [common lifecycle sources](bindings/common/README.md) for integration and testing.
-The extraction has no Triton, CUDA, ONNX Runtime, PyTorch, or NumPy dependency.
+This package has no Triton, CUDA, ONNX Runtime, PyTorch, or NumPy dependency.
 The C++ binding currently supports Unix platforms (Linux and macOS), using native
 path bytes.
 
@@ -61,12 +57,14 @@ execution.
 
 Bundle loading validates graph ports and connections, artifacts, and optional
 initial-value files. It does not check whether an inference engine can execute
-the graph. Declared external inputs can remain unresolved, matching the source
-implementations' inspection contract. Python and C++ represent missing input
-descriptors as `None` and `std::nullopt`, respectively.
+the graph. Declared external inputs can remain unresolved. Python and C++
+represent missing input descriptors as `None` and `std::nullopt`, respectively.
 
 The loader normalizes known backend aliases, accepts custom nonempty backend
 names, and leaves adapter availability to execution.
+
+The loader preserves YAML metadata, including custom tags, duplicate-key
+handling, and YAML merges.
 
 ## Build and test
 
@@ -87,22 +85,8 @@ also requires a C++20 compiler and Python 3.10 or newer. See
 [C++ bindings](bindings/cxx/README.md) for installation and binding tests.
 All inspection tests create opaque artifact bytes; no model generation is needed.
 
-## Extraction provenance
+## Shared lifecycle
 
-The shared sources, loader, and tests were extracted from the existing runtime
-implementations for backend-independent inspection.
-
-Execution feature gates and dependencies were removed. The C++ bundle facade
-was split out of `runtime.cc`, and `DataType` moved from `tensor.h` into
-`data_type.h`. Binding manifests, Python exports and stubs, and CMake packaging
-now expose only implemented inspection operations.
-
-The shared `bindings/common/src/lib.rs` and `runtime.rs` from the same source
-commit are retained byte-for-byte. The lifecycle regression target compiles the
-original implementation against a small test-only runtime API. No generic engine
-interface or lifecycle cleanup changes are introduced by this extraction.
-
-Binding regression tests also exposed a pre-existing tagged-metadata parsing
-failure. The loader now reads YAML tags directly and separates unknown metadata
-from serde's schema-field buffer before restoring it to the snapshot. Tests cover
-tags at every inspection level, nested values, duplicate keys, and YAML merges.
+`bindings/common/src/runtime.rs` manages session ownership, serializes calls, and
+coordinates explicit shutdown. The lifecycle regression target compiles these
+sources against a small test-only runtime API, without inference SDKs.

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Compile the original lifecycle source against a test-only runtime API.
+// Compile the shared lifecycle source against a test-only runtime API.
 // The real dependency still supplies Bundle and ErrorCode; no production shim.
 extern crate leapp_runtime as bundle_api;
 extern crate self as leapp_runtime;

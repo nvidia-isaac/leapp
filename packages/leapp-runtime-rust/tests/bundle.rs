@@ -482,7 +482,7 @@ fn yaml_and_artifacts_use_the_same_normalized_path() {
 }
 
 #[test]
-fn cpp_bundle_fixtures_load_through_the_new_api() {
+fn cpp_bundle_fixtures_load() {
     let f = Fixture::new();
     fs::create_dir(f.directory.path().join("artifacts")).unwrap();
     fs::write(
@@ -507,7 +507,7 @@ fn cpp_bundle_fixtures_load_through_the_new_api() {
 }
 
 #[test]
-fn retains_yaml12_scalar_resolution_from_the_prototype() {
+fn uses_yaml12_scalar_resolution() {
     let f = Fixture::new();
     fs::write(
         &f.path,
