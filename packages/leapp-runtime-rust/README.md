@@ -214,3 +214,27 @@ cargo test --locked --features triton --test execution public_pt2 -- --ignored -
 
 `LEAPP_PT2_FIXTURES` selects the fixture directory. `LEAPP_TRITON_BACKENDS`
 selects the backend installation. CUDA fixtures require an available GPU.
+
+## TorchScript execution
+
+The runtime configures scripted and traced artifacts for an externally installed
+`leapp_torchscript` Triton backend. Install
+`leapp_torchscript/libtriton_leapp_torchscript.so` beneath the runtime's backend
+directory, with its dependencies discoverable by the dynamic loader.
+
+Models accept positional tensor arguments and return a tensor or a flat tuple
+of tensors. Conversion maps YAML port order to `INPUT__0`, `INPUT__1`, and
+`OUTPUT__0`, `OUTPUT__1`; public LEAPP names remain unchanged. Session reset
+restores explicit feedback and default inputs, without resetting model-internal
+mutable state.
+
+The optional integration tests exercise the runtime against an installed backend:
+
+```sh
+python tests/generate_torchscript_models.py --output target/torchscript-fixtures
+cargo test --locked --features triton --test torchscript -- --ignored --test-threads=1
+```
+
+`LEAPP_TORCHSCRIPT_FIXTURES` selects the fixture directory, and
+`LEAPP_TRITON_BACKENDS` selects the backend installation. The plugin must preserve
+borrowed inputs and live outputs to satisfy the runtime's ownership contract.

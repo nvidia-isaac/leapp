@@ -12,7 +12,7 @@ pub(super) fn model(
     options: &ConversionOptions,
 ) -> Result<ModelConfig> {
     require(
-        matches!(model.parameters.backend.as_str(), "onnx" | "pt2"),
+        matches!(model.parameters.backend.as_str(), "onnx" | "pt2" | "jit"),
         format!("{node}: unsupported execution backend"),
     )?;
     require(
@@ -48,9 +48,10 @@ pub(super) fn model(
         versions: vec![MODEL_VERSION],
         ..Default::default()
     });
-    let config = ModelConfig {
+    let mut config = ModelConfig {
         name: format!("leapp_node_{index}"),
         backend: match model.parameters.backend.as_str() {
+            "jit" => "leapp_torchscript",
             "pt2" => "leapp_pt2",
             _ => "onnxruntime",
         }
@@ -68,6 +69,15 @@ pub(super) fn model(
         output: model.outputs.iter().map(|p| output(p, &p.name)).collect(),
         ..Default::default()
     };
+    // TorchScript arguments and results follow the exported port order.
+    if model.parameters.backend == "jit" {
+        for (index, port) in config.input.iter_mut().enumerate() {
+            port.name = format!("INPUT__{index}");
+        }
+        for (index, port) in config.output.iter_mut().enumerate() {
+            port.name = format!("OUTPUT__{index}");
+        }
+    }
     Ok(config)
 }
 

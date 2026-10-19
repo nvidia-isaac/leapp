@@ -589,3 +589,54 @@ fn converts_pt2_and_alias_with_onnx_in_one_ensemble() {
         assert_eq!(p.ensemble.ensemble_scheduling().step.len(), 2);
     }
 }
+
+#[test]
+fn torchscript_ports_use_ordinals_without_changing_public_or_feedback_names() {
+    for backend in ["jit", "jit-script", "jit-trace"] {
+        for device in [ExecutionDevice::Cpu, ExecutionDevice::Cuda { device_id: 2 }] {
+            let mut f = Fixture::new();
+            f.value["models"]["a_policy"]["parameters"]["backend"] = yaml(backend);
+            let p = convert_bundle(&f.open(), &ConversionOptions { device }).unwrap();
+            let config = &p.models[1].config;
+            assert_eq!(config.backend, "leapp_torchscript");
+            assert!(config.platform.is_empty());
+            assert_eq!(config.default_model_filename, "model.bin");
+            assert_eq!(config.max_batch_size, 0);
+            assert_eq!(
+                config
+                    .input
+                    .iter()
+                    .map(|p| p.name.as_str())
+                    .collect::<Vec<_>>(),
+                ["INPUT__0", "INPUT__1"]
+            );
+            assert_eq!(
+                config
+                    .output
+                    .iter()
+                    .map(|p| p.name.as_str())
+                    .collect::<Vec<_>>(),
+                ["OUTPUT__0", "OUTPUT__1"]
+            );
+            assert!(config.parameters.is_empty());
+            assert!(config.model_operations.is_none());
+            let step = &p.ensemble.ensemble_scheduling().step[1];
+            assert_eq!(step.input_map["INPUT__0"], "z_observation/features");
+            assert_eq!(step.input_map["INPUT__1"], p.feedback[0].input_name);
+            assert_eq!(step.output_map["OUTPUT__0"], "a_policy/actions");
+            assert_eq!(step.output_map["OUTPUT__1"], "a_policy/next_state");
+            assert_eq!(p.outputs[0].port.name(), "a_policy/next_state");
+            assert_eq!(
+                p.ensemble.ensemble_scheduling().step[0].output_map["features"],
+                "z_observation/features"
+            );
+            match device {
+                ExecutionDevice::Cpu => assert_eq!(
+                    config.instance_group[0].kind.enum_value().unwrap(),
+                    Kind::KIND_CPU
+                ),
+                ExecutionDevice::Cuda { .. } => assert_eq!(config.instance_group[0].gpus, [2]),
+            }
+        }
+    }
+}
