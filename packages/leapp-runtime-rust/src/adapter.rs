@@ -49,3 +49,6 @@ fn native_error(error: leapp_triton::Error) -> RuntimeError {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod nativert_tests;

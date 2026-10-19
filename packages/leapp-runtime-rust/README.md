@@ -218,7 +218,8 @@ behavior.
 The runtime configures PT2 artifacts for an externally installed `leapp_pt2`
 Triton backend. Set `RuntimeOptions::backend_directory` to a directory containing
 `leapp_pt2/libtriton_leapp_pt2.so` and any other backends used by the bundle.
-Backend implementations and their dependencies are installed separately.
+Backend implementations and their dependencies are installed separately. See
+the [plugin build guide](src/backends/README.md) to build `leapp_pt2` from source.
 
 PT2 inputs and outputs follow exported-program order. Archive devices must match
 the selected model instance. The runtime supplies feedback, default inputs, and
