@@ -12,8 +12,15 @@ pub(super) fn model(
     options: &ConversionOptions,
 ) -> Result<ModelConfig> {
     require(
-        matches!(model.parameters.backend.as_str(), "onnx" | "pt2" | "jit"),
+        matches!(
+            model.parameters.backend.as_str(),
+            "onnx" | "pt2" | "jit" | "trt"
+        ),
         format!("{node}: unsupported execution backend"),
+    )?;
+    require(
+        model.parameters.backend != "trt" || matches!(options.device, ExecutionDevice::Cuda { .. }),
+        format!("{node}: TensorRT requires CUDA execution"),
     )?;
     require(
         !model.outputs.is_empty(),
@@ -53,7 +60,13 @@ pub(super) fn model(
         backend: match model.parameters.backend.as_str() {
             "jit" => "leapp_torchscript",
             "pt2" => "leapp_pt2",
+            "trt" => "tensorrt",
             _ => "onnxruntime",
+        }
+        .into(),
+        platform: match model.parameters.backend.as_str() {
+            "trt" => "tensorrt_plan",
+            _ => "",
         }
         .into(),
         default_model_filename: model

@@ -238,3 +238,49 @@ cargo test --locked --features triton --test torchscript -- --ignored --test-thr
 `LEAPP_TORCHSCRIPT_FIXTURES` selects the fixture directory, and
 `LEAPP_TRITON_BACKENDS` selects the backend installation. The plugin must preserve
 borrowed inputs and live outputs to satisfy the runtime's ownership contract.
+
+## TensorRT engines
+
+Bundles can reference prebuilt serialized TensorRT engines with `backend: trt`
+or its `tensorrt` alias:
+
+```yaml
+parameters:
+  backend: trt
+  model_path: policy.engine
+```
+
+The artifact filename is preserved through `default_model_filename`, so `.plan`
+and `.engine` files work without renaming. The converter emits `backend: tensorrt`,
+`platform: tensorrt_plan`, `max_batch_size: 0`, and a GPU instance for the selected
+`ExecutionDevice::Cuda`. Port names, dtypes, and shapes must describe the engine's
+I/O. Triton validates engine compatibility and input shapes; the Rust runtime
+neither builds engines nor inspects their payloads.
+
+Install the supplied plugin at
+`<backend_directory>/tensorrt/libtriton_tensorrt.so`, with its TensorRT and CUDA
+dependencies available to the loader. Execution uses `RuntimeOptions`,
+`Session`, output placement, feedback, and reset APIs. CPU, pinned-host, and CUDA input/output buffers are supported
+with the `triton` feature. TensorRT model execution always requires a GPU.
+
+Dynamic dimensions use the engine's first optimization profile (profile 0).
+This integration targets ordinary tensor I/O. Shape-tensor configuration,
+selection of additional profiles, custom TensorRT plugins, and automatic engine
+compilation are not exposed.
+
+Build fixture engines on the target GPU with the supplied TensorRT toolchain:
+
+```sh
+python tests/generate_tensorrt_models.py --output target/tensorrt-fixtures \
+  --trtexec /usr/bin/trtexec
+cargo test --locked --features triton --test tensorrt -- --ignored --test-threads=1
+```
+
+The generator requires NumPy and ONNX and uses `trtexec` only in test tooling.
+`LEAPP_TENSORRT_FIXTURES` selects another fixture directory and
+`LEAPP_TRITON_BACKENDS` selects the backend installation for tests. Engines must
+be compatible with the deployed TensorRT version and GPU; tests build them in
+that environment instead of checking binary engines into the repository.
+Integration checks cover TensorRT-only and ONNX→TensorRT ensembles, host/CUDA
+buffers, retained outputs, and dynamic profile bounds and recovery. Converter
+tests also check CPU execution rejection.

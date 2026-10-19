@@ -591,6 +591,43 @@ fn converts_pt2_and_alias_with_onnx_in_one_ensemble() {
 }
 
 #[test]
+fn converts_tensorrt_aliases_with_gpu_placement() {
+    for backend in ["trt", "tensorrt"] {
+        let mut f = Fixture::new();
+        let parameters = &mut f.value["models"]["a_policy"]["parameters"];
+        parameters["backend"] = yaml(backend);
+        parameters["model_path"] = yaml("policy.engine");
+        fs::copy(
+            f.directory.path().join("model.bin"),
+            f.directory.path().join("policy.engine"),
+        )
+        .unwrap();
+        f.unsupported("TensorRT requires CUDA execution");
+        let options = ConversionOptions {
+            device: ExecutionDevice::Cuda { device_id: 2 },
+        };
+        let p = convert_bundle(&f.open(), &options).unwrap();
+        let config = &p
+            .models
+            .iter()
+            .find(|m| m.config.backend == "tensorrt")
+            .unwrap()
+            .config;
+        assert_eq!(config.platform, "tensorrt_plan");
+        assert_eq!(config.default_model_filename, "policy.engine");
+        assert_eq!(config.max_batch_size, 0);
+        assert_eq!(
+            config.instance_group[0].kind.enum_value().unwrap(),
+            Kind::KIND_GPU
+        );
+        assert_eq!(config.instance_group[0].gpus, [2]);
+        assert!(config.instance_group[0].profile.is_empty());
+        assert!(p.models.iter().any(|m| m.config.backend == "onnxruntime"));
+        assert_eq!(p.ensemble.ensemble_scheduling().step.len(), 2);
+    }
+}
+
+#[test]
 fn torchscript_ports_use_ordinals_without_changing_public_or_feedback_names() {
     for backend in ["jit", "jit-script", "jit-trace"] {
         for device in [ExecutionDevice::Cpu, ExecutionDevice::Cuda { device_id: 2 }] {
