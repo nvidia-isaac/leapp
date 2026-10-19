@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{
-    error::in_phase,
+use super::{
     schema::{BundleDescription, NodeParameters},
-    validate, BundleData, BundleError, Metadata, MetadataValue, PortRef,
+    validate, BundleData,
 };
+use crate::{error::in_phase, BundleError, Metadata, MetadataValue, PortRef};
 use anyhow::{ensure, Context, Result};
 use indexmap::IndexMap;
 use serde::{
@@ -113,7 +113,7 @@ pub(crate) fn read_bundle(path: &Path) -> Result<BundleData, BundleError> {
             Ok(Default::default())
         }
     })?;
-    let boundary = |map: &crate::schema::BoundaryPorts| {
+    let boundary = |map: &super::schema::BoundaryPorts| {
         map.iter()
             .flat_map(|(node, ports)| {
                 ports.iter().map(|port| PortRef {

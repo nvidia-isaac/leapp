@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::schema::{BundleDescription, InitialValueSpec, NodeSpec, PortRef};
+use super::schema::{BundleDescription, InitialValueSpec, NodeSpec, PortRef};
 use anyhow::{ensure, Context, Result};
 use indexmap::IndexMap;
 use safetensors::SafeTensors;
