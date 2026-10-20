@@ -648,7 +648,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                 return item.proxy
             if isinstance(item, torch.nn.Parameter):
                 # Inline parameters as constants for ONNX/JIT freezing.
-                return item.data
+                return traced_tensor._context._get_parameter_constant(item)
             return item
 
         # Extract proxies for graph recording.

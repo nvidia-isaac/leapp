@@ -62,6 +62,7 @@ class TracedTensorNode(LeappNode):
         self.tracer.graph = self.graph
         self.tracer.root = torch.nn.Module()
         self.tracer.tensor_attrs = {}
+        self._parameter_constants: dict[tuple, torch.Tensor] = {}
         self._discovered_warp_segments: list["WarpSegment"] = []
         self._pending_warp_segments: deque["WarpSegment"] = deque()
         self._is_warp_capture_active = False
@@ -138,6 +139,7 @@ class TracedTensorNode(LeappNode):
         self.tracer.graph = self.graph
         self.tracer.root = torch.nn.Module()
         self.tracer.tensor_attrs = {}
+        self._parameter_constants.clear()
         self.trimmed_inputs = set()
         self._next_buffer_idx = 0
         self.m = None
@@ -146,6 +148,28 @@ class TracedTensorNode(LeappNode):
         # State placeholders belong to the graph being replaced, so a second
         # pass has to re-declare them rather than reuse the old carriers.
         self._state_tensors.clear()
+
+    def _get_parameter_constant(self, parameter: torch.nn.Parameter) -> torch.Tensor:
+        """Reuse a detached constant for each parameter storage view in this trace."""
+        data = parameter.data
+        if data.layout != torch.strided or data.device.type == "meta":
+            return data
+
+        # Parameter.data creates a new tensor object on every access, while FX
+        # interns constants by object identity. Key by storage view so tied
+        # parameters share a constant, but a .data rebind or a different view
+        # does not reuse the wrong value. Cached tensors keep the storage alive.
+        key = (
+            data.untyped_storage().data_ptr(),
+            data.storage_offset(),
+            tuple(data.shape),
+            tuple(data.stride()),
+            data.dtype,
+            data.device,
+            data.is_conj(),
+            data.is_neg(),
+        )
+        return self._parameter_constants.setdefault(key, data)
 
     def find_declared_alias(self, value):
         """Carrier declared on this node that ``value`` may share a root with.
