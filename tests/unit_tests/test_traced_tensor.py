@@ -515,6 +515,47 @@ class TensorArithmeticFunctions:
 class TestTracedTensor(unittest.TestCase):
     """Test TracedTensor operations."""
 
+    def test_parameter_constants_preserve_sharing_and_views(self):
+        storage = torch.arange(8, dtype=torch.float32)
+        data = storage[:4].reshape(2, 2)
+        weight = torch.nn.Parameter(data)
+        views = {
+            "same": weight,
+            "tied": data,
+            "transpose": data.t(),
+            "offset": storage[4:].reshape(2, 2),
+            "shape": data.reshape(4),
+            "dtype": data.view(torch.int32),
+            "negative": torch._neg_view(data),
+        }
+        for requires_grad in (False, True):
+            weight.requires_grad_(requires_grad)
+            node = TracedTensorNode(f"policy_{requires_grad}")
+            for view, value in views.items():
+                with self.subTest(requires_grad=requires_grad, view=view):
+                    node.reset_trace_state()
+                    other = weight if view == "same" else torch.nn.Parameter(
+                        value, requires_grad=False)
+                    other_data = other.data
+                    x = node.create_input(torch.randn(2, 2), name="x")
+                    y = (x + weight).flatten() + (x.reshape(other.shape) + other).flatten()
+                    # Rebinding the same Parameter must retain its earlier value.
+                    weight.data = torch.full((2, 2), 3.0)
+                    node.compile_trace({"y": y + (x * weight).flatten()})
+                    weight.data = data
+
+                    count = 2 if view in ("same", "tied") else 3
+                    constants = {n.target for n in node.m.graph.nodes if n.op == "get_attr"}
+                    self.assertEqual(len(constants), count)
+                    fresh = torch.randn(2, 2)
+                    expected = ((fresh + data).flatten()
+                                + (fresh.reshape(other_data.shape) + other_data).flatten()
+                                + (fresh * 3).flatten())
+                    torch.testing.assert_close(node.m(fresh), expected)
+                    if view in ("same", "tied"):
+                        exported = torch.export.export(node.m, (fresh,))
+                        self.assertEqual(len(exported.constants) + len(exported.state_dict), count)
+
     def validate_export(
         self,
         graph_module,

@@ -16,6 +16,7 @@
 #
 import os
 import unittest
+import tempfile
 from unittest import mock
 import torch
 import yaml
@@ -160,6 +161,50 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
     snippet that we want to support
 
     """
+
+    def test_reused_parameter_export(self):
+        # Exceed onnxscript's small-initializer deduplication threshold.
+        dim = 64
+        linear = torch.nn.Linear(dim, dim).eval()
+
+        def forward(x):
+            for _ in range(4):
+                x = x + torch.tanh(linear(x)) / 4
+            return x
+
+        cases = [("onnx", {}), ("onnx", {"optimize": False}),
+                 ("onnx-torchscript", {}), ("exported-program", {}),
+                 ("jit-script", {}), ("jit-trace", {})]
+        for backend, params in cases:
+            for global_patching in (False, True):
+                with self.subTest(backend=backend, params=params, global_patching=global_patching), \
+                        tempfile.TemporaryDirectory() as tmp:
+                    leapp.start("graph", save_path=tmp, global_patching=global_patching)
+                    try:
+                        with torch.no_grad():
+                            for _ in range(2):
+                                x = annotate.input_tensors("policy", {"x": torch.randn(1, dim)})
+                                annotate.output_tensors("policy", {"y": forward(x)},
+                                                        export_with=backend, backend_params=params)
+                    finally:
+                        leapp.stop()
+                    self.assertEqual(
+                        leapp.compile_graph(visualize=False, validate=True, strict=True),
+                        {"policy": True})
+
+                    if backend.startswith("onnx"):
+                        initializers = onnx.load(os.path.join(tmp, "graph", "policy.onnx")).graph.initializer
+                        self.assertEqual(sum(tuple(t.dims) == (dim, dim) for t in initializers), 1)
+                        self.assertLess(sum(onnx.numpy_helper.to_array(t).nbytes for t in initializers),
+                                        2 * dim * dim * 4)
+
+                    manager = leapp.InferenceManager(os.path.join(tmp, "graph", "graph.yaml"))
+                    with torch.no_grad():
+                        for scale in (0.2, 1.0, 3.0):
+                            fresh = torch.randn(1, dim) * scale
+                            actual = manager.run_policy({
+                                "policy/x": fresh.to(manager.nodes["policy"].device)})["policy/y"]
+                            torch.testing.assert_close(actual.cpu(), forward(fresh), rtol=1e-4, atol=1e-5)
 
     def test_onnx_backend(self):
         @annotate.method(export_with="onnx")
