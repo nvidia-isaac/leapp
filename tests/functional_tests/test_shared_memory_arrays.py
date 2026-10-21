@@ -17,6 +17,8 @@
 """Tests for several traced carriers over one shared allocation."""
 
 import unittest
+import tempfile
+from pathlib import Path
 import numpy as np
 import torch
 import warp as wp
@@ -364,6 +366,92 @@ class TestWarpSharedMemory(WarpTestCase, LEAPPFunctionalTestBase):
     left on the pre-segment proxy produces a graph whose runner has no consumers
     and gets pruned, so the export silently returns the unmodified input.
     """
+
+    def test_strided_torch_views_bind_one_warp_allocation(self):
+        """Sibling reads/writes bind the full buffer on both segment boundaries."""
+        probe = wp.from_torch(torch.zeros(1, device=self.DEVICE))
+        if getattr(probe, "_storage_nbytes", None) is None:
+            self.skipTest("Warp does not expose allocation-wide Torch storage bounds")
+
+        for backend in ("onnx", "pt2"):
+            with self.subTest(backend=backend), tempfile.TemporaryDirectory() as folder:
+                leapp.start(name=self.TEST_GRAPH_NAME, save_path=folder)
+                try:
+                    for offset, amount in ((0, 1), (100, 7)):
+                        source, delta = annotate.input_tensors(
+                            "policy",
+                            {
+                                "source": torch.arange(32.0, device=self.DEVICE)
+                                + offset,
+                                "delta": torch.tensor(
+                                    [float(amount)], device=self.DEVICE
+                                ),
+                            },
+                        )
+                        root = source * delta
+                        first = root[1:12][::2]
+                        second = root[17:28][::2]
+                        first.add_(delta)
+                        a, b = wp.from_torch(first), wp.from_torch(second)
+                        wp.launch(
+                            self.kernels.mutate_both_in_place,
+                            dim=a.size,
+                            inputs=[a, b],
+                            device=self.DEVICE,
+                        )
+                        annotate.output_tensors(
+                            "policy",
+                            {
+                                "root": root * 3,
+                                "view": first * 2,
+                                "original": source * 3,
+                            },
+                            export_with=backend,
+                        )
+                finally:
+                    leapp.stop()
+                node = annotate.get_nodes()["policy"]
+                self.assertEqual(len(node.warp_segments), 1)
+                segment = node.warp_segments[0]
+                self.assertEqual(len(segment.input_refs), 1)
+                self.assertEqual(len(segment.output_refs), 1)
+                self.assertEqual(segment.input_refs["input_0"].storage_shape, (32,))
+                self.assertEqual(segment.output_refs["output_0"].storage_shape, (32,))
+                leapp.compile_graph(visualize=False, validate=True, strict=True)
+                manager = leapp.InferenceManager(
+                    str(
+                        Path(folder)
+                        / self.TEST_GRAPH_NAME
+                        / f"{self.TEST_GRAPH_NAME}.yaml"
+                    )
+                )
+                # Vary the root and mutation operand independently after reload.
+                for offset, amount in ((100, 1), (0, 7), (-20, -3)):
+                    source = torch.arange(32.0, device=self.DEVICE) + offset
+                    delta = torch.tensor([float(amount)], device=self.DEVICE)
+                    expected = source * delta
+                    expected[1:12:2].add_(delta).add_(1)
+                    expected[17:28:2].mul_(2)
+                    actual = manager.run_policy(
+                        {"policy/source": source, "policy/delta": delta}
+                    )
+                    for name, value in {
+                        "root": expected * 3,
+                        "view": expected[1:12:2] * 2,
+                        "original": source * 3,
+                    }.items():
+                        torch.testing.assert_close(
+                            actual[f"policy/{name}"].to(self.DEVICE),
+                            value,
+                            rtol=0,
+                            atol=0,
+                        )
+                    torch.testing.assert_close(
+                        source, torch.arange(32.0, device=self.DEVICE) + offset
+                    )
+                    torch.testing.assert_close(
+                        delta, torch.tensor([float(amount)], device=self.DEVICE)
+                    )
 
     def test_from_torch_alias_follows_the_segment(self):
         """A segment writing a converted buffer moves its Torch carrier too.

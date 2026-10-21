@@ -135,6 +135,19 @@ synchronization or host readback that would close an automatic segment only
 logs a warning and leaves the explicit block open, so the capture keeps
 growing. Keep the block limited to Warp work that is meant to be replayed.
 
+Torch-backed partial views need a traced allocation
+===================================================
+
+For Warp versions that expose allocation-wide Torch storage bounds, LEAPP can
+bind sliced, strided and compound-element views when their graph ancestry
+contains a contiguous Torch value covering the whole allocation. Declare that
+covering value as an input before creating the views, or derive it within the
+traced computation. Declaring only a partial view of an otherwise untraced
+allocation raises an error, because the remaining bytes have no graph value.
+A separately declared parent without a traced view relationship does not
+establish that dependency. Reinterpreting the storage dtype is unsupported.
+This mechanism does not add general support for Warp-native views.
+
 What is not intercepted
 =======================
 

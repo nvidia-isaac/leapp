@@ -27,6 +27,7 @@ from leapp.leapp_graph.datatypes import (
     to_export_torch_tensor,
 )
 from leapp.leapp_graph.datatypes.patching import get_warp_backend
+from leapp.leapp_graph.datatypes.proxy_view import STORAGE_LAYOUT_META_KEY
 from leapp.leapp_graph.functionalization import functionalize_graph, scriptable_sym_ite
 from leapp.utils.tensor_description import (
     resolve_tensor_descriptions_to_names,
@@ -843,6 +844,8 @@ class TracedTensorNode(LeappNode):
                 if node not in seen:
                     seen.add(node)
                     pending.extend(node.all_input_nodes)
+        for node in self.graph.nodes:
+            node.meta.pop(STORAGE_LAYOUT_META_KEY, None)
         self.graph.recording = False
         if self.graph.requires_functionalization:
             self.graph.output(

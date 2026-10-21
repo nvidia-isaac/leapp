@@ -29,11 +29,12 @@ Binding primitives
     before tracing began.
 """
 
-from typing import Any, Optional, Union
+from typing import Any, NamedTuple, Optional, Union
 
 import numpy as np
 import torch
 from torch.fx.proxy import Proxy
+from torch.multiprocessing.reductions import StorageWeakRef
 
 from leapp.utils.dtype import value_to_name_and_shape
 
@@ -98,12 +99,51 @@ class ProxyView:
         self._proxy = value
 
 
+STORAGE_LAYOUT_META_KEY = "leapp_storage_layout"
+
+
+class TorchStorageLayout(NamedTuple):
+    """Capture-pass allocation identity and layout, without retaining its tensor."""
+
+    identity: StorageWeakRef
+    shape: tuple[int, ...]
+    strides: tuple[int, ...]
+    dtype: torch.dtype
+
+
+def _record_storage_layout(carrier: Any, proxy: Optional[Proxy]) -> None:
+    # Warp APIC can bind the allocation behind a partial Torch view. Record
+    # covering graph values so the boundary can recover that allocation later.
+    # Native tensors must not be retained here: every intermediate would stay
+    # alive for the duration of capture. Weak storage identity also avoids
+    # confusing an allocator-reused address with the original allocation.
+    if proxy is None or not isinstance(carrier, torch.Tensor):
+        return
+    value = carrier.tensor
+    storage = value.untyped_storage()
+    if (
+        value.storage_offset() == 0
+        and value.is_contiguous()
+        and value.numel() * value.element_size() == storage.nbytes()
+    ):
+        proxy.node.meta.setdefault(
+            STORAGE_LAYOUT_META_KEY,
+            TorchStorageLayout(
+                StorageWeakRef(storage),
+                tuple(value.shape),
+                tuple(value.stride()),
+                value.dtype,
+            ),
+        )
+
+
 def bind_new_view(carrier: Any, name: str, context, proxy: Optional[Proxy]) -> None:
     """Attach a new root ``ProxyView`` holding ``proxy``."""
     carrier._name = name
     carrier._context = context
     carrier._proxy_view = ProxyView(proxy)
     carrier._output_port = None
+    _record_storage_layout(carrier, proxy)
 
 
 def bind_shared_view(carrier: Any, name: str, context, view: ProxyView) -> None:
@@ -112,6 +152,7 @@ def bind_shared_view(carrier: Any, name: str, context, view: ProxyView) -> None:
     carrier._context = context
     carrier._proxy_view = view
     carrier._output_port = None
+    _record_storage_layout(carrier, view.proxy)
 
 
 def update_view_proxy(
@@ -122,6 +163,7 @@ def update_view_proxy(
     carrier._context = context
     if rebind:
         carrier._proxy_view.rebind(proxy)
+        _record_storage_layout(carrier, proxy)
     else:
         carrier._proxy_view.proxy = proxy
     carrier._output_port = None
