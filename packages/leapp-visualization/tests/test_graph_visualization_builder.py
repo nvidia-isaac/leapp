@@ -43,8 +43,16 @@ class FakeNode:
 def test_build_visual_graph_preserves_ports_semantics_and_external_io():
     policy = FakeNode(
         name="policy",
-        inputs=[FakeTensorDescription("obs", "float32", (1, 12), semantics={"kind": "state"})],
-        outputs=[FakeTensorDescription("action", "float32", (1, 4), semantics={"kind": "command"})],
+        inputs=[
+            FakeTensorDescription(
+                "obs", "float32", (1, 12), semantics={"kind": "state"}
+            )
+        ],
+        outputs=[
+            FakeTensorDescription(
+                "action", "float32", (1, 4), semantics={"kind": "command"}
+            )
+        ],
         backend="onnx-dynamo",
         node_index=0,
     )
@@ -106,8 +114,18 @@ def test_build_visual_graph_marks_feedback_edges_without_adding_them_to_forward_
 
     graph = build_visual_graph(
         nodes={"first": first, "second": second},
-        connections=[{"source": {"node": first, "idx": 0}, "targets": [{"node": second, "idx": 0}]}],
-        feedback_connections=[{"source": {"node": second, "idx": 0}, "targets": [{"node": first, "idx": 0}]}],
+        connections=[
+            {
+                "source": {"node": first, "idx": 0},
+                "targets": [{"node": second, "idx": 0}],
+            }
+        ],
+        feedback_connections=[
+            {
+                "source": {"node": second, "idx": 0},
+                "targets": [{"node": first, "idx": 0}],
+            }
+        ],
         graph_inputs=[],
         graph_outputs=[],
     )

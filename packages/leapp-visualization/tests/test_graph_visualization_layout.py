@@ -16,7 +16,13 @@
 #
 
 from leapp_visualization.layout import compute_layered_layout
-from leapp_visualization.model import VisualEdge, VisualGraph, VisualNode, VisualPort, VisualTerminal
+from leapp_visualization.model import (
+    VisualEdge,
+    VisualGraph,
+    VisualNode,
+    VisualPort,
+    VisualTerminal,
+)
 
 
 def _node(name):
@@ -27,13 +33,41 @@ def test_layered_layout_places_pipeline_left_to_right():
     graph = VisualGraph(
         nodes=(_node("a"), _node("b")),
         terminals=(
-            VisualTerminal("terminal:input:a:x", "graph_input", "x", "node:a", "port:a:input:x"),
-            VisualTerminal("terminal:output:b:y", "graph_output", "y", "node:b", "port:b:output:y"),
+            VisualTerminal(
+                "terminal:input:a:x", "graph_input", "x", "node:a", "port:a:input:x"
+            ),
+            VisualTerminal(
+                "terminal:output:b:y", "graph_output", "y", "node:b", "port:b:output:y"
+            ),
         ),
         edges=(
-            VisualEdge("e0", "graph_input", "terminal:input:a:x", "node:a", None, "port:a:input:x", "x"),
-            VisualEdge("e1", "forward", "node:a", "node:b", "port:a:output:y", "port:b:input:y", "y"),
-            VisualEdge("e2", "graph_output", "node:b", "terminal:output:b:y", "port:b:output:y", None, "y"),
+            VisualEdge(
+                "e0",
+                "graph_input",
+                "terminal:input:a:x",
+                "node:a",
+                None,
+                "port:a:input:x",
+                "x",
+            ),
+            VisualEdge(
+                "e1",
+                "forward",
+                "node:a",
+                "node:b",
+                "port:a:output:y",
+                "port:b:input:y",
+                "y",
+            ),
+            VisualEdge(
+                "e2",
+                "graph_output",
+                "node:b",
+                "terminal:output:b:y",
+                "port:b:output:y",
+                None,
+                "y",
+            ),
         ),
     )
 
@@ -99,7 +133,11 @@ def test_layered_layout_sorts_encoded_edges_and_places_missing_ids(monkeypatch):
 
     graph = VisualGraph(
         nodes=(_node("b"), _node("a"), _node("c")),
-        terminals=(VisualTerminal("terminal:input:c:z", "graph_input", "z", "node:c", "port:c:input:z"),),
+        terminals=(
+            VisualTerminal(
+                "terminal:input:c:z", "graph_input", "z", "node:c", "port:c:input:z"
+            ),
+        ),
         edges=(
             VisualEdge("e1", "forward", "node:b", "node:c"),
             VisualEdge("e0", "forward", "node:a", "node:c"),

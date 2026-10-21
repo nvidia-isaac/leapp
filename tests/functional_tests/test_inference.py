@@ -26,11 +26,14 @@ import os
 import yaml
 import shutil
 import hashlib
+
+
 class TestInferenceManagerRobustness(LEAPPFunctionalTestBase):
     """Tests for InferenceManager resilience to YAML variations."""
 
     def _export_simple_model(self):
         """Export a minimal jit model and return the yaml path."""
+
         @annotate.method(export_with="jit")
         def simple_model(x: torch.Tensor):
             return x * 2.0
@@ -58,7 +61,7 @@ class TestInferenceManagerRobustness(LEAPPFunctionalTestBase):
         # Corrupt the model file by appending garbage bytes
         model_path = os.path.join(self.TEST_GRAPH_NAME, "simple_model.pt")
         with open(model_path, "ab") as f:
-            f.write(b"\x00\xFF\x00\xFF")
+            f.write(b"\x00\xff\x00\xff")
 
         yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
         with self.assertRaises(ValueError) as ctx:
@@ -134,8 +137,8 @@ class TestInferenceManagerRobustness(LEAPPFunctionalTestBase):
         yaml_path = self._export_simple_model()
         with open(yaml_path) as f:
             data = yaml.safe_load(f)
-        data['pipeline'].pop('feedback_flow', None)
-        with open(yaml_path, 'w') as f:
+        data["pipeline"].pop("feedback_flow", None)
+        with open(yaml_path, "w") as f:
             yaml.dump(data, f)
 
         manager = InferenceManager(yaml_path)
@@ -147,13 +150,12 @@ class TestInferenceManagerRobustness(LEAPPFunctionalTestBase):
         yaml_path = self._export_simple_model()
         with open(yaml_path) as f:
             data = yaml.safe_load(f)
-        data['pipeline'].pop('data_flow', None)
-        with open(yaml_path, 'w') as f:
+        data["pipeline"].pop("data_flow", None)
+        with open(yaml_path, "w") as f:
             yaml.dump(data, f)
 
         manager = InferenceManager(yaml_path)
         self.assertIsNotNone(manager)
-
 
     # -----------------------------------------------------------------
     # TG3: Feedback state loading
@@ -169,7 +171,9 @@ class TestInferenceManagerRobustness(LEAPPFunctionalTestBase):
         counter = annotate.state_tensors("policy", {"counter": initial_counter})
         new_counter = counter + obs_traced
         annotate.update_state("policy", {"counter": new_counter})
-        annotate.output_tensors("policy", {"action": obs_traced * 2.0}, export_with="jit")
+        annotate.output_tensors(
+            "policy", {"action": obs_traced * 2.0}, export_with="jit"
+        )
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
@@ -179,7 +183,8 @@ class TestInferenceManagerRobustness(LEAPPFunctionalTestBase):
         loaded = manager.value_dict["policy"]["counter"]
         self.assertTrue(
             torch.allclose(loaded.cpu(), initial_counter),
-            f"Expected initial_counter {initial_counter}, got {loaded}")
+            f"Expected initial_counter {initial_counter}, got {loaded}",
+        )
 
     def test_reset_zeros_runtime_buffers_then_repopulates_feedback(self):
         """reset() zeroes runtime caches and then restores feedback initial values."""
@@ -191,28 +196,38 @@ class TestInferenceManagerRobustness(LEAPPFunctionalTestBase):
         counter = annotate.state_tensors("policy", {"counter": initial_counter})
         new_counter = counter + obs_traced
         annotate.update_state("policy", {"counter": new_counter})
-        annotate.output_tensors("policy", {"action": obs_traced * 2.0}, export_with="jit")
+        annotate.output_tensors(
+            "policy", {"action": obs_traced * 2.0}, export_with="jit"
+        )
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
         yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
         manager = InferenceManager(yaml_path)
 
-        manager.run_policy({"policy/observation": obs.to(manager.nodes["policy"].device)})
+        manager.run_policy(
+            {"policy/observation": obs.to(manager.nodes["policy"].device)}
+        )
         manager.reset()
 
-        self.assertTrue(torch.allclose(
-            manager.value_dict["policy"]["observation"].cpu(),
-            torch.zeros_like(obs),
-        ))
-        self.assertTrue(torch.allclose(
-            manager.value_dict["policy"]["counter"].cpu(),
-            initial_counter,
-        ))
-        self.assertTrue(torch.allclose(
-            manager.value_dict["==out=="]["policy/action"].cpu(),
-            torch.zeros_like(obs),
-        ))
+        self.assertTrue(
+            torch.allclose(
+                manager.value_dict["policy"]["observation"].cpu(),
+                torch.zeros_like(obs),
+            )
+        )
+        self.assertTrue(
+            torch.allclose(
+                manager.value_dict["policy"]["counter"].cpu(),
+                initial_counter,
+            )
+        )
+        self.assertTrue(
+            torch.allclose(
+                manager.value_dict["==out=="]["policy/action"].cpu(),
+                torch.zeros_like(obs),
+            )
+        )
 
     def test_feedback_malformed_safetensors_key_raises(self):
         """A safetensors key with more than one slash raises an error on load."""
@@ -226,13 +241,16 @@ class TestInferenceManagerRobustness(LEAPPFunctionalTestBase):
         obs_traced = annotate.input_tensors("policy", {"observation": obs})
         counter = annotate.state_tensors("policy", {"counter": initial_counter})
         annotate.update_state("policy", {"counter": counter + obs_traced})
-        annotate.output_tensors("policy", {"action": obs_traced * 2.0}, export_with="jit")
+        annotate.output_tensors(
+            "policy", {"action": obs_traced * 2.0}, export_with="jit"
+        )
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
         # Overwrite the safetensors file with a malformed key (extra slash)
         safetensors_path = os.path.join(
-            self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}_initial_values.safetensors")
+            self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}_initial_values.safetensors"
+        )
         save_file({"policy/counter/extra": initial_counter}, safetensors_path)
 
         yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
@@ -258,7 +276,8 @@ class TestInferenceManagerRobustness(LEAPPFunctionalTestBase):
         # Copy node_a's model as node_b (same architecture, different name in YAML)
         shutil.copy(
             os.path.join(self.TEST_GRAPH_NAME, "node_a.pt"),
-            os.path.join(self.TEST_GRAPH_NAME, "node_b.pt"))
+            os.path.join(self.TEST_GRAPH_NAME, "node_b.pt"),
+        )
 
         yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
         with open(yaml_path) as f:
@@ -268,17 +287,25 @@ class TestInferenceManagerRobustness(LEAPPFunctionalTestBase):
         model_bytes = open(os.path.join(self.TEST_GRAPH_NAME, "node_b.pt"), "rb").read()
         sha256 = hashlib.sha256(model_bytes).hexdigest()
         md5 = hashlib.md5(model_bytes).hexdigest()
-        data['models']['node_b'] = {
-            'inputs': [{'name': 'x', 'dtype': 'float32', 'shape': [3], 'type': 'tensor'}],
-            'outputs': [{'name': 'out', 'dtype': 'float32', 'shape': [3], 'type': 'tensor'}],
-            'parameters': {'model_path': 'node_b.pt', 'backend': 'jit',
-                           'md5sum': md5, 'sha256sum': sha256},
+        data["models"]["node_b"] = {
+            "inputs": [
+                {"name": "x", "dtype": "float32", "shape": [3], "type": "tensor"}
+            ],
+            "outputs": [
+                {"name": "out", "dtype": "float32", "shape": [3], "type": "tensor"}
+            ],
+            "parameters": {
+                "model_path": "node_b.pt",
+                "backend": "jit",
+                "md5sum": md5,
+                "sha256sum": sha256,
+            },
         }
         # node_a/out fans out: to node_b/x (data_flow) AND stays as pipeline output
-        data['pipeline']['data_flow'] = {'node_a/out': ['node_b/x']}
-        data['pipeline']['outputs'] = {'node_a': ['out'], 'node_b': ['out']}
-        data['pipeline']['inputs'] = {'node_a': ['x']}
-        with open(yaml_path, 'w') as f:
+        data["pipeline"]["data_flow"] = {"node_a/out": ["node_b/x"]}
+        data["pipeline"]["outputs"] = {"node_a": ["out"], "node_b": ["out"]}
+        data["pipeline"]["inputs"] = {"node_a": ["x"]}
+        with open(yaml_path, "w") as f:
             yaml.dump(data, f)
 
         manager = InferenceManager(yaml_path)
@@ -326,7 +353,9 @@ class TestInferenceManagerRobustness(LEAPPFunctionalTestBase):
         result = manager.run_policy({"node_a/x": trace_input})
 
         self.assertTrue(torch.allclose(result["node_a/final_a"], trace_input + 10.0))
-        self.assertTrue(torch.allclose(result["node_b/final_b"], trace_input * 2.0 - 1.0))
+        self.assertTrue(
+            torch.allclose(result["node_b/final_b"], trace_input * 2.0 - 1.0)
+        )
 
     def test_unroutable_output_raises_on_load(self):
         """Malformed YAML with an output removed from routing should fail at load time."""
@@ -362,5 +391,5 @@ class TestInferenceManagerRobustness(LEAPPFunctionalTestBase):
         self.assertIn("node_a", str(ctx.exception))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main(verbosity=2)

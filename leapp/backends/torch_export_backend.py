@@ -26,7 +26,7 @@ from leapp.utils.logging import _get_logger
 class TorchExportBackend(ExportBackend):
     def get_backend_metadata(self):
         return {}
-    
+
     def get_backend_model_type(self):
         return "jit"
 
@@ -35,14 +35,16 @@ class TorchExportBackend(ExportBackend):
         # Freeze the model before saving for optimization
         if compiled_model is not None:
             preserved_attrs = []
-            if hasattr(self, 'node_context') and hasattr(self.node_context, 'saved_buffers'):
+            if hasattr(self, "node_context") and hasattr(
+                self.node_context, "saved_buffers"
+            ):
                 preserved_attrs = self.node_context.saved_buffers
 
             compiled_model = torch.jit.freeze(
-                compiled_model.eval(), preserved_attrs=preserved_attrs)
+                compiled_model.eval(), preserved_attrs=preserved_attrs
+            )
         else:
-            _get_logger().error(
-                f"No compiled model found for {self.node_context.name}")
+            _get_logger().error(f"No compiled model found for {self.node_context.name}")
 
         path = os.path.join(save_path, f"{self.node_context.name}.pt")
         compiled_model.save(path)
@@ -54,7 +56,8 @@ class TorchExportBackend(ExportBackend):
 
     def compile(self):
         raise NotImplementedError(
-            "TorchExportBackend does not support compilation, please use torch-script or torch-trace instead")
+            "TorchExportBackend does not support compilation, please use torch-script or torch-trace instead"
+        )
         return None
 
 
@@ -70,13 +73,11 @@ class TorchTraceExportBackend(TorchExportBackend):
             m = self.module_builder()
         m = m.eval()
         # Get flat tensor values directly from inputs (not input_formats which preserves nested structure)
-        input_values = [
-            tensor_desc.value for tensor_desc in self.node_context.inputs]
+        input_values = [tensor_desc.value for tensor_desc in self.node_context.inputs]
         # Clone tensors to escape inference mode (inference tensors can't participate in autograd)
         input_values = prepare_tensors_for_export(input_values)
 
-        self.compiled_model = torch.jit.trace(
-            m, input_values, **self.backend_params)
+        self.compiled_model = torch.jit.trace(m, input_values, **self.backend_params)
         self.compiled_module = m
         # Freezing moved to save() method to allow node combination
 

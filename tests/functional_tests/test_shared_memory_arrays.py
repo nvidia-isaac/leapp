@@ -61,15 +61,21 @@ class TestTorchSharedMemory(LEAPPFunctionalTestBase):
         # exported graph has to reproduce.
         self.assertTrue(
             torch.equal(action.tensor, expected),
-            f"eager value diverged: got {action.tensor}, expected {expected}")
+            f"eager value diverged: got {action.tensor}, expected {expected}",
+        )
 
         annotate.output_tensors("policy", {"action": action}, export_with="jit")
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1, internal_connections=0,
-            feedback_connections=0)
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=0,
+        )
         self.verify_inference_manager(
             source_inputs={"policy/obs": obs_value},
             source_outputs={"policy/action": expected},
@@ -85,13 +91,13 @@ class TestTorchSharedMemory(LEAPPFunctionalTestBase):
 
     def test_noop_conversion_alias_shares_provenance(self):
         """A ``to`` that neither casts nor moves allocates nothing."""
-        self._verify_alias_mutation_propagates(
-            lambda tensor: tensor.to(torch.float32))
+        self._verify_alias_mutation_propagates(lambda tensor: tensor.to(torch.float32))
 
     def test_chained_aliases_share_one_provenance(self):
         """An alias of an alias still names the one original value."""
         self._verify_alias_mutation_propagates(
-            lambda tensor: tensor.detach()[:].to(torch.float32))
+            lambda tensor: tensor.detach()[:].to(torch.float32)
+        )
 
     def test_inplace_dispatch_mutation_reaches_the_alias(self):
         """An in-place operation reaching dispatch rebinds the shared root.
@@ -112,12 +118,12 @@ class TestTorchSharedMemory(LEAPPFunctionalTestBase):
         alias = obs.detach()
         torch.relu_(obs)
         action = alias * 2.0
-        targets = [str(node.target)
-                   for node in annotate.nodes["policy"].graph.nodes]
+        targets = [str(node.target) for node in annotate.nodes["policy"].graph.nodes]
 
         self.assertTrue(
             torch.equal(action.tensor, expected),
-            f"eager value diverged: got {action.tensor}, expected {expected}")
+            f"eager value diverged: got {action.tensor}, expected {expected}",
+        )
 
         annotate.output_tensors("policy", {"action": action}, export_with="jit")
         leapp.stop()
@@ -126,7 +132,8 @@ class TestTorchSharedMemory(LEAPPFunctionalTestBase):
         # The mutation is a real operation, so unlike an alias it is recorded.
         self.assertTrue(
             any("relu" in target for target in targets),
-            f"the in-place mutation was not recorded: {targets}")
+            f"the in-place mutation was not recorded: {targets}",
+        )
         self.verify_inference_manager(
             source_inputs={"policy/obs": obs_value},
             source_outputs={"policy/action": expected},
@@ -150,7 +157,8 @@ class TestTorchSharedMemory(LEAPPFunctionalTestBase):
 
         self.assertTrue(
             torch.equal(action.tensor, expected),
-            f"eager value diverged: got {action.tensor}, expected {expected}")
+            f"eager value diverged: got {action.tensor}, expected {expected}",
+        )
 
         annotate.output_tensors("policy", {"action": action}, export_with="jit")
         leapp.stop()
@@ -174,20 +182,24 @@ class TestTorchSharedMemory(LEAPPFunctionalTestBase):
         obs = annotate.input_tensors("policy", {"obs": obs_value.clone()})
 
         action = obs.detach()[:].to(torch.float32) * 2.0
-        targets = [str(node.target)
-                   for node in annotate.nodes["policy"].graph.nodes]
+        targets = [str(node.target) for node in annotate.nodes["policy"].graph.nodes]
 
         annotate.output_tensors("policy", {"action": action}, export_with="jit")
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
         self.assertEqual(
-            2, len(targets),
-            f"expected only a placeholder and a multiply, got {targets}")
+            2,
+            len(targets),
+            f"expected only a placeholder and a multiply, got {targets}",
+        )
         self.assertFalse(
-            any("detach" in target or "getitem" in target or target == "to"
-                for target in targets),
-            f"an aliasing operation was recorded: {targets}")
+            any(
+                "detach" in target or "getitem" in target or target == "to"
+                for target in targets
+            ),
+            f"an aliasing operation was recorded: {targets}",
+        )
         self.verify_inference_manager(
             source_inputs={"policy/obs": obs_value},
             source_outputs={"policy/action": obs_value * 2.0},
@@ -208,12 +220,8 @@ class TestTorchSharedMemory(LEAPPFunctionalTestBase):
             buffer = obs_value.clone()
             alias = buffer.detach()
 
-            traced_buffer = annotate.input_tensors(
-                "policy", {"buffer": buffer}
-            )
-            traced_alias = annotate.input_tensors(
-                "policy", {"alias": alias}
-            )
+            traced_buffer = annotate.input_tensors("policy", {"buffer": buffer})
+            traced_alias = annotate.input_tensors("policy", {"alias": alias})
 
             if pass_index == 0:
                 self.assertIs(
@@ -240,8 +248,13 @@ class TestTorchSharedMemory(LEAPPFunctionalTestBase):
         leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1, internal_connections=0,
-            feedback_connections=0)
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=0,
+        )
         self.verify_inference_manager(
             source_inputs={"policy/buffer": obs_value},
             source_outputs={"policy/action": (obs_value + 1.0) * 2.0},
@@ -260,20 +273,27 @@ class TestTorchSharedMemory(LEAPPFunctionalTestBase):
 
         leapp.start(name=self.TEST_GRAPH_NAME)
         traced_buffer = annotate.input_tensors("policy", {"buffer": buffer})
-        annotate.input_tensors("policy", [
-            TensorSemantics(
-                name="alias", ref=alias, kind=InputKindEnum.JOINT_POSITION),
-        ])
+        annotate.input_tensors(
+            "policy",
+            [
+                TensorSemantics(
+                    name="alias", ref=alias, kind=InputKindEnum.JOINT_POSITION
+                ),
+            ],
+        )
         annotate.output_tensors(
-            "policy", {"action": traced_buffer * 2.0}, export_with="jit")
+            "policy", {"action": traced_buffer * 2.0}, export_with="jit"
+        )
         node = annotate.get_nodes()["policy"]
         leapp.stop()
 
         ports = [description.name_str for description in node.inputs]
         self.assertEqual(ports, ["buffer"], "adoption changed the exported port")
         self.assertEqual(
-            node.inputs[0].semantics.kind, InputKindEnum.JOINT_POSITION,
-            "the adopted declaration's semantics were dropped")
+            node.inputs[0].semantics.kind,
+            InputKindEnum.JOINT_POSITION,
+            "the adopted declaration's semantics were dropped",
+        )
 
     def test_output_alias_with_a_surviving_different_root_faults(self):
         """A pre-declaration mutation cannot silently escape through an alias.
@@ -321,8 +341,13 @@ class TestTorchSharedMemory(LEAPPFunctionalTestBase):
         leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1, internal_connections=0,
-            feedback_connections=0)
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=0,
+        )
         self.verify_inference_manager(
             source_inputs={"policy/source": source_value},
             source_outputs={"policy/a": source_value},
@@ -352,8 +377,7 @@ class TestWarpSharedMemory(WarpTestCase, LEAPPFunctionalTestBase):
 
         leapp.start(name=self.TEST_GRAPH_NAME)
         for _ in range(2):
-            obs = annotate.input_tensors(
-                "node_a", {"obs": obs_value.clone()})
+            obs = annotate.input_tensors("node_a", {"obs": obs_value.clone()})
             array = wp.from_torch(obs)
             with annotate.warp_op("node_a", device=self.DEVICE):
                 wp.launch(
@@ -366,9 +390,9 @@ class TestWarpSharedMemory(WarpTestCase, LEAPPFunctionalTestBase):
 
             self.assertTrue(
                 torch.equal(action.tensor, expected),
-                f"eager value diverged: got {action.tensor}, expected {expected}")
-            annotate.output_tensors(
-                "node_a", {"action": action}, export_with="onnx")
+                f"eager value diverged: got {action.tensor}, expected {expected}",
+            )
+            annotate.output_tensors("node_a", {"action": action}, export_with="onnx")
 
         leapp.stop()
         leapp.compile_graph(visualize=False)
@@ -407,9 +431,9 @@ class TestWarpSharedMemory(WarpTestCase, LEAPPFunctionalTestBase):
 
             self.assertTrue(
                 torch.equal(action.tensor, expected),
-                f"eager value diverged: got {action.tensor}, expected {expected}")
-            annotate.output_tensors(
-                "node_a", {"action": action}, export_with="onnx")
+                f"eager value diverged: got {action.tensor}, expected {expected}",
+            )
+            annotate.output_tensors("node_a", {"action": action}, export_with="onnx")
 
         leapp.stop()
         leapp.compile_graph(visualize=False)
@@ -453,9 +477,9 @@ class TestWarpSharedMemory(WarpTestCase, LEAPPFunctionalTestBase):
 
             self.assertTrue(
                 torch.equal(action.tensor, expected),
-                f"eager value diverged: got {action.tensor}, expected {expected}")
-            annotate.output_tensors(
-                "node_a", {"action": action}, export_with="onnx")
+                f"eager value diverged: got {action.tensor}, expected {expected}",
+            )
+            annotate.output_tensors("node_a", {"action": action}, export_with="onnx")
 
         leapp.stop()
         leapp.compile_graph(visualize=False)
@@ -481,7 +505,8 @@ class TestWarpSharedMemory(WarpTestCase, LEAPPFunctionalTestBase):
         leapp.start(name=self.TEST_GRAPH_NAME)
         for _ in range(2):
             tensor_a, tensor_b = annotate.input_tensors(
-                "node_a", {"in_a": a_value.clone(), "in_b": b_value.clone()})
+                "node_a", {"in_a": a_value.clone(), "in_b": b_value.clone()}
+            )
             array_1 = wp.from_torch(tensor_a)
             array_2 = wp.from_torch(tensor_b)
             with annotate.warp_op("node_a", device=self.DEVICE):
@@ -493,18 +518,21 @@ class TestWarpSharedMemory(WarpTestCase, LEAPPFunctionalTestBase):
                 )
 
             self.assertIsNot(
-                tensor_a.proxy.node, tensor_b.proxy.node,
-                "both buffers were left on one segment output")
+                tensor_a.proxy.node,
+                tensor_b.proxy.node,
+                "both buffers were left on one segment output",
+            )
 
             out_a = tensor_a + 10.0
             out_b = tensor_b * 3.0
             self.assertTrue(
                 torch.equal(out_a.tensor, expected_a)
                 and torch.equal(out_b.tensor, expected_b),
-                f"eager values diverged: got {out_a.tensor} and {out_b.tensor}")
+                f"eager values diverged: got {out_a.tensor} and {out_b.tensor}",
+            )
             annotate.output_tensors(
-                "node_a", {"out_a": out_a, "out_b": out_b},
-                export_with="onnx")
+                "node_a", {"out_a": out_a, "out_b": out_b}, export_with="onnx"
+            )
 
         leapp.stop()
         leapp.compile_graph(visualize=False)
@@ -540,8 +568,7 @@ class TestWarpSharedMemory(WarpTestCase, LEAPPFunctionalTestBase):
 
         leapp.start(name=self.TEST_GRAPH_NAME)
         for _ in range(2):
-            tensor = annotate.input_tensors(
-                "node_a", {"in_a": source_value.clone()})
+            tensor = annotate.input_tensors("node_a", {"in_a": source_value.clone()})
             array = wp.from_torch(tensor)
 
             with annotate.warp_op("node_a", device=self.DEVICE):
@@ -567,10 +594,9 @@ class TestWarpSharedMemory(WarpTestCase, LEAPPFunctionalTestBase):
             action = tensor * 2.0
             self.assertTrue(
                 torch.equal(action.tensor, expected),
-                f"eager value diverged: got {action.tensor}, "
-                f"expected {expected}")
-            annotate.output_tensors(
-                "node_a", {"action": action}, export_with="onnx")
+                f"eager value diverged: got {action.tensor}, expected {expected}",
+            )
+            annotate.output_tensors("node_a", {"action": action}, export_with="onnx")
 
         node = annotate.get_nodes()["node_a"]
         leapp.stop()
@@ -580,7 +606,8 @@ class TestWarpSharedMemory(WarpTestCase, LEAPPFunctionalTestBase):
         # the two would have merged into one segment and lost the middle stage.
         self.assertEqual(
             ["warp_segment_0", "warp_segment_1"],
-            [segment.runner_name for segment in node.warp_segments])
+            [segment.runner_name for segment in node.warp_segments],
+        )
         self.verify_inference_manager(
             source_inputs={"node_a/in_a": source_value},
             source_outputs={"node_a/action": expected},
@@ -595,19 +622,22 @@ class TestWarpSharedMemory(WarpTestCase, LEAPPFunctionalTestBase):
         leapp.start(name=self.TEST_GRAPH_NAME)
         array = annotate.input_tensors(
             "node_a",
-            {"in_a": wp.array(
-                [1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)},
+            {"in_a": wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)},
         )
 
         host = array.numpy()
         self.assertIsNot(
-            array.proxy_view, host.proxy_view,
-            "a host readback shared a root with its device buffer")
+            array.proxy_view,
+            host.proxy_view,
+            "a host readback shared a root with its device buffer",
+        )
 
         returned = wp.from_numpy(host, device=self.DEVICE)
         self.assertIsNot(
-            host.proxy_view, returned.proxy_view,
-            "a host-to-device copy shared a root with its host source")
+            host.proxy_view,
+            returned.proxy_view,
+            "a host-to-device copy shared a root with its host source",
+        )
 
 
 class TestPersistentAliasAttachment(WarpTestCase, LEAPPFunctionalTestBase):
@@ -649,13 +679,18 @@ class TestPersistentAliasAttachment(WarpTestCase, LEAPPFunctionalTestBase):
             # The kernel writes the buffer in place, so each pass starts over.
             torch_buffer.copy_(source_value)
             obs, declared_array = annotate.input_tensors(
-                "node_a", {"obs": torch_buffer, "warp_view": warp_buffer})
+                "node_a", {"obs": torch_buffer, "warp_view": warp_buffer}
+            )
             self.assertIs(
-                declared_array, warp_buffer,
-                "declaring a raw wp.array did not promote the caller's object")
+                declared_array,
+                warp_buffer,
+                "declaring a raw wp.array did not promote the caller's object",
+            )
             self.assertIs(
-                obs.proxy_view, warp_buffer.proxy_view,
-                "the declared aliases did not share one root")
+                obs.proxy_view,
+                warp_buffer.proxy_view,
+                "the declared aliases did not share one root",
+            )
 
             with annotate.warp_op("node_a", device=self.DEVICE):
                 wp.launch(
@@ -668,24 +703,34 @@ class TestPersistentAliasAttachment(WarpTestCase, LEAPPFunctionalTestBase):
 
             self.assertTrue(
                 torch.equal(action.tensor, expected),
-                f"eager value diverged: got {action.tensor}, expected {expected}")
-            annotate.output_tensors(
-                "node_a", {"action": action}, export_with="onnx")
+                f"eager value diverged: got {action.tensor}, expected {expected}",
+            )
+            annotate.output_tensors("node_a", {"action": action}, export_with="onnx")
 
         node = annotate.get_nodes()["node_a"]
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
         self.assertTrue(
-            any("warp_runner" in str(graph_node.target)
-                for graph_node in node.m.graph.nodes),
-            "the Warp runner did not survive pruning")
+            any(
+                "warp_runner" in str(graph_node.target)
+                for graph_node in node.m.graph.nodes
+            ),
+            "the Warp runner did not survive pruning",
+        )
         self.assertEqual(
-            node.trimmed_inputs, set(),
-            "a declared alias produced a port nothing consumed")
+            node.trimmed_inputs,
+            set(),
+            "a declared alias produced a port nothing consumed",
+        )
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1, internal_connections=0,
-            feedback_connections=0)
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=0,
+        )
         self.verify_inference_manager(
             source_inputs={"node_a/obs": source_value},
             source_outputs={"node_a/action": expected},
@@ -711,13 +756,18 @@ class TestPersistentAliasAttachment(WarpTestCase, LEAPPFunctionalTestBase):
         for _ in range(2):
             torch_buffer.copy_(source_value)
             declared_array, obs = annotate.input_tensors(
-                "node_a", {"warp_view": warp_buffer, "obs": torch_buffer})
+                "node_a", {"warp_view": warp_buffer, "obs": torch_buffer}
+            )
             self.assertIs(
-                declared_array, warp_buffer,
-                "declaring a raw wp.array did not promote the caller's object")
+                declared_array,
+                warp_buffer,
+                "declaring a raw wp.array did not promote the caller's object",
+            )
             self.assertIs(
-                obs.proxy_view, warp_buffer.proxy_view,
-                "the declared aliases did not share one root")
+                obs.proxy_view,
+                warp_buffer.proxy_view,
+                "the declared aliases did not share one root",
+            )
 
             with annotate.warp_op("node_a", device=self.DEVICE):
                 wp.launch(
@@ -730,24 +780,34 @@ class TestPersistentAliasAttachment(WarpTestCase, LEAPPFunctionalTestBase):
 
             self.assertTrue(
                 torch.equal(action.tensor, expected),
-                f"eager value diverged: got {action.tensor}, expected {expected}")
-            annotate.output_tensors(
-                "node_a", {"action": action}, export_with="onnx")
+                f"eager value diverged: got {action.tensor}, expected {expected}",
+            )
+            annotate.output_tensors("node_a", {"action": action}, export_with="onnx")
 
         node = annotate.get_nodes()["node_a"]
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
         self.assertTrue(
-            any("warp_runner" in str(graph_node.target)
-                for graph_node in node.m.graph.nodes),
-            "the Warp runner did not survive pruning")
+            any(
+                "warp_runner" in str(graph_node.target)
+                for graph_node in node.m.graph.nodes
+            ),
+            "the Warp runner did not survive pruning",
+        )
         self.assertEqual(
-            node.trimmed_inputs, set(),
-            "a declared alias produced a port nothing consumed")
+            node.trimmed_inputs,
+            set(),
+            "a declared alias produced a port nothing consumed",
+        )
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1, internal_connections=0,
-            feedback_connections=0)
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=0,
+        )
         self.verify_inference_manager(
             source_inputs={"node_a/warp_view": source_value},
             source_outputs={"node_a/action": expected},
@@ -771,10 +831,12 @@ class TestPersistentAliasAttachment(WarpTestCase, LEAPPFunctionalTestBase):
         for _ in range(2):
             torch_buffer.copy_(source_value)
             annotate.input_tensors(
-                "node_a", {"obs": torch_buffer, "warp_view": warp_buffer})
+                "node_a", {"obs": torch_buffer, "warp_view": warp_buffer}
+            )
             self.assertTrue(
                 torch_buffer.is_tracing,
-                "declaring a Torch input did not promote the caller's object")
+                "declaring a Torch input did not promote the caller's object",
+            )
 
             with annotate.warp_op("node_a", device=self.DEVICE):
                 wp.launch(
@@ -788,18 +850,21 @@ class TestPersistentAliasAttachment(WarpTestCase, LEAPPFunctionalTestBase):
 
             self.assertTrue(
                 torch.equal(action.tensor, expected),
-                f"eager value diverged: got {action.tensor}, expected {expected}")
-            annotate.output_tensors(
-                "node_a", {"action": action}, export_with="onnx")
+                f"eager value diverged: got {action.tensor}, expected {expected}",
+            )
+            annotate.output_tensors("node_a", {"action": action}, export_with="onnx")
 
         node = annotate.get_nodes()["node_a"]
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
         self.assertTrue(
-            any("warp_runner" in str(graph_node.target)
-                for graph_node in node.m.graph.nodes),
-            "the Warp runner did not survive pruning")
+            any(
+                "warp_runner" in str(graph_node.target)
+                for graph_node in node.m.graph.nodes
+            ),
+            "the Warp runner did not survive pruning",
+        )
         self.verify_inference_manager(
             source_inputs={"node_a/obs": source_value},
             source_outputs={"node_a/action": expected},
@@ -818,8 +883,7 @@ class TestPersistentAliasAttachment(WarpTestCase, LEAPPFunctionalTestBase):
         _, warp_buffer = self._make_persistent_pair(obs_value)
 
         leapp.start(name=self.TEST_GRAPH_NAME)
-        obs = annotate.input_tensors(
-            "node_a", {"obs": obs_value.clone()})
+        obs = annotate.input_tensors("node_a", {"obs": obs_value.clone()})
         with annotate.warp_op("node_a", device=self.DEVICE):
             wp.launch(
                 self.kernels.increment_in_place,
@@ -829,11 +893,12 @@ class TestPersistentAliasAttachment(WarpTestCase, LEAPPFunctionalTestBase):
             )
 
         self.assertIs(
-            type(warp_buffer), wp.array,
-            "an undeclared persistent alias was promoted")
+            type(warp_buffer), wp.array, "an undeclared persistent alias was promoted"
+        )
         self.assertIsNone(
             getattr(warp_buffer, "_proxy_view", None),
-            "an undeclared persistent alias was given provenance")
+            "an undeclared persistent alias was given provenance",
+        )
         self.assertIsNotNone(obs.proxy, "the declared input lost its provenance")
 
     def test_closed_node_output_crosses_the_boundary_untouched(self):
@@ -854,8 +919,10 @@ class TestPersistentAliasAttachment(WarpTestCase, LEAPPFunctionalTestBase):
         consumed = annotate.input_tensors("node_b", {"hidden": hidden})
 
         self.assertIsNot(
-            consumed.proxy_view, hidden.proxy_view,
-            "a boundary rewrap shared the producer's root")
+            consumed.proxy_view,
+            hidden.proxy_view,
+            "a boundary rewrap shared the producer's root",
+        )
 
 
 class TestNumpySharedMemory(LEAPPFunctionalTestBase):
@@ -873,18 +940,23 @@ class TestNumpySharedMemory(LEAPPFunctionalTestBase):
         obs = annotate.input_tensors("policy", {"obs": torch.tensor([1.0, 2.0])})
 
         self.assertIs(
-            obs.proxy_view, obs.numpy().proxy_view,
-            "a zero-copy .numpy() did not share the tensor's root")
+            obs.proxy_view,
+            obs.numpy().proxy_view,
+            "a zero-copy .numpy() did not share the tensor's root",
+        )
 
     def test_identical_layout_numpy_view_shares_a_root(self):
         """A view cast covers the same bytes at the same layout."""
         leapp.start(name=self.TEST_GRAPH_NAME)
         arr = annotate.input_tensors(
-            "policy", {"obs": np.array([1.0, 2.0, 3.0], dtype=np.float32)})
+            "policy", {"obs": np.array([1.0, 2.0, 3.0], dtype=np.float32)}
+        )
 
         self.assertIs(
-            arr.proxy_view, arr.view(type(arr)).proxy_view,
-            "an identical-layout view did not share its source's root")
+            arr.proxy_view,
+            arr.view(type(arr)).proxy_view,
+            "an identical-layout view did not share its source's root",
+        )
 
     def test_narrowing_and_allocating_results_are_separate_values(self):
         """A slice covers fewer bytes and a ufunc result covers other bytes.
@@ -894,14 +966,19 @@ class TestNumpySharedMemory(LEAPPFunctionalTestBase):
         """
         leapp.start(name=self.TEST_GRAPH_NAME)
         arr = annotate.input_tensors(
-            "policy", {"obs": np.array([1.0, 2.0, 3.0], dtype=np.float32)})
+            "policy", {"obs": np.array([1.0, 2.0, 3.0], dtype=np.float32)}
+        )
 
         self.assertIsNot(
-            arr.proxy_view, arr[0:2].proxy_view,
-            "a narrowing slice shared its source's root")
+            arr.proxy_view,
+            arr[0:2].proxy_view,
+            "a narrowing slice shared its source's root",
+        )
         self.assertIsNot(
-            arr.proxy_view, np.add(arr, 1.0).proxy_view,
-            "a freshly allocated ufunc result shared its source's root")
+            arr.proxy_view,
+            np.add(arr, 1.0).proxy_view,
+            "a freshly allocated ufunc result shared its source's root",
+        )
 
     def test_numpy_mutation_reaches_the_torch_carrier(self):
         """A write through the NumPy carrier moves the Torch carrier with it.
@@ -923,7 +1000,8 @@ class TestNumpySharedMemory(LEAPPFunctionalTestBase):
 
         self.assertTrue(
             torch.equal(action.tensor, expected),
-            f"eager value diverged: got {action.tensor}, expected {expected}")
+            f"eager value diverged: got {action.tensor}, expected {expected}",
+        )
 
         annotate.output_tensors("policy", {"action": action}, export_with="jit")
         leapp.stop()
@@ -942,19 +1020,22 @@ class TestNumpySharedMemory(LEAPPFunctionalTestBase):
         property the test above already drives end to end.
         """
         leapp.start(name=self.TEST_GRAPH_NAME)
-        obs = annotate.input_tensors(
-            "policy", {"obs": torch.tensor([-1.0, 2.0, -3.0])})
+        obs = annotate.input_tensors("policy", {"obs": torch.tensor([-1.0, 2.0, -3.0])})
 
         np_view = obs.numpy()
         placeholder_proxy = obs.proxy
         torch.relu_(obs)
 
         self.assertIs(
-            obs.proxy_view, np_view.proxy_view,
-            "the Torch mutation replaced the root instead of its proxy")
+            obs.proxy_view,
+            np_view.proxy_view,
+            "the Torch mutation replaced the root instead of its proxy",
+        )
         self.assertIsNot(
-            placeholder_proxy, np_view.proxy,
-            "the NumPy carrier still reports the pre-mutation proxy")
+            placeholder_proxy,
+            np_view.proxy,
+            "the NumPy carrier still reports the pre-mutation proxy",
+        )
 
 
 if __name__ == "__main__":

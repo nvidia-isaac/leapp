@@ -60,8 +60,8 @@ class WarpTensorRef:
         storage_dtype, storage_shape = value_to_name_and_shape(value)
         storage_shape = tuple(storage_shape)
         component_shape = ()
-        if isinstance(shape, tuple) and storage_shape[:len(shape)] == shape:
-            component_shape = storage_shape[len(shape):]
+        if isinstance(shape, tuple) and storage_shape[: len(shape)] == shape:
+            component_shape = storage_shape[len(shape) :]
 
         return cls(
             name=name,
@@ -107,11 +107,7 @@ class WarpSegment:
 
     @property
     def is_empty(self) -> bool:
-        return not (
-            self.events
-            or self.input_refs
-            or self.output_refs
-        )
+        return not (self.events or self.input_refs or self.output_refs)
 
     def add_event(self, event: Any) -> None:
         self.events.append(event)

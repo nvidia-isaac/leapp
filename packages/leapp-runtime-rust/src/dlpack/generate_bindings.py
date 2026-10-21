@@ -64,7 +64,7 @@ for node in ast["inner"]:
             value_node = item["inner"][0]
             while "value" not in value_node:
                 value_node = value_node["inner"][0]
-            out.append(f'pub const {item["name"]}: u32 = {value_node["value"]};')
+            out.append(f"pub const {item['name']}: u32 = {value_node['value']};")
     if node["kind"] not in {"TypedefDecl", "RecordDecl"}:
         continue
     if node.get("name") not in selected:
@@ -87,7 +87,7 @@ for node in ast["inner"]:
             if field["name"] == "deleter"
             else rust_type(field["type"]["qualType"])
         )
-        out.append(f'    pub {field["name"]}: {value},')
+        out.append(f"    pub {field['name']}: {value},")
     out.append("}")
 (root / "sys.rs").write_text("\n".join(out) + "\n")
 subprocess.run(["rustfmt", str(root / "sys.rs")], check=True)

@@ -110,7 +110,7 @@ class SimplifiedONNXProgram:
         return all(isinstance(dim, int) and dim >= 0 for dim in shape)
 
     def _can_use_cuda_iobinding(self, args):
-        if self._active_provider != 'CUDAExecutionProvider':
+        if self._active_provider != "CUDAExecutionProvider":
             return False
 
         if not args:
@@ -164,7 +164,7 @@ class SimplifiedONNXProgram:
                 )
             binding.bind_input(
                 name=name,
-                device_type='cuda',
+                device_type="cuda",
                 device_id=device_id,
                 element_type=np_dtype,
                 shape=tuple(prepared.shape),
@@ -188,7 +188,7 @@ class SimplifiedONNXProgram:
             ).contiguous()
             binding.bind_output(
                 name=output_meta.name,
-                device_type='cuda',
+                device_type="cuda",
                 device_id=output_device.index or 0,
                 element_type=self._torch_dtype_to_numpy_dtype(torch_dtype),
                 shape=tuple(output_tensor.shape),
@@ -201,7 +201,7 @@ class SimplifiedONNXProgram:
 
     def __del__(self):
         """Clean up temp directory if we own it."""
-        if getattr(self, '_temp_dir', None) is not None:
+        if getattr(self, "_temp_dir", None) is not None:
             try:
                 if os.path.exists(self._temp_dir):
                     shutil.rmtree(self._temp_dir)
@@ -212,13 +212,13 @@ class SimplifiedONNXProgram:
         """Get execution providers, always preferring CUDA when available."""
         available_providers = ort.get_available_providers()
 
-        if 'CUDAExecutionProvider' in available_providers:
-            return ['CUDAExecutionProvider', 'CPUExecutionProvider']
+        if "CUDAExecutionProvider" in available_providers:
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
 
         _get_logger().warning(
             "CUDA execution provider not available. Falling back to CPU."
         )
-        return ['CPUExecutionProvider']
+        return ["CPUExecutionProvider"]
 
     def _get_source_size(self):
         """Get total size of all files in the source directory."""
@@ -233,7 +233,9 @@ class SimplifiedONNXProgram:
 
         return total_size
 
-    def save(self, destination, include_initializers=True, keep_initializers_as_inputs=False):
+    def save(
+        self, destination, include_initializers=True, keep_initializers_as_inputs=False
+    ):
         """Save the ONNX model to disk.
 
         For large models (>2GB), re-saves with external data format.
@@ -265,7 +267,8 @@ class SimplifiedONNXProgram:
                 os.remove(data_path)
 
             _get_logger().info(
-                f"Saving model to {destination} with external data in {data_filename}")
+                f"Saving model to {destination} with external data in {data_filename}"
+            )
             onnx.save(
                 model_proto,
                 destination,
@@ -279,11 +282,11 @@ class SimplifiedONNXProgram:
             # Verify external data file was created
             expected_data_path = os.path.join(dest_dir, data_filename)
             if os.path.exists(expected_data_path):
-                _get_logger().info(
-                    f"External data file created: {expected_data_path}")
+                _get_logger().info(f"External data file created: {expected_data_path}")
             else:
                 _get_logger().warning(
-                    f"External data file NOT found: {expected_data_path}")
+                    f"External data file NOT found: {expected_data_path}"
+                )
         else:
             # Small model - just copy files
             shutil.copy2(src_path, destination)
@@ -307,14 +310,18 @@ class SimplifiedONNXProgram:
             # patterns (e.g. Gemm chains produced by FX make_fx decomposition).
             # ORT_ENABLE_BASIC is safe and still applies constant folding.
             sess_options.graph_optimization_level = (
-                ort.GraphOptimizationLevel.ORT_ENABLE_BASIC)
+                ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+            )
             self._session = ort.InferenceSession(
-                model_path, sess_options, providers=providers)
-            self._input_names = [
-                inp.name for inp in self._session.get_inputs()]
+                model_path, sess_options, providers=providers
+            )
+            self._input_names = [inp.name for inp in self._session.get_inputs()]
             self._output_metas = list(self._session.get_outputs())
-            self._active_provider = self._session.get_providers(
-            )[0] if self._session.get_providers() else 'CPUExecutionProvider'
+            self._active_provider = (
+                self._session.get_providers()[0]
+                if self._session.get_providers()
+                else "CPUExecutionProvider"
+            )
 
     def __call__(self, *args):
         """Run inference on the ONNX model.
@@ -335,7 +342,7 @@ class SimplifiedONNXProgram:
             )
 
         # Determine output device from input tensors
-        output_device = 'cpu'
+        output_device = "cpu"
         for tensor in args:
             if isinstance(tensor, torch.Tensor) and tensor.is_cuda:
                 output_device = tensor.device
@@ -368,7 +375,7 @@ def prepare_tensors_for_export(tensors):
     with torch.inference_mode(False):
         for t in tensors:
             if isinstance(t, torch.Tensor):
-                if hasattr(t, 'original_clone'):
+                if hasattr(t, "original_clone"):
                     prepared.append(t.original_clone())
                 else:
                     prepared.append(t.clone())
@@ -390,7 +397,7 @@ class ExportBackend(abc.ABC):
         self.compiled_model = None
         self.compiled_module = None
         self.runtime_device = None
-    
+
     def override_module_builder(self, module_builder: Callable):
         self.module_builder = module_builder
 
@@ -398,7 +405,7 @@ class ExportBackend(abc.ABC):
         if not os.path.exists(model_path):
             _get_logger().error(f"Model file not found at {model_path}")
             return None, None
-        with open(model_path, 'rb') as f:
+        with open(model_path, "rb") as f:
             file_data = f.read()
             md5sum = hashlib.md5(file_data).hexdigest()
             sha256sum = hashlib.sha256(file_data).hexdigest()
@@ -437,54 +444,56 @@ class ExportBackend(abc.ABC):
 
     @abc.abstractmethod
     def compile(self, m: torch.nn.Module = None) -> Any:
-        '''
+        """
         Compiles the model.
 
-        This function should return the compiled model. The resulting compiled model 
+        This function should return the compiled model. The resulting compiled model
         can be used in recombination with other models.
-        '''
+        """
         raise NotImplementedError
 
     @abc.abstractmethod
     def save(self, save_path: str) -> Tuple[str, str, str]:
-        '''
+        """
         Save the compiled model to the given path
 
         This function should apply all necessary optimizations
-        '''
+        """
         raise NotImplementedError
 
     @abc.abstractmethod
     def load(self, model_path: str, sha256sum: str):
         raise NotImplementedError
-    
+
     def _select_runtime_device(self):
-        return 'cuda' if torch.cuda.is_available() else 'cpu'
+        return "cuda" if torch.cuda.is_available() else "cpu"
 
     def _load_onnx(self, model_path: str, sha256sum: str):
-        _, actual_sha256sum = self._verify_model_location_and_get_hash(
-            model_path)
+        _, actual_sha256sum = self._verify_model_location_and_get_hash(model_path)
         if actual_sha256sum != sha256sum:
             _get_logger().fatal(
                 f"SHA256 checksum mismatch for {model_path}: "
                 f"expected {sha256sum}, got {actual_sha256sum}",
-                error_type=ValueError)
+                error_type=ValueError,
+            )
         model = SimplifiedONNXProgram(model_path)
         self.compiled_model = model
-        has_ort_cuda = 'CUDAExecutionProvider' in ort.get_available_providers()
-        self.runtime_device = 'cuda' if (
-            torch.cuda.is_available() and has_ort_cuda
-        ) else 'cpu'
-        self.compiled_module = None # ONNX models cannot be represented as a module for reexport.
-    
+        has_ort_cuda = "CUDAExecutionProvider" in ort.get_available_providers()
+        self.runtime_device = (
+            "cuda" if (torch.cuda.is_available() and has_ort_cuda) else "cpu"
+        )
+        self.compiled_module = (
+            None  # ONNX models cannot be represented as a module for reexport.
+        )
+
     def _load_torchscript(self, model_path: str, sha256sum: str):
-        _, actual_sha256sum = self._verify_model_location_and_get_hash(
-            model_path)
+        _, actual_sha256sum = self._verify_model_location_and_get_hash(model_path)
         if actual_sha256sum != sha256sum:
             _get_logger().fatal(
                 f"SHA256 checksum mismatch for {model_path}: "
                 f"expected {sha256sum}, got {actual_sha256sum}",
-                error_type=ValueError)
+                error_type=ValueError,
+            )
         device = self._select_runtime_device()
         model = torch.jit.load(model_path, map_location=device)
         model = model.to(device)
@@ -506,30 +515,48 @@ class NoneExportBackend(ExportBackend):
         return {}
 
     def compile(self, m: torch.nn.Module = None):
-        if "model_path" not in self.backend_params or self.backend_params['model_path'] is None:
+        if (
+            "model_path" not in self.backend_params
+            or self.backend_params["model_path"] is None
+        ):
             _get_logger().warning(
-                f"No model path provided for {self.node_context.name}")
-            _get_logger().warning("if this is intentional, please provide a path to the correct model "
-                                  "in the generated yaml file. Otherwise, please manually fill in the backend parameters.")
+                f"No model path provided for {self.node_context.name}"
+            )
+            _get_logger().warning(
+                "if this is intentional, please provide a path to the correct model "
+                "in the generated yaml file. Otherwise, please manually fill in the backend parameters."
+            )
         else:
-            _, sha256sum = self._verify_model_location_and_get_hash(self.backend_params['model_path'])
-            self.load(self.backend_params['model_path'], sha256sum, self.get_backend_model_type())
-
+            _, sha256sum = self._verify_model_location_and_get_hash(
+                self.backend_params["model_path"]
+            )
+            self.load(
+                self.backend_params["model_path"],
+                sha256sum,
+                self.get_backend_model_type(),
+            )
 
     def save(self, save_path: str) -> Tuple[str, str, str]:
-        if "model_path" not in self.backend_params or self.backend_params['model_path'] is None:
+        if (
+            "model_path" not in self.backend_params
+            or self.backend_params["model_path"] is None
+        ):
             return None, None, None
         md5sum, sha256sum = self._verify_model_location_and_get_hash(
-            self.backend_params['model_path'])
-        model_path = self.backend_params['model_path']
+            self.backend_params["model_path"]
+        )
+        model_path = self.backend_params["model_path"]
 
-        if "copy_original_model" in self.backend_params and self.backend_params['copy_original_model'] is True:
+        if (
+            "copy_original_model" in self.backend_params
+            and self.backend_params["copy_original_model"] is True
+        ):
             model_path = self._copy_model_to_path(model_path, save_path)
 
         return model_path, md5sum, sha256sum
 
     def load(self, model_path: str, sha256sum: str, model_type=None):
-        if model_type is None: 
+        if model_type is None:
             return
         if model_type == "onnx":
             self._load_onnx(model_path, sha256sum)
@@ -537,28 +564,28 @@ class NoneExportBackend(ExportBackend):
             self._load_torchscript(model_path, sha256sum)
         else:
             _get_logger().fatal(
-                f"Unsupported model type: {model_type}",
-                error_type=ValueError)
+                f"Unsupported model type: {model_type}", error_type=ValueError
+            )
 
     def get_backend_model_type(self):
         if "model_path" not in self.backend_params:
             return None
 
-        path = self.backend_params['model_path']
-        suffix = path.split('.')[-1]
-        if suffix == 'pt':
+        path = self.backend_params["model_path"]
+        suffix = path.split(".")[-1]
+        if suffix == "pt":
             return "jit"
-        elif suffix == 'pt2':
+        elif suffix == "pt2":
             return "pt2"
-        elif suffix == 'onnx':
+        elif suffix == "onnx":
             return "onnx"
-        elif suffix == 'cpp' or suffix == "cc":
+        elif suffix == "cpp" or suffix == "cc":
             return "cpp"
-        elif suffix == 'py':
+        elif suffix == "py":
             return "py"
-        elif suffix == 'engine' or suffix == 'plan':
-            return 'trt'
+        elif suffix == "engine" or suffix == "plan":
+            return "trt"
         else:
             _get_logger().fatal(
-                f"Unsupported model file suffix: {suffix}",
-                error_type=ValueError)
+                f"Unsupported model file suffix: {suffix}", error_type=ValueError
+            )

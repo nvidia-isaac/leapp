@@ -31,6 +31,7 @@ from leapp.utils.tensor_description import (
     resolve_tensor_descriptions_to_names,
     flatten_io_structure,
 )
+
 # Importing registers the ``leapp::warp_runner`` custom op (import side effect)
 # and exposes ``get_op``/``QUALIFIED_NAME`` used when emitting segment nodes.
 from leapp.leapp_graph.custom_operator_registry import warp_operator
@@ -39,6 +40,7 @@ from dataclasses import replace
 
 if TYPE_CHECKING:
     from leapp.leapp_graph.datatypes.warp import WarpSegment
+
 
 # fx graph overloads to create custom behavior when interacting with the graph.
 # keep local so that only the tracedTensorNode can create it.
@@ -55,7 +57,9 @@ class _LeappFXGraph(fx.Graph):
 class TracedTensorNode(LeappNode):
     def __init__(self, name, *args, **kwargs):
         if args or kwargs:
-            _get_logger().warning(f"{name} received unexpected arguments on initialization. these arguments will be ignored.")
+            _get_logger().warning(
+                f"{name} received unexpected arguments on initialization. these arguments will be ignored."
+            )
         super().__init__(name)
         self.graph = _LeappFXGraph()
         self.tracer = fx.Tracer()
@@ -120,7 +124,10 @@ class TracedTensorNode(LeappNode):
         self._pending_warp_segments.append(segment)
 
     def complete_warp_segment(self, segment: "WarpSegment") -> None:
-        if not self._pending_warp_segments or self._pending_warp_segments[0] is not segment:
+        if (
+            not self._pending_warp_segments
+            or self._pending_warp_segments[0] is not segment
+        ):
             _get_logger().fatal(
                 f"[{self.name}] Captured Warp regions out of discovery order.",
                 error_type=RuntimeError,
@@ -195,10 +202,15 @@ class TracedTensorNode(LeappNode):
                 error_type=Exception,
             )
 
-    def compile_trace(self, tensors: dict[str, "TracedTensor"], backend=None, backend_params={},
-                       static_tensors: dict[str, torch.Tensor] | None = None,
-                       semantics_map: dict[str, object] | None = None,
-                       static_semantics_map: dict[str, object] | None = None):
+    def compile_trace(
+        self,
+        tensors: dict[str, "TracedTensor"],
+        backend=None,
+        backend_params={},
+        static_tensors: dict[str, torch.Tensor] | None = None,
+        semantics_map: dict[str, object] | None = None,
+        static_semantics_map: dict[str, object] | None = None,
+    ):
         # Auto-collect buffer mutations before merging state outputs.
         # collect() may remove non-mutated buffers from _state_tensors and
         # bake them as constants, so it must run before get_state_outputs().
@@ -209,7 +221,9 @@ class TracedTensorNode(LeappNode):
         # Merge state outputs into the tensor dict before processing
         state_outputs = self.get_state_outputs()
         if state_outputs:
-            _get_logger().info(f"Adding {len(state_outputs)} state outputs: {list(state_outputs.keys())}")
+            _get_logger().info(
+                f"Adding {len(state_outputs)} state outputs: {list(state_outputs.keys())}"
+            )
             tensors = {**tensors, **state_outputs}
 
         # Held for the post-pruning alias check below. Static outputs join
@@ -219,11 +233,13 @@ class TracedTensorNode(LeappNode):
 
         unwrapped_tensors = []
         for name, tensor in tensors.items():
-            unwrapped = self.create_output(tensor, name, semantics=(semantics_map or {}).get(name))
+            unwrapped = self.create_output(
+                tensor, name, semantics=(semantics_map or {}).get(name)
+            )
             unwrapped_tensors.append(unwrapped)
             if name in self._state_tensors:
-                self._state_tensors[name]["output_desc"] = self._get_required_io_description(
-                    name, self.outputs, "output"
+                self._state_tensors[name]["output_desc"] = (
+                    self._get_required_io_description(name, self.outputs, "output")
                 )
 
         # Static tensors go through the same create_output path with static=True
@@ -240,8 +256,7 @@ class TracedTensorNode(LeappNode):
         self.build_graph_module(list(tensors.values()))
         self._validate_declared_input_aliases(traced_outputs)
 
-        self.m = fx.GraphModule(
-            self.tracer.root, self.graph)
+        self.m = fx.GraphModule(self.tracer.root, self.graph)
 
         # Sanitize the FX graph for compatibility with export backends.
         self._rewrite_aten_ops(self.m.graph)
@@ -249,15 +264,20 @@ class TracedTensorNode(LeappNode):
         self._make_tensor_attrs_contiguous(self.m)
         self.m.recompile()
 
+        _get_logger().debug(f"Compiled graph module for {self.name}:\n{self.m.graph}")
         _get_logger().debug(
-            f"Compiled graph module for {self.name}:\n{self.m.graph}")
+            f"Graph module inputs: {[resolve_tensor_descriptions_to_names(input) for input in self.input_formats]}"
+        )
         _get_logger().debug(
-            f"Graph module inputs: {[resolve_tensor_descriptions_to_names(input) for input in self.input_formats]}")
-        _get_logger().debug(
-            f"Graph module outputs: {[resolve_tensor_descriptions_to_names(output) for output in self.output_formats]}")
+            f"Graph module outputs: {[resolve_tensor_descriptions_to_names(output) for output in self.output_formats]}"
+        )
         self.setup_backend(backend, backend_params)
 
-        return unwrapped_tensors[0] if len(unwrapped_tensors) == 1 else tuple(unwrapped_tensors)
+        return (
+            unwrapped_tensors[0]
+            if len(unwrapped_tensors) == 1
+            else tuple(unwrapped_tensors)
+        )
 
     def state_feedback_pairs(self):
         """State tensors are an eager form of feedback.
@@ -300,8 +320,8 @@ class TracedTensorNode(LeappNode):
             target_type_name = type(target).__name__
             target_module = getattr(target, "__module__", "")
             is_tensor_method_target = (
-                target_type_name == "method_descriptor" or
-                target_module.startswith("torch._tensor")
+                target_type_name == "method_descriptor"
+                or target_module.startswith("torch._tensor")
             )
             if not is_tensor_method_target:
                 continue
@@ -314,7 +334,8 @@ class TracedTensorNode(LeappNode):
         if rewritten:
             _get_logger().debug(
                 f"Rewrote {len(rewritten)} tensor-method call_function node(s) "
-                f"to call_method: {rewritten}")
+                f"to call_method: {rewritten}"
+            )
         graph.lint()
 
     @staticmethod
@@ -336,10 +357,10 @@ class TracedTensorNode(LeappNode):
         # key = overloadpacket name, value = method name on the tensor.
         # -----------------------------------------------------------------
         _TO_METHOD = {
-            'view': 'view',
-            'reshape': 'reshape',
-            'contiguous': 'contiguous',
-            'to': 'to',
+            "view": "view",
+            "reshape": "reshape",
+            "contiguous": "contiguous",
+            "to": "to",
         }
 
         # -----------------------------------------------------------------
@@ -352,25 +373,27 @@ class TracedTensorNode(LeappNode):
             # F.interpolate sig: (input, size=, mode=, align_corners=)
             inp, size, align_corners = args[0], args[1], args[2]
             return (inp,), {
-                'size': size, 'mode': 'bilinear',
-                'align_corners': align_corners,
+                "size": size,
+                "mode": "bilinear",
+                "align_corners": align_corners,
             }
 
         def _upsample_bicubic2d_args(args, kwargs):
             inp, size, align_corners = args[0], args[1], args[2]
             return (inp,), {
-                'size': size, 'mode': 'bicubic',
-                'align_corners': align_corners,
+                "size": size,
+                "mode": "bicubic",
+                "align_corners": align_corners,
             }
 
         def _upsample_nearest2d_args(args, kwargs):
             inp, size = args[0], args[1]
-            return (inp,), {'size': size, 'mode': 'nearest'}
+            return (inp,), {"size": size, "mode": "nearest"}
 
         _CUSTOM_FN = {
-            'upsample_bilinear2d': (F.interpolate, _upsample_bilinear2d_args),
-            'upsample_bicubic2d':  (F.interpolate, _upsample_bicubic2d_args),
-            'upsample_nearest2d':  (F.interpolate, _upsample_nearest2d_args),
+            "upsample_bilinear2d": (F.interpolate, _upsample_bilinear2d_args),
+            "upsample_bicubic2d": (F.interpolate, _upsample_bicubic2d_args),
+            "upsample_nearest2d": (F.interpolate, _upsample_nearest2d_args),
         }
 
         # -----------------------------------------------------------------
@@ -379,7 +402,7 @@ class TracedTensorNode(LeappNode):
         # When step==1 this is equivalent to torch.narrow.
         # Identity slices (start=0, end>=2^62) are replaced by the input.
         # -----------------------------------------------------------------
-        _SLICE_OPS = {'slice', 'slice_copy'}
+        _SLICE_OPS = {"slice", "slice_copy"}
 
         rewritten = []
         nodes_to_erase = []
@@ -408,8 +431,7 @@ class TracedTensorNode(LeappNode):
             if op_name in _CUSTOM_FN:
                 fn, arg_rewriter = _CUSTOM_FN[op_name]
                 if arg_rewriter is not None:
-                    node.args, node.kwargs = arg_rewriter(
-                        node.args, node.kwargs)
+                    node.args, node.kwargs = arg_rewriter(node.args, node.kwargs)
                 node.target = fn
                 rewritten.append(op_name)
                 continue
@@ -473,7 +495,8 @@ class TracedTensorNode(LeappNode):
             else:
                 _get_logger().warning(
                     f"Could not find a high-level equivalent for aten op "
-                    f"'{target._name}'. torch.jit.script may fail.")
+                    f"'{target._name}'. torch.jit.script may fail."
+                )
 
         # Erase identity-slice nodes (must be done after iteration)
         for node in nodes_to_erase:
@@ -482,7 +505,8 @@ class TracedTensorNode(LeappNode):
         if rewritten:
             _get_logger().debug(
                 f"Rewrote {len(rewritten)} aten OpOverload node(s) to "
-                f"high-level equivalents: {rewritten}")
+                f"high-level equivalents: {rewritten}"
+            )
         graph.lint()
 
     @staticmethod
@@ -510,29 +534,31 @@ class TracedTensorNode(LeappNode):
         for name, param in list(graph_module.named_parameters()):
             if not param.is_contiguous():
                 graph_module.register_parameter(
-                    name, torch.nn.Parameter(param.contiguous(),
-                                             requires_grad=param.requires_grad))
+                    name,
+                    torch.nn.Parameter(
+                        param.contiguous(), requires_grad=param.requires_grad
+                    ),
+                )
                 count += 1
         if count:
             _get_logger().debug(
-                f"Made {count} non-contiguous tensor constant(s) contiguous")
+                f"Made {count} non-contiguous tensor constant(s) contiguous"
+            )
 
     def _create_io_helper(self, data, name: str, to: str):
         if isinstance(data, collections.abc.Mapping):
             new_data = {}
             for key, value in data.items():
                 child_name = "_".join([name, key]) if name else key
-                new_data[key] = self._create_io_helper(
-                    value, child_name, to)
+                new_data[key] = self._create_io_helper(value, child_name, to)
             return new_data
         elif isinstance(data, (list, tuple)):
             new_data = []
             for idx, value in enumerate(data):
                 child_name = "_".join([name, str(idx)]) if name else str(idx)
-                new_data.append(self._create_io_helper(
-                    value, child_name, to))
+                new_data.append(self._create_io_helper(value, child_name, to))
             return type(data)(new_data)
-        
+
         elif is_tracable_tensor_type(data):
             is_traced = isinstance(data, TracedData)
             is_active_traced = is_traced and data.is_tracing
@@ -546,17 +572,21 @@ class TracedTensorNode(LeappNode):
                         f"detected data '{name}' is an active {data.__class__.__name__} from a different node '{data.context}'. \n"
                         f"Mixing active contexts is not allowed. "
                         f"Call output_tensors() on the source node first.",
-                        error_type=Exception)
+                        error_type=Exception,
+                    )
 
-            if to=="traced":
+            if to == "traced":
                 # A root that is a placeholder means the value entered its node
                 # as a declaration rather than being computed there. Declaring
                 # promotes the caller's tensor in place, so one external tensor
                 # reaching two nodes arrives here still carrying the first
                 # node's placeholder, which is an ordinary shared input and not
                 # a missing edge between the two.
-                entered_by_declaration = is_traced and getattr(
-                    getattr(data.proxy, "node", None), "op", None) == "placeholder"
+                entered_by_declaration = (
+                    is_traced
+                    and getattr(getattr(data.proxy, "node", None), "op", None)
+                    == "placeholder"
+                )
 
                 if is_active_traced:
                     # Same context: allow override with warning
@@ -565,10 +595,13 @@ class TracedTensorNode(LeappNode):
                         f"from the same node. Creating fresh input placeholder "
                         f"(previous trace will be discarded for this branch)."
                     )
-                elif (self.is_tracing and is_traced
-                        and data.context_obj is not self
-                        and data.output_port is None
-                        and not entered_by_declaration):
+                elif (
+                    self.is_tracing
+                    and is_traced
+                    and data.context_obj is not self
+                    and data.output_port is None
+                    and not entered_by_declaration
+                ):
                     # Came out of a previous node but was never registered as one
                     # of that node's outputs, so there is no edge to connect to.
                     # Only the first pass can say this, because a re-entry pass
@@ -581,7 +614,8 @@ class TracedTensorNode(LeappNode):
                         f"node '{data.context}' but is not one of its registered outputs.\n"
                         f"Add it to that node's output_tensors() to connect the two nodes, "
                         f"or ignore this if '{name}' is meant to enter the graph from outside.\n"
-                        f"Treating '{name}' as a dangling input.")
+                        f"Treating '{name}' as a dangling input."
+                    )
 
                 proxy = None
                 if self.is_tracing:
@@ -605,25 +639,28 @@ class TracedTensorNode(LeappNode):
                         self._layout_index.setdefault(key, traced)
                 return traced
 
-            elif to=="tensor":
+            elif to == "tensor":
                 if not is_traced:
                     _get_logger().warning(
                         f"Warning: when creating outputs for {self.name}, "
-                        f"detected data {name} is not a TracedTensor")
+                        f"detected data {name} is not a TracedTensor"
+                    )
                 return data
-            
-            elif to=="static":
+
+            elif to == "static":
                 if is_traced:
                     _get_logger().fatal(
                         f"Cannot create static output from traced "
                         f"{type(data).__name__} '{name}'. "
                         "Static outputs must be raw tensors.",
-                        error_type=Exception)
+                        error_type=Exception,
+                    )
 
                 # Create unique attribute name and store on root module
                 attr_name = f"_static_{name}".replace(".", "_")
                 self.tracer.root.register_buffer(
-                    attr_name, to_export_torch_tensor(data).clone())
+                    attr_name, to_export_torch_tensor(data).clone()
+                )
                 # Create get_attr node that retrieves the stored constant
                 node = self.graph.create_node("get_attr", attr_name, (), {})
                 proxy = Proxy(node, self.tracer)
@@ -632,7 +669,8 @@ class TracedTensorNode(LeappNode):
             if to == "traced":
                 _get_logger().warning(
                     f"Non-tracable input '{name}' (type={type(data).__name__}) in node '{self.name}' "
-                    f"will be passed through as a constant.")
+                    f"will be passed through as a constant."
+                )
             return data
 
     def create_input(self, data, name: str, semantics=None) -> "TracedTensor":
@@ -653,16 +691,14 @@ class TracedTensorNode(LeappNode):
             getattr(data, "is_tracing", False)
             and getattr(data, "context_obj", None) is not self
         )
-        adoptable = (
-            getattr(data, "output_port", None) is None
-            and not foreign_active
-        )
+        adoptable = getattr(data, "output_port", None) is None and not foreign_active
         declared = self.find_declared_alias(data) if adoptable else None
         if declared is not None:
             _get_logger().info(
                 f"Input '{name}' for node '{self.name}' shares memory with declared "
                 f"input '{declared.name}'. Both names describe one graph value, so "
-                f"'{declared.name}' will be the only port in the exported node interface.")
+                f"'{declared.name}' will be the only port in the exported node interface."
+            )
             # Adoption skips add_input, which is where semantics are normally
             # attached, so remember the alias and preserve any semantics the
             # surviving port does not already have.
@@ -701,19 +737,18 @@ class TracedTensorNode(LeappNode):
                 self.publish_output_port(wrapped, existing.port)
                 self.validate_output_and_update_sources(name, name, data)
                 return wrapped
-            descriptions = self.add_output(
-                name, name, data, semantics=semantics)
+            descriptions = self.add_output(name, name, data, semantics=semantics)
             self.publish_output_ports(wrapped, name, descriptions)
             return wrapped
         else:
             unwrapped_data = self._create_io_helper(data, name, to="tensor")
             if existing is not None:
                 self.publish_output_port(unwrapped_data, existing.port)
-                self.validate_output_and_update_sources(
-                    name, name, unwrapped_data)
+                self.validate_output_and_update_sources(name, name, unwrapped_data)
                 return unwrapped_data
             descriptions = self.add_output(
-                name, name, unwrapped_data, semantics=semantics)
+                name, name, unwrapped_data, semantics=semantics
+            )
             self.publish_output_ports(unwrapped_data, name, descriptions)
             return unwrapped_data
 
@@ -724,13 +759,15 @@ class TracedTensorNode(LeappNode):
                 "but expected a raw tracable data type.\n"
                 "**Static outputs must be raw tensors, not derived from input tensors.**\n"
                 "If this value depends on inputs, use it as a regular output tensor instead.",
-                error_type=Exception)
+                error_type=Exception,
+            )
         if is_traced_type(tensor):
             _get_logger().fatal(
                 f"Error: static output '{name}' is a traced "
                 f"{type(tensor).__name__}. "
                 "Static outputs should be constant tensors, not traced computations.",
-                error_type=Exception)
+                error_type=Exception,
+            )
 
     def create_static_tensors(self, static_outputs):
         """Wrap raw tensors as static graph nodes (for register_buffer).
@@ -739,11 +776,11 @@ class TracedTensorNode(LeappNode):
         or register outputs — it only validates and wraps.
         Returns data in the same nested structure as the input payload.
         """
-        flattened_static_outputs = flatten_io_structure(static_outputs, '')
+        flattened_static_outputs = flatten_io_structure(static_outputs, "")
         for tensor_name, tensor in flattened_static_outputs.items():
             self._validate_static_tensor(tensor, tensor_name)
 
-        return self._create_io_helper(static_outputs, '', to="static")
+        return self._create_io_helper(static_outputs, "", to="static")
 
     def build_graph_module(self, outputs: list["TracedTensor"]) -> fx.GraphModule:
         """Convert the traced computation to a torch.fx.GraphModule.
@@ -771,6 +808,16 @@ class TracedTensorNode(LeappNode):
         for output_node in output_nodes:
             mark_used(output_node)
 
+        # Capture can fail in work unrelated to the declared outputs. Only a
+        # failure that survives the output dependency traversal blocks export.
+        for node in self.graph.nodes:
+            if node in used_nodes and (error := node.meta.get("leapp_capture_error")):
+                _get_logger().fatal(
+                    f"Cannot export node '{self.name}': a declared output depends on "
+                    f"a failed capture. {error}",
+                    error_type=NotImplementedError,
+                )
+
         # Remove unused nodes (both placeholders and call_function nodes)
         nodes_to_remove = []
         for node in self.graph.nodes:
@@ -785,11 +832,13 @@ class TracedTensorNode(LeappNode):
         for node in reversed(nodes_to_remove):
             if node.op == "placeholder":
                 input_description = LeappNode.get_io_description_by_name(
-                    node.target, self.inputs)
+                    node.target, self.inputs
+                )
                 if input_description is None:
                     _get_logger().error(
                         f"Error: when building the graph module for {self.name}, "
-                        f"could not find input description for placeholder '{node.target}'")
+                        f"could not find input description for placeholder '{node.target}'"
+                    )
                     continue
                 self.trimmed_inputs.add(input_description.name_str)
 
@@ -797,14 +846,17 @@ class TracedTensorNode(LeappNode):
                 self.graph.erase_node(node)
 
         if len(self.trimmed_inputs) > 0:
-            _get_logger().warning(f"Warning: when building the graph module for {self.name}, "
-                                  "detected the following inputs are not used in the computation or directly returned as output: "
-                                  f"{self.trimmed_inputs} \n"
-                                  "For clarity and efficiency, consider removing these inputs")
+            _get_logger().warning(
+                f"Warning: when building the graph module for {self.name}, "
+                "detected the following inputs are not used in the computation or directly returned as output: "
+                f"{self.trimmed_inputs} \n"
+                "For clarity and efficiency, consider removing these inputs"
+            )
 
             # Remove trimmed inputs from self.inputs
             self.inputs = [
-                inp for inp in self.inputs if inp.name_str not in self.trimmed_inputs]
+                inp for inp in self.inputs if inp.name_str not in self.trimmed_inputs
+            ]
 
         # After pruning, record which Warp-segment outputs survived (are actually
         # used) as a binary mask on the segment marker node's metadata.
@@ -884,16 +936,21 @@ class TracedTensorNode(LeappNode):
                 output_mask=mask,
             )
 
-            op_node.update_arg(1, warp_operator.encode_runtime_metadata(runtime_metadata))
+            op_node.update_arg(
+                1, warp_operator.encode_runtime_metadata(runtime_metadata)
+            )
 
-    def create_state_tensors(self, tensors: dict[str, torch.Tensor]) -> dict[str, TracedTensor]:
+    def create_state_tensors(
+        self, tensors: dict[str, torch.Tensor]
+    ) -> dict[str, TracedTensor]:
         """Create state tensors that are both inputs and outputs."""
         result = {}
         for name, tensor in tensors.items():
             if name in self._state_tensors:
                 _get_logger().warning(
                     f"State tensor '{name}' already registered for node '{self.name}'. "
-                    "Returning existing TracedTensor.")
+                    "Returning existing TracedTensor."
+                )
                 result[name] = self._state_tensors[name]["input"]
                 continue
 
@@ -903,7 +960,9 @@ class TracedTensorNode(LeappNode):
             # Track as state tensor
             self._state_tensors[name] = {
                 "input": traced_input,
-                "input_desc": self._get_required_io_description(name, self.inputs, "input"),
+                "input_desc": self._get_required_io_description(
+                    name, self.inputs, "input"
+                ),
                 "output": None,  # Set via update_state_tensors()
                 "output_desc": None,
             }
@@ -919,25 +978,29 @@ class TracedTensorNode(LeappNode):
                 _get_logger().fatal(
                     f"Error: update_state called for '{name}' but it was not registered "
                     f"as a state tensor. Call state_tensors() first.",
-                    error_type=Exception)
+                    error_type=Exception,
+                )
 
             # Validate shape and dtype match the input state
             input_tensor = self._state_tensors[name]["input"]
             input_underlying = (
-                input_tensor.tensor if isinstance(input_tensor, TracedData)
-                else input_tensor)
-            value_underlying = (
-                value.tensor if isinstance(value, TracedData) else value)
+                input_tensor.tensor
+                if isinstance(input_tensor, TracedData)
+                else input_tensor
+            )
+            value_underlying = value.tensor if isinstance(value, TracedData) else value
             if input_underlying.shape != value_underlying.shape:
                 _get_logger().fatal(
                     f"Error: update_state for '{name}' has shape {value_underlying.shape} "
                     f"but expected {input_underlying.shape} (must match input state shape).",
-                    error_type=Exception)
+                    error_type=Exception,
+                )
             if input_underlying.dtype != value_underlying.dtype:
                 _get_logger().fatal(
                     f"Error: update_state for '{name}' has dtype {value_underlying.dtype} "
                     f"but expected {input_underlying.dtype} (must match input state dtype).",
-                    error_type=Exception)
+                    error_type=Exception,
+                )
 
             self._state_tensors[name]["output"] = value
 
@@ -948,8 +1011,7 @@ class TracedTensorNode(LeappNode):
         States declared without an update are treated as regular inputs.
         """
         inactive_states = [
-            name for name, info in self._state_tensors.items()
-            if info["output"] is None
+            name for name, info in self._state_tensors.items() if info["output"] is None
         ]
         if inactive_states:
             _get_logger().warning(
@@ -967,7 +1029,9 @@ class TracedTensorNode(LeappNode):
     def _create_warp_bundle_proxy(self, wrp_archive: bytes, runner_name: str) -> Proxy:
         """Wire a pre-packed WRPB archive as a ``get_attr`` FX node."""
         buffer_name = f"_{runner_name}_bundle"
-        bundle_tensor = torch.frombuffer(bytearray(wrp_archive), dtype=torch.uint8).clone()
+        bundle_tensor = torch.frombuffer(
+            bytearray(wrp_archive), dtype=torch.uint8
+        ).clone()
         self.tracer.root.register_buffer(buffer_name, bundle_tensor, persistent=True)
         bundle_node = self.graph.create_node(
             "get_attr",
@@ -1026,7 +1090,6 @@ class TracedTensorNode(LeappNode):
             )
 
         return warp_runner, output_proxies
-
 
     @property
     def state_names(self) -> list[str]:

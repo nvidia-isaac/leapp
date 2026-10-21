@@ -15,6 +15,7 @@
 # limitations under the License.
 #
 
+
 def test_visualization_package_exports_public_entrypoint():
     from leapp_visualization import render_graph
 

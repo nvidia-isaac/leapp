@@ -20,7 +20,14 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from leapp_visualization.model import VisualEdge, VisualGraph, VisualNode, VisualPort, VisualTerminal, visual_id
+from leapp_visualization.model import (
+    VisualEdge,
+    VisualGraph,
+    VisualNode,
+    VisualPort,
+    VisualTerminal,
+    visual_id,
+)
 
 
 def build_visual_graph(
@@ -30,7 +37,9 @@ def build_visual_graph(
     graph_inputs: Sequence[str],
     graph_outputs: Sequence[str],
 ) -> VisualGraph:
-    ordered_nodes = [_build_node(node) for _, node in sorted(nodes.items(), key=_node_sort_key)]
+    ordered_nodes = [
+        _build_node(node) for _, node in sorted(nodes.items(), key=_node_sort_key)
+    ]
     node_name_map = {node.title: node for node in ordered_nodes}
 
     terminals: list[VisualTerminal] = []
@@ -43,16 +52,22 @@ def build_visual_graph(
         edges.extend(_build_internal_edges(connection, "feedback"))
 
     for sequence_index, terminal_edge in enumerate(graph_inputs):
-        terminal, edge = _build_graph_input_terminal_edge(terminal_edge, node_name_map, sequence_index)
+        terminal, edge = _build_graph_input_terminal_edge(
+            terminal_edge, node_name_map, sequence_index
+        )
         terminals.append(terminal)
         edges.append(edge)
 
     for sequence_index, terminal_edge in enumerate(graph_outputs):
-        terminal, edge = _build_graph_output_terminal_edge(terminal_edge, node_name_map, sequence_index)
+        terminal, edge = _build_graph_output_terminal_edge(
+            terminal_edge, node_name_map, sequence_index
+        )
         terminals.append(terminal)
         edges.append(edge)
 
-    return VisualGraph(nodes=tuple(ordered_nodes), terminals=tuple(terminals), edges=tuple(edges))
+    return VisualGraph(
+        nodes=tuple(ordered_nodes), terminals=tuple(terminals), edges=tuple(edges)
+    )
 
 
 def _build_internal_edges(connection: dict, kind: str) -> list[VisualEdge]:
@@ -70,7 +85,15 @@ def _build_internal_edges(connection: dict, kind: str) -> list[VisualEdge]:
         target_id = visual_id("node", target_node.name)
         edges.append(
             VisualEdge(
-                id=visual_id("edge", kind, source_id, source_desc.name_str, target_id, target_desc.name_str, sequence_index),
+                id=visual_id(
+                    "edge",
+                    kind,
+                    source_id,
+                    source_desc.name_str,
+                    target_id,
+                    target_desc.name_str,
+                    sequence_index,
+                ),
                 kind=kind,
                 source_id=source_id,
                 target_id=target_id,
@@ -82,7 +105,9 @@ def _build_internal_edges(connection: dict, kind: str) -> list[VisualEdge]:
     return edges
 
 
-def _build_graph_input_terminal_edge(node_port: str, node_name_map: dict[str, VisualNode], sequence_index: int) -> tuple[VisualTerminal, VisualEdge]:
+def _build_graph_input_terminal_edge(
+    node_port: str, node_name_map: dict[str, VisualNode], sequence_index: int
+) -> tuple[VisualTerminal, VisualEdge]:
     node_name, port_name = node_port.split("/", 1)
     node = node_name_map[node_name]
     port_id = _find_port_id(node, "input", port_name)
@@ -95,7 +120,15 @@ def _build_graph_input_terminal_edge(node_port: str, node_name_map: dict[str, Vi
         port_id=port_id,
     )
     edge = VisualEdge(
-        id=visual_id("edge", "graph_input", terminal_id, port_name, node.id, port_name, sequence_index),
+        id=visual_id(
+            "edge",
+            "graph_input",
+            terminal_id,
+            port_name,
+            node.id,
+            port_name,
+            sequence_index,
+        ),
         kind="graph_input",
         source_id=terminal_id,
         target_id=node.id,
@@ -106,7 +139,9 @@ def _build_graph_input_terminal_edge(node_port: str, node_name_map: dict[str, Vi
     return terminal, edge
 
 
-def _build_graph_output_terminal_edge(node_port: str, node_name_map: dict[str, VisualNode], sequence_index: int) -> tuple[VisualTerminal, VisualEdge]:
+def _build_graph_output_terminal_edge(
+    node_port: str, node_name_map: dict[str, VisualNode], sequence_index: int
+) -> tuple[VisualTerminal, VisualEdge]:
     node_name, port_name = node_port.split("/", 1)
     node = node_name_map[node_name]
     port_id = _find_port_id(node, "output", port_name)
@@ -119,7 +154,15 @@ def _build_graph_output_terminal_edge(node_port: str, node_name_map: dict[str, V
         port_id=port_id,
     )
     edge = VisualEdge(
-        id=visual_id("edge", "graph_output", node.id, port_name, terminal_id, port_name, sequence_index),
+        id=visual_id(
+            "edge",
+            "graph_output",
+            node.id,
+            port_name,
+            terminal_id,
+            port_name,
+            sequence_index,
+        ),
         kind="graph_output",
         source_id=node.id,
         target_id=terminal_id,
@@ -131,7 +174,11 @@ def _build_graph_output_terminal_edge(node_port: str, node_name_map: dict[str, V
 
 
 def _build_node(node: Any) -> VisualNode:
-    backend = node.get_backend() if hasattr(node, "get_backend") else getattr(node, "backend", None)
+    backend = (
+        node.get_backend()
+        if hasattr(node, "get_backend")
+        else getattr(node, "backend", None)
+    )
     return VisualNode(
         id=visual_id("node", node.name),
         title=node.name,
@@ -179,7 +226,9 @@ def _find_port_id(node: Any, side: str, port_name: str) -> str:
         desc_name = getattr(desc, "name_str", getattr(desc, "name", None))
         if desc_name == port_name:
             return visual_id("port", node_name, side, desc_name)
-    raise KeyError(f"Port '{port_name}' not found on node '{node_name}' for side '{side}'")
+    raise KeyError(
+        f"Port '{port_name}' not found on node '{node_name}' for side '{side}'"
+    )
 
 
 def _node_sort_key(item: tuple[str, Any]) -> tuple[int, str]:

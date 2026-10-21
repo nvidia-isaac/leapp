@@ -12,7 +12,10 @@ import torch
 from safetensors.torch import load_file
 
 
-from leapp.utils.tensor_description import map_to_torch_dtype, validate_connection_compatibility
+from leapp.utils.tensor_description import (
+    map_to_torch_dtype,
+    validate_connection_compatibility,
+)
 from leapp.utils.logging import _get_logger
 
 from leapp.backends.torch_export_backend import TorchExportBackend
@@ -27,47 +30,50 @@ class NodeManager:
         self.input_descriptions = inputs
         self.output_descriptions = outputs
 
-
-        backend = self._create_backend(parameters['backend'])
-        backend.load(model_path, parameters['sha256sum'])
+        backend = self._create_backend(parameters["backend"])
+        backend.load(model_path, parameters["sha256sum"])
         self.model = backend.compiled_model
 
         self.device = backend.runtime_device
 
     @property
     def input_names(self):
-        return [input['name'] for input in self.input_descriptions]
+        return [input["name"] for input in self.input_descriptions]
 
     @property
     def input_shapes(self):
-        return [input['shape'] for input in self.input_descriptions]
+        return [input["shape"] for input in self.input_descriptions]
 
     @property
     def input_dtypes(self):
-        return [input['dtype'] for input in self.input_descriptions]
+        return [input["dtype"] for input in self.input_descriptions]
 
     @property
     def output_names(self):
-        return [output['name'] for output in self.output_descriptions]
+        return [output["name"] for output in self.output_descriptions]
 
     @property
     def output_shapes(self):
-        return [output['shape'] for output in self.output_descriptions]
+        return [output["shape"] for output in self.output_descriptions]
 
     @property
     def output_dtypes(self):
-        return [output['dtype'] for output in self.output_descriptions]
+        return [output["dtype"] for output in self.output_descriptions]
 
     @property
     def mock_input(self):
         input_values_to_populate = {}
         for input_val in self.input_descriptions:
-            input_name = input_val['name']
-            input_shape = json.loads(input_val['shape']) if isinstance(
-                input_val['shape'], str) else input_val['shape']
-            input_dtype = input_val['dtype']
+            input_name = input_val["name"]
+            input_shape = (
+                json.loads(input_val["shape"])
+                if isinstance(input_val["shape"], str)
+                else input_val["shape"]
+            )
+            input_dtype = input_val["dtype"]
             input_value = torch.zeros(
-                tuple(input_shape), dtype=map_to_torch_dtype(input_dtype))
+                tuple(input_shape), dtype=map_to_torch_dtype(input_dtype)
+            )
             input_values_to_populate[input_name] = input_value.to(self.device)
 
         return input_values_to_populate
@@ -76,14 +82,17 @@ class NodeManager:
     def mock_output(self):
         output_values_to_populate = {}
         for output_val in self.output_descriptions:
-            output_name = output_val['name']
-            output_shape = json.loads(output_val['shape']) if isinstance(
-                output_val['shape'], str) else output_val['shape']
-            output_dtype = output_val['dtype']
+            output_name = output_val["name"]
+            output_shape = (
+                json.loads(output_val["shape"])
+                if isinstance(output_val["shape"], str)
+                else output_val["shape"]
+            )
+            output_dtype = output_val["dtype"]
             output_value = torch.zeros(
-                tuple(output_shape), dtype=map_to_torch_dtype(output_dtype))
-            output_values_to_populate[output_name] = output_value.to(
-                self.device)
+                tuple(output_shape), dtype=map_to_torch_dtype(output_dtype)
+            )
+            output_values_to_populate[output_name] = output_value.to(self.device)
 
         return output_values_to_populate
 
@@ -96,13 +105,16 @@ class NodeManager:
         elif backend == "pt2":
             return ExportedProgramExportBackend(None)
         else:
-            _get_logger().fatal(f"Unsupported backend: {backend}", error_type=ValueError)
+            _get_logger().fatal(
+                f"Unsupported backend: {backend}", error_type=ValueError
+            )
 
     def __call__(self, *inputs):
         if len(inputs) != len(self.input_descriptions):
             _get_logger().fatal(
                 f"Expected {len(self.input_descriptions)} inputs, got {len(inputs)}",
-                error_type=ValueError)
+                error_type=ValueError,
+            )
 
         outputs = self.model(*inputs)
 
@@ -117,7 +129,8 @@ class NodeManager:
         else:
             _get_logger().fatal(
                 f"Expected {len(self.output_descriptions)} outputs, got {len(outputs)}",
-                error_type=ValueError)
+                error_type=ValueError,
+            )
 
 
 class InferenceManager:
@@ -132,12 +145,14 @@ class InferenceManager:
         if not os.path.exists(model_path):
             _get_logger().fatal(
                 f"Leapp description file not found at {model_path}",
-                error_type=FileNotFoundError)
+                error_type=FileNotFoundError,
+            )
 
         if not model_path.endswith(".yaml"):
             _get_logger().fatal(
                 f"Leapp description file must end with .yaml, got {model_path}",
-                error_type=ValueError)
+                error_type=ValueError,
+            )
 
         self.model_path = model_path
 
@@ -153,10 +168,14 @@ class InferenceManager:
         with open(self.model_path, "r") as f:
             self.leapp_description = yaml.safe_load(f)
 
-        if any(key not in self.leapp_description for key in ["models", "pipeline", "system information"]):
+        if any(
+            key not in self.leapp_description
+            for key in ["models", "pipeline", "system information"]
+        ):
             _get_logger().fatal(
                 f"Leapp description file must contain models, pipeline, and system_info, got {self.leapp_description.keys()}",
-                error_type=ValueError)
+                error_type=ValueError,
+            )
 
         self.models = self.leapp_description["models"]
         self.pipeline = self.leapp_description["pipeline"]
@@ -165,18 +184,25 @@ class InferenceManager:
     def _create_nodes(self):
         nodes = {}
         for name, description in self.models.items():
-            if any(key not in description for key in ["inputs", "outputs", "parameters"]):
+            if any(
+                key not in description for key in ["inputs", "outputs", "parameters"]
+            ):
                 _get_logger().fatal(
                     f"Model description must contain inputs, outputs, and parameters, got {description.keys()}",
-                    error_type=ValueError)
+                    error_type=ValueError,
+                )
             # load the model
-            parameters = description['parameters']
-            if any(key not in parameters for key in ["model_path", "md5sum", "sha256sum", "backend"]):
+            parameters = description["parameters"]
+            if any(
+                key not in parameters
+                for key in ["model_path", "md5sum", "sha256sum", "backend"]
+            ):
                 _get_logger().fatal(
                     f"Model description must contain model_path, md5sum, sha256sum, and backend, got {parameters.keys()}",
-                    error_type=ValueError)
+                    error_type=ValueError,
+                )
 
-            model_path = parameters['model_path']
+            model_path = parameters["model_path"]
             base_path = os.path.dirname(self.model_path)
 
             relative_model_path = os.path.join(base_path, model_path)
@@ -184,7 +210,12 @@ class InferenceManager:
                 model_path = relative_model_path
 
             node = NodeManager(
-                name, model_path, description['inputs'], description['outputs'], description['parameters'])
+                name,
+                model_path,
+                description["inputs"],
+                description["outputs"],
+                description["parameters"],
+            )
             nodes[name] = node
 
         return nodes
@@ -199,7 +230,10 @@ class InferenceManager:
         self.organized_pipeline_connections = {}
         # Merge data_flow and feedback_flow, combining target lists for shared keys
         all_flows = {}
-        for flow_dict in [self.pipeline.get('data_flow', {}), self.pipeline.get('feedback_flow', {})]:
+        for flow_dict in [
+            self.pipeline.get("data_flow", {}),
+            self.pipeline.get("feedback_flow", {}),
+        ]:
             for source, targets in flow_dict.items():
                 if source in all_flows:
                     all_flows[source] = all_flows[source] + targets
@@ -207,44 +241,49 @@ class InferenceManager:
                     all_flows[source] = targets
         # organize the pipeline connections
         for source, targets in all_flows.items():
-            source_node_name, source_output_name = source.split('/')
+            source_node_name, source_output_name = source.split("/")
             if source_node_name not in self.organized_pipeline_connections:
                 self.organized_pipeline_connections[source_node_name] = {}
-            self.organized_pipeline_connections[source_node_name][source_output_name] = [
-            ]
+            self.organized_pipeline_connections[source_node_name][
+                source_output_name
+            ] = []
             for target in targets:
-                target_node_name, target_input_name = target.split('/')
-                self.organized_pipeline_connections[source_node_name][source_output_name].append(
-                    (target_node_name, target_input_name))
+                target_node_name, target_input_name = target.split("/")
+                self.organized_pipeline_connections[source_node_name][
+                    source_output_name
+                ].append((target_node_name, target_input_name))
 
         # Create '==out==' slot and route final outputs to it
         output_cache = {}
-        for node_name, output_names in self.pipeline['outputs'].items():
+        for node_name, output_names in self.pipeline["outputs"].items():
             node = self.nodes[node_name]
             # Get output descriptions for this node
-            output_descs = {desc['name']
-                : desc for desc in node.output_descriptions}
+            output_descs = {desc["name"]: desc for desc in node.output_descriptions}
 
             for output_name in output_names:
                 desc = output_descs[output_name]
-                output_shape = json.loads(desc['shape']) if isinstance(
-                    desc['shape'], str) else desc['shape']
-                output_dtype = map_to_torch_dtype(desc['dtype'])
+                output_shape = (
+                    json.loads(desc["shape"])
+                    if isinstance(desc["shape"], str)
+                    else desc["shape"]
+                )
+                output_dtype = map_to_torch_dtype(desc["dtype"])
                 # Create cache tensor with unique key: node_name/output_name
                 cache_key = f"{node_name}/{output_name}"
                 output_cache[cache_key] = torch.zeros(
-                    tuple(output_shape), dtype=output_dtype, device=node.device)
+                    tuple(output_shape), dtype=output_dtype, device=node.device
+                )
 
                 # Add connection from this output to ==out==
                 if node_name not in self.organized_pipeline_connections:
                     self.organized_pipeline_connections[node_name] = {}
                 if output_name not in self.organized_pipeline_connections[node_name]:
-                    self.organized_pipeline_connections[node_name][output_name] = [
-                    ]
+                    self.organized_pipeline_connections[node_name][output_name] = []
                 self.organized_pipeline_connections[node_name][output_name].append(
-                    ('==out==', cache_key))
+                    ("==out==", cache_key)
+                )
 
-        self.value_dict['==out=='] = output_cache
+        self.value_dict["==out=="] = output_cache
 
         self._validate_output_routing()
 
@@ -256,7 +295,8 @@ class InferenceManager:
         for node_name, node in self.nodes.items():
             pipeline_map = self.organized_pipeline_connections.get(node_name, {})
             missing_outputs = [
-                output_name for output_name in node.output_names
+                output_name
+                for output_name in node.output_names
                 if output_name not in pipeline_map
             ]
             if missing_outputs:
@@ -265,11 +305,12 @@ class InferenceManager:
                     "Every model output must appear in pipeline data_flow, "
                     "feedback_flow, or pipeline outputs. This may indicate the "
                     "YAML was edited manually and is inconsistent with the exported model.",
-                    error_type=ValueError)
+                    error_type=ValueError,
+                )
 
     def _validate_connection_compatibility(self):
         all_flows = {}
-        for flow_key in ('data_flow', 'feedback_flow'):
+        for flow_key in ("data_flow", "feedback_flow"):
             for source, targets in self.pipeline.get(flow_key, {}).items():
                 if source in all_flows:
                     all_flows[source] = all_flows[source] + targets
@@ -277,51 +318,59 @@ class InferenceManager:
                     all_flows[source] = list(targets)
 
         for source, targets in all_flows.items():
-            source_node_name, source_output_name = source.split('/')
+            source_node_name, source_output_name = source.split("/")
 
             # Validate source node exists
             if source_node_name not in self.nodes:
                 _get_logger().fatal(
                     f"Source node '{source_node_name}' not found in models",
-                    error_type=ValueError)
+                    error_type=ValueError,
+                )
 
             source_node = self.nodes[source_node_name]
 
             # Validate source output exists
-            source_output_names = [desc['name']
-                                   for desc in source_node.output_descriptions]
+            source_output_names = [
+                desc["name"] for desc in source_node.output_descriptions
+            ]
             if source_output_name not in source_output_names:
                 _get_logger().fatal(
                     f"Source output '{source_output_name}' not found in node '{source_node_name}'. "
                     f"Available outputs: {source_output_names}",
-                    error_type=ValueError)
+                    error_type=ValueError,
+                )
 
             # Get source output description
             source_desc = next(
-                desc for desc in source_node.output_descriptions
-                if desc['name'] == source_output_name
+                desc
+                for desc in source_node.output_descriptions
+                if desc["name"] == source_output_name
             )
-            source_shape = json.loads(source_desc['shape']) if isinstance(
-                source_desc['shape'], str) else source_desc['shape']
-            source_dtype = map_to_torch_dtype(source_desc['dtype'])
+            source_shape = (
+                json.loads(source_desc["shape"])
+                if isinstance(source_desc["shape"], str)
+                else source_desc["shape"]
+            )
+            source_dtype = map_to_torch_dtype(source_desc["dtype"])
 
             for target in targets:
-                target_node_name, target_input_name = target.split('/')
+                target_node_name, target_input_name = target.split("/")
 
                 # Validate target node exists
                 if target_node_name not in self.nodes:
                     _get_logger().fatal(
                         f"Target node '{target_node_name}' not found in models",
-                        error_type=ValueError)
+                        error_type=ValueError,
+                    )
 
                 # Validate target input exists
                 if target_input_name not in self.value_dict[target_node_name]:
-                    available_inputs = list(
-                        self.value_dict[target_node_name].keys())
+                    available_inputs = list(self.value_dict[target_node_name].keys())
                     _get_logger().fatal(
                         f"Target input '{target_input_name}' not found in node '{target_node_name}'. "
                         f"Available inputs: {available_inputs}",
-                        error_type=ValueError)
+                        error_type=ValueError,
+                    )
 
                 target_tensor = self.value_dict[target_node_name][target_input_name]
 
@@ -336,12 +385,12 @@ class InferenceManager:
 
     def _prepopulate_feedback_inputs(self):
         """Load feedback initial values from safetensors and populate input buffers.
-        
+
         If the pipeline has an 'initial_values' field pointing to a safetensors file,
         load it and overwrite the corresponding feedback input buffers so deployers
         don't need to know what to initialize them as.
         """
-        initial_values_file = self.pipeline.get('initial_values')
+        initial_values_file = self.pipeline.get("initial_values")
         if not initial_values_file:
             return
 
@@ -351,39 +400,46 @@ class InferenceManager:
         if not os.path.exists(safetensors_path):
             _get_logger().fatal(
                 f"Feedback initial values file not found at {safetensors_path}",
-                error_type=FileNotFoundError)
+                error_type=FileNotFoundError,
+            )
 
         initial_values = load_file(safetensors_path)
 
         for key, tensor in initial_values.items():
-            node_name, input_name = key.split('/')
-            if node_name in self.value_dict and input_name in self.value_dict[node_name]:
+            node_name, input_name = key.split("/")
+            if (
+                node_name in self.value_dict
+                and input_name in self.value_dict[node_name]
+            ):
                 device = self.value_dict[node_name][input_name].device
                 self.value_dict[node_name][input_name] = tensor.to(device)
             else:
                 _get_logger().fatal(
                     f"Feedback initial value key '{key}' does not match any node input. "
                     f"Available nodes: {list(self.value_dict.keys())}",
-                    error_type=ValueError)
+                    error_type=ValueError,
+                )
 
     def run_policy(self, inputs: dict[str, torch.Tensor]):
         # Update input tensors with provided values (keys are "node_name/input_name")
         for key, input_value in inputs.items():
             try:
-                node_name, input_name = key.split('/')
+                node_name, input_name = key.split("/")
             except ValueError as e:
                 _get_logger().fatal(
                     f"Invalid input key: {key}\n Expected format: node_name/input_name",
                     error_type=ValueError,
-                    cause=e)
+                    cause=e,
+                )
             self.value_dict[node_name][input_name] = input_value
 
         for node_name, node in self.nodes.items():
             # Run inference via node's __call__
             # Use node.input_names to ensure inputs are passed in the correct order
-            node_inputs = [self.value_dict[node_name][name]
-                      for name in node.input_names]
-            
+            node_inputs = [
+                self.value_dict[node_name][name] for name in node.input_names
+            ]
+
             outputs = node(*node_inputs)
             output_order = node.output_names
             # Ensure outputs is always a tuple/list for consistent iteration
@@ -396,19 +452,22 @@ class InferenceManager:
                 for i, (target_node_name, target_input_name) in enumerate(targets):
                     if i == 0:
                         # Zero-copy: direct assignment for first consumer
-                        self.value_dict[target_node_name][target_input_name] = output_value
+                        self.value_dict[target_node_name][target_input_name] = (
+                            output_value
+                        )
                     else:
                         # Clone for 2nd+ consumers to prevent data corruption
-                        self.value_dict[target_node_name][target_input_name] = output_value.clone(
+                        self.value_dict[target_node_name][target_input_name] = (
+                            output_value.clone()
                         )
 
-        return dict(self.value_dict['==out=='])
+        return dict(self.value_dict["==out=="])
 
     @property
     def inputs(self) -> list:
         """Returns list of expected input keys in 'node_name/input_name' format."""
         input_keys = []
-        for node_name, input_names in self.pipeline['inputs'].items():
+        for node_name, input_names in self.pipeline["inputs"].items():
             for input_name in input_names:
                 input_keys.append(f"{node_name}/{input_name}")
         return input_keys
@@ -417,7 +476,7 @@ class InferenceManager:
     def outputs(self) -> list:
         """Returns list of output keys in 'node_name/output_name' format."""
         output_keys = []
-        for node_name, output_names in self.pipeline['outputs'].items():
+        for node_name, output_names in self.pipeline["outputs"].items():
             for output_name in output_names:
                 output_keys.append(f"{node_name}/{output_name}")
         return output_keys
@@ -425,7 +484,7 @@ class InferenceManager:
     @property
     def feedback_inputs(self) -> list:
         keys = []
-        for targets in self.pipeline.get('feedback_flow', {}).values():
+        for targets in self.pipeline.get("feedback_flow", {}).values():
             keys.extend(targets)
         return keys
 
@@ -440,33 +499,35 @@ class InferenceManager:
         """
         mock_inputs = {}
 
-        for node_name, input_names in self.pipeline['inputs'].items():
+        for node_name, input_names in self.pipeline["inputs"].items():
             node = self.nodes[node_name]
             # Create a lookup for input descriptions by name
-            input_descs = {desc['name']
-                : desc for desc in node.input_descriptions}
+            input_descs = {desc["name"]: desc for desc in node.input_descriptions}
 
             for input_name in input_names:
                 desc = input_descs[input_name]
-                shape = json.loads(desc['shape']) if isinstance(
-                    desc['shape'], str) else desc['shape']
-                dtype = map_to_torch_dtype(desc['dtype'])
+                shape = (
+                    json.loads(desc["shape"])
+                    if isinstance(desc["shape"], str)
+                    else desc["shape"]
+                )
+                dtype = map_to_torch_dtype(desc["dtype"])
                 device = node.device
 
                 # Generate random tensor (randn for floats, randint for integers)
                 if dtype.is_floating_point:
-                    tensor = torch.randn(
-                        tuple(shape), dtype=dtype, device=device)
+                    tensor = torch.randn(tuple(shape), dtype=dtype, device=device)
                 else:
-                    tensor = torch.randint(0, 256, tuple(
-                        shape), dtype=dtype, device=device)
+                    tensor = torch.randint(
+                        0, 256, tuple(shape), dtype=dtype, device=device
+                    )
                 mock_inputs[f"{node_name}/{input_name}"] = tensor
 
         return mock_inputs
-    
+
     def reset(self):
         """resets the inference manager to its initial state
-        
+
         This method does not reset the internal state of the nodes, only the input and output buffers.
         It uses default initial values for feedback inputs.
         """
@@ -476,7 +537,6 @@ class InferenceManager:
                     tensor.zero_()
 
         self._prepopulate_feedback_inputs()
-
 
     def __call__(self, inputs: dict[str, torch.Tensor]):
         return self.run_policy(inputs)

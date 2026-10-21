@@ -18,16 +18,22 @@ class TestExportInferenceMode(unittest.TestCase):
     def test_prepare_inputs_escapes_inference_mode(self):
         for ambient_mode in (False, True):
             for original_clone in (False, True):
-                with self.subTest(ambient_mode=ambient_mode, original_clone=original_clone):
+                with self.subTest(
+                    ambient_mode=ambient_mode, original_clone=original_clone
+                ):
                     with torch.inference_mode():
-                        tensor = torch.tensor([1., 2.])
+                        tensor = torch.tensor([1.0, 2.0])
                     if original_clone:
                         tensor.original_clone = tensor.clone
                     marker = object()
                     with torch.inference_mode(ambient_mode):
-                        prepared, unchanged = prepare_tensors_for_export((tensor, marker))
+                        prepared, unchanged = prepare_tensors_for_export(
+                            (tensor, marker)
+                        )
                         self.assertFalse(prepared.is_inference())
-                        self.assertEqual(torch.is_inference_mode_enabled(), ambient_mode)
+                        self.assertEqual(
+                            torch.is_inference_mode_enabled(), ambient_mode
+                        )
                     self.assertTrue(tensor.is_inference())
                     self.assertNotEqual(prepared.data_ptr(), tensor.data_ptr())
                     torch.testing.assert_close(prepared, tensor)
@@ -41,14 +47,18 @@ class TestExportInferenceMode(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmpdir:
             _get_logger().configure(tmpdir, verbose=False)
-            for backend, target in (("onnx-dynamo", "torch.onnx.export"),
-                                    ("pt2", "torch.export.export")):
+            for backend, target in (
+                ("onnx-dynamo", "torch.onnx.export"),
+                ("pt2", "torch.export.export"),
+            ):
                 node = LeappNode("inference_test")
                 node.setup_backend(backend, {})
                 node.m = torch.nn.Identity()
                 for message in messages:
                     for chain in (None, "__cause__", "__context__"):
-                        with self.subTest(backend=backend, message=message, chain=chain):
+                        with self.subTest(
+                            backend=backend, message=message, chain=chain
+                        ):
                             original = RuntimeError(message)
                             error = original
                             if chain:
@@ -70,5 +80,10 @@ class TestExportInferenceMode(unittest.TestCase):
                                 self.assertIn("FATAL:leapp:", logs.output[0])
                                 self.assertIn(diagnostic, logs.output[0])
                             else:
-                                self.assertEqual(diagnostic, f"Error compiling model {node.name}: {error}")
-                                self.assertNotIn("torch.inference_mode()", logs.output[0])
+                                self.assertEqual(
+                                    diagnostic,
+                                    f"Error compiling model {node.name}: {error}",
+                                )
+                                self.assertNotIn(
+                                    "torch.inference_mode()", logs.output[0]
+                                )

@@ -27,8 +27,7 @@ class TestGettingStarted(BaseExampleTest):
     def test_getting_started_execution(self):
         """Test that getting_started.py runs and generates expected artifacts."""
         expected_files = [
-            "obs_processor.pt",
-            "policy.pt",
+            "control.onnx",
             "sample_pipeline.png",
             "sample_pipeline.yaml",
         ]

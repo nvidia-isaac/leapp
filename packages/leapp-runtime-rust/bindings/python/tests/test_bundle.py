@@ -45,7 +45,9 @@ def test_ordered_inspection_and_detached_values(bundle_path):
         "one",
         "two",
     ]
-    assert bundle.output_info("a_policy", "actions").metadata["temporal_period_ms"] == 100
+    assert (
+        bundle.output_info("a_policy", "actions").metadata["temporal_period_ms"] == 100
+    )
     assert bundle.input_info("absent", "port") is None
     assert bundle.model_metadata("absent") is None
     assert bundle.model_parameters("absent") is None
@@ -124,7 +126,9 @@ def test_snapshot_and_concurrent_reads(bundle_path):
     bundle_path.unlink()
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(
-            pool.map(lambda _: bundle.input_info("a_policy", "features").shape, range(24))
+            pool.map(
+                lambda _: bundle.input_info("a_policy", "features").shape, range(24)
+            )
         )
     assert results == [[3]] * 24
     assert bundle.model_names() == ["z_observation", "a_policy"]

@@ -1,12 +1,15 @@
-=====
-LEAPP
-=====
+===========
+Isaac LEAPP
+===========
+
+.. meta::
+   :description: Isaac LEAPP is NVIDIA's library for machine learning pipeline export. Capture supported preprocessing, inference, and postprocessing in ONNX, TorchScript, or PT2 models.
 
 .. raw:: html
 
    <header class="leapp-hero">
      <div class="leapp-hero-copy">
-       <h1>LEAPP</h1>
+       <h1>Isaac LEAPP</h1>
        <p>Lightweight Export Annotations<br />for Policy Pipelines</p>
      </div>
      <div class="leapp-hero-action">
@@ -25,11 +28,14 @@ LEAPP
 
 Export the whole policy pipeline, not just the model weights.
 
-LEAPP helps teams move learned policies and multi-stage PyTorch pipelines
-from research code into deployable artifacts. It traces real execution across
-preprocessing, model inference, postprocessing, constants, and tensor library
-glue, then exports per-node models and a YAML pipeline specification that
-downstream runtimes can consume.
+Isaac LEAPP is NVIDIA's library for machine learning pipeline export.
+LEAPP stands for Lightweight Export Annotations for Policy Pipelines.
+It exports the computation you already run into ONNX, TorchScript, or
+PyTorch ExportedProgram models. Capture preprocessing, model inference, and
+action processing together in **one model**, even when the computation spans
+helper functions, class methods, and supported PyTorch and NumPy operations.
+Choose separate models only when your deployment benefits from independent
+stages.
 
 LEAPP is designed for the full policy path, including the logic that
 surrounds the learned model: normalization, feature transforms, recurrent
@@ -40,7 +46,10 @@ into deployment.
 
 With LEAPP, you mark the input and output boundaries of the compute you already
 run. Execute the annotated pipeline with sample inputs, and LEAPP compiles the
-traced graph into portable artifacts.
+traced graph and validates exported outputs against captured Python outputs.
+Your code does not need to implement an RL environment interface or fit into a
+single ``forward()`` method. Isaac Lab also provides a native LEAPP export
+integration; see :doc:`ecosystem`.
 
 .. button-ref:: getting_started
    :ref-type: doc
@@ -83,11 +92,10 @@ checkpoint. It is a strong fit when you need to:
       Keep preprocessing, postprocessing, constants, and tensor operations
       around the learned model.
 
-   .. grid-item-card:: Avoid specialized export-only implementations
+   .. grid-item-card:: Reuse existing computation
       :class-card: leapp-fit-card sd-rounded-3
 
-      Eliminate the need for a separate export-only implementation of the same
-      computation.
+      Reuse supported computation directly from your application.
 
    .. grid-item-card:: Move between runtimes
       :class-card: leapp-fit-card sd-rounded-3
@@ -95,11 +103,11 @@ checkpoint. It is a strong fit when you need to:
       Carry policy logic into another runtime, simulator, application, or
       deployment stack.
 
-   .. grid-item-card:: Export modular policy graphs
+   .. grid-item-card:: Choose one model or several
       :class-card: leapp-fit-card sd-rounded-3
 
-      Represent a policy as connected nodes, so each stage can be inspected,
-      exported, and wired independently.
+      Export the full computation as one model, or choose separate stages
+      with independent export backends when needed.
 
    .. grid-item-card:: Describe tensor meaning
       :class-card: leapp-fit-card sd-rounded-3
@@ -114,10 +122,11 @@ How LEAPP Fits In
 
    .. grid-item::
 
-      LEAPP traces the code path you actually execute. It records tensor flow
-      between annotated stages, exports each stage independently, and writes a
-      YAML specification describing how the exported pieces connect at
-      inference time.
+      LEAPP traces the code path you actually execute. One annotated input/output
+      boundary can capture the entire policy pipeline into one model file.
+      Multiple boundaries let you export separate models instead. A YAML
+      specification describes the model interfaces, semantic metadata, and
+      any state feedback or connections between models.
 
       The result is an export bundle that can be inspected, validated, and
       handed to downstream systems without requiring those systems to
@@ -135,15 +144,13 @@ How LEAPP Fits In
              <div class="leapp-diagram-chevron">export bundle</div>
              <div class="leapp-diagram-output">
                <div class="leapp-artifact-grid">
-                 <span>node1.pt</span>
-                 <span>node2.onnx</span>
+                 <span>control.onnx</span>
                  <span>pipeline.yaml</span>
                  <span>visualization.png</span>
                </div>
              </div>
            </div>
          </div>
-
 
 Documentation Map
 =================

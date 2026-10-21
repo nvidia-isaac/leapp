@@ -25,8 +25,10 @@ from .base_example_test import BaseExampleTest
 
 def run_example(**inputs):
     from examples.wbc_plain import run_model, get_model
+
     model = get_model("models/isaac_velocity_flat_h1_v0.pt")
     return run_model(model, **inputs)
+
 
 class TestWBCPlain(BaseExampleTest):
     """Unit tests for examples/wbc_plain.py"""
@@ -36,50 +38,52 @@ class TestWBCPlain(BaseExampleTest):
 
         # Expected output files based on the sample_wbc_graph directory
         expected_files = [
-            'wbc_plain.onnx',
-            'sample_wbc_graph.png',
-            'sample_wbc_graph.yaml'
+            "wbc_plain.onnx",
+            "sample_wbc_graph.png",
+            "sample_wbc_graph.yaml",
         ]
 
         # Run the test
         self._run_and_verify_example(
-            script_name='wbc_plain.py',
-            output_dir_name='sample_wbc_graph',
+            script_name="wbc_plain.py",
+            output_dir_name="sample_wbc_graph",
             expected_files=expected_files,
-            test_description='Testing wbc_plain.py'
+            test_description="Testing wbc_plain.py",
         )
 
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        device = "cuda" if torch.cuda.is_available() else "cpu"
         inputs = {
-            'joint_pos': torch.randn(19, device=device, dtype=torch.float32),
-            'joint_vel': torch.randn(19, device=device, dtype=torch.float32),
-            'velocity_commands': torch.randn(3, device=device, dtype=torch.float32),
-            'lin_vel_I': torch.randn(3, device=device, dtype=torch.float32),
-            'ang_vel_I': torch.randn(3, device=device, dtype=torch.float32),
-            'q_IB': torch.randn(4, device=device, dtype=torch.float32),
-            'previous_actions': torch.zeros(19, device=device, dtype=torch.float32),
+            "joint_pos": torch.randn(19, device=device, dtype=torch.float32),
+            "joint_vel": torch.randn(19, device=device, dtype=torch.float32),
+            "velocity_commands": torch.randn(3, device=device, dtype=torch.float32),
+            "lin_vel_I": torch.randn(3, device=device, dtype=torch.float32),
+            "ang_vel_I": torch.randn(3, device=device, dtype=torch.float32),
+            "q_IB": torch.randn(4, device=device, dtype=torch.float32),
+            "previous_actions": torch.zeros(19, device=device, dtype=torch.float32),
         }
         exported_pipeline_inputs = {
-            'wbc_plain/velocity_commands': inputs['velocity_commands'].clone(),
-            'wbc_plain/joint_vel': inputs['joint_vel'].clone(),
-            'wbc_plain/joint_pos': inputs['joint_pos'].clone(),
-            'wbc_plain/lin_vel_I': inputs['lin_vel_I'].clone(),
-            'wbc_plain/ang_vel_I': inputs['ang_vel_I'].clone(),
-            'wbc_plain/q_IB': inputs['q_IB'].clone(),
+            "wbc_plain/velocity_commands": inputs["velocity_commands"].clone(),
+            "wbc_plain/joint_vel": inputs["joint_vel"].clone(),
+            "wbc_plain/joint_pos": inputs["joint_pos"].clone(),
+            "wbc_plain/lin_vel_I": inputs["lin_vel_I"].clone(),
+            "wbc_plain/ang_vel_I": inputs["ang_vel_I"].clone(),
+            "wbc_plain/q_IB": inputs["q_IB"].clone(),
         }
 
         run_example(**inputs)
         outputs, _ = run_example(**inputs)
 
-        exported_example = InferenceManager('sample_wbc_graph/sample_wbc_graph.yaml')
+        exported_example = InferenceManager("sample_wbc_graph/sample_wbc_graph.yaml")
 
         exported_outputs = exported_example.run_policy(exported_pipeline_inputs)
-        exported_action = exported_outputs['wbc_plain/final_actions']
+        exported_action = exported_outputs["wbc_plain/final_actions"]
 
         try:
             if torch.cuda.is_available():
                 torch.cuda.synchronize()  # Wait for GPU operations to complete
-            self.assertTrue(torch.allclose(outputs, exported_action, rtol=1e-3, atol=1e-6))
+            self.assertTrue(
+                torch.allclose(outputs, exported_action, rtol=1e-3, atol=1e-6)
+            )
         except AssertionError as e:
             print("Outputs do not match:")
             print(f"Outputs: {outputs}")
@@ -87,5 +91,5 @@ class TestWBCPlain(BaseExampleTest):
             raise e
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main(verbosity=2)

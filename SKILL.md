@@ -155,10 +155,11 @@ Calls in NumPy, SciPy, scikit-learn, scikit-image, OpenCV, or other libraries **
 
 | Hazard | What the agent should do |
 |--------|--------------------------|
-| Unmapped NumPy/native operation | Treat the trace warning as a correctness failure. A plain result mixed back into traced data can become a constant. Patch the operation and compare new inputs against the original. |
+| Unsupported NumPy/native operation | NumPy capture checks graph structure; numerical comparison happens during final exported-node validation. Recoverable capture failures log errors and continue eager execution. Unused failures are pruned; a failed dependency in the declared output graph blocks export. Unsupported mutations remain immediate errors. Calls that bypass the hooks can still return plain values that become constants. Patch unsupported computation and compare new inputs against the original. |
 | `.item()`, `.tolist()`, `float()`, `int()` | Audit explicitly: Torch extraction can be silent. Keep dynamic data in traced operations; logs alone cannot prove correctness. |
-| NumPy indexing down to a scalar or NumPy scalar operands | Check for loss of array tracing or unsupported operand types. Use a faithful adapter preserving the needed array computation. |
-| NumPy negative-stride slicing, unsupported `astype` dtype | Eager and exported behavior can disagree. Check the online limitations and implement supported equivalent operations within the adapter. |
+| NumPy indexing down to a scalar | Keep an array dimension to preserve runtime dependence. Constant NumPy scalar operands are accepted, but cannot restore a dependency lost by indexing. |
+| NumPy negative-stride slicing | Static basic reads use `flip` or normalized indices with `index_select`. Runtime bounds, mixed advanced indices, reverse assignment, and mutation through reversed views need separate support. |
+| Unsupported `astype` dtype | Eager and exported dtypes can disagree. Use a supported dtype and check replay against the original. |
 | Tensor-dependent Python `if`/`while` or iteration counts | Only the executed path is captured. Use a faithful traceable expression in an adapter where possible; otherwise document the supported domain or external control-flow boundary. Another exporter cannot recover a branch already lost. |
 
 Supported NumPy/Torch conversions such as `torch.from_numpy()` and `.numpy()` can preserve tracing with global patching enabled. Do not rewrite all NumPy code or treat every conversion as a trace break.
@@ -179,6 +180,8 @@ Warp is part of this skill. **Before integrating Warp, read [the complete Warp g
 - Use ONNX Dynamo by default; PT2 is the other supported Warp exporter. Deploy the corresponding native runtime dependency along with the bundle.
 
 ## Validate the whole exported pipeline
+
+`compile_graph(validate=True)` compares all cached node outputs, including exported state updates. Consecutive samples validate the original pipeline's stateful transitions, not just its actions. Each sample supplies recorded reference inputs/state; sequential runtime replay instead feeds exported state forward and checks accumulated numerical drift and runtime feedback/reset handling. Cache size controls transition coverage, not feedback replay. See [stateful validation](https://nvidia-isaac.github.io/leapp/guides/debugging.html#stateful-transitions-and-sequential-replay).
 
 1. Compare the original application and annotated execution using the same inputs, weights, state, execution mode, and random seeds where relevant. Check function adapters against original functions separately.
 2. Run `compile_graph(validate=True, strict=True)` with justified tolerances. Inspect warnings and generated YAML: expected external inputs, final outputs, forward/feedback edges, initial values, backend types, and existing artifact paths. Explain any unexpected dangling input.
