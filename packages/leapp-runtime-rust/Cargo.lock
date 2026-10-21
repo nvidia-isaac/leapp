@@ -303,7 +303,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "indexmap",
- "leapp-triton",
  "protobuf",
  "protobuf-codegen",
  "safetensors",
@@ -330,7 +329,6 @@ dependencies = [
  "cxx-build",
  "leapp-runtime",
  "leapp-runtime-bindings",
- "leapp-triton",
 ]
 
 [[package]]
@@ -339,15 +337,7 @@ version = "0.1.0"
 dependencies = [
  "leapp-runtime",
  "leapp-runtime-bindings",
- "leapp-triton",
  "pyo3",
-]
-
-[[package]]
-name = "leapp-triton"
-version = "0.1.0"
-dependencies = [
- "serde_json",
 ]
 
 [[package]]

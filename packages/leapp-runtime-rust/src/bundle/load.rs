@@ -97,7 +97,7 @@ pub(crate) fn read_bundle(path: &Path) -> Result<BundleData, BundleError> {
     })
 }
 
-// Inspection normalizes known exporter aliases without requiring an adapter.
+// Inspection normalizes known exporter aliases without requiring an engine.
 pub(crate) fn backend_name(name: &str) -> &str {
     match name {
         "onnx" | "onnx-dynamo" | "onnx-torchscript" => "onnx",

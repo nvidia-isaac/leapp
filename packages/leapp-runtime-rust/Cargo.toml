@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [workspace]
-members = ["src/adapter/triton", "bindings/common", "bindings/python", "bindings/cxx"]
+members = ["bindings/common", "bindings/python", "bindings/cxx"]
 default-members = ["."]
 resolver = "2"
 
@@ -14,11 +14,7 @@ license = "Apache-2.0"
 publish = false
 description = "LEAPP bundle inspection and synchronous Triton execution"
 
-[features]
-triton = ["dep:leapp-triton"]
-
 [dependencies]
-leapp-triton = { path = "src/adapter/triton", optional = true }
 protobuf = "=3.7.2"
 tempfile = "3"
 anyhow = "1"
@@ -34,9 +30,13 @@ safetensors = "=0.6.2"
 protobuf-codegen = "=3.7.2"
 
 [[test]]
+name = "bundle"
+path = "tests/unit_tests/bundle.rs"
+
+[[test]]
+name = "dlpack"
+path = "tests/unit_tests/dlpack.rs"
+
+[[test]]
 name = "binding_lifecycle"
 path = "bindings/common/tests/lifecycle.rs"
-
-[[example]]
-name = "run"
-required-features = ["triton"]

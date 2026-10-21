@@ -3,22 +3,21 @@
 
 """Synchronous LEAPP execution with retained NumPy and DLPack outputs."""
 
-from dataclasses import dataclass
+from __future__ import annotations
+
+from dataclasses import dataclass, field
 from enum import IntEnum
-from os import PathLike
 
 from ._native import (
     Bundle,
     BundleError,
-    DLPackView,
+    DLPackOutput,
     MetadataMapping,
     PortRef,
     PortSpec,
     RunResult,
-    Runtime,
     RuntimeError,
     Session,
-    Tensor,
 )
 
 
@@ -32,25 +31,24 @@ class ErrorCode(IntEnum):
 
 
 @dataclass(frozen=True)
-class RuntimeOptions:
-    """Model placement, independent of input/output storage."""
+class SessionOptions:
+    """Construction-time model placement and output storage."""
 
     device: str = "cpu"
-    backend_directory: str | PathLike = "/opt/tritonserver/backends"
+    output_device: str = "cpu"
+    output_overrides: dict[str, str] = field(default_factory=dict)
 
 
 __all__ = [
     "Bundle",
     "BundleError",
-    "DLPackView",
+    "DLPackOutput",
     "ErrorCode",
     "MetadataMapping",
     "PortRef",
     "PortSpec",
     "RunResult",
-    "Runtime",
     "RuntimeError",
-    "RuntimeOptions",
+    "SessionOptions",
     "Session",
-    "Tensor",
 ]

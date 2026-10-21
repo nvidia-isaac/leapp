@@ -1,8 +1,9 @@
 # Python bindings
 
 PyO3 bindings to the Rust bundle and synchronous runtime APIs. Linux x86-64
-requires the Triton SDK, CUDA runtime, and selected backend libraries at runtime. NumPy is a package dependency; PyTorch and CuPy are
-optional DLPack producers/consumers.
+requires the Triton SDK, CUDA runtime, and selected backend libraries at runtime.
+NumPy is a package dependency; PyTorch and CuPy are optional DLPack
+producers/consumers.
 
 Build with the workspace's Rust toolchain and Python 3.10 or newer:
 
@@ -23,14 +24,12 @@ import numpy as np
 import leapp_runtime as lr
 
 bundle = lr.Bundle.open("exports/policy.yaml")
-options = lr.RuntimeOptions(device="cuda:0")
-with lr.Runtime.open(bundle, options) as runtime:
-    session = runtime.create_session()
+options = lr.SessionOptions(device="cuda:0", output_device="cpu")
+with lr.Session.open(bundle, options) as session:
     result = session.run(
         {"preprocess/obs": np.zeros(18, dtype=np.float32)},
-        output_device="cpu",
     )
-    action = result.numpy("policy/action")
+    action = np.from_dlpack(result["policy/action"])
     mutable_action = action.copy()
     session.reset()
 ```
@@ -46,50 +45,52 @@ preserved. An absent model returns `None`; a model with no ports returns two
 empty lists. Use `input_info` and `output_info` to inspect those ports.
 Unresolved pipeline input descriptors are represented by `None`.
 
-Inputs may be NumPy arrays, PyTorch tensors, CuPy arrays, LEAPP tensors, or
-other DLPack producers.
-Input owners are retained until synchronous inference completes. Do not modify
-or resize their storage during a call. Every call supplies all public inputs.
-Noncontiguous NumPy, PyTorch, and CuPy inputs are copied to contiguous storage
-on their existing device only when necessary. Contiguous inputs remain borrowed;
-temporary copies are retained through inference. Other DLPack producers must
-provide C-contiguous tensors: DLPack has no standard contiguous-copy operation,
-so materialize those inputs explicitly before calling `run`.
-CUDA producer work is handed to a private stream and completed before Triton
-reads the buffer; this includes nondefault producer streams.
+Inputs must implement `__dlpack__` and `__dlpack_device__`. NumPy, PyTorch,
+CuPy, and returned `DLPackOutput` objects use the same protocol path. Legacy
+capsules and DLPack 1.0 versioned capsules are supported. Use producer versions
+that implement this protocol; older array interfaces and framework-specific
+fallbacks are not supported.
 
-CPU and pinned outputs support `result.numpy(name)` or `tensor.numpy()`.
-These are zero-copy, read-only NumPy arrays retaining their allocation owner;
-`array.copy()` provides mutable storage. CUDA tensors require explicit host
-transfer through a consumer such as CuPy.
+All inputs must be C-contiguous with supported native-endian numeric dtypes.
+Materialize noncontiguous inputs explicitly, for example `np.ascontiguousarray(x)`,
+`x.contiguous()` in PyTorch, or `cp.ascontiguousarray(x)`. Read-only inputs are
+accepted when their producer can export them through DLPack; producer export
+errors are propagated. Input leases remain alive until Triton releases the request.
+Do not modify or resize input storage during a call.
 
-DLPack exports **copy by default**, retaining the original device:
+CUDA producers hand work to an engine-owned stream per device. After importing
+the batch, each participating stream is synchronized once before inference.
+Producers and capsules remain alive through these waits, including on import
+failure. Outputs are ready on return.
 
-```python
-import cupy as cp
+Results expose minimal `DLPackOutput` objects with only the two DLPack protocol
+methods. Use `np.from_dlpack(result[name])`, `torch.from_dlpack(result[name])`, or
+`cp.from_dlpack(result[name])`. Consumers control array APIs, copies, and transfers.
+Exports share output storage; repeated exports may alias. Outputs also used as
+feedback are copied to their configured public location before publication, so consumer mutation
+cannot change the next inference or reset state. NumPy may return a read-only view;
+use its `copy()` when a writable NumPy array is required.
 
-with lr.Runtime.open(bundle, options) as runtime:
-    session = runtime.create_session()
-    result = session.run(inputs, output_device="cuda:0")
-    action = cp.from_dlpack(result["policy/action"])  # independent mutable storage
-    shared = cp.from_dlpack(result["policy/action"].dlpack_view())
-```
-
-`dlpack_view()` explicitly acknowledges the read-only sharing contract.
-Versioned capsules carry DLPack's read-only flag, but consumers may ignore it;
-legacy capsules cannot express it. **Never mutate this shared allocation**:
-it can also hold feedback state or data retained by other results. There is no
-copy-on-write interception. Ordinary `Tensor.__dlpack__(copy=False)` rejects
-the request and points to `dlpack_view()`; the explicit view accepts
-`copy=True` for an isolated copy. CPU and CUDA exports support legacy and
-versioned capsules. Cross-device export requests fail rather than silently move
-data. Native outputs and export copies are complete before publication.
+Exports support `copy=False` and `copy=None`. Explicit `copy=True` and cross-device
+export requests raise `BufferError`; perform those operations in the consumer.
+There is no `Tensor`, `DLPackView`, `.numpy()`, or `.dlpack_view()` convenience API.
+The engine may recycle unexposed storage after all owners release it. Descriptor
+access or DLPack export permanently excludes that allocation from reuse. Retain the
+consumer's DLPack owner until all its uses complete, including work on CUDA streams.
 
 `Session.run`, loading, reset and close release the GIL while doing native work.
 Calls on one session serialize; separate sessions may run concurrently.
-`Runtime.close()` waits for active calls, closes all associated sessions, and is
-idempotent. Further session calls fail. Results, arrays, DLPack allocations and
-bundle metadata remain valid after close. Context-manager exit calls close.
+`session.new_session()` shares the loaded engine and construction options, but
+starts from captured initial state rather than the source's current feedback.
+`Session.close()` waits for that session's active call and is idempotent. Other
+sessions remain usable. Results, arrays, DLPack allocations and bundle metadata
+remain valid after close. Context-manager exit closes only its session.
+
+`SessionOptions` captures output placement at construction; `run` takes only inputs.
+Set `output_device` to `"cpu"`, `"pinned"`, or `"cuda:N"` and use `output_overrides`
+for individual public outputs. The engine is fixed by the build. Configure its
+installation before starting Python, as described in the
+[runtime guide](../../README.md#synchronous-execution).
 
 Bundle and execution failures raise `BundleError` and `RuntimeError` with
 `code`, `phase`, and `message`; bundle errors also include `path`.
@@ -97,7 +98,7 @@ Python argument/protocol failures use standard Python exception types.
 
 ## Tests
 
-Generate ONNX fixtures with `tests/generate_models.py`, then run from the Rust
+Generate ONNX fixtures with `tests/generators/generate_models.py`, then run from the Rust
 package directory:
 
 ```sh
@@ -107,4 +108,4 @@ LEAPP_TEST_CUDA=1 python -m pytest bindings/python/tests
 ```
 
 Install pytest, PyTorch and CuPy for the complete interoperability suite.
-C++ bindings will be a separate crate and are not needed to use this package.
+C++ bindings are a separate crate and are not needed to use this package.

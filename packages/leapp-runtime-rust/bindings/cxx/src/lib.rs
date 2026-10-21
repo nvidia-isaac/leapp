@@ -7,8 +7,7 @@
 mod bridge;
 mod bundle;
 mod dtype;
-mod runtime;
-mod tensor;
+mod session;
 
 use bridge::ffi;
 use leapp_runtime::ErrorCode;
@@ -31,11 +30,6 @@ fn error(code: ErrorCode, phase: &str, message: impl ToString) -> ffi::StatusDat
 
 fn invalid(message: &str) -> ffi::StatusData {
     error(ErrorCode::InvalidArgument, "binding", message)
-}
-
-fn native_error(e: leapp_triton::Error) -> ffi::StatusData {
-    let e = leapp_runtime::RuntimeError::from(e);
-    error(e.code(), e.phase(), &e)
 }
 
 fn binding_status(result: Result<(), leapp_runtime_bindings::Error>) -> ffi::StatusData {

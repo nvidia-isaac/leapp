@@ -1,0 +1,9 @@
+{
+    "rust-analyzer.linkedProjects": [
+        "packages/leapp-runtime-rust/Cargo.toml"
+    ],
+    "rust-analyzer.cargo.extraEnv": {
+        "LEAPP_ANALYSIS_ONLY": "1"
+    },
+    "rust-analyzer.cargo.targetDir": true
+}

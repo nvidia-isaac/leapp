@@ -5,8 +5,7 @@
 
 mod bundle;
 mod dlpack;
-mod runtime;
-mod tensor;
+mod session;
 
 use leapp_runtime::{ErrorCode, MemoryLocation};
 use pyo3::{
@@ -42,10 +41,6 @@ fn execution_error(py: Python<'_>, error: leapp_runtime::RuntimeError) -> PyErr 
     diagnostic(py, runtime_error(&error), error.code(), error.phase())
 }
 
-fn native_error(error: leapp_triton::Error) -> PyErr {
-    Python::attach(|py| execution_error(py, error.into()))
-}
-
 fn location(text: &str) -> PyResult<MemoryLocation> {
     match text {
         "cpu" => Ok(MemoryLocation::Cpu),
@@ -58,14 +53,6 @@ fn location(text: &str) -> PyResult<MemoryLocation> {
     }
 }
 
-fn device_name(location: MemoryLocation) -> String {
-    match location {
-        MemoryLocation::Cpu => "cpu".into(),
-        MemoryLocation::PinnedCpu => "pinned".into(),
-        MemoryLocation::Cuda { device_id } => format!("cuda:{device_id}"),
-    }
-}
-
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("BundleError", m.py().get_type::<BundleError>())?;
@@ -74,10 +61,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<bundle::PortRef>()?;
     m.add_class::<bundle::PortSpec>()?;
     m.add_class::<bundle::MetadataMapping>()?;
-    m.add_class::<runtime::PyRuntime>()?;
-    m.add_class::<runtime::PySession>()?;
-    m.add_class::<runtime::PyRunResult>()?;
-    m.add_class::<tensor::PyTensor>()?;
-    m.add_class::<tensor::DLPackView>()?;
+    m.add_class::<session::PySession>()?;
+    m.add_class::<session::PyRunResult>()?;
+    m.add_class::<dlpack::Output>()?;
     Ok(())
 }

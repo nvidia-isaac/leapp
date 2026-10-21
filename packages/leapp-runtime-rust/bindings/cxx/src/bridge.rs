@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{bundle::*, runtime::*, tensor::*};
+use crate::{bundle::*, session::*};
 
 #[cxx::bridge(namespace = "leapp::detail")]
 pub mod ffi {
@@ -94,25 +94,15 @@ pub mod ffi {
         nodes: Vec<MetadataNode>,
     }
 
+    // Only the address of the standard DLTensor crosses this private bridge.
     struct Input {
         name: Vec<u8>,
-        dtype: Dtype,
-        shape: Vec<i64>,
-        address: usize,
-        byte_size: usize,
-        location: Location,
+        descriptor: usize,
     }
 
     struct Placement {
         name: Vec<u8>,
         location: Location,
-    }
-
-    struct TensorData {
-        dtype: Dtype,
-        shape: Vec<i64>,
-        location: Location,
-        byte_size: usize,
     }
 
     extern "Rust" {
@@ -138,24 +128,17 @@ pub mod ffi {
             node: &[u8],
         ) -> MetadataData;
 
-        type RuntimeHandle;
-
-        fn runtime_new() -> Box<RuntimeHandle>;
-
-        fn runtime_open(
+        type SessionHandle;
+        fn session_new() -> Box<SessionHandle>;
+        fn session_open(
             bundle: &BundleHandle,
             location: Location,
-            backends: &[u8],
-            output: &mut RuntimeHandle,
+            output_location: Location,
+            overrides: &[Placement],
+            output: &mut SessionHandle,
         ) -> StatusData;
-
-        fn runtime_close(runtime: &RuntimeHandle) -> StatusData;
-
-        type SessionHandle;
-
-        fn session_new() -> Box<SessionHandle>;
-
-        fn session_create(runtime: &RuntimeHandle, output: &mut SessionHandle) -> StatusData;
+        fn session_close(session: &SessionHandle) -> StatusData;
+        fn session_duplicate(session: &SessionHandle, output: &mut SessionHandle) -> StatusData;
 
         fn session_reset(session: &SessionHandle) -> StatusData;
 
@@ -163,8 +146,6 @@ pub mod ffi {
         unsafe fn session_run(
             session: &SessionHandle,
             inputs: &[Input],
-            location: Location,
-            overrides: &[Placement],
             output: &mut ResultHandle,
         ) -> StatusData;
 
@@ -174,20 +155,7 @@ pub mod ffi {
 
         fn result_names(result: &ResultHandle) -> Vec<String>;
 
-        fn result_tensor(
-            result: &ResultHandle,
-            name: &[u8],
-            output: &mut TensorHandle,
-        ) -> StatusData;
+        fn result_tensor(result: &ResultHandle, name: &[u8], output: &mut usize) -> StatusData;
 
-        type TensorHandle;
-
-        fn tensor_new() -> Box<TensorHandle>;
-
-        fn tensor_info(tensor: &TensorHandle) -> TensorData;
-
-        fn tensor_address(tensor: &TensorHandle) -> usize;
-
-        fn tensor_cpu_bytes(tensor: &TensorHandle, bytes: &mut Vec<u8>) -> StatusData;
     }
 }
