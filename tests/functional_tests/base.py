@@ -20,7 +20,9 @@ import shutil
 import torch
 from safetensors.torch import load_file
 from leapp.export_manager import ExportManager
-from leapp.leapp import _MANAGER as annotate # non-protected access to annotate singleton
+from leapp.leapp import (
+    _MANAGER as annotate,
+)  # non-protected access to annotate singleton
 import yaml
 
 
@@ -35,15 +37,20 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
             ExportManager.set_interpret_graph(False)
         annotate.reset_nodes()
         annotate.set_dry_run_and_non_traced(False, [])
-    
+
     def verify_all_models_exist(self, *model_names):
         for model_name in model_names:
             model_exists = False
-            model_exists |= os.path.exists(os.path.join(self.TEST_GRAPH_NAME, f"{model_name}.pt"))
-            model_exists |= os.path.exists(os.path.join(self.TEST_GRAPH_NAME, f"{model_name}.onnx"))
-            model_exists |= os.path.exists(os.path.join(self.TEST_GRAPH_NAME, f"{model_name}.pt2"))
-            self.assertTrue(model_exists,
-                            f"Model {model_name} does not exist")
+            model_exists |= os.path.exists(
+                os.path.join(self.TEST_GRAPH_NAME, f"{model_name}.pt")
+            )
+            model_exists |= os.path.exists(
+                os.path.join(self.TEST_GRAPH_NAME, f"{model_name}.onnx")
+            )
+            model_exists |= os.path.exists(
+                os.path.join(self.TEST_GRAPH_NAME, f"{model_name}.pt2")
+            )
+            self.assertTrue(model_exists, f"Model {model_name} does not exist")
 
     def verify_node_io(self, node, *, inputs=None, outputs=None):
         if inputs is not None:
@@ -59,29 +66,56 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
                 f"Expected {outputs} node output(s), got {len(node.outputs)}",
             )
 
-    def verify_num_connections(self, leapp_annotation, nodes=None, inputs=None, outputs=None,
-                               internal_connections=None, feedback_connections=None):
+    def verify_num_connections(
+        self,
+        leapp_annotation,
+        nodes=None,
+        inputs=None,
+        outputs=None,
+        internal_connections=None,
+        feedback_connections=None,
+    ):
         if nodes is not None:
-            self.assertEqual(nodes, len(leapp_annotation.detected_nodes),
-                             "Number of nodes do not match")
+            self.assertEqual(
+                nodes,
+                len(leapp_annotation.detected_nodes),
+                "Number of nodes do not match",
+            )
         if inputs is not None:
             total_inputs = sum(
-                [len(graph_inputs) for graph_inputs in leapp_annotation.detected_pipeline['inputs'].values()])
-            self.assertEqual(inputs, total_inputs,
-                             "Number of inputs do not match")
+                [
+                    len(graph_inputs)
+                    for graph_inputs in leapp_annotation.detected_pipeline[
+                        "inputs"
+                    ].values()
+                ]
+            )
+            self.assertEqual(inputs, total_inputs, "Number of inputs do not match")
         if outputs is not None:
             total_outputs = sum(
-                [len(graph_outputs) for graph_outputs in leapp_annotation.detected_pipeline['outputs'].values()])
-            self.assertEqual(outputs, total_outputs,
-                             "Number of outputs do not match")
+                [
+                    len(graph_outputs)
+                    for graph_outputs in leapp_annotation.detected_pipeline[
+                        "outputs"
+                    ].values()
+                ]
+            )
+            self.assertEqual(outputs, total_outputs, "Number of outputs do not match")
         if internal_connections is not None:
             num_connections = 0
-            for _, targets in leapp_annotation.detected_pipeline['data_flow'].items():
+            for _, targets in leapp_annotation.detected_pipeline["data_flow"].items():
                 num_connections += len(targets)
-            self.assertEqual(internal_connections, num_connections, "Number of internal connections do not match")
+            self.assertEqual(
+                internal_connections,
+                num_connections,
+                "Number of internal connections do not match",
+            )
         if feedback_connections is not None:
-            self.assertEqual(feedback_connections, len(
-                leapp_annotation.detected_pipeline['feedback_flow']), "Number of feedback connections do not match")
+            self.assertEqual(
+                feedback_connections,
+                len(leapp_annotation.detected_pipeline["feedback_flow"]),
+                "Number of feedback connections do not match",
+            )
 
     def inspect_torchscript_model(self, model_name, model_path=None):
         """
@@ -101,119 +135,114 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
         if model_path is None:
             model_path = self.TEST_GRAPH_NAME
         model = torch.jit.load(os.path.join(model_path, f"{model_name}.pt"))
-        result = {
-            'inputs': [],
-            'outputs': [],
-            'graph': None,
-            'code': None
-        }
+        result = {"inputs": [], "outputs": [], "graph": None, "code": None}
 
         try:
             # Get the computation graph
             graph = model.graph
-            result['graph'] = graph
+            result["graph"] = graph
 
             # Extract input information
             inputs = list(graph.inputs())
             for i, inp in enumerate(inputs):
                 input_info = {
-                    'index': i,
-                    'debug_name': inp.debugName(),
-                    'type': str(inp.type()),
+                    "index": i,
+                    "debug_name": inp.debugName(),
+                    "type": str(inp.type()),
                 }
 
                 # Try to get shape information if it's a tensor
-                if hasattr(inp.type(), 'sizes'):
+                if hasattr(inp.type(), "sizes"):
                     try:
-                        input_info['shape'] = list(inp.type().sizes())
+                        input_info["shape"] = list(inp.type().sizes())
                     except Exception:
-                        input_info['shape'] = None
+                        input_info["shape"] = None
                 else:
-                    input_info['shape'] = None
+                    input_info["shape"] = None
 
-                result['inputs'].append(input_info)
+                result["inputs"].append(input_info)
 
             # Extract output information
             outputs = list(graph.outputs())
-            
+
             # Check if the output is a single tuple - if so, unwrap it
             if len(outputs) == 1:
                 output_type = outputs[0].type()
                 # Check if it's a tuple type by looking at the string representation
                 type_str = str(output_type)
-                if type_str.startswith('Tuple[') or type_str.startswith('('):
+                if type_str.startswith("Tuple[") or type_str.startswith("("):
                     # It's a tuple - unwrap it by getting the element types
-                    if hasattr(output_type, 'elements'):
+                    if hasattr(output_type, "elements"):
                         # This is a TupleType, get the individual elements
                         tuple_elements = output_type.elements()
                         for i, elem_type in enumerate(tuple_elements):
                             output_info = {
-                                'index': i,
-                                'debug_name': f'tuple_element_{i}',
-                                'type': str(elem_type),
+                                "index": i,
+                                "debug_name": f"tuple_element_{i}",
+                                "type": str(elem_type),
                             }
-                            
+
                             # Try to get shape information if it's a tensor
-                            if hasattr(elem_type, 'sizes'):
+                            if hasattr(elem_type, "sizes"):
                                 try:
-                                    output_info['shape'] = list(elem_type.sizes())
+                                    output_info["shape"] = list(elem_type.sizes())
                                 except Exception:
-                                    output_info['shape'] = None
+                                    output_info["shape"] = None
                             else:
-                                output_info['shape'] = None
-                            
-                            result['outputs'].append(output_info)
+                                output_info["shape"] = None
+
+                            result["outputs"].append(output_info)
                     else:
                         # Fallback: treat as single output
                         output_info = {
-                            'index': 0,
-                            'debug_name': outputs[0].debugName(),
-                            'type': type_str,
-                            'shape': None
+                            "index": 0,
+                            "debug_name": outputs[0].debugName(),
+                            "type": type_str,
+                            "shape": None,
                         }
-                        result['outputs'].append(output_info)
+                        result["outputs"].append(output_info)
                 else:
                     # Not a tuple, process normally
                     for i, out in enumerate(outputs):
                         output_info = {
-                            'index': i,
-                            'debug_name': out.debugName(),
-                            'type': str(out.type()),
+                            "index": i,
+                            "debug_name": out.debugName(),
+                            "type": str(out.type()),
                         }
 
                         # Try to get shape information if it's a tensor
-                        if hasattr(out.type(), 'sizes'):
+                        if hasattr(out.type(), "sizes"):
                             try:
-                                output_info['shape'] = list(out.type().sizes())
+                                output_info["shape"] = list(out.type().sizes())
                             except Exception:
-                                output_info['shape'] = None
+                                output_info["shape"] = None
                         else:
-                            output_info['shape'] = None
+                            output_info["shape"] = None
 
-                        result['outputs'].append(output_info)
+                        result["outputs"].append(output_info)
             else:
                 # Multiple outputs, process normally
                 for i, out in enumerate(outputs):
                     output_info = {
-                        'index': i,
-                        'debug_name': out.debugName(),
-                        'type': str(out.type()),
+                        "index": i,
+                        "debug_name": out.debugName(),
+                        "type": str(out.type()),
                     }
 
                     # Try to get shape information if it's a tensor
-                    if hasattr(out.type(), 'sizes'):
+                    if hasattr(out.type(), "sizes"):
                         try:
-                            output_info['shape'] = list(out.type().sizes())
+                            output_info["shape"] = list(out.type().sizes())
                         except Exception:
-                            output_info['shape'] = None
+                            output_info["shape"] = None
                     else:
-                        output_info['shape'] = None
+                        output_info["shape"] = None
 
-                    result['outputs'].append(output_info)
+                    result["outputs"].append(output_info)
 
             # Get the code representation if available
-            if hasattr(model, 'code'):
-                result['code'] = model.code
+            if hasattr(model, "code"):
+                result["code"] = model.code
 
         except Exception as e:
             print(f"Error inspecting TorchScript model: {e}")
@@ -231,44 +260,45 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
         """
         info = self.inspect_torchscript_model(model_name, model_path)
 
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("TorchScript Model Information")
-        print("="*60)
+        print("=" * 60)
 
         print("\n[Inputs]")
-        if not info['inputs']:
+        if not info["inputs"]:
             print("  No inputs found")
         else:
-            for inp in info['inputs']:
+            for inp in info["inputs"]:
                 print(f"  Input {inp['index']}:")
                 print(f"    Name: {inp['debug_name']}")
                 print(f"    Type: {inp['type']}")
-                if inp['shape']:
+                if inp["shape"]:
                     print(f"    Shape: {inp['shape']}")
 
         print("\n[Outputs]")
-        if not info['outputs']:
+        if not info["outputs"]:
             print("  No outputs found")
         else:
-            for out in info['outputs']:
+            for out in info["outputs"]:
                 print(f"  Output {out['index']}:")
                 print(f"    Name: {out['debug_name']}")
                 print(f"    Type: {out['type']}")
-                if out['shape']:
+                if out["shape"]:
                     print(f"    Shape: {out['shape']}")
 
-        if verbose and info['graph']:
+        if verbose and info["graph"]:
             print("\n[Computation Graph]")
-            print(info['graph'])
+            print(info["graph"])
 
-        if info['code']:
+        if info["code"]:
             print("\n[Model Code]")
-            print(info['code'])
+            print(info["code"])
 
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
 
     def verify_data_exact_match(self, source_data, target_data):
         from leapp.leapp_graph.datatypes.traced_data import TracedData
+
         if isinstance(source_data, TracedData):
             source_data = source_data.data
         if isinstance(target_data, TracedData):
@@ -311,7 +341,7 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
         Uses the same traversal order as describe_io_helper.
         """
         tensors = []
-        
+
         def _flatten(item):
             if isinstance(item, torch.Tensor):
                 tensors.append(item)
@@ -321,24 +351,25 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
             elif isinstance(item, (list, tuple)):
                 for elem in item:
                     _flatten(elem)
-        
+
         _flatten(data)
         return tensors
 
     def _assert_artifacts(self, save_dir, graph_name):
         yaml_path = os.path.join(save_dir, f"{graph_name}.yaml")
         model_path = os.path.join(save_dir, "identity.pt")
-        self.assertTrue(os.path.exists(yaml_path),
-                        f"YAML not found at {yaml_path}")
-        self.assertTrue(os.path.exists(model_path),
-                        f"Model not found at {model_path}")
+        self.assertTrue(os.path.exists(yaml_path), f"YAML not found at {yaml_path}")
+        self.assertTrue(os.path.exists(model_path), f"Model not found at {model_path}")
         # The exported model_path entry in YAML must be relative to the YAML dir.
         with open(yaml_path, "r") as f:
             config = yaml.safe_load(f)
         identity_params = config["models"]["identity"]["parameters"]
-        self.assertEqual(identity_params["model_path"], "identity.pt",
-                         f"model_path should be relative to YAML directory, "
-                         f"got {identity_params['model_path']!r}")
+        self.assertEqual(
+            identity_params["model_path"],
+            "identity.pt",
+            f"model_path should be relative to YAML directory, "
+            f"got {identity_params['model_path']!r}",
+        )
 
     def verify_feedback_initial_values(self, expected_values, graph_name=None):
         """Verify that the feedback initial values safetensors file exists and contains expected values.
@@ -352,21 +383,32 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
         """
         if graph_name is None:
             graph_name = self.TEST_GRAPH_NAME
-        safetensors_path = os.path.join(graph_name, f"{graph_name}_initial_values.safetensors")
-        self.assertTrue(os.path.exists(safetensors_path),
-                        f"Feedback initial values safetensors file not found at {safetensors_path}")
+        safetensors_path = os.path.join(
+            graph_name, f"{graph_name}_initial_values.safetensors"
+        )
+        self.assertTrue(
+            os.path.exists(safetensors_path),
+            f"Feedback initial values safetensors file not found at {safetensors_path}",
+        )
         loaded = load_file(safetensors_path)
 
         for key, expected in expected_values.items():
-            self.assertIn(key, loaded, f"Key '{key}' not found in feedback initial values")
+            self.assertIn(
+                key, loaded, f"Key '{key}' not found in feedback initial values"
+            )
             if isinstance(expected, tuple):
                 # Shape-only check
-                self.assertEqual(loaded[key].shape, torch.Size(expected),
-                                 f"Shape mismatch for '{key}': got {loaded[key].shape}, expected {expected}")
+                self.assertEqual(
+                    loaded[key].shape,
+                    torch.Size(expected),
+                    f"Shape mismatch for '{key}': got {loaded[key].shape}, expected {expected}",
+                )
             else:
                 # Exact value check
-                self.assertTrue(torch.equal(loaded[key], expected),
-                                f"Value mismatch for '{key}': got {loaded[key]}, expected {expected}")
+                self.assertTrue(
+                    torch.equal(loaded[key], expected),
+                    f"Value mismatch for '{key}': got {loaded[key]}, expected {expected}",
+                )
 
     def verify_safetensors_matches_feedback(self, leapp_annotation, graph_name=None):
         """Verify safetensors keys exactly match the feedback targets in the pipeline.
@@ -378,10 +420,10 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
         if graph_name is None:
             graph_name = self.TEST_GRAPH_NAME
         safetensors_path = os.path.join(
-            graph_name, f"{graph_name}_initial_values.safetensors")
+            graph_name, f"{graph_name}_initial_values.safetensors"
+        )
 
-        feedback_flow = leapp_annotation.detected_pipeline.get(
-            'feedback_flow', {})
+        feedback_flow = leapp_annotation.detected_pipeline.get("feedback_flow", {})
 
         # Collect all feedback target keys (node_name/input_name)
         expected_keys = set()
@@ -392,24 +434,29 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
         if not expected_keys:
             self.assertFalse(
                 os.path.exists(safetensors_path),
-                "No feedback connections exist, but safetensors file was created")
+                "No feedback connections exist, but safetensors file was created",
+            )
             return
 
         self.assertTrue(
             os.path.exists(safetensors_path),
-            f"Feedback connections exist but safetensors file not found at {safetensors_path}")
+            f"Feedback connections exist but safetensors file not found at {safetensors_path}",
+        )
 
         loaded = load_file(safetensors_path)
         actual_keys = set(loaded.keys())
 
         self.assertEqual(
-            expected_keys, actual_keys,
+            expected_keys,
+            actual_keys,
             f"Safetensors keys do not match feedback targets.\n"
             f"  Expected: {sorted(expected_keys)}\n"
-            f"  Actual:   {sorted(actual_keys)}")
+            f"  Actual:   {sorted(actual_keys)}",
+        )
 
-    def verify_inference_manager(self, source_inputs, source_outputs,
-                                 graph_name=None, rtol=1e-3, atol=1e-5):
+    def verify_inference_manager(
+        self, source_inputs, source_outputs, graph_name=None, rtol=1e-3, atol=1e-5
+    ):
         """Load the exported graph via InferenceManager, run it, and compare outputs.
 
         Args:
@@ -424,23 +471,28 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
         if graph_name is None:
             graph_name = self.TEST_GRAPH_NAME
         yaml_path = os.path.join(graph_name, f"{graph_name}.yaml")
-        self.assertTrue(os.path.exists(yaml_path),
-                        f"YAML not found at {yaml_path}")
+        self.assertTrue(os.path.exists(yaml_path), f"YAML not found at {yaml_path}")
 
         manager = InferenceManager(yaml_path)
 
         # Verify expected input/output keys exist
         for key in source_inputs:
-            self.assertIn(key, manager.inputs,
-                          f"Input key '{key}' not found in InferenceManager inputs: {manager.inputs}")
+            self.assertIn(
+                key,
+                manager.inputs,
+                f"Input key '{key}' not found in InferenceManager inputs: {manager.inputs}",
+            )
         for key in source_outputs:
-            self.assertIn(key, manager.outputs,
-                          f"Output key '{key}' not found in InferenceManager outputs: {manager.outputs}")
+            self.assertIn(
+                key,
+                manager.outputs,
+                f"Output key '{key}' not found in InferenceManager outputs: {manager.outputs}",
+            )
 
         # Move inputs to the device the InferenceManager expects
         device_inputs = {}
         for key, tensor in source_inputs.items():
-            node_name = key.split('/')[0]
+            node_name = key.split("/")[0]
             target_device = manager.nodes[node_name].device
             device_inputs[key] = tensor.to(target_device)
 
@@ -449,8 +501,11 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
 
         # Compare each expected output
         for key, expected in source_outputs.items():
-            self.assertIn(key, exported_outputs,
-                          f"Output key '{key}' missing from InferenceManager results")
+            self.assertIn(
+                key,
+                exported_outputs,
+                f"Output key '{key}' missing from InferenceManager results",
+            )
             actual = exported_outputs[key]
             if expected.device != actual.device:
                 actual = actual.to(expected.device)
@@ -459,13 +514,16 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
                 f"Output mismatch for '{key}':\n"
                 f"  Expected: {expected}\n"
                 f"  Actual:   {actual}\n"
-                f"  Max diff: {(expected - actual).abs().max().item():.6e}")
+                f"  Max diff: {(expected - actual).abs().max().item():.6e}",
+            )
 
-    def verify_single_torchscript_model_expected_value(self, inputs, expected_outputs, model_name, model_path=None):
+    def verify_single_torchscript_model_expected_value(
+        self, inputs, expected_outputs, model_name, model_path=None
+    ):
         if model_path is None:
             model_path = self.TEST_GRAPH_NAME
         model = torch.jit.load(os.path.join(model_path, f"{model_name}.pt"))
-        
+
         # Flatten all inputs since models now expect flat tensor arguments
         flat_inputs = []
         for inp in inputs:
@@ -479,14 +537,20 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
             outputs = (outputs,)
 
         for output, expected_output in zip(outputs, flat_expected_outputs):
-            self.assertTrue(self.verify_data_exact_match(output, expected_output), "An output value does not match expected value: "
-                            f"got {output} but expected {expected_output}")
+            self.assertTrue(
+                self.verify_data_exact_match(output, expected_output),
+                "An output value does not match expected value: "
+                f"got {output} but expected {expected_output}",
+            )
 
-    def verify_single_exported_program_model_expected_value(self, inputs, expected_outputs, model_name, model_path=None):
+    def verify_single_exported_program_model_expected_value(
+        self, inputs, expected_outputs, model_name, model_path=None
+    ):
         if model_path is None:
             model_path = self.TEST_GRAPH_NAME
         exported_program = torch.export.load(
-            os.path.join(model_path, f"{model_name}.pt2"))
+            os.path.join(model_path, f"{model_name}.pt2")
+        )
         model = exported_program.module()
 
         flat_inputs = []
@@ -501,5 +565,8 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
             outputs = (outputs,)
 
         for output, expected_output in zip(outputs, flat_expected_outputs):
-            self.assertTrue(self.verify_data_exact_match(output, expected_output), "An output value does not match expected value: "
-                            f"got {output} but expected {expected_output}")
+            self.assertTrue(
+                self.verify_data_exact_match(output, expected_output),
+                "An output value does not match expected value: "
+                f"got {output} but expected {expected_output}",
+            )

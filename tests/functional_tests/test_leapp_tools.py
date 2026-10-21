@@ -55,8 +55,10 @@ class TestStartNamePathNormalization(LEAPPFunctionalTestBase):
     def test_simple_name_preserves_legacy_layout(self):
         leapp.start(self.TEST_GRAPH_NAME)
         self.assertEqual(annotate.get_graph_name(), self.TEST_GRAPH_NAME)
-        self.assertEqual(os.path.normpath(annotate.get_save_path()),
-                         os.path.normpath(self.TEST_GRAPH_NAME))
+        self.assertEqual(
+            os.path.normpath(annotate.get_save_path()),
+            os.path.normpath(self.TEST_GRAPH_NAME),
+        )
         self._build_trivial_graph()
         self._assert_artifacts(self.TEST_GRAPH_NAME, self.TEST_GRAPH_NAME)
 
@@ -65,8 +67,9 @@ class TestStartNamePathNormalization(LEAPPFunctionalTestBase):
 
         leapp.start("foo/bar")
         self.assertEqual(annotate.get_graph_name(), "bar")
-        self.assertEqual(os.path.normpath(annotate.get_save_path()),
-                         os.path.join("foo", "bar"))
+        self.assertEqual(
+            os.path.normpath(annotate.get_save_path()), os.path.join("foo", "bar")
+        )
         self._build_trivial_graph()
         self._assert_artifacts(os.path.join("foo", "bar"), "bar")
 
@@ -75,15 +78,19 @@ class TestStartNamePathNormalization(LEAPPFunctionalTestBase):
 
         leapp.start(absolute_target)
         self.assertEqual(annotate.get_graph_name(), "exported_gr00t")
-        self.assertEqual(os.path.normpath(annotate.get_save_path()),
-                         os.path.normpath(absolute_target))
+        self.assertEqual(
+            os.path.normpath(annotate.get_save_path()),
+            os.path.normpath(absolute_target),
+        )
         self._build_trivial_graph()
         self._assert_artifacts(absolute_target, "exported_gr00t")
         # Critically, the YAML must NOT land one dir above the models, which
         # was the original bug.
         bad_path = os.path.join(self._tmp_root, "exported_gr00t.yaml")
-        self.assertFalse(os.path.exists(bad_path),
-                         f"YAML must not be emitted to sibling-dir path {bad_path}")
+        self.assertFalse(
+            os.path.exists(bad_path),
+            f"YAML must not be emitted to sibling-dir path {bad_path}",
+        )
 
     def test_trailing_slash_path_is_normalized(self):
         absolute_target = os.path.join(self._tmp_root, "exported_gr00t")
@@ -91,8 +98,10 @@ class TestStartNamePathNormalization(LEAPPFunctionalTestBase):
 
         leapp.start(name_with_slash)
         self.assertEqual(annotate.get_graph_name(), "exported_gr00t")
-        self.assertEqual(os.path.normpath(annotate.get_save_path()),
-                         os.path.normpath(absolute_target))
+        self.assertEqual(
+            os.path.normpath(annotate.get_save_path()),
+            os.path.normpath(absolute_target),
+        )
         self._build_trivial_graph()
         self._assert_artifacts(absolute_target, "exported_gr00t")
 
@@ -101,8 +110,9 @@ class TestStartNamePathNormalization(LEAPPFunctionalTestBase):
         leapp.start("nested/bar", save_path=save_path)
         expected_dir = os.path.join(save_path, "nested", "bar")
         self.assertEqual(annotate.get_graph_name(), "bar")
-        self.assertEqual(os.path.normpath(annotate.get_save_path()),
-                         os.path.normpath(expected_dir))
+        self.assertEqual(
+            os.path.normpath(annotate.get_save_path()), os.path.normpath(expected_dir)
+        )
         self._build_trivial_graph()
         self._assert_artifacts(expected_dir, "bar")
 
@@ -130,7 +140,8 @@ class TestCompileGraphLogging(LEAPPFunctionalTestBase):
         leapp.stop()
 
         expected_model_path = os.path.abspath(
-            os.path.join(self.TEST_GRAPH_NAME, "identity.pt"))
+            os.path.join(self.TEST_GRAPH_NAME, "identity.pt")
+        )
         with self.assertLogs("leapp", level=25) as logs:
             leapp.compile_graph(visualize=False, validate=False)
 

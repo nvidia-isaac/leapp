@@ -42,7 +42,9 @@ class TestFatalLoggingInExportManager(LEAPPFunctionalTestBase):
         leapp.start(name=self.TEST_GRAPH_NAME)
         try:
             with self.assertLogs("leapp", level="ERROR") as logs:
-                with self.assertRaisesRegex(Exception, "source and target do not match"):
+                with self.assertRaisesRegex(
+                    Exception, "source and target do not match"
+                ):
                     annotate.mirror_leapp_tags(
                         torch.tensor([1.0]),
                         torch.tensor([2.0]),

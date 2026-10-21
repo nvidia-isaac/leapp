@@ -267,3 +267,8 @@ isaac
 canonicalize
 canonicalized
 canonicalizing
+ATen
+ufunc
+namespaces
+functionalizes
+TopK

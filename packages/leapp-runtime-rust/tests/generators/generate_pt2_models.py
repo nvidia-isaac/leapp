@@ -13,8 +13,12 @@ import torch
 class Weighted(torch.nn.Module):
     def __init__(self, device):
         super().__init__()
-        self.weight = torch.nn.Parameter(torch.tensor([2., 3., 4., 5.], device=device))
-        self.register_buffer("bias", torch.tensor([10., 20., 30., 40.], device=device))
+        self.weight = torch.nn.Parameter(
+            torch.tensor([2.0, 3.0, 4.0, 5.0], device=device)
+        )
+        self.register_buffer(
+            "bias", torch.tensor([10.0, 20.0, 30.0, 40.0], device=device)
+        )
 
     def forward(self, values):
         return values * self.weight + self.bias, values.reshape(2, 2).t()
@@ -26,34 +30,49 @@ def generate(root):
     for device in devices:
         suffix = "cuda" if device.startswith("cuda") else "cpu"
         module = Weighted(device).eval()
-        example = torch.arange(1., 5., device=device)
+        example = torch.arange(1.0, 5.0, device=device)
         directory = root / f"weighted_{suffix}"
         directory.mkdir(exist_ok=True)
         program = torch.export.export(module, (example.clone(),))
         torch.export.save(program, directory / "model.pt2")
         expected = module(example.clone())
         dtype = str(example.dtype).removeprefix("torch.")
-        inputs = [{"name": "values", "dtype": dtype,
-                   "shape": list(example.shape),
-                   "type": "tensor"}]
+        inputs = [
+            {
+                "name": "values",
+                "dtype": dtype,
+                "shape": list(example.shape),
+                "type": "tensor",
+            }
+        ]
         outputs = [
-            {"name": f"output_{i}",
-             "dtype": str(value.dtype).removeprefix("torch."),
-             "shape": list(value.shape),
-             "type": "tensor"}
+            {
+                "name": f"output_{i}",
+                "dtype": str(value.dtype).removeprefix("torch."),
+                "shape": list(value.shape),
+                "type": "tensor",
+            }
             for i, value in enumerate(expected)
         ]
         bundle = {
             "system information": {"leapp config version": "1.3"},
-            "models": {"model": {
-                "inputs": inputs, "outputs": outputs,
-                "parameters": {"backend": "pt2",
-                               "model_path": f"{directory.name}/model.pt2"},
-            }},
-            "pipeline": {"data_flow": {}, "feedback_flow": {},
-                         "inputs": {"model": ["values"]},
-                         "outputs": {"model": [p["name"] for p in outputs]},
-                         "configs": {}},
+            "models": {
+                "model": {
+                    "inputs": inputs,
+                    "outputs": outputs,
+                    "parameters": {
+                        "backend": "pt2",
+                        "model_path": f"{directory.name}/model.pt2",
+                    },
+                }
+            },
+            "pipeline": {
+                "data_flow": {},
+                "feedback_flow": {},
+                "inputs": {"model": ["values"]},
+                "outputs": {"model": [p["name"] for p in outputs]},
+                "configs": {},
+            },
         }
         (root / f"{directory.name}.yaml").write_text(json.dumps(bundle))
 

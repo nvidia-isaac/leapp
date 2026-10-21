@@ -22,9 +22,11 @@ correct.
 Confirm the export
 ==================
 
-``compile_graph(validate=True)`` checks that each exported node matches
-the traced Python on the inputs captured during tracing. LEAPP runs the
-exported model, compares outputs with
+``compile_graph(validate=True)`` checks each exported node against all its
+cached Python input/output samples, including exported state inputs and
+updates. Repeated execution can capture consecutive stateful transitions;
+``max_cached_io`` controls how many samples are retained per node. LEAPP runs
+the exported model on each sample, compares outputs with
 ``torch.allclose(..., rtol=..., atol=...)``, logs any deviation, and
 returns a dict mapping node names to results.
 
@@ -79,6 +81,44 @@ first passes, the log names that ``sample N``.
 Re-entry also checks names, shapes, dtypes, and connectivity against
 the first step. Those failures show up during tracing, not at
 ``compile_graph()``.
+
+.. _stateful-validation:
+
+Stateful transitions and sequential replay
+------------------------------------------
+
+When consecutive calls carry state forward, cached samples preserve the
+original trajectory, including each state's next value:
+
+.. code-block:: text
+
+   (observation_0, state_0) -> (action_0, state_1)
+   (observation_1, state_1) -> (action_1, state_2)
+   (observation_2, state_2) -> (action_2, state_3)
+
+LEAPP supplies each recorded observation and state to the exported node and
+compares both its action and its next state with the recorded outputs. This
+validates the state-transition computation across the captured trajectory.
+State must be included in the exported interface as described in
+:doc:`graph`; unannotated Python state is outside this check.
+
+For deterministic computation with all relevant state represented, exact
+agreement on every transition also implies agreement when those transitions
+are chained with the same observations, initial state, and reset boundaries:
+each exported next state equals the next recorded input state.
+
+Validation accepts numerical differences within ``rtol`` and ``atol``.
+Cached validation supplies the recorded reference state again at each step,
+so small accepted errors do not accumulate between samples. **Sequential
+runtime replay feeds the exported state outputs into subsequent calls** and
+can reveal whether those errors grow, as well as problems in feedback wiring,
+initialization, or reset handling. Increasing the cache size expands recorded
+transition coverage; it does not change how validation supplies state.
+
+Use both checks when assessing stateful deployment: capture representative
+consecutive transitions, then compare a sequence through
+:doc:`../leapp_runtime` against the original pipeline from matching initial
+state. Include episode resets and fresh observations beyond the capture set.
 
 Inspect what was captured
 =========================

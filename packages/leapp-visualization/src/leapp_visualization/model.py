@@ -72,7 +72,9 @@ class VisualGraph:
     edges: tuple[VisualEdge, ...]
 
     def visual_ids(self) -> tuple[str, ...]:
-        return tuple(node.id for node in self.nodes) + tuple(terminal.id for terminal in self.terminals)
+        return tuple(node.id for node in self.nodes) + tuple(
+            terminal.id for terminal in self.terminals
+        )
 
 
 def visual_id(*parts: object) -> str:

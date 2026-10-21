@@ -11,8 +11,8 @@ Installation
 
 LEAPP requires Python 3.10+ and PyTorch 2.6.0+. Graph visualization requires
 Python 3.11+; on Python 3.10, LEAPP warns and skips PNG generation while
-completing the rest of the export. The full dependency list is
-in the :doc:`/index`.
+completing the rest of the export. The full dependency list is in
+`pyproject.toml <https://github.com/nvidia-isaac/leapp/blob/develop/pyproject.toml>`_.
 
 .. note::
 
@@ -20,13 +20,13 @@ in the :doc:`/index`.
    is required. See :doc:`tensor_libraries/installation`.
 
 Welcome to LEAPP! This guide walks you through the basics of using LEAPP
-to trace and export computational graphs from PyTorch code.
+to export observation processing, policy inference, and action processing
+together as one ONNX model.
 
 You'll learn how to:
 
-* Use traced tensors to annotate node inputs and outputs
-* Build multi-node graphs by connecting one node's outputs to a later node's
-  inputs
+* Mark the inputs and final outputs of an existing pipeline
+* Capture computation across helpers and multiple input call sites in one model
 * Understand where LEAPP writes models, YAML, and graph visualizations
 
 .. note::
@@ -39,8 +39,9 @@ You'll learn how to:
 Example: a robot sensor pipeline
 ================================
 
-This pipeline preprocesses robot observations into a feature vector, then
-runs a small policy stage on those features.
+This pipeline normalizes joint state, projects gravity, runs a small policy,
+and scales and clips its actions. All of that computation is captured in one
+``control.onnx`` model. The helper functions keep their existing organization.
 
 .. code-block:: python
 
@@ -63,7 +64,7 @@ runs a small policy stage on those features.
        # Simulates reading live joint sensors each time this function is called.
        JOINT_POS = torch.randn(6)
        JOINT_VEL = torch.randn(6)
-       return annotate.input_tensors("obs_processor", {
+       return annotate.input_tensors("control", {
            "joint_pos": JOINT_POS,
            "joint_vel": JOINT_VEL,
        })
@@ -72,7 +73,7 @@ runs a small policy stage on those features.
        # Simulates reading live orientation and command context each call.
        ORIENTATION = torch.tensor([1.0, 0.0, 0.0, 0.0])
        CMD_VEL = torch.tensor([0.5, 0.0, 0.1])
-       return annotate.input_tensors("obs_processor", {
+       return annotate.input_tensors("control", {
            "orientation": ORIENTATION,
            "cmd_vel": CMD_VEL,
        })
@@ -96,7 +97,7 @@ runs a small policy stage on those features.
    def main():
        leapp.start(name="sample_pipeline")
 
-       # NODE 1: observation preprocessing.
+       # One node captures the complete computation.
        # Multiple input_tensors() calls can contribute to the same node.
        pos, vel = capture_joint_observations()
        quat, cmd = capture_context()
@@ -105,26 +106,17 @@ runs a small policy stage on those features.
        gravity_vec = project_gravity(quat)
        obs_features = torch.cat([pos_norm, vel_norm, gravity_vec, cmd])
 
-       annotate.output_tensors(
-           "obs_processor",
-           {"obs_features": obs_features},
-           export_with="jit",
-       )
-
-       # NODE 2: policy.
-       feat = annotate.input_tensors("policy",
-                                     {"obs_features": obs_features})
-       raw_action = feat @ _W + _b
+       raw_action = obs_features @ _W + _b
        joint_targets = scale_and_clip(raw_action)
 
        annotate.output_tensors(
-           "policy",
+           "control",
            {"joint_targets": joint_targets},
-           export_with="jit",
+           export_with="onnx",
        )
 
        leapp.stop()
-       leapp.compile_graph()
+       leapp.compile_graph(validate=True)
 
    if __name__ == "__main__":
        main()
@@ -150,7 +142,7 @@ Traced tensors
 
    annotate.output_tensors('feature_extractor', {
        'result': result,
-   }, export_with="jit")
+   }, export_with="onnx")
 
 This pair gives you the most flexible capture surface:
 
@@ -168,11 +160,8 @@ Graph flow
 
    joint_pos, joint_vel, orientation, cmd_vel
                        |
-                [obs_processor]
-                       |
-                 obs_features
-                       |
-                   [policy]
+                   [control]
+           normalize -> policy -> scale/clip
                        |
                  joint_targets
 
@@ -197,11 +186,12 @@ artifacts and the metadata needed to wire them together.
 .. grid:: 1 1 2 2
    :gutter: 3
 
-   .. grid-item-card:: Exported node models
+   .. grid-item-card:: One exported model
       :class-card: sd-rounded-3
 
-      Per-node TorchScript, ExportedProgram (``.pt2``), or ONNX artifacts
-      containing traced compute, constants, and model weights.
+      ``control.onnx`` contains preprocessing, policy weights and inference,
+      and action processing. Other export formats include TorchScript and
+      ExportedProgram (``.pt2``).
 
    .. grid-item-card:: Pipeline specification
       :class-card: sd-rounded-3
@@ -224,7 +214,8 @@ artifacts and the metadata needed to wire them together.
 Try it yourself
 ===============
 
-1. Run the maintained example: ``python examples/getting_started.py``
+1. In a repository checkout, run ``python examples/getting_started.py``;
+   with a pip-only installation, save and run the code above instead.
 2. Open the generated ``sample_pipeline/`` directory.
 3. Inspect the files to see your exported pipeline.
 
@@ -234,7 +225,7 @@ Graph visualization
 On Python 3.11+, LEAPP writes a PNG graph visualization showing exported
 nodes, graph inputs and outputs, and data-flow connections between nodes.
 Python 3.10 warns and skips this artifact. Use it to verify that LEAPP
-detected the node boundaries and cross-node connections you intended.
+captured the external inputs and final outputs you intended.
 
 .. image:: _static/images/getting_started_graph.png
    :alt: Getting started graph
@@ -248,37 +239,20 @@ LEAPP also generates a complete specification of the pipeline. More details in
 
 .. code-block:: yaml
 
-   models:
-     obs_processor:
-       inputs:
-       - dtype: float32
-         name: joint_pos
-         shape: [6]
-         type: tensor
-       outputs:
-       - dtype: float32
-         name: obs_features
-         shape: [18]
-         type: tensor
-       parameters:
-         backend: jit
-         model_path: obs_processor.pt
-
    pipeline:
      inputs:
-       obs_processor: [joint_pos, joint_vel, orientation, cmd_vel]
+       control: [joint_pos, joint_vel, orientation, cmd_vel]
      outputs:
-       policy: [joint_targets]
-     data_flow:
-       obs_processor/obs_features: [policy/obs_features]
+       control: [joint_targets]
+     data_flow: {}
      feedback_flow: {}
 
-This YAML contains:
+The complete YAML contains:
 
 * Complete node specifications with input/output tensor descriptions.
 * Shape and dtype information for all tensors.
 * Graph structure metadata ready for deployment systems.
-* Export configuration showing how each node should be compiled.
+* Model paths and export backend settings.
 
 Next steps
 ==========
@@ -286,5 +260,5 @@ Next steps
 * Take a look at the :doc:`semantics/usage` guide to learn how to add semantic metadata to your pipeline.
 * Learn graph annotation patterns in :doc:`guides/nodes` and exported-model
   runtime details in :doc:`generated_configs`.
-* Learn how to interpret and run the generated bundle in :doc:`generated_configs`.
+* Add recurrent state and feedback with :doc:`guides/graph`.
 * Browse the full :doc:`api/index`.

@@ -63,7 +63,6 @@ capsule_pointer.argtypes = [c.py_object, c.c_char_p]
 
 
 class Producer:
-
     def __init__(
         self, *, stride=1, offset=0, declared=(1, 0), actual=(1, 0), versioned=False
     ):
@@ -183,8 +182,6 @@ def test_rejected_major_version_and_partial_batch_cleanup():
     bad.managed.version.major = 999
     with open_session("policy") as rt:
         with pytest.raises(BufferError, match="major version"):
-            rt.new_session().run(
-                {"preprocess/observation": first, "policy/bias": bad}
-            )
+            rt.new_session().run({"preprocess/observation": first, "policy/bias": bad})
     assert first.deleted == 1
     assert bad.deleted == 1

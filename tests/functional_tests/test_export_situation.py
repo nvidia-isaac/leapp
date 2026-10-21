@@ -45,17 +45,24 @@ class TestExportSituation(LEAPPFunctionalTestBase):
             out = torch.softmax(out, dim=-1)
             out = out * 2.0
             return out
-        
-        x, y = annotate.input_tensors('scripted_computation', {
-            'x': a,
-            'y': b,
-        })
+
+        x, y = annotate.input_tensors(
+            "scripted_computation",
+            {
+                "x": a,
+                "y": b,
+            },
+        )
 
         result = module(x, y)
 
-        annotate.output_tensors('scripted_computation', {
-            'result': result,
-        }, export_with="jit-script")
+        annotate.output_tensors(
+            "scripted_computation",
+            {
+                "result": result,
+            },
+            export_with="jit-script",
+        )
 
         leapp.stop()
         leapp.compile_graph()
@@ -63,15 +70,20 @@ class TestExportSituation(LEAPPFunctionalTestBase):
         # Use allclose instead of exact match because torch.jit.freeze
         # (optimize_numerics=True) can cause tiny floating-point differences
         import os
-        model = torch.jit.load(os.path.join(self.TEST_GRAPH_NAME, "scripted_computation.pt"))
+
+        model = torch.jit.load(
+            os.path.join(self.TEST_GRAPH_NAME, "scripted_computation.pt")
+        )
         output = model(a, b)
-        self.assertTrue(torch.allclose(output, result, atol=1e-6),
-                        f"Output mismatch: max diff = {(output - result).abs().max().item():.2e}")
+        self.assertTrue(
+            torch.allclose(output, result, atol=1e-6),
+            f"Output mismatch: max diff = {(output - result).abs().max().item():.2e}",
+        )
 
     def test_export_nnModule_function(self):
         linear = torch.nn.Linear(3, 3)
 
-        @annotate.method(export_with="jit", environment_constants=['linear'])
+        @annotate.method(export_with="jit", environment_constants=["linear"])
         def funcA(inputA: torch.Tensor):
             output = linear(inputA)
             return output
@@ -103,72 +115,97 @@ class TestExportSituation(LEAPPFunctionalTestBase):
             list_conversion = list(inputA.values())
             return list_conversion
 
-        input = {'a': torch.tensor([1]), 'b': torch.tensor(
-            [2]), 'c': torch.tensor([3]), 'd': torch.tensor([4])}
+        input = {
+            "a": torch.tensor([1]),
+            "b": torch.tensor([2]),
+            "c": torch.tensor([3]),
+            "d": torch.tensor([4]),
+        }
         leapp.start(name=self.TEST_GRAPH_NAME)
         expected_output = funcA(input)
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
-        self.verify_num_connections(annotate, nodes=1, inputs=4, outputs=4,
-                                    internal_connections=0)
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=4, outputs=4, internal_connections=0
+        )
         self.verify_single_torchscript_model_expected_value(
-            [input], [expected_output], funcA.__name__)
+            [input], [expected_output], funcA.__name__
+        )
 
         model_info = self.inspect_torchscript_model(funcA.__name__)
         # self + 4 flat tensors (inputA_a, inputA_b, inputA_c, inputA_d)
-        self.assertEqual(len(model_info['inputs']), 5)
-        self.assertEqual(len(model_info['outputs']), 4)  # list_conversion
+        self.assertEqual(len(model_info["inputs"]), 5)
+        self.assertEqual(len(model_info["outputs"]), 4)  # list_conversion
 
     def test_export_nnModule_with_large_nested_dict_io(self):
         @annotate.method(export_with="jit")
         def funcA(inputA: dict, inputB):
-            underlying_values = inputA[0]['nested']
+            underlying_values = inputA[0]["nested"]
             list_conversion = list(underlying_values.values())
             return_values = list_conversion + [inputB]
-            return {'return_values': [return_values]}
+            return {"return_values": [return_values]}
 
-        input = [[{'nested': {'a': torch.tensor([1]), 'b': torch.tensor(
-            [2]), 'c': torch.tensor([3]), 'd': torch.tensor([4])}}], torch.tensor([5])]
+        input = [
+            [
+                {
+                    "nested": {
+                        "a": torch.tensor([1]),
+                        "b": torch.tensor([2]),
+                        "c": torch.tensor([3]),
+                        "d": torch.tensor([4]),
+                    }
+                }
+            ],
+            torch.tensor([5]),
+        ]
         leapp.start(name=self.TEST_GRAPH_NAME)
         expected_output = funcA(*input)
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
-        self.verify_num_connections(annotate, nodes=1, inputs=5, outputs=5,
-                                    internal_connections=0)
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=5, outputs=5, internal_connections=0
+        )
         self.verify_single_torchscript_model_expected_value(
-            input, [expected_output], funcA.__name__)
+            input, [expected_output], funcA.__name__
+        )
 
         model_info = self.inspect_torchscript_model(funcA.__name__)
         # self + 5 flat tensors (inputA contains 4 nested tensors + inputB is 1 tensor)
-        self.assertEqual(len(model_info['inputs']), 6)
-        self.assertEqual(len(model_info['outputs']), 5)  # return_values
+        self.assertEqual(len(model_info["inputs"]), 6)
+        self.assertEqual(len(model_info["outputs"]), 5)  # return_values
 
     def test_export_class_method_that_relies_on_dynamic_variable(self):
-        class moduleA():
+        class moduleA:
             def __init__(self):
                 self.idx = 0
                 self.stride = 3
 
-            @annotate.method(export_with="jit", environment_constants=['self.idx', 'self.stride'])
+            @annotate.method(
+                export_with="jit", environment_constants=["self.idx", "self.stride"]
+            )
             def get_subset(self, inputA: torch.Tensor):
-                retval = inputA[self.idx:self.idx+self.stride]
+                retval = inputA[self.idx : self.idx + self.stride]
                 self.idx += self.stride
                 return retval
+
         moduleA = moduleA()
         leapp.start(name=self.TEST_GRAPH_NAME)
         subset = moduleA.get_subset(torch.tensor([1, 2, 3]))
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
-        self.verify_num_connections(annotate, nodes=1, inputs=1, outputs=1,
-                                    internal_connections=0)
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=1, outputs=1, internal_connections=0
+        )
         self.verify_single_torchscript_model_expected_value(
-            [torch.tensor([1, 2, 3])], [subset], moduleA.get_subset.__name__)
+            [torch.tensor([1, 2, 3])], [subset], moduleA.get_subset.__name__
+        )
 
     def test_export_dict_and_list_bidirectional_io(self):
         """Test function that takes dict and list inputs, returns list and dict outputs"""
+
         @annotate.method(export_with="jit")
         def test_complex_io(input: dict, input_2: list):
             dictionary_output = {}
@@ -177,13 +214,17 @@ class TestExportSituation(LEAPPFunctionalTestBase):
             return [value for value in input.values()], dictionary_output
 
         input_dict = {
-            'a': torch.tensor([1]),
-            'b': torch.tensor([2]),
-            'c': torch.tensor([3]),
-            'd': torch.tensor([4]),
+            "a": torch.tensor([1]),
+            "b": torch.tensor([2]),
+            "c": torch.tensor([3]),
+            "d": torch.tensor([4]),
         }
-        input_list = [torch.tensor([5]), torch.tensor(
-            [6]), torch.tensor([7]), torch.tensor([8])]
+        input_list = [
+            torch.tensor([5]),
+            torch.tensor([6]),
+            torch.tensor([7]),
+            torch.tensor([8]),
+        ]
 
         leapp.start(name=self.TEST_GRAPH_NAME)
         expected_output = test_complex_io(input_dict, input_list)
@@ -191,34 +232,36 @@ class TestExportSituation(LEAPPFunctionalTestBase):
         leapp.compile_graph(visualize=False)
 
         # Verify graph statistics: 1 node, 8 dangling inputs, 8 dangling outputs, 0 internal connections
-        self.verify_num_connections(annotate, nodes=1, inputs=8, outputs=8,
-                                    internal_connections=0)
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=8, outputs=8, internal_connections=0
+        )
 
         # Verify the model produces the correct output
         self.verify_single_torchscript_model_expected_value(
-            [input_dict, input_list], [expected_output], test_complex_io.__name__)
+            [input_dict, input_list], [expected_output], test_complex_io.__name__
+        )
 
         # Verify model structure: forward should have 8 flat tensor inputs + self
         model_info = self.inspect_torchscript_model(test_complex_io.__name__)
         # self + 4 dict tensors + 4 list tensors
-        self.assertEqual(len(model_info['inputs']), 9)
+        self.assertEqual(len(model_info["inputs"]), 9)
         # list output + dict output
-        self.assertEqual(len(model_info['outputs']), 8)
+        self.assertEqual(len(model_info["outputs"]), 8)
 
         # Verify output structure
         output_list, output_dict = expected_output
         self.assertEqual(len(output_list), 4)
         self.assertEqual(len(output_dict), 4)
         self.assertTrue(all(isinstance(v, torch.Tensor) for v in output_list))
-        self.assertTrue(all(isinstance(v, torch.Tensor)
-                        for v in output_dict.values()))
+        self.assertTrue(all(isinstance(v, torch.Tensor) for v in output_dict.values()))
 
     def test_export_split_tensor_to_list(self):
         """Test function that takes a single tensor and splits it into a list of tensors"""
+
         @annotate.method(export_with="jit", verbose=True)
         def split_tensor(input_tensor: torch.Tensor):
             # Split the tensor into individual elements
-            return [input_tensor[i:i+1] for i in range(len(input_tensor))]
+            return [input_tensor[i : i + 1] for i in range(len(input_tensor))]
 
         # Create input tensor with shape (20,) with values 0, 10, 20, ..., 190
         input_tensor = torch.arange(0, 200, 10)
@@ -229,25 +272,25 @@ class TestExportSituation(LEAPPFunctionalTestBase):
         leapp.compile_graph(visualize=False)
 
         # Verify graph statistics: 1 node, 1 dangling input, 20 dangling outputs, 0 internal connections
-        self.verify_num_connections(annotate, nodes=1, inputs=1, outputs=20,
-                                    internal_connections=0)
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=1, outputs=20, internal_connections=0
+        )
 
         # Verify the model produces the correct output
         self.verify_single_torchscript_model_expected_value(
-            [input_tensor], [expected_output], split_tensor.__name__)
+            [input_tensor], [expected_output], split_tensor.__name__
+        )
 
         # Verify model structure: forward should have 1 tensor input + self
         model_info = self.inspect_torchscript_model(split_tensor.__name__)
-        self.assertEqual(len(model_info['inputs']), 2)  # self + 1 input tensor
+        self.assertEqual(len(model_info["inputs"]), 2)  # self + 1 input tensor
         # 20 individual tensor outputs
-        self.assertEqual(len(model_info['outputs']), 20)
+        self.assertEqual(len(model_info["outputs"]), 20)
 
         # Verify output structure: should be a list of 20 tensors, each with shape (1,)
         self.assertEqual(len(expected_output), 20)
-        self.assertTrue(all(isinstance(t, torch.Tensor)
-                        for t in expected_output))
-        self.assertTrue(
-            all(t.shape == torch.Size([1]) for t in expected_output))
+        self.assertTrue(all(isinstance(t, torch.Tensor) for t in expected_output))
+        self.assertTrue(all(t.shape == torch.Size([1]) for t in expected_output))
 
         # Verify output values
         for i, tensor in enumerate(expected_output):
@@ -255,10 +298,14 @@ class TestExportSituation(LEAPPFunctionalTestBase):
 
     def test_export_nested_list_of_lists_output(self):
         """Test function that returns a nested list of lists of tensors"""
+
         @annotate.method(export_with="jit")
         def create_nested_lists(input_tensor: torch.Tensor):
             # Split into groups of 2
-            return [[input_tensor[i:i+1], input_tensor[i+1:i+2]] for i in range(0, 4, 2)]
+            return [
+                [input_tensor[i : i + 1], input_tensor[i + 1 : i + 2]]
+                for i in range(0, 4, 2)
+            ]
 
         input_tensor = torch.arange(4)
 
@@ -268,28 +315,30 @@ class TestExportSituation(LEAPPFunctionalTestBase):
         leapp.compile_graph(visualize=False)
 
         # Should have 1 input, 4 outputs (flattened from nested structure)
-        self.verify_num_connections(annotate, nodes=1, inputs=1, outputs=4,
-                                    internal_connections=0)
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=1, outputs=4, internal_connections=0
+        )
 
         self.verify_single_torchscript_model_expected_value(
-            [input_tensor], [expected_output], create_nested_lists.__name__)
+            [input_tensor], [expected_output], create_nested_lists.__name__
+        )
 
         # Verify structure: 2 lists, each containing 2 tensors
         self.assertEqual(len(expected_output), 2)
         self.assertTrue(all(len(sublist) == 2 for sublist in expected_output))
 
-        model_info = self.inspect_torchscript_model(
-            create_nested_lists.__name__)
-        self.assertEqual(len(model_info['inputs']), 2)  # self + 1 input
-        self.assertEqual(len(model_info['outputs']), 4)  # 4 flattened outputs
+        model_info = self.inspect_torchscript_model(create_nested_lists.__name__)
+        self.assertEqual(len(model_info["inputs"]), 2)  # self + 1 input
+        self.assertEqual(len(model_info["outputs"]), 4)  # 4 flattened outputs
 
     def test_export_dict_with_list_values_output(self):
         """Test function that returns a dict where values are lists of tensors"""
+
         @annotate.method(export_with="jit")
         def create_dict_of_lists(input_list: list):
             return {
-                'first_half': [input_list[0], input_list[1]],
-                'second_half': [input_list[2], input_list[3]]
+                "first_half": [input_list[0], input_list[1]],
+                "second_half": [input_list[2], input_list[3]],
             }
 
         input_list = [torch.tensor([i]) for i in range(4)]
@@ -300,28 +349,30 @@ class TestExportSituation(LEAPPFunctionalTestBase):
         leapp.compile_graph(visualize=False)
 
         # 4 inputs, 4 outputs (dict values flattened)
-        self.verify_num_connections(annotate, nodes=1, inputs=4, outputs=4,
-                                    internal_connections=0)
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=4, outputs=4, internal_connections=0
+        )
 
         self.verify_single_torchscript_model_expected_value(
-            [input_list], [expected_output], create_dict_of_lists.__name__)
+            [input_list], [expected_output], create_dict_of_lists.__name__
+        )
 
         # Verify structure
-        self.assertEqual(len(expected_output['first_half']), 2)
-        self.assertEqual(len(expected_output['second_half']), 2)
+        self.assertEqual(len(expected_output["first_half"]), 2)
+        self.assertEqual(len(expected_output["second_half"]), 2)
 
-        model_info = self.inspect_torchscript_model(
-            create_dict_of_lists.__name__)
-        self.assertEqual(len(model_info['inputs']), 5)  # self + 4 inputs
-        self.assertEqual(len(model_info['outputs']), 4)  # 4 flattened outputs
+        model_info = self.inspect_torchscript_model(create_dict_of_lists.__name__)
+        self.assertEqual(len(model_info["inputs"]), 5)  # self + 4 inputs
+        self.assertEqual(len(model_info["outputs"]), 4)  # 4 flattened outputs
 
     def test_export_mixed_return_types(self):
         """Test function that returns a single tensor, a list, and a dict all together"""
+
         @annotate.method(export_with="jit")
         def mixed_outputs(input_tensor: torch.Tensor):
             single_tensor = input_tensor[0:1]  # Still a tensor, shape (1,)
             list_out = [input_tensor[1:2], input_tensor[2:3]]
-            dict_out = {'a': input_tensor[3:4], 'b': input_tensor[4:5]}
+            dict_out = {"a": input_tensor[3:4], "b": input_tensor[4:5]}
             return single_tensor, list_out, dict_out
 
         input_tensor = torch.arange(5)
@@ -332,11 +383,13 @@ class TestExportSituation(LEAPPFunctionalTestBase):
         leapp.compile_graph(visualize=False)
 
         # 1 input, 5 outputs (1 tensor + 2 list tensors + 2 dict tensors)
-        self.verify_num_connections(annotate, nodes=1, inputs=1, outputs=5,
-                                    internal_connections=0)
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=1, outputs=5, internal_connections=0
+        )
 
         self.verify_single_torchscript_model_expected_value(
-            [input_tensor], [expected_output], mixed_outputs.__name__)
+            [input_tensor], [expected_output], mixed_outputs.__name__
+        )
 
         # Verify structure: all outputs are tensors
         single_tensor, list_out, dict_out = expected_output
@@ -344,20 +397,20 @@ class TestExportSituation(LEAPPFunctionalTestBase):
         self.assertEqual(len(list_out), 2)
         self.assertTrue(all(isinstance(t, torch.Tensor) for t in list_out))
         self.assertEqual(len(dict_out), 2)
-        self.assertTrue(all(isinstance(t, torch.Tensor)
-                        for t in dict_out.values()))
+        self.assertTrue(all(isinstance(t, torch.Tensor) for t in dict_out.values()))
 
         model_info = self.inspect_torchscript_model(mixed_outputs.__name__)
-        self.assertEqual(len(model_info['inputs']), 2)  # self + 1 input
-        self.assertEqual(len(model_info['outputs']), 5)  # 5 flattened outputs
+        self.assertEqual(len(model_info["inputs"]), 2)  # self + 1 input
+        self.assertEqual(len(model_info["outputs"]), 5)  # 5 flattened outputs
 
     def test_export_list_of_dicts_output(self):
         """Test function that returns a list of dictionaries"""
+
         @annotate.method(export_with="jit")
         def create_list_of_dicts(input_tensor: torch.Tensor):
             return [
-                {'x': input_tensor[0:1], 'y': input_tensor[1:2]},
-                {'x': input_tensor[2:3], 'y': input_tensor[3:4]}
+                {"x": input_tensor[0:1], "y": input_tensor[1:2]},
+                {"x": input_tensor[2:3], "y": input_tensor[3:4]},
             ]
 
         input_tensor = torch.arange(4)
@@ -368,37 +421,39 @@ class TestExportSituation(LEAPPFunctionalTestBase):
         leapp.compile_graph(visualize=False)
 
         # 1 input, 4 outputs (flattened from list of dicts)
-        self.verify_num_connections(annotate, nodes=1, inputs=1, outputs=4,
-                                    internal_connections=0)
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=1, outputs=4, internal_connections=0
+        )
 
         self.verify_single_torchscript_model_expected_value(
-            [input_tensor], [expected_output], create_list_of_dicts.__name__)
+            [input_tensor], [expected_output], create_list_of_dicts.__name__
+        )
 
         # Verify structure: list of 2 dicts, each with 2 keys
         self.assertEqual(len(expected_output), 2)
         self.assertTrue(all(len(d) == 2 for d in expected_output))
-        self.assertTrue(all('x' in d and 'y' in d for d in expected_output))
+        self.assertTrue(all("x" in d and "y" in d for d in expected_output))
 
-        model_info = self.inspect_torchscript_model(
-            create_list_of_dicts.__name__)
-        self.assertEqual(len(model_info['inputs']), 2)  # self + 1 input
-        self.assertEqual(len(model_info['outputs']), 4)  # 4 flattened outputs
+        model_info = self.inspect_torchscript_model(create_list_of_dicts.__name__)
+        self.assertEqual(len(model_info["inputs"]), 2)  # self + 1 input
+        self.assertEqual(len(model_info["outputs"]), 4)  # 4 flattened outputs
 
     def test_export_deeply_nested_dict_to_flat_list(self):
         """Test function with deeply nested dict input and flat list output"""
+
         @annotate.method(export_with="jit")
         def flatten_nested_structure(nested: dict):
             # Extract from deeply nested structure: nested['level1']['level2']['data']
-            level2 = nested['level1']['level2']
-            return [level2['data'][key] for key in sorted(level2['data'].keys())]
+            level2 = nested["level1"]["level2"]
+            return [level2["data"][key] for key in sorted(level2["data"].keys())]
 
         nested_input = {
-            'level1': {
-                'level2': {
-                    'data': {
-                        'a': torch.tensor([1]),
-                        'b': torch.tensor([2]),
-                        'c': torch.tensor([3])
+            "level1": {
+                "level2": {
+                    "data": {
+                        "a": torch.tensor([1]),
+                        "b": torch.tensor([2]),
+                        "c": torch.tensor([3]),
                     }
                 }
             }
@@ -410,22 +465,23 @@ class TestExportSituation(LEAPPFunctionalTestBase):
         leapp.compile_graph(visualize=False)
 
         # 3 inputs (flattened from nested dict), 3 outputs
-        self.verify_num_connections(annotate, nodes=1, inputs=3, outputs=3,
-                                    internal_connections=0)
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=3, outputs=3, internal_connections=0
+        )
 
         self.verify_single_torchscript_model_expected_value(
-            [nested_input], [expected_output], flatten_nested_structure.__name__)
+            [nested_input], [expected_output], flatten_nested_structure.__name__
+        )
 
         # Verify output is a list of 3 tensors
         self.assertEqual(len(expected_output), 3)
-        self.assertTrue(all(isinstance(t, torch.Tensor)
-                        for t in expected_output))
+        self.assertTrue(all(isinstance(t, torch.Tensor) for t in expected_output))
 
-        model_info = self.inspect_torchscript_model(
-            flatten_nested_structure.__name__)
+        model_info = self.inspect_torchscript_model(flatten_nested_structure.__name__)
         # self + 3 nested inputs
-        self.assertEqual(len(model_info['inputs']), 4)
-        self.assertEqual(len(model_info['outputs']), 3)  # 3 outputs
+        self.assertEqual(len(model_info["inputs"]), 4)
+        self.assertEqual(len(model_info["outputs"]), 3)  # 3 outputs
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main(verbosity=2)

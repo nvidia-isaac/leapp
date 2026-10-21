@@ -7,6 +7,21 @@ This guide covers advanced node patterns. The primary interface is
 :func:`~leapp.annotate.output_tensors`; use :func:`~leapp.annotate.method`
 when a node fits cleanly inside one function and you want a shorthand.
 
+One model for the whole pipeline
+================================
+
+A node is an export boundary, not a restriction on how you organize Python
+code. Use the same node name from the first input annotation through the final
+output annotation to export preprocessing, model inference, and action
+processing together as one model. The captured computation can cross helper
+functions and class methods, including supported NumPy-to-PyTorch conversions.
+There is no requirement to wrap the pipeline in a single ``nn.Module`` or an
+RL environment adapter.
+
+Introduce additional node boundaries when you want separate model artifacts,
+different export backends, or stage interfaces you can inspect independently.
+LEAPP exports one model per node; splitting the pipeline is optional.
+
 Distributed inputs: one node, many call sites
 =============================================
 

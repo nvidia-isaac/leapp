@@ -25,25 +25,27 @@ _MAX_PARAM_SCAN_DEPTH = 16
 # Register the Warp dtype codec so leapp core can convert warp dtypes to common
 # name strings without importing warp itself. Mirrors the torch/numpy entries
 # and only runs when this (warp-gated) module is imported.
-register_dtype_codec(DtypeCodec(
-    backend="warp",
-    matches=lambda v: isinstance(v, wp.array),
-    value_dtype=lambda v: v.dtype,
-    dtype_to_name={
-        wp.float16: "float16",
-        wp.float32: "float32",
-        wp.float64: "float64",
-        wp.int8: "int8",
-        wp.int16: "int16",
-        wp.int32: "int32",
-        wp.int64: "int64",
-        wp.uint8: "uint8",
-        wp.uint16: "uint16",
-        wp.uint32: "uint32",
-        wp.uint64: "uint64",
-        wp.bool: "bool",
-    },
-))
+register_dtype_codec(
+    DtypeCodec(
+        backend="warp",
+        matches=lambda v: isinstance(v, wp.array),
+        value_dtype=lambda v: v.dtype,
+        dtype_to_name={
+            wp.float16: "float16",
+            wp.float32: "float32",
+            wp.float64: "float64",
+            wp.int8: "int8",
+            wp.int16: "int16",
+            wp.int32: "int32",
+            wp.int64: "int64",
+            wp.uint8: "uint8",
+            wp.uint16: "uint16",
+            wp.uint32: "uint32",
+            wp.uint64: "uint64",
+            wp.bool: "bool",
+        },
+    )
+)
 
 
 class TracedWpArray(wp.array, TracedData):
@@ -121,8 +123,13 @@ class TracedWpArray(wp.array, TracedData):
         the pass that promoted it has to shed that provenance before the next
         pass can describe it.
         """
-        for attribute in ("_name", "_context", "_proxy_view", "_output_port",
-                          "_leapp_warp_segment"):
+        for attribute in (
+            "_name",
+            "_context",
+            "_proxy_view",
+            "_output_port",
+            "_leapp_warp_segment",
+        ):
             array.__dict__.pop(attribute, None)
         array.__class__ = wp.array
         return array
@@ -156,15 +163,11 @@ class TracedWpArray(wp.array, TracedData):
         qualname = backend.function_qualname(func)
 
         if backend.is_boundary_function(func):
-            handled, result = cls._handle_boundary_call(
-                backend, func, args, kwargs
-            )
+            handled, result = cls._handle_boundary_call(backend, func, args, kwargs)
             if handled:
                 return result
 
-        traced_inputs, call_args, call_kwargs = cls._normalize_and_collect(
-            args, kwargs
-        )
+        traced_inputs, call_args, call_kwargs = cls._normalize_and_collect(args, kwargs)
         trace_source = cls._select_trace_source(qualname, traced_inputs)
         segment = backend.resolve_or_begin_warp_segment(trace_source)
 
@@ -174,9 +177,7 @@ class TracedWpArray(wp.array, TracedData):
         with backend.pause_context():
             result = func(*call_args, **call_kwargs)
 
-        cls._process_post_call_arrays(
-            func, segment, args, kwargs, result, trace_source
-        )
+        cls._process_post_call_arrays(func, segment, args, kwargs, result, trace_source)
         if segment is not None and getattr(func, "__name__", None) == "launch":
             outputs = kwargs.get("outputs", args[3] if len(args) > 3 else ())
             if any(getattr(array, "_tensor", None) is not None for array in outputs):
@@ -212,16 +213,17 @@ class TracedWpArray(wp.array, TracedData):
             # Keep the caller's Torch object as the owner of the Warp view so
             # writes through that view can update the caller's tracing state.
             alias = getattr(raw, "_tensor", None)
-            if (isinstance(src, torch.Tensor) and type(alias) is torch.Tensor
-                    and layout_key(alias) == layout_key(src)):
+            if (
+                isinstance(src, torch.Tensor)
+                and type(alias) is torch.Tensor
+                and layout_key(alias) == layout_key(src)
+            ):
                 raw._tensor = src
             if may_adopt_view(src, raw):
                 view, proxy = src.proxy_view, None
             else:
                 view, proxy = None, src.proxy
-            return True, as_traced(
-                raw, src.name, src.context_obj, proxy, view=view
-            )
+            return True, as_traced(raw, src.name, src.context_obj, proxy, view=view)
         return True, raw
 
     @staticmethod
@@ -280,8 +282,7 @@ class TracedWpArray(wp.array, TracedData):
             }
         if type(obj) in (list, tuple, set, frozenset):
             return type(obj)(
-                cls._normalize_node(item, traced, depth=depth + 1)
-                for item in obj
+                cls._normalize_node(item, traced, depth=depth + 1) for item in obj
             )
         return obj
 
@@ -484,7 +485,6 @@ class TracedWpArray(wp.array, TracedData):
         )
         raw._ref = self
         return raw
-
 
     @property
     def tensor(self) -> torch.Tensor:

@@ -58,8 +58,10 @@ Parameters
 * ``non_traced`` (list[str], optional): Node names to exclude from export.
   They are still traced, still capture I/O, contribute to graph
   connectivity, and appear in the YAML. Defaults to ``None``.
-* ``max_cached_io`` (int, optional): How many re-entry I/O examples
-  LEAPP caches per node for multi-example validation. Defaults to ``5``.
+* ``max_cached_io`` (int, optional): Maximum number of captured input/output
+  samples per node, including the initial trace. Repeated calls can record
+  consecutive stateful transitions, including state inputs and updates.
+  Defaults to ``5``.
 * ``global_patching`` (bool, optional): Enable all process-global patches,
   including user-defined replacements. Defaults to ``True``.
 * ``patching`` (sequence[FunctionPatch] | None, optional): User-defined
@@ -197,8 +199,10 @@ Parameters
   visualization errors stop compilation.
 * ``verbose`` (bool | None, optional): Override verbose logging for the
   compile step. ``None`` leaves the current setting unchanged.
-* ``validate`` (bool, optional): Validate exported models against
-  captured traced outputs. Defaults to ``True``.
+* ``validate`` (bool, optional): Validate exported models against all cached
+  input/output samples, including exported state updates. Each sample uses
+  its recorded inputs and state; see :ref:`stateful-validation` for the
+  distinction from sequential runtime replay. Defaults to ``True``.
 * ``rtol`` (float, optional): Relative tolerance for
   ``torch.allclose()``. Defaults to ``1e-3``.
 * ``atol`` (float, optional): Absolute tolerance for
