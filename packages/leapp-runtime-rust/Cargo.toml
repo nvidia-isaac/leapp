@@ -7,18 +7,16 @@ default-members = ["."]
 resolver = "2"
 
 [package]
-# Legacy sources are retained for the following implementation commits.
-build = false
-autotests = false
-autoexamples = false
 name = "leapp-runtime"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 publish = false
-description = "LEAPP bundle inspection and core Session API"
+description = "LEAPP bundle inspection and synchronous Triton execution"
 
 [dependencies]
+protobuf = "=3.7.2"
+tempfile = "3"
 anyhow = "1"
 indexmap = { version = "2", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
@@ -28,8 +26,8 @@ serde_json = "1"
 sha2 = "0.10"
 safetensors = "=0.6.2"
 
-[dev-dependencies]
-tempfile = "3"
+[build-dependencies]
+protobuf-codegen = "=3.7.2"
 
 [[test]]
 name = "bundle"

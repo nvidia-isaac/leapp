@@ -136,6 +136,14 @@ impl RuntimeError {
         }
     }
 
+    pub(crate) fn classified(code: ErrorCode, phase: &'static str, source: anyhow::Error) -> Self {
+        Self {
+            code,
+            phase,
+            source,
+        }
+    }
+
     /// Category suitable for programmatic error handling.
     pub fn code(&self) -> ErrorCode {
         self.code

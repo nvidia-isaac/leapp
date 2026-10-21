@@ -7,6 +7,7 @@ include(CTest)
 
 find_package(Threads REQUIRED)
 find_program(CARGO_EXECUTABLE cargo REQUIRED)
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../src/engines/cxx.cmake")
 
 set(RUST_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/cargo")
 set(RUST_LIBRARY "${RUST_TARGET_DIR}/release/libleapp_runtime_cxx.a")
@@ -14,6 +15,7 @@ set(RUST_LIBRARY "${RUST_TARGET_DIR}/release/libleapp_runtime_cxx.a")
 # Cargo tracks Rust sources and dependencies; this also refreshes generated headers.
 add_custom_target(leapp_runtime_rust
   COMMAND "${CMAKE_COMMAND}" -E env --unset=MAKEFLAGS --unset=MFLAGS
+          ${LEAPP_ENGINE_ENV}
           "${CARGO_EXECUTABLE}" build --locked --release
           --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
           --target-dir "${RUST_TARGET_DIR}"
@@ -32,7 +34,7 @@ target_include_directories(leapp_runtime
          "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
   PRIVATE "${RUST_TARGET_DIR}/cxxbridge")
 
-target_link_libraries(leapp_runtime PRIVATE "${RUST_LIBRARY}"
+target_link_libraries(leapp_runtime PRIVATE "${RUST_LIBRARY}" ${LEAPP_ENGINE_LIBRARIES}
   Threads::Threads ${CMAKE_DL_LIBS} m)
 if(APPLE)
   target_link_libraries(leapp_runtime PRIVATE iconv)
