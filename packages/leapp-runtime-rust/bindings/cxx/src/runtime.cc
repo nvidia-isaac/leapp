@@ -332,10 +332,6 @@ const PortSpec* Bundle::output_info(std::string_view node,
   return data_ ? data_->Port(node, port, false) : nullptr;
 }
 
-struct Runtime::Data {
-  rust::Box<wire::RuntimeHandle> handle = wire::runtime_new();
-};
-
 struct Session::Data {
   rust::Box<wire::SessionHandle> handle = wire::session_new();
 };
@@ -352,22 +348,6 @@ struct RunResult::Data {
   std::vector<std::string> names;
 };
 
-struct Tensor::Data {
-  explicit Data(rust::Box<wire::TensorHandle> value)
-      : handle(std::move(value)), info(wire::tensor_info(*handle)) {}
-
-  rust::Box<wire::TensorHandle> handle;
-  wire::TensorData info;
-};
-
-Runtime::Runtime() = default;
-
-Runtime::~Runtime() = default;
-
-Runtime::Runtime(Runtime&&) noexcept = default;
-
-Runtime& Runtime::operator=(Runtime&&) noexcept = default;
-
 Session::Session() = default;
 
 Session::~Session() = default;
@@ -376,10 +356,10 @@ Session::Session(Session&&) noexcept = default;
 
 Session& Session::operator=(Session&&) noexcept = default;
 
-Status Runtime::Open(const Bundle& bundle, const RuntimeOptions& options,
-                     Runtime* runtime) {
-  if (runtime == nullptr || runtime->data_ || !bundle.is_valid()) {
-    return Invalid("expected a valid bundle and an empty runtime destination");
+Status Session::Open(const Bundle& bundle, const SessionOptions& options,
+                     Session* session) {
+  if (session == nullptr || session->data_ || !bundle.is_valid()) {
+    return Invalid("expected a valid bundle and an empty session destination");
   }
   MemoryLocation location;
   switch (options.device) {
@@ -393,33 +373,39 @@ Status Runtime::Open(const Bundle& bundle, const RuntimeOptions& options,
       return Invalid("unknown execution device");
   }
   location.device_id = options.device_id;
+  std::vector<wire::Placement> overrides;
+  for (const auto& [name, location] : options.output_overrides) {
+    overrides.push_back({OwnedBytes(name), Location(location)});
+  }
   auto data = std::make_unique<Data>();
-  auto status = Convert(wire::runtime_open(
+  auto status = Convert(wire::session_open(
       *bundle.data_->handle, Location(location),
-      Bytes(options.backend_directory.native()), *data->handle));
+      Location(options.output_location),
+      {overrides.data(), overrides.size()}, *data->handle));
   if (!status.ok()) {
     return status;
   }
-  runtime->bundle_ = bundle;
-  runtime->data_ = std::move(data);
-  return {};
-}
-
-Status Runtime::CreateSession(Session* session) const {
-  if (!data_ || session == nullptr || session->data_) {
-    return Invalid("expected a runtime and an empty session destination");
-  }
-  auto data = std::make_unique<Session::Data>();
-  auto status = Convert(wire::session_create(*data_->handle, *data->handle));
-  if (!status.ok()) {
-    return status;
-  }
+  session->bundle_ = bundle;
   session->data_ = std::move(data);
   return {};
 }
 
-Status Runtime::Close() {
-  return data_ ? Convert(wire::runtime_close(*data_->handle)) : Status{};
+Status Session::NewSession(Session* session) const {
+  if (!data_ || session == nullptr || session->data_) {
+    return Invalid("expected a session and an empty session destination");
+  }
+  auto data = std::make_unique<Session::Data>();
+  auto status = Convert(wire::session_duplicate(*data_->handle, *data->handle));
+  if (!status.ok()) {
+    return status;
+  }
+  session->bundle_ = bundle_;
+  session->data_ = std::move(data);
+  return {};
+}
+
+Status Session::Close() {
+  return data_ ? Convert(wire::session_close(*data_->handle)) : Status{};
 }
 
 Status Session::Reset() {
@@ -428,7 +414,7 @@ Status Session::Reset() {
 }
 
 Status Session::Run(std::span<const NamedTensor> inputs,
-                    const RunOptions& options, RunResult* result) {
+                    RunResult* result) {
   if (!data_ || result == nullptr) {
     return Invalid("expected a session and result destination");
   }
@@ -439,24 +425,13 @@ Status Session::Run(std::span<const NamedTensor> inputs,
   for (const auto& [name, tensor] : inputs) {
     wire::Input input{};
     input.name = OwnedBytes(name);
-    input.dtype = static_cast<wire::Dtype>(tensor.dtype);
-    for (int64_t dim : tensor.shape) {
-      input.shape.push_back(dim);
-    }
-    input.address = reinterpret_cast<uintptr_t>(tensor.data);
-    input.byte_size = tensor.byte_size;
-    input.location = Location(tensor.location);
+    input.descriptor = reinterpret_cast<uintptr_t>(tensor);
     views.push_back(std::move(input));
-  }
-  std::vector<wire::Placement> overrides;
-  for (const auto& [name, location] : options.output_overrides) {
-    overrides.push_back({OwnedBytes(name), Location(location)});
   }
   auto handle = wire::result_new();
   auto status =
       Convert(wire::session_run(*data_->handle, {views.data(), views.size()},
-                                Location(options.output_location),
-                                {overrides.data(), overrides.size()}, *handle));
+                                *handle));
   if (!status.ok()) {
     return status;
   }
@@ -471,73 +446,16 @@ std::vector<std::string_view> RunResult::names() const {
   return {data_->names.begin(), data_->names.end()};
 }
 
-Status RunResult::GetTensor(std::string_view name, Tensor* tensor) const {
+Status RunResult::GetTensor(std::string_view name, ManagedTensor* tensor) const {
   if (!data_ || tensor == nullptr) {
-    return Invalid("expected a result and tensor destination");
+    return Invalid("expected a result and DLPack destination");
   }
-  auto handle = wire::tensor_new();
-  auto status =
-      Convert(wire::result_tensor(*data_->handle, Bytes(name), *handle));
+  size_t pointer = 0;
+  auto status = Convert(wire::result_tensor(*data_->handle, Bytes(name), pointer));
   if (!status.ok()) {
     return status;
   }
-  tensor->data_ = std::make_shared<Tensor::Data>(std::move(handle));
-  return {};
-}
-
-DataType Tensor::dtype() const {
-  return data_ ? static_cast<DataType>(data_->info.dtype) : DataType::kFloat32;
-}
-
-std::span<const int64_t> Tensor::shape() const {
-  if (!data_) {
-    return {};
-  }
-  return {data_->info.shape.data(), data_->info.shape.size()};
-}
-
-MemoryLocation Tensor::location() const {
-  if (!data_) {
-    return {};
-  }
-  return {static_cast<MemoryType>(data_->info.location.memory),
-          data_->info.location.device};
-}
-
-size_t Tensor::byte_size() const { return data_ ? data_->info.byte_size : 0; }
-
-const void* Tensor::data() const {
-  if (!data_) {
-    return nullptr;
-  }
-  return reinterpret_cast<const void*>(wire::tensor_address(*data_->handle));
-}
-
-TensorView Tensor::view() const {
-  if (!data_) {
-    return {};
-  }
-  return {dtype(),
-          {data_->info.shape.begin(), data_->info.shape.end()},
-          data(),
-          byte_size(),
-          location()};
-}
-
-Status Tensor::CopyToCpu(std::vector<std::byte>* bytes) const {
-  if (!data_ || bytes == nullptr) {
-    return Invalid("expected a tensor and byte destination");
-  }
-  rust::Vec<uint8_t> buffer;
-  auto status = Convert(wire::tensor_cpu_bytes(*data_->handle, buffer));
-  if (!status.ok()) {
-    return status;
-  }
-  std::vector<std::byte> result(buffer.size());
-  if (!buffer.empty()) {
-    std::memcpy(result.data(), buffer.data(), buffer.size());
-  }
-  *bytes = std::move(result);
+  tensor->reset(reinterpret_cast<DLManagedTensorVersioned*>(pointer));
   return {};
 }
 

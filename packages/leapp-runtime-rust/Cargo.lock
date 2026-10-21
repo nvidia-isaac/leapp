@@ -328,6 +328,7 @@ dependencies = [
  "cxx",
  "cxx-build",
  "leapp-runtime",
+ "leapp-runtime-bindings",
 ]
 
 [[package]]
@@ -335,6 +336,7 @@ name = "leapp-runtime-python"
 version = "0.1.0"
 dependencies = [
  "leapp-runtime",
+ "leapp-runtime-bindings",
  "pyo3",
 ]
 

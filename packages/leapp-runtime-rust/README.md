@@ -6,8 +6,8 @@ SPDX-License-Identifier: Apache-2.0
 # LEAPP Rust runtime
 
 This package targets Linux and executes exported LEAPP bundles through embedded
-Triton 2.69.0. All builds require the Triton and CUDA runtime SDKs. Rust exposes bundle inspection and synchronous Session execution. Python and
-C++ currently expose bundle inspection; executable bindings are integrated next.
+Triton 2.69.0. All builds require the Triton and CUDA runtime SDKs. Rust, Python,
+and C++ expose bundle inspection and synchronous execution.
 
 ## Included code
 
@@ -16,8 +16,8 @@ C++ currently expose bundle inspection; executable bindings are integrated next.
 | Rust core | Immutable bundles, session state, shared engines, DLPack leases, and results |
 | Public inspection types | `PortRef`, `PortSpec`, `DataType`, `Metadata`, `MetadataValue`, `BundleError`, `ErrorCode` |
 | Common lifecycle crate | `SessionHandle`, error-source preservation, and cleanup after poisoned locks; three focused regression tests |
-| Python | Bundle inspection, typed stubs, and structured exceptions |
-| C++ | C++20 bundle inspection, private cxx transport, installable CMake target |
+| Python | Bundle inspection, synchronous sessions, DLPack protocol inputs and outputs, typed stubs and structured exceptions |
+| C++ | C++20 bundle/session facade, borrowed DLPack descriptors, managed outputs, private cxx transport, installable CMake target |
 | Tests | Bundle inspection, conversion, backend execution, tensor ownership, and language-binding lifecycle tests |
 
 The core crate owns bundle inspection, graph validation, independent session state,
@@ -37,8 +37,8 @@ model configuration, repository creation, and the protobuf schema.
 
 The `src/dlpack` module provides the ABI and lifetime guards. The core uses
 explicit unsafe borrows only for private initial state and feedback descriptors.
-The `bindings/common` crate supplies one lock per session and explicit closure
-for the upcoming executable language bindings. The Rust core and both bindings require Linux and the native SDKs.
+The `bindings/common` crate adds one lock per session and explicit closure for
+Python and C++. The Rust core and both bindings require Linux and the native SDKs.
 
 ## Rust
 
