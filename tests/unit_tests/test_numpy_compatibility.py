@@ -4,8 +4,10 @@
 #
 
 import leapp
+import pytest
 from leapp.leapp import _MANAGER as annotate
 from leapp.leapp_graph.datatypes.numpy.patching import NumpyPatchBackend
+from leapp.leapp_graph.datatypes.numpy import aten_adapter
 from leapp.leapp_graph.datatypes.torch.patching import TorchPatchBackend
 from leapp.leapp_graph.traced_node import TracedTensorNode
 import numpy as np
@@ -270,3 +272,38 @@ def test_public_lifecycle_export_and_replay(tmp_path):
     torch.testing.assert_close(
         model(torch.from_numpy(x + 2)), torch.from_numpy(np.linalg.norm(x + 2, axis=-1))
     )
+
+
+@pytest.mark.parametrize("case", ["dtype_only", "bad_values", "cancelled"])
+def test_numpy_numerical_differences_checked_at_final_validation(
+    case, monkeypatch, tmp_path
+):
+    original = aten_adapter._implementations()[np.sin]
+
+    def different_sin(x):
+        return original(x).astype("float64") + (0 if case == "dtype_only" else 0.5)
+
+    monkeypatch.setitem(aten_adapter.NUMPY_OVERRIDES, np.sin, different_sin)
+    sample = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    leapp.start(name="numpy_final_validation", save_path=str(tmp_path), max_cached_io=2)
+    try:
+        for raw in (sample, sample + 1):
+            x = leapp.annotate.input_tensors("sine", {"x": raw})
+            y = np.sin(x)
+            if case == "cancelled":
+                y = y - y + x
+            y = y.astype(np.float32)
+            leapp.annotate.output_tensors("sine", {"y": y}, export_with="jit")
+    finally:
+        leapp.stop()
+    if case == "bad_values":
+        with pytest.raises(Exception, match="Model validation failed"):
+            leapp.compile_graph(visualize=False)
+    else:
+        leapp.compile_graph(visualize=False)
+        model = torch.jit.load(str(next(tmp_path.rglob("sine.pt"))))
+        changed = sample + 2
+        expected = changed if case == "cancelled" else np.sin(changed)
+        torch.testing.assert_close(
+            model(torch.from_numpy(changed)), torch.from_numpy(expected)
+        )

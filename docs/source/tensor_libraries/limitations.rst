@@ -3,7 +3,8 @@ Limitations
 ===========
 
 NumPy function capture reuses ``torch._numpy`` implementations and checks their
-captured ATen graphs against real NumPy. This expands function coverage, but
+captured ATen graph structure. Numerical comparison with real NumPy happens at
+the exported node outputs. This expands function coverage, but
 does not intercept every way that Python or a native extension can consume an
 array. Calls that fail capture and values that escape the tracing hooks need
 different handling.
@@ -12,7 +13,7 @@ Capture failures are checked against outputs
 ============================================
 
 A valid NumPy call can fail ATen capture because its implementation is missing,
-its signature is unsupported, or parity validation fails. LEAPP logs a
+its signature is unsupported, or its graph structure is unsupported. LEAPP logs a
 recoverable error and continues eager execution. Tracing can therefore pass
 through work that is not needed by the declared outputs:
 
@@ -44,14 +45,19 @@ Support is specific to the arguments and dtypes being captured:
 * Direct ufunc calls are supported through the adapter; methods such as
   ``np.add.reduce`` are not. Use the supported reduction function where
   appropriate, such as ``np.sum``.
-* Shape, dtype, or numerical differences from NumPy cause a parity failure.
-  For example, float32 FFT capture with NumPy 2.5 and PyTorch 2.14 fails parity
-  because NumPy returns complex64 while the compatibility layer returns
-  complex128. FFT dtype handling remains unresolved.
+* Intermediate shapes, dtypes, and values are not compared against NumPy during
+  capture. Compatibility-layer differences can propagate into later operations;
+  a matching function signature alone does not establish correct output behavior.
+  Final validation checks the exported node results, so an intermediate
+  difference that disappears before the output need not prevent export.
 
 A successful capture does not establish support for every runtime value,
-shape, device, or export backend. Compare exported results with NumPy on
-changed inputs; validating only the capture sample can miss frozen values.
+shape, device, or export backend. ``compile_graph()`` enables numerical
+validation and strict failure handling by default. Keep those checks enabled
+and collect varied input samples; validating only the capture sample can miss
+frozen values. Exported output interfaces must still meet the application's
+shape and dtype requirements; removing intermediate comparisons does not
+relax that contract. See :doc:`/guides/debugging`.
 
 Untraced values can still become constants
 ==========================================
@@ -155,4 +161,4 @@ Casts are limited to the shared dtypes
 ``float16``, ``float32``, ``float64``, ``int8``, ``int16``, ``int32``,
 ``int64``, ``uint8``, and ``bool``. Any other target dtype casts eagerly, warns,
 and leaves the graph at the original dtype. This method-level behavior is
-separate from the function adapter's dtype parity checks.
+separate from function capture and final numerical validation.

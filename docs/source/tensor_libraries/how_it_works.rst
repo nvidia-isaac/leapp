@@ -19,18 +19,26 @@ For each intercepted function or direct ufunc call, LEAPP:
 #. Captures that implementation with ``make_fx`` using tensor versions of the
    inputs, then functionalizes the captured graph to remove temporary
    in-place operations.
-#. Compares the captured result with real NumPy on copies of the capture
-   inputs. Shapes and dtypes must match, and values must agree within numerical
-   tolerances. The captured graph must contain supported functional operations.
+#. Checks that the graph contains supported functional operations and tensor
+   outputs that can be connected to the eager result. It does not execute the
+   captured graph again to compare intermediate shapes, dtypes, or values.
 #. Inserts the captured ATen operations into the current LEAPP FX graph and
    wraps the eager NumPy result with the corresponding graph references.
 
 ATen is PyTorch's tensor operator layer. One NumPy call can contribute several
 ATen operations. The exported graph contains tensor operations, with no
 ``torch._numpy`` arrays or calls needed during replay. LEAPP still executes
-real NumPy for the eager result, including its view/storage behavior.
+real NumPy once for each successfully captured call's eager result, including
+its view/storage behavior. Copies of tensor inputs are still needed during
+capture to isolate temporary writes. Failed captures also probe NumPy on
+copies before eager execution to detect unsupported mutations safely.
 
-A recoverable capture or validation failure logs an error and continues eager
+Numerical validation happens at the exported node outputs.
+``compile_graph()`` defaults to ``validate=True, strict=True``: it compares
+exported outputs with cached eager results and raises on validation failure.
+Collect representative, varied input samples; see :doc:`/guides/debugging`.
+
+A recoverable capture or graph-structure failure logs an error and continues eager
 execution. LEAPP retains the failed operation's dependencies until it knows
 which computations produce the declared outputs. Unused failures are pruned;
 a failure needed by an output prevents export. After the owning node finishes
@@ -67,7 +75,7 @@ vary with the installed PyTorch version.
 Small override registry
 =======================
 
-Overrides use the same capture and validation path as upstream implementations.
+Overrides use the same capture and structural checks as upstream implementations.
 They cover specific semantic or export differences:
 
 .. list-table::
@@ -91,7 +99,7 @@ What gets traced
 
 Coverage depends on the callable, arguments, dtype, installed PyTorch version,
 and export backend. Finding a compatibility implementation is only the first
-step; that particular call must also pass capture and NumPy parity checks.
+step; that particular call must also pass capture and structural checks.
 Examples exercised by the tests include:
 
 .. list-table::
@@ -119,6 +127,6 @@ Calls that never reach a traced operand, such as standalone array creation,
 are not made traceable by compatibility-layer discovery.
 
 These examples are not a promise of every NumPy signature or backend. The
-adapter uses private PyTorch APIs, and capture-sample parity alone cannot prove
+adapter uses private PyTorch APIs, and agreement on one input cannot prove
 correctness for other values. Validate exported results on changed inputs as
 well as the capture input; see :doc:`/guides/debugging` and :doc:`limitations`.

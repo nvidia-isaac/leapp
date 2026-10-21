@@ -193,6 +193,10 @@ User-facing integration recipes belong here, not in this file.
   supported output graph. Preserve failed-operation dependencies until output
   pruning, and reject export if a declared output depends on a failed capture;
   test direct and downstream dependencies separately.
+- NumPy capture checks graph structure and mutation safety. Leave numerical
+  comparisons to final exported-node validation; do not add per-call eager
+  parity checks to the adapter. Retain shape, dtype, value, and changed-input
+  parity coverage in tests, including final validation rejecting wrong outputs.
 - Prefer extending `TracedData` once (`_map_structure`, index lowering,
   port preserve/clear) over copying logic into tensor, NumPy, and Warp
   classes. Warp value semantics live on `TracedWpArray`; `WarpPatchBackend`

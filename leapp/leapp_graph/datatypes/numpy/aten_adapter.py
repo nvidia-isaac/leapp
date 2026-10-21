@@ -4,9 +4,9 @@
 """Capture NumPy operations through PyTorch's private compatibility layer.
 
 A small override registry handles compatibility gaps; other calls use PyTorch's
-NumPy implementation. Each call is captured independently, checked against real NumPy, then
-inlined as ATen into the owning node. No torch._numpy objects survive capture.
-Capture-sample parity is a guard, not a guarantee for every runtime input.
+NumPy implementation. Each call is captured independently and structurally checked,
+then inlined as ATen into the owning node. No torch._numpy objects survive capture.
+Numerical validation happens on the exported node outputs.
 """
 
 import inspect
@@ -63,15 +63,11 @@ def capture_numpy_call(source, func, args, kwargs):
     """Log recoverable translation errors and retain their output dependencies."""
     label = f"NumPy {func.__module__}.{func.__name__} in node {source.context}"
     implementation = NUMPY_OVERRIDES.get(func, _implementations().get(func))
-    # Real NumPy errors are application errors, not recoverable capture failures.
-    # Probe on copies so unsupported mutations cannot touch caller storage.
-    native_args, native_kwargs = TracedData._map_structure(
-        TracedData.unwrap_traced_data((args, kwargs)),
-        lambda x: x.copy() if isinstance(x, np.ndarray) else x,
-    )
-    expected = func(*native_args, **native_kwargs)
     if func is np.result_type:
-        return expected
+        return func(
+            *TracedData.unwrap_traced_data(args),
+            **TracedData.unwrap_traced_data(kwargs),
+        )
 
     try:
         if implementation is None:
@@ -83,8 +79,7 @@ def capture_numpy_call(source, func, args, kwargs):
                 value is not None for value in args[func.nin : func.nin + func.nout]
             )
             if (
-                expected is None
-                or native_bound.get("out") is not None
+                native_bound.get("out") is not None
                 or native_bound.get("overwrite_input", False)
                 or (func is np.nan_to_num and not native_bound.get("copy", True))
                 or positional_out
@@ -99,15 +94,22 @@ def capture_numpy_call(source, func, args, kwargs):
             bound.arguments.get("out") is not None
             or bound.arguments.get("overwrite_input", False)
             or (func is np.nan_to_num and not bound.arguments.get("copy", True))
-            or expected is None
         ):
             raise NotImplementedError(
                 f"{label}: mutation is unsupported by the ATen adapter"
             )
-        return _capture_numpy_call(
-            source, func, args, kwargs, implementation, expected, label
-        )
+        return _capture_numpy_call(source, func, args, kwargs, implementation, label)
     except _NumpyCaptureError as exc:
+        # A failed lowering cannot establish that the native call is functional.
+        # Probe only this error path on copies, protecting caller storage from
+        # unsupported mutators such as copyto/put (which return None). Native
+        # NumPy errors propagate before a recoverable capture error is logged.
+        native_args, native_kwargs = TracedData._map_structure(
+            TracedData.unwrap_traced_data((args, kwargs)),
+            lambda x: x.copy() if isinstance(x, np.ndarray) else x,
+        )
+        if func(*native_args, **native_kwargs) is None:
+            raise NotImplementedError(f"{label}: untraced mutation is unsupported")
         message = str(exc)
         _get_logger().error(
             f"{message}. Continuing eager execution; export requires this operation "
@@ -135,7 +137,7 @@ def capture_numpy_call(source, func, args, kwargs):
         return TracedData._map_structure(expected, wrap)
 
 
-def _capture_numpy_call(source, func, args, kwargs, implementation, expected, label):
+def _capture_numpy_call(source, func, args, kwargs, implementation, label):
     inputs = []
     TracedData._map_structure(
         (args, kwargs), lambda x: inputs.append(x) if isinstance(x, TracedData) else x
@@ -175,17 +177,15 @@ def _capture_numpy_call(source, func, args, kwargs, implementation, expected, la
                 and node.target._schema.is_mutable
             ):
                 raise _NumpyMutationError(f"{label}: mutable operation: {node.target}")
-        actual = captured(*examples)
-        actual_leaves, expected_leaves = [], []
-        TracedData._map_structure(actual, actual_leaves.append)
-        TracedData._map_structure(expected, expected_leaves.append)
-        if len(actual_leaves) != len(expected_leaves):
-            raise ValueError("output structure differs from NumPy")
-        for value, reference in zip(actual_leaves, expected_leaves):
-            if not isinstance(value, torch.Tensor):
-                raise ValueError("non-tensor output would lose runtime dependence")
-            reference = torch.from_numpy(np.array(reference, copy=True))
-            torch.testing.assert_close(value, reference, equal_nan=True)
+        output_nodes = []
+        output_node = next(node for node in captured.graph.nodes if node.op == "output")
+        TracedData._map_structure(output_node.args[0], output_nodes.append)
+        if not output_nodes or any(
+            not isinstance(node, torch.fx.Node)
+            or not isinstance(node.meta.get("val"), torch.Tensor)
+            for node in output_nodes
+        ):
+            raise ValueError("non-tensor output would lose runtime dependence")
         for node in captured.graph.nodes:
             if node.op not in ("placeholder", "get_attr", "call_function", "output"):
                 raise ValueError(f"unsupported graph node: {node.op}")
@@ -196,15 +196,17 @@ def _capture_numpy_call(source, func, args, kwargs, implementation, expected, la
     except _NumpyMutationError:
         raise
     except Exception as exc:
-        raise _NumpyCaptureError(
-            f"{label}: ATen capture/parity check failed: {exc}"
-        ) from exc
+        raise _NumpyCaptureError(f"{label}: ATen capture failed: {exc}") from exc
 
     # Once the lowering is known to be functional, execute NumPy on the real
     # operands so eager view/storage behavior is retained (e.g. broadcast_to).
     expected = func(
         *TracedData.unwrap_traced_data(args), **TracedData.unwrap_traced_data(kwargs)
     )
+    expected_leaves = []
+    TracedData._map_structure(expected, expected_leaves.append)
+    if len(output_nodes) != len(expected_leaves):
+        raise _NumpyCaptureError(f"{label}: output structure differs from NumPy")
     tracer = source._context.tracer
     bindings = {}
     proxies = iter(x.proxy for x in inputs)

@@ -19,6 +19,7 @@ import torch
 from leapp.utils.logging import _get_logger
 from leapp.leapp_graph.traced_node import TracedTensorNode
 from leapp.leapp_graph.datatypes import TracedNpArray
+from leapp.leapp_graph.datatypes.numpy import aten_adapter
 from leapp.leapp_graph.datatypes.patching import TracingPatcher
 
 from tests.unit_tests.export_format_validation import (
@@ -1408,9 +1409,8 @@ def test_structured_outputs_and_constant_snapshot():
 @pytest.mark.parametrize(
     "fn, message",
     [
-        (np.fft.fft, "dtype"),
         (np.spacing, "no torch._numpy lowering"),
-        (lambda x: np.allclose(x, x), "ATen capture/parity check failed"),
+        (lambda x: np.allclose(x, x), "ATen capture failed"),
         (lambda x: np.sort(x, stable=True), "sorting"),
         (lambda x: np.argsort(x, kind="mergesort"), "sorting"),
         (lambda x: np.pad(x, 1, mode="reflect"), "pad"),
@@ -1512,6 +1512,51 @@ def test_reject_mutating_call_before_changing_input():
     with pytest.raises(NotImplementedError, match="mutation"):
         np.nan_to_num(x, copy=False)
     np.testing.assert_array_equal(original, [np.nan, 1.0])
+
+
+def test_successful_capture_executes_native_numpy_once(monkeypatch):
+    calls = []
+
+    def native_sin(x):
+        calls.append(x)
+        return np.sin(x)
+
+    monkeypatch.setitem(
+        aten_adapter.NUMPY_OVERRIDES,
+        native_sin,
+        aten_adapter._implementations()[np.sin],
+    )
+    sample = np.array([1.0, 2.0], dtype=np.float32)
+    ctx = TracedTensorNode(name="single_native_call", node_index=0)
+    x = ctx.create_input(sample, name="x")
+    y = aten_adapter.capture_numpy_call(x, native_sin, (x,), {})
+    assert len(calls) == 1
+    assert np.shares_memory(calls[0], sample)
+    ctx.compile_trace({"y": y})
+    _assert_numpy_output(ctx.m(torch.from_numpy(sample + 1)), np.sin(sample + 1))
+
+
+@pytest.mark.parametrize("implementation", [lambda x: 1, lambda x: (x, x)])
+def test_invalid_capture_outputs_retain_failure_dependency(implementation, monkeypatch):
+    monkeypatch.setitem(aten_adapter.NUMPY_OVERRIDES, np.sin, implementation)
+    ctx = TracedTensorNode(name="invalid_structure", node_index=0)
+    x = ctx.create_input(np.array([1.0, 2.0], dtype=np.float32), name="x")
+    y = np.sin(x)
+    np.testing.assert_array_equal(y.data, np.sin(x.data))
+    with pytest.raises(NotImplementedError, match="declared output depends"):
+        ctx.compile_trace({"y": y})
+
+
+@pytest.mark.parametrize(
+    "fn", [lambda x: np.copyto(x, 0), lambda x: np.fill_diagonal(x, 0)]
+)
+def test_reject_none_returning_mutator_before_changing_storage(fn):
+    sample = np.ones((2, 2), dtype=np.float32)
+    ctx = TracedTensorNode(name="native_mutator", node_index=0)
+    x = ctx.create_input(sample, name="x")
+    with pytest.raises(NotImplementedError, match="mutat"):
+        fn(x)
+    np.testing.assert_array_equal(sample, np.ones((2, 2), dtype=np.float32))
 
 
 def test_eager_view_keeps_numpy_storage():
