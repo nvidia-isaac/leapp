@@ -28,5 +28,9 @@ safetensors = "=0.6.2"
 tempfile = "3"
 
 [[test]]
+name = "bundle"
+path = "tests/unit_tests/bundle.rs"
+
+[[test]]
 name = "binding_lifecycle"
 path = "bindings/common/tests/lifecycle.rs"

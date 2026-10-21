@@ -90,6 +90,8 @@ the complete workspace
 also requires a C++20 compiler and Python 3.10 or newer. See
 [Python bindings](bindings/python/README.md) and
 [C++ bindings](bindings/cxx/README.md) for installation and binding tests.
+Core bundle tests live in `tests/unit_tests/`, with shared fixtures in
+`tests/fixtures/`. Language-binding tests stay under their respective bindings.
 All inspection tests create opaque artifact bytes; no model generation is needed.
 
 ## Shared lifecycle

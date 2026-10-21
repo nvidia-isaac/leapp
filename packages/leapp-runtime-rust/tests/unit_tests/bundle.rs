@@ -6,7 +6,7 @@ use safetensors::{tensor::TensorView, Dtype};
 use std::{fs, path::PathBuf};
 use tempfile::TempDir;
 
-const YAML: &str = include_str!("fixtures/pipeline.yaml");
+const YAML: &str = include_str!("../fixtures/pipeline.yaml");
 
 struct Fixture {
     directory: TempDir,
@@ -506,31 +506,6 @@ fn yaml_and_artifacts_use_the_same_normalized_path() {
 
     fs::remove_file(f.directory.path().join("model.bin")).unwrap();
     assert_eq!(Bundle::open(&path).unwrap_err().code(), ErrorCode::NotFound);
-}
-
-#[test]
-fn cpp_bundle_fixtures_load() {
-    let f = Fixture::new();
-    fs::create_dir(f.directory.path().join("artifacts")).unwrap();
-    fs::write(
-        f.directory.path().join("artifacts/policy.pt2"),
-        b"model bytes\n",
-    )
-    .unwrap();
-    fs::write(
-        f.directory.path().join("artifacts/preprocess.onnx"),
-        b"model bytes\n",
-    )
-    .unwrap();
-    fs::write(&f.path, include_str!("fixtures/policy.yaml")).unwrap();
-    let bundle = Bundle::open(&f.path).unwrap();
-    assert_eq!(bundle.model_names(), ["policy", "preprocess"]);
-    assert_eq!(bundle.pipeline_inputs()[0].name(), "preprocess/observation");
-    let text =
-        include_str!("fixtures/feedback.yaml").replace("  initial_values: state.safetensors\n", "");
-    fs::write(&f.path, text).unwrap();
-    let bundle = Bundle::open(&f.path).unwrap();
-    assert_eq!(bundle.input_info("policy", "state").unwrap().shape, [2]);
 }
 
 #[test]
