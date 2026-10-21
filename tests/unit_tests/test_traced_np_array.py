@@ -141,56 +141,6 @@ class TestTracedNpArray(unittest.TestCase):
         self.assertIsInstance(y, TracedNpArray)
         np.testing.assert_array_equal(y, np.array([False, True, False]))
 
-    # ==================== NumPy Ufunc Tests ====================
-
-    def test_np_sin(self):
-        """Test np.sin ufunc."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([0.0, np.pi / 2, np.pi]), name="x")
-        y = np.sin(x)
-        self.assertIsInstance(y, TracedNpArray)
-        np.testing.assert_array_almost_equal(y, np.array([0.0, 1.0, 0.0]), decimal=5)
-
-    def test_np_cos(self):
-        """Test np.cos ufunc."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([0.0, np.pi / 2, np.pi]), name="x")
-        y = np.cos(x)
-        self.assertIsInstance(y, TracedNpArray)
-        np.testing.assert_array_almost_equal(y, np.array([1.0, 0.0, -1.0]), decimal=5)
-
-    def test_np_exp(self):
-        """Test np.exp ufunc."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([0.0, 1.0, 2.0]), name="x")
-        y = np.exp(x)
-        self.assertIsInstance(y, TracedNpArray)
-        np.testing.assert_array_almost_equal(y, np.exp(np.array([0.0, 1.0, 2.0])))
-
-    def test_np_log(self):
-        """Test np.log ufunc."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([1.0, np.e, np.e**2]), name="x")
-        y = np.log(x)
-        self.assertIsInstance(y, TracedNpArray)
-        np.testing.assert_array_almost_equal(y, np.array([0.0, 1.0, 2.0]))
-
-    def test_np_sqrt(self):
-        """Test np.sqrt ufunc."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([1.0, 4.0, 9.0]), name="x")
-        y = np.sqrt(x)
-        self.assertIsInstance(y, TracedNpArray)
-        np.testing.assert_array_almost_equal(y, np.array([1.0, 2.0, 3.0]))
-
-    def test_np_abs(self):
-        """Test np.abs ufunc."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([-1.0, 2.0, -3.0]), name="x")
-        y = np.abs(x)
-        self.assertIsInstance(y, TracedNpArray)
-        np.testing.assert_array_almost_equal(y, np.array([1.0, 2.0, 3.0]))
-
     # ==================== NumPy Function Tests ====================
 
     def test_np_concatenate(self):
@@ -860,15 +810,22 @@ class TestCompiledGraphExecution(unittest.TestCase):
 
     def test_np_sin(self):
         """Test: np.sin(x)"""
-        input_data = np.array([0.0, 0.5, 1.0])
+        input_data = np.array([0.0, 0.5, 1.0, np.pi / 2, np.pi])
         expected = np.sin(input_data)
         self._test_operation("np_sin", lambda x: np.sin(x), input_data, expected)
 
     def test_np_cos(self):
         """Test: np.cos(x)"""
-        input_data = np.array([0.0, 0.5, 1.0])
-        expected = np.cos(input_data)
-        self._test_operation("np_cos", lambda x: np.cos(x), input_data, expected)
+        for dtype in (np.float32, np.float64):
+            with self.subTest(dtype=dtype):
+                input_data = np.array([0.0, 0.5, 1.0, np.pi / 2, np.pi], dtype=dtype)
+                # ONNX Runtime 1.23.2's CPU Cos kernel only supports float32.
+                backends = ("fx", "jit", "pt2")
+                if dtype is np.float32:
+                    backends += ("onnx",)
+                self._test_operation(
+                    "np_cos", np.cos, input_data, np.cos(input_data), backends=backends
+                )
 
     def test_np_exp(self):
         """Test: np.exp(x)"""
@@ -878,7 +835,7 @@ class TestCompiledGraphExecution(unittest.TestCase):
 
     def test_np_log(self):
         """Test: np.log(x)"""
-        input_data = np.array([1.0, 2.0, 3.0])
+        input_data = np.array([1.0, 2.0, 3.0, np.e, np.e**2])
         expected = np.log(input_data)
         self._test_operation("np_log", lambda x: np.log(x), input_data, expected)
 
