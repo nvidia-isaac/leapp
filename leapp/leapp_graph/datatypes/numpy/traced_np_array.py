@@ -554,8 +554,13 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         # avoids older exporters treating a same-dtype ``to(copy=True)`` as
         # frozen input storage during functionalization.
         if np.dtype(dtype) == self.dtype:
+            # Keep the explicit cast even when the native sample already has
+            # this dtype: an imported lowering can have different metadata.
+            cast = self._context.tracer.create_proxy(
+                "call_method", "to", (self.proxy, torch_dtype), {}
+            )
             proxy_out = self._context.tracer.create_proxy(
-                "call_function", torch.clone, (self.proxy,), {}
+                "call_function", torch.clone, (cast,), {}
             )
         else:
             proxy_out = self._context.tracer.create_proxy(
