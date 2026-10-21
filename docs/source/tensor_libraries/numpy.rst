@@ -9,10 +9,10 @@ keep the NumPy preprocessing it already has instead of rewriting it in torch
 before it can be exported.
 
 Supported NumPy functions are captured through PyTorch's tensor-backed NumPy
-compatibility layer, with a small override registry for semantic and export
-differences. The exported artifact contains torch operations; NumPy is a
-frontend to that graph, not a second export backend. See :doc:`how_it_works`
-for the interception model and :doc:`limitations` for its supported scope.
+compatibility layer. The exported artifact contains torch operations; NumPy
+is a frontend to that graph, not a second export backend. See
+:doc:`how_it_works` for the interception model and :doc:`limitations` for its
+supported scope.
 
 Example: a dataset-driven policy pipeline
 =========================================

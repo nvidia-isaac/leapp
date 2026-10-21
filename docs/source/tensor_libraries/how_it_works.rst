@@ -13,12 +13,10 @@ From a NumPy call to ATen
 
 For each intercepted function or direct ufunc call, LEAPP:
 
-#. Selects an implementation from a small override registry, or discovers the
-   corresponding callable in ``torch._numpy``. Discovery covers the NumPy,
-   linear algebra, and FFT namespaces; it excludes the random namespace.
-#. Captures that implementation with ``make_fx`` using tensor versions of the
-   inputs, then functionalizes the captured graph to remove temporary
-   in-place operations.
+#. Uses PyTorch's NumPy compatibility layer to express the call as tensor
+   operations.
+#. Captures those operations using tensor versions of the inputs and removes
+   temporary in-place operations from the graph.
 #. Checks that the graph contains supported functional operations and tensor
    outputs that can be connected to the eager result. It does not execute the
    captured graph again to compare intermediate shapes, dtypes, or values.
@@ -28,10 +26,8 @@ For each intercepted function or direct ufunc call, LEAPP:
 ATen is PyTorch's tensor operator layer. One NumPy call can contribute several
 ATen operations. The exported graph contains tensor operations, with no
 ``torch._numpy`` arrays or calls needed during replay. LEAPP still executes
-real NumPy once for each successfully captured call's eager result, including
-its view/storage behavior. Copies of tensor inputs are still needed during
-capture to isolate temporary writes. Failed captures also probe NumPy on
-copies before eager execution to detect unsupported mutations safely.
+real NumPy for the eager result, preserving its values and view/storage
+behavior during tracing.
 
 Numerical validation happens at the exported node outputs.
 ``compile_graph()`` defaults to ``validate=True, strict=True``: it compares
@@ -71,28 +67,6 @@ concatenation. Schematically, omitting constant-copy nodes:
 Plain arrays such as ``STATE_MEAN`` and ``STATE_STD`` become graph constants.
 If they must vary at runtime, declare them as inputs. Exact ATen sequences can
 vary with the installed PyTorch version.
-
-Small override registry
-=======================
-
-Overrides use the same capture and structural checks as upstream implementations.
-They cover specific semantic or export differences:
-
-.. list-table::
-   :header-rows: 1
-   :widths: 25 75
-
-   * - Function
-     - Override behavior
-   * - ``np.cbrt``
-     - Preserves the sign for negative inputs and signed zero.
-   * - ``np.pad``
-     - Supports static padding widths, constant mode, and a scalar fill value.
-   * - ``np.nanmean``
-     - Supplies the missing reduction and promotes integer inputs to float64.
-   * - ``np.sort``, ``np.argsort``
-     - Uses a fixed-size TopK lowering for export. Stable and structured sorting
-       cannot be captured.
 
 What gets traced
 ================
