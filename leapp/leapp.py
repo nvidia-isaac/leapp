@@ -201,6 +201,76 @@ def compile_graph(visualize=True, verbose=None, validate=True,
     return True
 
 
+def optimize_graph(trt_compatible=False):
+    """Post-compile optimizations for the saved LEAPP graph.
+
+    Call after ``compile_graph()``. Options can be combined as more passes are
+    added; today ``trt_compatible`` is the TensorRT ONNX rewrite pass.
+
+    When ``trt_compatible=True``, LEAPP rewrites exported ONNX files in the
+    graph output directory so TensorRT can parse them (UINT8 intermediate
+    Casts, Resize ``antialias``, rank-9 Reshape) and updates YAML checksums
+    plus ``parameters.tensorrt_compatible``. Graph input/output names, dtypes,
+    and shapes are left unchanged. Requires ``isaac_deploy_trt``.
+    """
+    manager = _MANAGER
+
+    if ExportManager.is_interpret_graph_enabled():
+        _get_logger().fatal(
+            "LEAPP graph interpretation is enabled. Call leapp.stop() and "
+            "leapp.compile_graph() before leapp.optimize_graph().",
+            error_type=Exception)
+
+    save_path = manager.get_save_path()
+    if not save_path or not os.path.isdir(save_path):
+        _get_logger().fatal(
+            "leapp.optimize_graph() requires a compiled graph directory. "
+            "Call leapp.compile_graph() first.",
+            error_type=Exception)
+
+    yaml_path = os.path.join(save_path, f"{manager.get_graph_name()}.yaml")
+    if not os.path.isfile(yaml_path):
+        _get_logger().fatal(
+            f"leapp.optimize_graph() did not find {yaml_path}. "
+            "Call leapp.compile_graph() first.",
+            error_type=Exception)
+
+    applied = {}
+
+    if trt_compatible:
+        try:
+            from leapp.backends.tensorrt_leapp_bundle import (
+                rewrite_leapp_export_for_tensorrt,
+            )
+        except ImportError as exc:
+            _get_logger().fatal(
+                "optimize_graph(trt_compatible=True) requires isaac_deploy_trt. "
+                "Install with: pip install -e ./packages/isaac_deploy_trt",
+                error_type=ImportError,
+                cause=exc,
+            )
+        _get_logger().section("Graph optimization: trt_compatible")
+        result = rewrite_leapp_export_for_tensorrt(save_path)
+        rewritten = [model.filename for model in result.models if model.rewritten]
+        if rewritten:
+            _get_logger().info(
+                f"Rewrote ONNX for TensorRT: {', '.join(rewritten)}"
+            )
+        else:
+            _get_logger().info(
+                "No TensorRT GraphSurgeon rewrites were needed for exported ONNX"
+            )
+        applied["trt_compatible"] = result
+
+    if not applied:
+        _get_logger().warning(
+            "leapp.optimize_graph() ran with no optimization options enabled. "
+            "Pass trt_compatible=True to rewrite ONNX for TensorRT."
+        )
+
+    return applied
+
+
 class AnnotateAPI:
     """Annotation-only facade over ExportManager."""
 

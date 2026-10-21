@@ -1,0 +1,3520 @@
+{
+  "cuda": "13.2",
+  "platform": "thor",
+  "display_name": "Jetson AGX Thor (CUDA 13.x / JetPack 7.x)",
+  "tensorrt": "TensorRT 10.13\u201310.15.x from JetPack (not TensorRT 11.2.1)",
+  "arch": "Blackwell (Thor GPU)",
+  "compute_capability": "11.0",
+  "parser_tensorrt_version": "11.2",
+  "opset": {
+    "min": 9,
+    "max": 24
+  },
+  "source": "https://raw.githubusercontent.com/onnx/onnx-tensorrt/main/docs/operators.md",
+  "gpu_precisions": [
+    "FP32",
+    "TF32",
+    "FP16",
+    "BF16",
+    "FP8",
+    "FP4",
+    "INT8",
+    "INT4",
+    "INT32",
+    "INT64",
+    "UINT8",
+    "BOOL"
+  ],
+  "dla": false,
+  "tensorrt_11": false,
+  "notes": [
+    "JetPack 7.x ships TensorRT 10.x; NVIDIA documents Thor as unsupported on TensorRT 11.2.1.",
+    "Blackwell enables FP8/FP4; no Orin-style DLA catalog.",
+    "Engines are not portable to Orin (different SM)."
+  ],
+  "sources": [
+    "https://docs.nvidia.com/deeplearning/tensorrt/latest/api/migration/tensorrt-10x-to-11x-jetson.html",
+    "https://docs.nvidia.com/deeplearning/tensorrt/latest/getting-started/support-matrix.html",
+    "https://raw.githubusercontent.com/NVIDIA/TensorRT/v10.9.0/include/NvInferRuntimeBase.h",
+    "https://raw.githubusercontent.com/NVIDIA/TensorRT/v10.9.0/include/NvInfer.h",
+    "https://raw.githubusercontent.com/NVIDIA/TensorRT/v10.9.0/include/NvInferRuntime.h"
+  ],
+  "supported_releases": [
+    "v10.9.0",
+    "v10.10.0",
+    "v10.11"
+  ],
+  "nvinfer": {
+    "source": [
+      "https://raw.githubusercontent.com/NVIDIA/TensorRT/v10.9.0/include/NvInferRuntimeBase.h",
+      "https://raw.githubusercontent.com/NVIDIA/TensorRT/v10.9.0/include/NvInfer.h",
+      "https://raw.githubusercontent.com/NVIDIA/TensorRT/v10.9.0/include/NvInferRuntime.h"
+    ],
+    "data_types": [
+      "kFLOAT",
+      "kHALF",
+      "kINT8",
+      "kINT32",
+      "kBOOL",
+      "kUINT8",
+      "kFP8",
+      "kBF16",
+      "kINT64",
+      "kINT4",
+      "kFP4"
+    ],
+    "layer_types": [
+      "kCONVOLUTION",
+      "kCAST",
+      "kACTIVATION",
+      "kPOOLING",
+      "kLRN",
+      "kSCALE",
+      "kSOFTMAX",
+      "kDECONVOLUTION",
+      "kCONCATENATION",
+      "kELEMENTWISE",
+      "kPLUGIN",
+      "kUNARY",
+      "kPADDING",
+      "kSHUFFLE",
+      "kREDUCE",
+      "kTOPK",
+      "kGATHER",
+      "kMATRIX_MULTIPLY",
+      "kRAGGED_SOFTMAX",
+      "kCONSTANT",
+      "kIDENTITY",
+      "kPLUGIN_V2",
+      "kSLICE",
+      "kSHAPE",
+      "kPARAMETRIC_RELU",
+      "kRESIZE",
+      "kTRIP_LIMIT",
+      "kRECURRENCE",
+      "kITERATOR",
+      "kLOOP_OUTPUT",
+      "kSELECT",
+      "kFILL",
+      "kQUANTIZE",
+      "kDEQUANTIZE",
+      "kCONDITION",
+      "kCONDITIONAL_INPUT",
+      "kCONDITIONAL_OUTPUT",
+      "kSCATTER",
+      "kEINSUM",
+      "kASSERTION",
+      "kONE_HOT",
+      "kNON_ZERO",
+      "kGRID_SAMPLE",
+      "kNMS",
+      "kREVERSE_SEQUENCE",
+      "kNORMALIZATION",
+      "kPLUGIN_V3",
+      "kSQUEEZE",
+      "kUNSQUEEZE",
+      "kCUMULATIVE",
+      "kDYNAMIC_QUANTIZE"
+    ],
+    "layer_type_names": [
+      "CONVOLUTION",
+      "CAST",
+      "ACTIVATION",
+      "POOLING",
+      "LRN",
+      "SCALE",
+      "SOFTMAX",
+      "DECONVOLUTION",
+      "CONCATENATION",
+      "ELEMENTWISE",
+      "PLUGIN",
+      "UNARY",
+      "PADDING",
+      "SHUFFLE",
+      "REDUCE",
+      "TOPK",
+      "GATHER",
+      "MATRIX_MULTIPLY",
+      "RAGGED_SOFTMAX",
+      "CONSTANT",
+      "IDENTITY",
+      "PLUGIN_V2",
+      "SLICE",
+      "SHAPE",
+      "PARAMETRIC_RELU",
+      "RESIZE",
+      "TRIP_LIMIT",
+      "RECURRENCE",
+      "ITERATOR",
+      "LOOP_OUTPUT",
+      "SELECT",
+      "FILL",
+      "QUANTIZE",
+      "DEQUANTIZE",
+      "CONDITION",
+      "CONDITIONAL_INPUT",
+      "CONDITIONAL_OUTPUT",
+      "SCATTER",
+      "EINSUM",
+      "ASSERTION",
+      "ONE_HOT",
+      "NON_ZERO",
+      "GRID_SAMPLE",
+      "NMS",
+      "REVERSE_SEQUENCE",
+      "NORMALIZATION",
+      "PLUGIN_V3",
+      "SQUEEZE",
+      "UNSQUEEZE",
+      "CUMULATIVE",
+      "DYNAMIC_QUANTIZE"
+    ],
+    "builder_flags": [
+      "kFP16",
+      "kINT8",
+      "kDEBUG",
+      "kGPU_FALLBACK",
+      "kREFIT",
+      "kDISABLE_TIMING_CACHE",
+      "kTF32",
+      "kSPARSE_WEIGHTS",
+      "kSAFETY_SCOPE",
+      "kOBEY_PRECISION_CONSTRAINTS",
+      "kPREFER_PRECISION_CONSTRAINTS",
+      "kDIRECT_IO",
+      "kREJECT_EMPTY_ALGORITHMS",
+      "kVERSION_COMPATIBLE",
+      "kEXCLUDE_LEAN_RUNTIME",
+      "kFP8",
+      "kERROR_ON_TIMING_CACHE_MISS",
+      "kBF16",
+      "kDISABLE_COMPILATION_CACHE",
+      "kSTRIP_PLAN",
+      "kWEIGHTLESS",
+      "kREFIT_IDENTICAL",
+      "kWEIGHT_STREAMING",
+      "kINT4",
+      "kREFIT_INDIVIDUAL",
+      "kSTRICT_NANS",
+      "kMONITOR_MEMORY",
+      "kFP4",
+      "kEDITABLE_TIMING_CACHE"
+    ],
+    "network_definition_creation_flags": [
+      "kEXPLICIT_BATCH",
+      "kSTRONGLY_TYPED",
+      "kPREFER_JIT_PYTHON_PLUGINS",
+      "kPREFER_AOT_PYTHON_PLUGINS"
+    ],
+    "strongly_typed": true,
+    "strongly_typed_flag": "NetworkDefinitionCreationFlag::kSTRONGLY_TYPED",
+    "strongly_typed_note": "NetworkDefinitionCreationFlag::kSTRONGLY_TYPED (TensorRT 11: always on; the flag is retained for API compatibility). Tensor DataType is authoritative; TensorRT will not implicitly cast. Listed nvinfer_datatypes must match the ONNX/TRT tensor types.",
+    "onnx_type_to_nvinfer": {
+      "FP32": "kFLOAT",
+      "FLOAT32": "kFLOAT",
+      "FLOAT": "kFLOAT",
+      "FP16": "kHALF",
+      "FLOAT16": "kHALF",
+      "BF16": "kBF16",
+      "BFLOAT16": "kBF16",
+      "FP8": "kFP8",
+      "FP4": "kFP4",
+      "FP64": "kDOUBLE",
+      "DOUBLE": "kDOUBLE",
+      "INT8": "kINT8",
+      "INT4": "kINT4",
+      "INT32": "kINT32",
+      "INT64": "kINT64",
+      "UINT8": "kUINT8",
+      "BOOL": "kBOOL",
+      "TF32": "kFLOAT"
+    }
+  },
+  "onnx_supported": [
+    "Abs",
+    "Acos",
+    "Acosh",
+    "Add",
+    "And",
+    "ArgMax",
+    "ArgMin",
+    "Asin",
+    "Asinh",
+    "Atan",
+    "Atanh",
+    "Attention",
+    "AveragePool",
+    "BatchNormalization",
+    "BlackmanWindow",
+    "Cast",
+    "CastLike",
+    "Ceil",
+    "Celu",
+    "Clip",
+    "Concat",
+    "Constant",
+    "ConstantOfShape",
+    "Conv",
+    "ConvTranspose",
+    "Cos",
+    "Cosh",
+    "CumSum",
+    "DFT",
+    "DeformConv",
+    "DepthToSpace",
+    "DequantizeLinear",
+    "Div",
+    "Dropout",
+    "Einsum",
+    "Elu",
+    "Equal",
+    "Erf",
+    "Exp",
+    "Expand",
+    "EyeLike",
+    "Flatten",
+    "Floor",
+    "Gather",
+    "GatherElements",
+    "GatherND",
+    "Gelu",
+    "Gemm",
+    "GlobalAveragePool",
+    "GlobalLpPool",
+    "GlobalMaxPool",
+    "Greater",
+    "GreaterOrEqual",
+    "GridSample",
+    "GroupNormalization",
+    "GRU",
+    "HammingWindow",
+    "HannWindow",
+    "HardSigmoid",
+    "HardSwish",
+    "Hardmax",
+    "Identity",
+    "If",
+    "ImageScaler",
+    "InstanceNormalization",
+    "IsInf",
+    "IsNaN",
+    "LayerNormalization",
+    "LeakyRelu",
+    "Less",
+    "LessOrEqual",
+    "Log",
+    "LogSoftmax",
+    "Loop",
+    "LRN",
+    "LSTM",
+    "LpNormalization",
+    "LpPool",
+    "MatMul",
+    "Max",
+    "MaxPool",
+    "Mean",
+    "MeanVarianceNormalization",
+    "Min",
+    "Mish",
+    "Mod",
+    "Mul",
+    "Neg",
+    "NonMaxSuppression",
+    "NonZero",
+    "Not",
+    "OneHot",
+    "Or",
+    "Pad",
+    "ParametricSoftplus",
+    "Pow",
+    "PRelu",
+    "QuantizeLinear",
+    "RandomNormal",
+    "RandomNormalLike",
+    "RandomUniform",
+    "RandomUniformLike",
+    "Range",
+    "Reciprocal",
+    "ReduceL1",
+    "ReduceL2",
+    "ReduceLogSum",
+    "ReduceLogSumExp",
+    "ReduceMax",
+    "ReduceMean",
+    "ReduceMin",
+    "ReduceProd",
+    "ReduceSum",
+    "ReduceSumSquare",
+    "Relu",
+    "Reshape",
+    "Resize",
+    "ReverseSequence",
+    "RMSNormalization",
+    "RNN",
+    "RoiAlign",
+    "RotaryEmbedding",
+    "Round",
+    "STFT",
+    "ScaledTanh",
+    "Scan",
+    "Scatter",
+    "ScatterElements",
+    "ScatterND",
+    "Selu",
+    "Shape",
+    "Shrink",
+    "Sigmoid",
+    "Sign",
+    "Sin",
+    "Sinh",
+    "Size",
+    "Slice",
+    "Softmax",
+    "Softplus",
+    "Softsign",
+    "SpaceToDepth",
+    "Split",
+    "Sqrt",
+    "Squeeze",
+    "Sub",
+    "Sum",
+    "Swish",
+    "Tan",
+    "Tanh",
+    "TensorScatter",
+    "ThresholdedRelu",
+    "Tile",
+    "TopK",
+    "Transpose",
+    "Trilu",
+    "Unsqueeze",
+    "Upsample",
+    "Where",
+    "Xor"
+  ],
+  "onnx_unsupported": [
+    "AffineGrid",
+    "Bernoulli",
+    "BitShift",
+    "BitwiseAnd",
+    "BitwiseNot",
+    "BitwiseOr",
+    "BitwiseXor",
+    "Col2Im",
+    "CenterCropPad",
+    "Compress",
+    "ConcatFromSequence",
+    "ConvInteger",
+    "Det",
+    "DynamicQuantizeLinear",
+    "ImageDecoder",
+    "MatMulInteger",
+    "MaxRoiPool",
+    "MaxUnpool",
+    "MelWeightMatrix",
+    "Multinomial",
+    "NegativeLogLikelihoodLoss",
+    "Optional",
+    "OptionalGetElement",
+    "OptionalHasElement",
+    "QLinearConv",
+    "QLinearMatMul",
+    "RegexFullMatch",
+    "SequenceAt",
+    "SequenceConstruct",
+    "SequenceEmpty",
+    "SequenceErase",
+    "SequenceInsert",
+    "SequenceLength",
+    "SequenceMap",
+    "SoftmaxCrossEntropyLoss",
+    "SplitToSequence",
+    "StringConcat",
+    "StringNormalizer",
+    "StringSplit",
+    "TfIdfVectorizer",
+    "Unique"
+  ],
+  "onnx_operators": {
+    "Abs": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Acos": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Acosh": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Add": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "AffineGrid": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "And": {
+      "supported": true,
+      "types": [
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kBOOL"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "ArgMax": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "ArgMin": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Asin": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Asinh": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Atan": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Atanh": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Attention": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT8",
+        "FP8"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT8",
+        "kFP8"
+      ],
+      "restrictions": "`Q`, `K`, `V` and `attn_mask ` must be 4D. `past_key`, `past_value` and `nonpad_kv_seqlen` inputs are unsupported. `present_key`, `present_value` and `qk_matmul_output` outputs are unsupported. `qk_matmul_output_mode` and `softcap` attributes are unsupported. `q_num_heads` and `kv_num_heads` attributes are supported via being specified as the second dimension of `Q` and `K`/`V`'s shapes respectively.; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "AveragePool": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "2D or 3D Pooling only. `dilations` must be empty or all ones; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "BatchNormalization": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Bernoulli": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "BitShift": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "BitwiseAnd": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "BitwiseNot": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "BitwiseOr": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "BitwiseXor": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "BlackmanWindow": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Cast": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "UINT8",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kUINT8",
+        "kBOOL"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "CastLike": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "UINT8",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kUINT8",
+        "kBOOL"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Ceil": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Col2Im": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Celu": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "CenterCropPad": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Clip": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Compress": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Concat": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "ConcatFromSequence": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Constant": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "FP8",
+        "FP4",
+        "INT4",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kFP8",
+        "kFP4",
+        "kINT4",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "`sparse_value`, `value_string`, and `value_strings` attributes are unsupported.; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "ConstantOfShape": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "FP8",
+        "FP4",
+        "INT4",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kFP8",
+        "kFP4",
+        "kINT4",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Conv": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "ConvInteger": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "ConvTranspose": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Cos": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Cosh": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "CumSum": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "`axis` must be a build-time constant; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "DFT": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Runs on a cuFFT-backed plugin so cuFFT must be available at runtime. Complex tensors use the packed-real `[..., 2]` layout, and the innermost dimension must be a static 1 (real) or 2 (complex). The transform axis must be `-2`. The opset 20 `axis` input must be a build-time constant scalar. `dft_length` is required for the onesided inverse (C2R) and unsupported otherwise. FP16 and BF16 require power-of-two signal lengths.; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "DeformConv": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF"
+      ],
+      "restrictions": "`input` must have 1D or 2D spatial dimensions. `pads` for the beginning and end along each spatial axis must be the same; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "DepthToSpace": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "DequantizeLinear": {
+      "supported": true,
+      "types": [
+        "INT8",
+        "FP8",
+        "FP4",
+        "INT4"
+      ],
+      "nvinfer_datatypes": [
+        "kINT8",
+        "kFP8",
+        "kFP4",
+        "kINT4"
+      ],
+      "restrictions": "`x_zero_point` must be zero; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Det": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Div": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Dropout": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "`is_training` must be an initializer and evaluate to False.; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "DynamicQuantizeLinear": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Not supported. TensorRT's IDynamicQuantize can be composed from ONNX operators in the form of a model local function.; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Einsum": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Elu": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Equal": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Erf": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Exp": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Expand": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "EyeLike": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "`input` must have static dimensions; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Flatten": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Floor": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Gather": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "GatherElements": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "GatherND": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Gelu": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT8",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT8",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Gemm": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "GlobalAveragePool": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "GlobalLpPool": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "GlobalMaxPool": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Greater": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "GreaterOrEqual": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "GridSample": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Input must be 4D or 5D.; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "GroupNormalization": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "GRU": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "For bidirectional GRUs, activation functions must be the same for both the forward and reverse pass; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "HammingWindow": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "HannWindow": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "HardSigmoid": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "HardSwish": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Hardmax": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "`axis` dimension of input must be a build-time constant; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Identity": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "If": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "Output tensors of the two conditional branches must have the same rank and must have different names; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "ImageScaler": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "ImageDecoder": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "InstanceNormalization": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "IsInf": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "IsNaN": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "LayerNormalization": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Only the first output `Y` is supported.; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "LeakyRelu": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Less": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "LessOrEqual": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Log": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "LogSoftmax": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Loop": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "Scan output length cannot be dynamic. The shape of Loop carried dependencies must be the same across all loop iterations.; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "LRN": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "LSTM": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "For bidirectional LSTMs, activation functions must be the same for both the forward and reverse pass. `input_forget` attribute must be 0. `layout` attribute must be 0.; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "LpNormalization": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "LpPool": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "`dilations` must be empty or all ones; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "MatMul": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "MatMulInteger": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Max": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "MaxPool": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "2D or 3D pooling only. `Indices` output tensor unsupported. `dilations` must be empty or all ones; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "MaxRoiPool": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "MaxUnpool": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Mean": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "FP8",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kFP8",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "MeanVarianceNormalization": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "MelWeightMatrix": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Min": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Mish": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Mod": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Mul": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Multinomial": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Neg": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "NegativeLogLikelihoodLoss": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "NonMaxSuppression": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "NonZero": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Not": {
+      "supported": true,
+      "types": [
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kBOOL"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "OneHot": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "`depth` must be a build-time constant; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Optional": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "OptionalGetElement": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "OptionalHasElement": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Or": {
+      "supported": true,
+      "types": [
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kBOOL"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Pad": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "ParametricSoftplus": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Pow": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "PRelu": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "QLinearConv": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "QLinearMatMul": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "QuantizeLinear": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "`y_zero_point` must be 0; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "RandomNormal": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "`seed` value is ignored by TensorRT; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "RandomNormalLike": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "`seed` value is ignored by TensorRT; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "RandomUniform": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "`seed` value is ignored by TensorRT; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "RandomUniformLike": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "`seed` value is ignored by TensorRT; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Range": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Reciprocal": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "ReduceL1": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "`axes` must be an initializer; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "ReduceL2": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "`axes` must be an initializer; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "ReduceLogSum": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "`axes` must be an initializer; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "ReduceLogSumExp": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "`axes` must be an initializer; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "ReduceMax": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "`axes` must be an initializer; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "ReduceMean": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "`axes` must be an initializer; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "ReduceMin": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "`axes` must be an initializer; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "ReduceProd": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "`axes` must be an initializer; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "ReduceSum": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "`axes` must be an initializer; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "ReduceSumSquare": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "`axes` must be an initializer; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "RegexFullMatch": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Relu": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Reshape": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Resize": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Supported resize transformation modes: `half_pixel`, `pytorch_half_pixel`, `tf_half_pixel_for_nn`, `asymmetric`, and `align_corners`.<br />Supported resize modes: `nearest`, `linear`.<br />Supported nearest modes: `floor`, `ceil`, `round_prefer_floor`, `round_prefer_ceil`.<br />Supported aspect ratio policy: `stretch`.<br />When `scales` is a tensor input, `axes` must be an iota vector of length rank(input).<br />Antialiasing is not supported.; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "ReverseSequence": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "RMSNormalization": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "RNN": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "For bidirectional RNNs, activation functions must be the same for both the forward and reverse pass; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "RoiAlign": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "RotaryEmbedding": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "`position_ids` must be INT64; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Round": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "STFT": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "`frame_step` and `window` must be an initializer. Input must be real-valued.; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "ScaledTanh": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Scan": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Scatter": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "ScatterElements": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "ScatterND": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "`reduction` other than `none` is not supported; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Selu": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "SequenceAt": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "SequenceConstruct": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "SequenceEmpty": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "SequenceErase": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "SequenceInsert": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "SequenceLength": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "SequenceMap": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Shape": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Shrink": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Sigmoid": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Sign": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Sin": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Sinh": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Size": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Slice": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Softmax": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "SoftmaxCrossEntropyLoss": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Softplus": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Softsign": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "SpaceToDepth": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Split": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "SplitToSequence": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Sqrt": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Squeeze": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "`axes` must be resolvable to a constant.; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "StringConcat": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "StringNormalizer": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "StringSplit": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Sub": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Sum": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Swish": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Tan": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Tanh": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "TensorScatter": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32"
+      ],
+      "restrictions": "`past_cache` and `update` must be 4D. `axis` must be -2.; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "TfIdfVectorizer": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "ThresholdedRelu": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Tile": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "TopK": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64"
+      ],
+      "restrictions": "`sorted` must be 1. `K` input must be less than 3840.; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Transpose": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Trilu": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Unique": {
+      "supported": false,
+      "types": [],
+      "nvinfer_datatypes": [],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Unsqueeze": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "`axes` must be resolvable to a constant.; Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Upsample": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Where": {
+      "supported": true,
+      "types": [
+        "FP32",
+        "FP16",
+        "BF16",
+        "INT32",
+        "INT64",
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kFLOAT",
+        "kHALF",
+        "kBF16",
+        "kINT32",
+        "kINT64",
+        "kBOOL"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    },
+    "Xor": {
+      "supported": true,
+      "types": [
+        "BOOL"
+      ],
+      "nvinfer_datatypes": [
+        "kBOOL"
+      ],
+      "restrictions": "Parser table is TensorRT 11.x; this platform ships TensorRT 10.x. Treat newly added 11.x-only ops as unverified."
+    }
+  },
+  "tensorrt_layers": {
+    "ACTIVATION": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "ASSERTION": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "ATTENTION": {
+      "gpu": false,
+      "dla": false,
+      "notes": "Documented as TensorRT 11.x native layer; not in JetPack 10.x"
+    },
+    "CAST": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "CONCATENATION": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "CONDITION": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "CONSTANT": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "CONVOLUTION": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "CUMULATIVE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "DECONVOLUTION": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "DEQUANTIZE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "DYNAMIC_QUANTIZE": {
+      "gpu": false,
+      "dla": false,
+      "notes": "Documented as TensorRT 11.x native layer; not in JetPack 10.x"
+    },
+    "EINSUM": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "ELEMENTWISE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "FILL": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "GATHER": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "GRID_SAMPLE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "IDENTITY": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "LOOP": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "LOOP_OUTPUT": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "LRN": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "MATRIX_MULTIPLY": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "NMS": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "NON_ZERO": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "NORMALIZATION": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "ONE_HOT": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "PADDING": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "PARAMETRIC_RELU": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "PLUGIN": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "PLUGIN_V2": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "PLUGIN_V3": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "POOLING": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "QUANTIZE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "RAGGED_SOFTMAX": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "RECURRENCE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "REDUCE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "RESIZE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "REVERSE_SEQUENCE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "SCALE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "SCATTER": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "SELECT": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "SHAPE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "SHUFFLE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "SLICE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "SOFTMAX": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "SQUEEZE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "TOPK": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "TRIP_LIMIT": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "UNARY": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "UNSQUEEZE": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "ITERATOR": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "CONDITIONAL_INPUT": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    },
+    "CONDITIONAL_OUTPUT": {
+      "gpu": true,
+      "dla": false,
+      "notes": ""
+    }
+  },
+  "installed_tensorrt": null
+}
