@@ -4,7 +4,7 @@
 //! Immutable bundle inspection, with parsing and validation in child modules.
 
 mod load;
-pub(crate) mod schema;
+mod schema;
 mod validate;
 
 use crate::BundleError;
@@ -17,13 +17,14 @@ use std::{
 };
 
 #[derive(Debug)]
-pub(crate) struct BundleData {
+struct BundleData {
     yaml_path: PathBuf,
-    pub(crate) description: BundleDescription,
+    description: BundleDescription,
     inputs: Vec<PortRef>,
     outputs: Vec<PortRef>,
     // Validated initial descriptors are retained for later bundle conversion.
-    pub(crate) initial_values: IndexMap<PortRef, InitialValueSpec>,
+    #[allow(dead_code)]
+    initial_values: IndexMap<PortRef, InitialValueSpec>,
 }
 
 /// Shared ownership of an immutable, validated bundle snapshot.
@@ -32,7 +33,7 @@ pub(crate) struct BundleData {
 /// concurrent reads are safe. Artifact files must remain available and unchanged
 /// for any subsequent execution that uses the resolved paths.
 #[derive(Debug, Clone)]
-pub struct Bundle(pub(crate) Arc<BundleData>);
+pub struct Bundle(Arc<BundleData>);
 
 impl Bundle {
     /// Parse and validate a YAML bundle, resolving artifacts beside its path.

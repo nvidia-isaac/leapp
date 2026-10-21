@@ -2,25 +2,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [workspace]
-members = ["src/adapter/triton", "bindings/common", "bindings/python", "bindings/cxx"]
+members = ["bindings/common", "bindings/python", "bindings/cxx"]
 default-members = ["."]
 resolver = "2"
 
 [package]
+# Legacy sources are retained for the following implementation commits.
+build = false
+autotests = false
+autoexamples = false
 name = "leapp-runtime"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 publish = false
-description = "LEAPP bundle inspection and synchronous Triton execution"
-
-[features]
-triton = ["dep:leapp-triton"]
+description = "LEAPP bundle inspection and core Session API"
 
 [dependencies]
-leapp-triton = { path = "src/adapter/triton", optional = true }
-protobuf = "=3.7.2"
-tempfile = "3"
 anyhow = "1"
 indexmap = { version = "2", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
@@ -30,13 +28,17 @@ serde_json = "1"
 sha2 = "0.10"
 safetensors = "=0.6.2"
 
-[build-dependencies]
-protobuf-codegen = "=3.7.2"
+[dev-dependencies]
+tempfile = "3"
+
+[[test]]
+name = "bundle"
+path = "tests/unit_tests/bundle.rs"
+
+[[test]]
+name = "dlpack"
+path = "tests/unit_tests/dlpack.rs"
 
 [[test]]
 name = "binding_lifecycle"
 path = "bindings/common/tests/lifecycle.rs"
-
-[[example]]
-name = "run"
-required-features = ["triton"]

@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 publish = false
-# Lifecycle regressions run in the SDK-free root test target.
+# Lifecycle regressions run in the root test target.
 autotests = false
 
 [dependencies]
-leapp-runtime = { path = "../..", features = ["triton"] }
+leapp-runtime = { path = "../.." }
