@@ -34,6 +34,12 @@ warnings.filterwarnings("ignore", message=".*Casting complex values to real.*")
 
 
 def _assert_numpy_output(actual, expected, atol=1e-5):
+    if isinstance(expected, (tuple, list)):
+        assert isinstance(actual, (tuple, list))
+        assert len(actual) == len(expected)
+        for value, reference in zip(actual, expected):
+            _assert_numpy_output(value, reference, atol)
+        return
     torch.testing.assert_close(
         actual,
         torch.from_numpy(np.array(expected, copy=True)),
@@ -624,6 +630,8 @@ class TestCompiledGraphExecution(unittest.TestCase):
                 model = graph_module
                 if backend == "jit":
                     model = torch.jit.script(graph_module)
+                elif backend == "jit-trace":
+                    model = torch.jit.trace(graph_module, (input_tensor.clone(),))
                 elif backend == "pt2":
                     model = torch.export.export(
                         graph_module, (input_tensor.clone(),), strict=False
@@ -675,10 +683,34 @@ class TestCompiledGraphExecution(unittest.TestCase):
         corner[0, 0] += 4
         operations = {
             "inverse": np.linalg.inv,
+            "det": np.linalg.det,
+            "slogdet": lambda x: tuple(np.linalg.slogdet(x)),
+            "cholesky": np.linalg.cholesky,
+            "solve": lambda x: np.linalg.solve(x, np.ones(3, dtype=np.float32)),
+            "matrix_power": lambda x: np.linalg.matrix_power(x, 3),
+            "svd_values": lambda x: np.linalg.svd(x, compute_uv=False),
+            "eigvalsh": np.linalg.eigvalsh,
+            "pinv": np.linalg.pinv,
             "norm": lambda x: x / np.linalg.norm(x, axis=-1, keepdims=True),
             "cross": lambda x: np.cross(x, np.array([1.0, 2.0, 3.0], dtype=np.float32)),
             "isclose_where": lambda x: np.where(np.isclose(x, 3.0), x, -x),
             "sinc": np.sinc,
+            "degrees": np.degrees,
+            "radians": np.radians,
+            "logaddexp": lambda x: np.logaddexp(x, x + 1),
+            "heaviside": lambda x: np.heaviside(x - 4, 0.5),
+            "copysign": lambda x: np.copysign(x, -1.0),
+            "gradient": lambda x: tuple(np.gradient(x)),
+            "repeat": lambda x: np.repeat(x, 2, axis=1),
+            "tile": lambda x: np.tile(x, (2, 1)),
+            "take": lambda x: np.take(x, [0, 2], axis=1),
+            "take_along_axis": lambda x: np.take_along_axis(
+                x, np.array([[2, 0], [0, 1], [1, 2]]), axis=1
+            ),
+            "broadcast_to": lambda x: np.broadcast_to(x, (2, 3, 3)),
+            "median": lambda x: np.median(x, axis=1),
+            "ptp": lambda x: np.ptp(x, axis=1),
+            "unique": np.unique,
             "diff": lambda x: np.diff(x, axis=-1),
             "quantile": lambda x: np.quantile(x, 0.25, axis=1),
             "cbrt": np.cbrt,
@@ -686,7 +718,7 @@ class TestCompiledGraphExecution(unittest.TestCase):
             "nanmean": lambda x: np.nanmean(x, axis=-1, keepdims=True),
         }
         for name, fn in operations.items():
-            backends = ("fx", "jit", "pt2")
+            backends = ("fx", "jit", "jit-trace", "pt2")
             if name in ("norm", "cross", "isclose_where"):
                 backends += ("onnx-dynamo",)
             with self.subTest(operation=name):
@@ -696,7 +728,10 @@ class TestCompiledGraphExecution(unittest.TestCase):
                     x,
                     fn(x),
                     backends=backends,
-                    replay_inputs=(x + 2, corner, -x),
+                    # Cholesky requires positive-definite inputs.
+                    replay_inputs=(x + 2, corner)
+                    if name == "cholesky"
+                    else (x + 2, corner, -x),
                 )
 
     def test_integer_mean(self):
