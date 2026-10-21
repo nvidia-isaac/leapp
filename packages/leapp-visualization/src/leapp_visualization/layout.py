@@ -46,7 +46,9 @@ def compute_layered_layout(graph: VisualGraph) -> LayoutResult:
     if not visual_ids:
         return LayoutResult(centers={}, forward_edge_ids=())
 
-    layout_edges = tuple(edge for edge in graph.edges if edge.kind in _LAYOUT_EDGE_KINDS)
+    layout_edges = tuple(
+        edge for edge in graph.edges if edge.kind in _LAYOUT_EDGE_KINDS
+    )
     if not layout_edges:
         return LayoutResult(
             centers=_deterministic_grid(visual_ids),
@@ -55,11 +57,14 @@ def compute_layered_layout(graph: VisualGraph) -> LayoutResult:
 
     id_to_index = {visual_id: index for index, visual_id in enumerate(visual_ids)}
     edge_pairs = sorted(
-        (id_to_index[edge.source_id], id_to_index[edge.target_id]) for edge in layout_edges
+        (id_to_index[edge.source_id], id_to_index[edge.target_id])
+        for edge in layout_edges
     )
     raw_positions = _compute_sugiyama_positions(edge_pairs)
     centers = _normalize_points(_decode_positions(visual_ids, raw_positions))
-    missing_ids = tuple(visual_id for visual_id in visual_ids if visual_id not in centers)
+    missing_ids = tuple(
+        visual_id for visual_id in visual_ids if visual_id not in centers
+    )
     if missing_ids:
         centers.update(_place_missing_ids(centers, missing_ids))
 
@@ -69,7 +74,9 @@ def compute_layered_layout(graph: VisualGraph) -> LayoutResult:
     )
 
 
-def _compute_sugiyama_positions(edge_pairs: list[tuple[int, int]]) -> dict[int, tuple[float, float]]:
+def _compute_sugiyama_positions(
+    edge_pairs: list[tuple[int, int]],
+) -> dict[int, tuple[float, float]]:
     layouts = from_edges(
         edge_pairs,
         vertex_spacing=96,
@@ -103,7 +110,9 @@ def _normalize_points(points: dict[str, Point]) -> dict[str, Point]:
     }
 
 
-def _place_missing_ids(points: dict[str, Point], missing_ids: tuple[str, ...]) -> dict[str, Point]:
+def _place_missing_ids(
+    points: dict[str, Point], missing_ids: tuple[str, ...]
+) -> dict[str, Point]:
     next_x = max(point.x for point in points.values()) + _GRID_X_STEP
     return {
         visual_id: Point(x=next_x, y=row * _GRID_Y_STEP)

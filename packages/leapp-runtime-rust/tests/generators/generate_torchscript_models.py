@@ -46,7 +46,6 @@ class MutatingAccumulator(torch.nn.Module):
         return state
 
 
-
 class Reshape(torch.nn.Module):
     def forward(self, values):
         return values.reshape(-1, 2)

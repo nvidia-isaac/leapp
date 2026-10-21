@@ -27,10 +27,7 @@ from .base import LEAPPFunctionalTestBase
 from tests.warp_support import WarpTestCase
 
 
-
-
 class TestWarpOp(WarpTestCase, LEAPPFunctionalTestBase):
-
     def _run_torch_to_warp_to_torch_node(self, device):
         leapp.start(name=self.TEST_GRAPH_NAME)
         source = torch.tensor([1.0, 2.0, 3.0], device=device)
@@ -118,9 +115,7 @@ class TestWarpOp(WarpTestCase, LEAPPFunctionalTestBase):
                 outputs=[wp.from_torch(out)],
                 device=self.DEVICE,
             )
-            annotate.output_tensors(
-                "node_a", {"out_a": out * 3.0}, export_with="onnx"
-            )
+            annotate.output_tensors("node_a", {"out_a": out * 3.0}, export_with="onnx")
 
         node = annotate.get_nodes()["node_a"]
         leapp.stop()
@@ -129,14 +124,10 @@ class TestWarpOp(WarpTestCase, LEAPPFunctionalTestBase):
         self.verify_node_io(node, inputs=1, outputs=1)
         self.verify_inference_manager(
             source_inputs={
-                "node_a/in_a": torch.tensor(
-                    [10.0, 20.0, 30.0], device=self.DEVICE
-                )
+                "node_a/in_a": torch.tensor([10.0, 20.0, 30.0], device=self.DEVICE)
             },
             source_outputs={
-                "node_a/out_a": torch.tensor(
-                    [36.0, 66.0, 96.0], device=self.DEVICE
-                )
+                "node_a/out_a": torch.tensor([36.0, 66.0, 96.0], device=self.DEVICE)
             },
         )
 
@@ -240,7 +231,9 @@ class TestWarpOp(WarpTestCase, LEAPPFunctionalTestBase):
             [segment.runner_name for segment in node.warp_segments],
             ["warp_segment_0", "warp_segment_1"],
         )
-        self.assertTrue(all(segment.apic_graph is not None for segment in node.warp_segments))
+        self.assertTrue(
+            all(segment.apic_graph is not None for segment in node.warp_segments)
+        )
         self.verify_all_models_exist("node_a")
 
     def test_single_warp_op_can_produce_multiple_outputs(self):
@@ -446,7 +439,9 @@ class TestWarpOp(WarpTestCase, LEAPPFunctionalTestBase):
                 out = wp.empty_like(arr)
                 wp.copy(out, arr)
             if include_extra:
-                with self.assertRaisesRegex(RuntimeError, "more regions than discovery"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "more regions than discovery"
+                ):
                     with annotate.warp_op("node_a"):
                         scaled = wp.empty_like(out)
                         wp.launch(
@@ -712,7 +707,6 @@ class TestWarpCompoundType(WarpTestCase, LEAPPFunctionalTestBase):
         self.verify_all_models_exist("node_a")
 
 
-
 class TestWarpInference(WarpTestCase, LEAPPFunctionalTestBase):
     NODE_NAME = "node_a"
 
@@ -743,13 +737,12 @@ class TestWarpInference(WarpTestCase, LEAPPFunctionalTestBase):
             lambda values: self._launch_add(values, 1.0),
             export_with="pt2",
         )
-        with tempfile.TemporaryDirectory() as cache_dir, mock.patch.dict(
-            os.environ, {"XDG_CACHE_HOME": cache_dir}
+        with (
+            tempfile.TemporaryDirectory() as cache_dir,
+            mock.patch.dict(os.environ, {"XDG_CACHE_HOME": cache_dir}),
         ):
             os.environ.pop("LEAPP_WARP_PT2_CUSTOM_OP_LIBRARY")
-            with self.assertRaisesRegex(
-                FileNotFoundError, "leapp-build-warp-runtime"
-            ):
+            with self.assertRaisesRegex(FileNotFoundError, "leapp-build-warp-runtime"):
                 leapp.compile_graph(visualize=False)
 
     def test_onnx_runner_requires_custom_op_library(self):
@@ -759,16 +752,15 @@ class TestWarpInference(WarpTestCase, LEAPPFunctionalTestBase):
             lambda values: self._launch_add(values, 1.0),
         )
         leapp.compile_graph(visualize=False)
-        with tempfile.TemporaryDirectory() as cache_dir, mock.patch.dict(
-            os.environ, {"XDG_CACHE_HOME": cache_dir}
+        with (
+            tempfile.TemporaryDirectory() as cache_dir,
+            mock.patch.dict(os.environ, {"XDG_CACHE_HOME": cache_dir}),
         ):
             os.environ.pop("LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY")
             manager = InferenceManager(
                 f"{self.TEST_GRAPH_NAME}/{self.TEST_GRAPH_NAME}.yaml"
             )
-            with self.assertRaisesRegex(
-                FileNotFoundError, "leapp-build-warp-runtime"
-            ):
+            with self.assertRaisesRegex(FileNotFoundError, "leapp-build-warp-runtime"):
                 manager.run_policy(manager.get_mock_input())
 
     def test_one_array_read_by_three_launches_is_one_segment_input(self):
@@ -779,6 +771,7 @@ class TestWarpInference(WarpTestCase, LEAPPFunctionalTestBase):
         post-call walk registers every array it touched, which is what the
         later launches recognize.
         """
+
         def operation(values):
             first = self._launch_add(values, 1.0)
             second = self._launch_add(values, 2.0)
@@ -798,14 +791,22 @@ class TestWarpInference(WarpTestCase, LEAPPFunctionalTestBase):
 
         segment = node.warp_segments[0]
         self.assertEqual(
-            len(segment.input_refs), 1,
+            len(segment.input_refs),
+            1,
             "one buffer read by three launches produced "
-            f"{len(segment.input_refs)} segment inputs")
+            f"{len(segment.input_refs)} segment inputs",
+        )
         self.verify_inference_manager(
-            source_inputs={f"{self.NODE_NAME}/in_a": torch.tensor(
-                [1.0, 2.0, 3.0], device=self.DEVICE)},
-            source_outputs={f"{self.NODE_NAME}/out_a": torch.tensor(
-                [2.0, 3.0, 4.0], device=self.DEVICE)},
+            source_inputs={
+                f"{self.NODE_NAME}/in_a": torch.tensor(
+                    [1.0, 2.0, 3.0], device=self.DEVICE
+                )
+            },
+            source_outputs={
+                f"{self.NODE_NAME}/out_a": torch.tensor(
+                    [2.0, 3.0, 4.0], device=self.DEVICE
+                )
+            },
         )
 
 
@@ -973,8 +974,9 @@ class TestWarpAutomaticSegmentDetection(WarpTestCase, LEAPPFunctionalTestBase):
             self.verify_inference_manager(
                 source_inputs={f"{self.NODE_NAME}/in_a": values},
                 source_outputs={
-                    f"{self.NODE_NAME}/out_a":
-                        (values * 2 + 1).reshape(2, 3)[:, 1:].transpose(0, 1)
+                    f"{self.NODE_NAME}/out_a": (values * 2 + 1)
+                    .reshape(2, 3)[:, 1:]
+                    .transpose(0, 1)
                 },
             )
 
@@ -1077,6 +1079,7 @@ class TestGlobalPatchingAliasScan(WarpTestCase, LEAPPFunctionalTestBase):
         which ``getattr``'s default does not absorb because the default only
         covers ``AttributeError``.
         """
+
         class ExceptionWrapper:
             def __init__(self, exception):
                 object.__setattr__(self, "_exception", exception)
@@ -1089,7 +1092,8 @@ class TestGlobalPatchingAliasScan(WarpTestCase, LEAPPFunctionalTestBase):
 
         module = types.ModuleType("leapp_test_absent_dependency")
         module.mesh_loader = ExceptionWrapper(
-            ModuleNotFoundError("No module named 'networkx'"))
+            ModuleNotFoundError("No module named 'networkx'")
+        )
         sys.modules[module.__name__] = module
         self.addCleanup(sys.modules.pop, module.__name__, None)
 

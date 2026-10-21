@@ -145,9 +145,7 @@ def test_cuda_streams_and_output_placement(output_device):
         with stream:
             obs = cp.arange(4, dtype=cp.float32)
             obs += 1
-            result = session.run(
-                {"accumulator/observation": obs}
-            )
+            result = session.run({"accumulator/observation": obs})
         tensor = result["accumulator/next"]
         assert (
             tensor.__dlpack_device__()
@@ -166,9 +164,7 @@ def test_cuda_streams_and_output_placement(output_device):
             with torch.cuda.stream(torch_stream):
                 value = torch.ones(4, dtype=torch.float32, device="cuda")
                 value.mul_(2)
-                next_result = session.run(
-                    {"accumulator/observation": value}
-                )
+                next_result = session.run({"accumulator/observation": value})
             np.testing.assert_array_equal(
                 cp.asnumpy(cp.from_dlpack(next_result["accumulator/next"])),
                 [3, 4, 5, 6],
@@ -176,7 +172,9 @@ def test_cuda_streams_and_output_placement(output_device):
         else:
             np.testing.assert_array_equal(np.from_dlpack(tensor), [1, 2, 3, 4])
         session.reset()
-        with open_session(device="cuda:0", output_overrides={"accumulator/next": "cpu"}) as host_session:
+        with open_session(
+            device="cuda:0", output_overrides={"accumulator/next": "cpu"}
+        ) as host_session:
             result = step(host_session)
             assert result.__dlpack_device__() == (1, 0)
 
@@ -196,9 +194,7 @@ def test_runtime_tensor_inputs(output_device):
             == {"cpu": (1, 0), "pinned": (3, 0), "cuda:0": (2, 0)}[output_device]
         )
         for _ in range(8):
-            result = session.run(
-                {"dynamic/input": result["dynamic/output"]}
-            )
+            result = session.run({"dynamic/input": result["dynamic/output"]})
             assert (
                 result["dynamic/output"].__dlpack_device__()
                 == retained.__dlpack_device__()
@@ -208,7 +204,6 @@ def test_runtime_tensor_inputs(output_device):
         np.testing.assert_array_equal(np.from_dlpack(host["dynamic/output"]), [7])
         host = host_session.run({"dynamic/input": retained})
         np.testing.assert_array_equal(np.from_dlpack(host["dynamic/output"]), [7])
-
 
 
 @pytest.mark.skipif(not CUDA, reason="set LEAPP_TEST_CUDA=1")
@@ -426,7 +421,9 @@ def test_multiple_dlpack_outputs_and_retained_placements(device, tmp_path):
         # Retained results must survive later runs with different placement.
         host = np.arange(1, 5, dtype=np.float32)
         host_session = open_session(tmp_path / "policy", device)
-        again = host_session.run({"preprocess/observation": host, "policy/bias": host * 10})
+        again = host_session.run(
+            {"preprocess/observation": host, "policy/bias": host * 10}
+        )
         np.testing.assert_array_equal(
             np.from_dlpack(again["policy/action"]), [14, 29, 46, 65]
         )

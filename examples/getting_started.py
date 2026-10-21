@@ -10,7 +10,7 @@ This example mirrors the getting-started guide and shows two important ideas:
 2. multiple input_tensors() calls contributing inputs to the same node
 
 Pipeline:
-  [obs_processor] -> [policy]
+  joint state + orientation + command -> [control] -> joint targets
 
 Run:
     python examples/getting_started.py
@@ -35,22 +35,22 @@ def normalize_joints(pos: torch.Tensor, vel: torch.Tensor):
 
 
 def capture_joint_observations():
-    """First input_tensors() call for the obs_processor node."""
+    """First input_tensors() call for the control node."""
     # Simulates reading live joint sensors each time this function is called.
     JOINT_POS = torch.randn(6)
     JOINT_VEL = torch.randn(6)
-    return annotate.input_tensors("obs_processor", {
+    return annotate.input_tensors("control", {
         "joint_pos": JOINT_POS,
         "joint_vel": JOINT_VEL,
     })
 
 
 def capture_context():
-    """Second input_tensors() call for the same obs_processor node."""
+    """Second input_tensors() call for the same control node."""
     # Simulates reading live orientation and command context each call.
     ORIENTATION = torch.tensor([1.0, 0.0, 0.0, 0.0])
     CMD_VEL = torch.tensor([0.5, 0.0, 0.1])
-    return annotate.input_tensors("obs_processor", {
+    return annotate.input_tensors("control", {
         "orientation": ORIENTATION,
         "cmd_vel": CMD_VEL,
     })
@@ -82,35 +82,25 @@ _W, _b = torch.randn(18, 6) * 0.05, torch.zeros(6)
 def main():
     leapp.start(name="sample_pipeline")
 
-    # Node 1: observation preprocessing.
-    # These two calls contribute inputs to the same traced node.
+    # One node captures preprocessing, policy, and action processing.
+    # These two calls contribute inputs at different call sites.
     pos, vel = capture_joint_observations()
     quat, cmd = capture_context()
 
     pos_norm, vel_norm = normalize_joints(pos, vel)
     gravity_vec = project_gravity(quat)  # helper function calls are traced too
     obs_features = torch.cat([pos_norm, vel_norm, gravity_vec, cmd])
-    annotate.output_tensors(
-        "obs_processor",
-        {"obs_features": obs_features},
-        export_with="jit",
-    )
-
-    # Node 2: tiny policy + post-processing.
-    feat = annotate.input_tensors("policy", {
-        "obs_features": obs_features,
-    })
-    raw_action = feat @ _W + _b
+    raw_action = obs_features @ _W + _b
     joint_targets = scale_and_clip(raw_action)
 
     annotate.output_tensors(
-        "policy",
+        "control",
         {"joint_targets": joint_targets},
-        export_with="jit",
+        export_with="onnx",
     )
 
     leapp.stop()
-    leapp.compile_graph(visualize=True)
+    leapp.compile_graph(visualize=True, validate=True)
 
     out_dir = "sample_pipeline"
     print(f"\nExported to {out_dir}/")

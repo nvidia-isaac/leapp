@@ -40,6 +40,7 @@ except ImportError:
     wp = None
     WarpOp = None
 else:
+
     def _save_warp_bundle(node_name: str, segment: WarpSegment) -> bytes:
         """Persist a captured Warp APIC graph and pack it as a WRPB archive.
 
@@ -84,10 +85,7 @@ else:
         )
         return archive
 
-
-    def _update_output_ref_proxy(
-        node_ref: Any, ref, proxy
-    ) -> None:
+    def _update_output_ref_proxy(node_ref: Any, ref, proxy) -> None:
         """Point this segment output's value at the runner output that produced it.
 
         Updates the traced array's shared view so every Torch or NumPy alias of
@@ -192,7 +190,6 @@ else:
         segment.status = "closed"
         return segment
 
-
     class WarpOp:
         @staticmethod
         def _verify_warp() -> None:
@@ -256,8 +253,7 @@ else:
         def __exit__(self, exc_type, exc_value, traceback):
             if self._segment is None:
                 _get_logger().fatal(
-                    "WarpOp.__exit__ called before the Warp operation was "
-                    "initialized.",
+                    "WarpOp.__exit__ called before the Warp operation was initialized.",
                     error_type=RuntimeError,
                 )
             return self._context_exit_impl(exc_type, exc_value, traceback)
@@ -274,8 +270,10 @@ else:
             if self._segment is None:
                 return None
             return self._terminate_impl(
-                exc_type=exc_type, exc_value=exc_value,
-                traceback=traceback, close_call_stack=close_call_stack,
+                exc_type=exc_type,
+                exc_value=exc_value,
+                traceback=traceback,
+                close_call_stack=close_call_stack,
             )
 
         def _context_exit_discovery(self, exc_type, exc_value, traceback):
@@ -395,7 +393,8 @@ else:
                 )
 
             warp_call_events = tuple(
-                event for event in self._segment.events
+                event
+                for event in self._segment.events
                 if event.get("kind") == "warp_call"
             )
             self._segment.call_qualnames = tuple(
@@ -469,9 +468,7 @@ else:
             scope_result = False
             if self._scope is not None:
                 with self._session.pause():
-                    scope_result = self._scope.__exit__(
-                        exc_type, exc_value, traceback
-                    )
+                    scope_result = self._scope.__exit__(exc_type, exc_value, traceback)
             self._validate_capture_close(close_call_stack)
             if exc_type is None and self._segment is not None:
                 self._finalize_capture()

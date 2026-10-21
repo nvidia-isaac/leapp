@@ -19,7 +19,7 @@ class WarpTraceSession:
         self.active_warp_op: Any | None = None
         self.owner_token: Any | None = None
         # TODO: revisit if we need 2 different pause states for cupti and patching
-        self._pause_depth = 0 # used to detect nested pauses.
+        self._pause_depth = 0  # used to detect nested pauses.
 
     @property
     def paused(self) -> bool:

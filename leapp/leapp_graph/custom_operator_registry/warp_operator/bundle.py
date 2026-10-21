@@ -129,4 +129,3 @@ def iter_warp_segments_from_graph(graph: fx.Graph) -> list:
         if segment is not None:
             segments.append(segment)
     return segments
-

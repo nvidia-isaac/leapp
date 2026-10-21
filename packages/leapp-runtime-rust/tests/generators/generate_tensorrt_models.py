@@ -20,11 +20,17 @@ def generate(root, trtexec):
         directory = root / name
         directory.mkdir(parents=True, exist_ok=True)
         engine = directory / ("policy.engine" if name == "policy" else "model.plan")
-        command = [trtexec, f"--onnx={source / name / 'model.onnx'}",
-                   f"--saveEngine={engine}", "--skipInference", "--noTF32"]
+        command = [
+            trtexec,
+            f"--onnx={source / name / 'model.onnx'}",
+            f"--saveEngine={engine}",
+            "--skipInference",
+            "--noTF32",
+        ]
         if name == "dynamic":
-            command.extend(["--minShapes=input:1", "--optShapes=input:4",
-                            "--maxShapes=input:8"])
+            command.extend(
+                ["--minShapes=input:1", "--optShapes=input:4", "--maxShapes=input:8"]
+            )
         subprocess.run(command, check=True)
         engines[name] = engine.relative_to(root).as_posix()
 

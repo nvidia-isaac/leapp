@@ -4,7 +4,12 @@
 #
 
 import leapp
+import pytest
 from leapp.leapp import _MANAGER as annotate
+from leapp.leapp_graph.datatypes.numpy.patching import NumpyPatchBackend
+from leapp.leapp_graph.datatypes.numpy import aten_adapter
+from leapp.leapp_graph.datatypes.torch.patching import TorchPatchBackend
+from leapp.leapp_graph.traced_node import TracedTensorNode
 import numpy as np
 import torch
 import unittest
@@ -26,7 +31,7 @@ class TestNumpyCompatibilityTracedTensor(unittest.TestCase):
         tensor = torch.tensor([1.0, 2.0, 3.0])
 
         leapp.start(name=self.TEST_GRAPH_NAME)
-        tensor = annotate.input_tensors('basic_numpy_function', {'tensor': tensor})
+        tensor = annotate.input_tensors("basic_numpy_function", {"tensor": tensor})
 
         # numpy operations
         numpy_val = tensor.numpy()
@@ -34,16 +39,21 @@ class TestNumpyCompatibilityTracedTensor(unittest.TestCase):
         numpy_val2 = numpy_val - 1
         numpy_val3 = numpy_val1 * numpy_val2
         numpy_val4 = numpy_val3 / 2
-        torch_tensors = [torch.from_numpy(numpy_val) for numpy_val in [numpy_val1, numpy_val2, numpy_val3, numpy_val4]]
+        torch_tensors = [
+            torch.from_numpy(numpy_val)
+            for numpy_val in [numpy_val1, numpy_val2, numpy_val3, numpy_val4]
+        ]
 
-        annotate.output_tensors('basic_numpy_function', {'tensor': torch_tensors}, export_with="jit")
+        annotate.output_tensors(
+            "basic_numpy_function", {"tensor": torch_tensors}, export_with="jit"
+        )
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
 
 class TestNumpyFunctionsWithPatchesApplied(unittest.TestCase):
     """Test that regular numpy functions work correctly when patches are applied.
-    
+
     This verifies that torch.from_numpy, torch.as_tensor, and torch.tensor
     work correctly with regular numpy arrays between start() and stop(),
     even though the global patches are applied.
@@ -59,92 +69,94 @@ class TestNumpyFunctionsWithPatchesApplied(unittest.TestCase):
     def test_numpy_to_torch_between_start_stop(self):
         """Test torch.from_numpy works with regular numpy arrays during annotation."""
         leapp.start(name=self.TEST_GRAPH_NAME)
-        
+
         # Regular numpy arrays (not TracedTensors)
         np_array1 = np.array([1.0, 2.0, 3.0], dtype=np.float32)
         np_array2 = np.array([[1, 2], [3, 4]], dtype=np.float64)
-        
+
         # These should work normally via the patched functions
         tensor1 = torch.from_numpy(np_array1)
         tensor2 = torch.from_numpy(np_array2)
-        
+
         # Verify the conversions worked correctly
         self.assertIsInstance(tensor1, torch.Tensor)
         self.assertIsInstance(tensor2, torch.Tensor)
         self.assertEqual(tensor1.shape, torch.Size([3]))
         self.assertEqual(tensor2.shape, torch.Size([2, 2]))
         self.assertTrue(torch.allclose(tensor1, torch.tensor([1.0, 2.0, 3.0])))
-        
+
         leapp.stop()
 
     def test_as_tensor_between_start_stop(self):
         """Test torch.as_tensor works with regular numpy arrays during annotation."""
         leapp.start(name=self.TEST_GRAPH_NAME)
-        
+
         np_array = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-        
+
         # torch.as_tensor should work normally
         tensor = torch.as_tensor(np_array)
-        
+
         self.assertIsInstance(tensor, torch.Tensor)
         self.assertEqual(tensor.shape, torch.Size([3]))
         self.assertTrue(torch.allclose(tensor, torch.tensor([1.0, 2.0, 3.0])))
-        
+
         # Test with dtype conversion
         tensor_int = torch.as_tensor(np_array, dtype=torch.int32)
         self.assertEqual(tensor_int.dtype, torch.int32)
-        
+
         leapp.stop()
 
     def test_torch_tensor_between_start_stop(self):
         """Test torch.tensor works with regular numpy arrays during annotation."""
         leapp.start(name=self.TEST_GRAPH_NAME)
-        
+
         np_array = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-        
+
         # torch.tensor should work normally
         tensor = torch.tensor(np_array)
-        
+
         self.assertIsInstance(tensor, torch.Tensor)
         self.assertEqual(tensor.shape, torch.Size([3]))
         self.assertTrue(torch.allclose(tensor, torch.tensor([1.0, 2.0, 3.0])))
-        
+
         # Test with dtype conversion
         tensor_int = torch.tensor(np_array, dtype=torch.int64)
         self.assertEqual(tensor_int.dtype, torch.int64)
-        
+
         leapp.stop()
 
     def test_numpy_operations_between_start_stop(self):
         """Test that standard numpy operations work correctly during annotation."""
         leapp.start(name=self.TEST_GRAPH_NAME)
-        
+
         # Standard numpy operations should work unaffected
         arr1 = np.array([1.0, 2.0, 3.0])
         arr2 = np.array([4.0, 5.0, 6.0])
-        
+
         result_add = np.add(arr1, arr2)
         result_mul = np.multiply(arr1, arr2)
         result_sin = np.sin(arr1)
         result_concat = np.concatenate([arr1, arr2])
-        
+
         # Verify numpy operations produced correct results
         np.testing.assert_array_almost_equal(result_add, [5.0, 7.0, 9.0])
         np.testing.assert_array_almost_equal(result_mul, [4.0, 10.0, 18.0])
         np.testing.assert_array_almost_equal(result_sin, np.sin([1.0, 2.0, 3.0]))
-        np.testing.assert_array_almost_equal(result_concat, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
-        
+        np.testing.assert_array_almost_equal(
+            result_concat, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        )
+
         # Convert final result to torch
         tensor = torch.from_numpy(result_concat)
         self.assertIsInstance(tensor, torch.Tensor)
         self.assertEqual(tensor.shape, torch.Size([6]))
-        
+
         leapp.stop()
 
 
 class TestNumpyPatchingDisabled(unittest.TestCase):
     """Test that global_patching=False correctly disables numpy patching.
-    
+
     When global_patching=False is passed to start(), TracedTensor.numpy() and
     np.array(traced_tensor) should return actual numpy arrays, not TracedTensors.
     """
@@ -159,68 +171,139 @@ class TestNumpyPatchingDisabled(unittest.TestCase):
     def test_numpy_method_returns_array_when_patching_disabled(self):
         """Test that .numpy() returns actual numpy array when global_patching=False."""
         from leapp.leapp_graph.datatypes.torch.traced_tensor import TracedTensor
-        
+
         tensor = torch.tensor([1.0, 2.0, 3.0])
-        
+
         # Start with global_patching=False
         leapp.start(name=self.TEST_GRAPH_NAME, global_patching=False)
-        traced = annotate.input_tensors('test_node', {'tensor': tensor})
-        
+        traced = annotate.input_tensors("test_node", {"tensor": tensor})
+
         # Verify we have a TracedTensor
         self.assertIsInstance(traced, TracedTensor)
-        
+
         # .numpy() should return actual numpy array, not TracedTensor
         result = traced.numpy()
-        
+
         self.assertIsInstance(result, np.ndarray)
         self.assertNotIsInstance(result, TracedTensor)
         np.testing.assert_array_almost_equal(result, [1.0, 2.0, 3.0])
-        
-        annotate.output_tensors('test_node', {'tensor': traced}, export_with="jit")
+
+        annotate.output_tensors("test_node", {"tensor": traced}, export_with="jit")
         leapp.stop()
 
     def test_np_array_returns_array_when_patching_disabled(self):
         """Test that np.array() returns actual numpy array when global_patching=False."""
         from leapp.leapp_graph.datatypes.torch.traced_tensor import TracedTensor
-        
+
         tensor = torch.tensor([4.0, 5.0, 6.0])
-        
+
         # Start with global_patching=False
         leapp.start(name=self.TEST_GRAPH_NAME, global_patching=False)
-        traced = annotate.input_tensors('test_node', {'tensor': tensor})
-        
+        traced = annotate.input_tensors("test_node", {"tensor": tensor})
+
         # Verify we have a TracedTensor
         self.assertIsInstance(traced, TracedTensor)
-        
+
         # np.array() should return actual numpy array
         result = np.array(traced)
-        
+
         self.assertIsInstance(result, np.ndarray)
         self.assertNotIsInstance(result, TracedTensor)
         np.testing.assert_array_almost_equal(result, [4.0, 5.0, 6.0])
-        
-        annotate.output_tensors('test_node', {'tensor': traced}, export_with="jit")
+
+        annotate.output_tensors("test_node", {"tensor": traced}, export_with="jit")
         leapp.stop()
 
     def test_np_asarray_returns_array_when_patching_disabled(self):
         """Test that np.asarray() returns actual numpy array when global_patching=False."""
         from leapp.leapp_graph.datatypes.torch.traced_tensor import TracedTensor
-        
+
         tensor = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
-        
+
         # Start with global_patching=False
         leapp.start(name=self.TEST_GRAPH_NAME, global_patching=False)
-        traced = annotate.input_tensors('test_node', {'tensor': tensor})
-        
+        traced = annotate.input_tensors("test_node", {"tensor": tensor})
+
         # Verify we have a TracedTensor
         self.assertIsInstance(traced, TracedTensor)
-        
+
         # np.asarray() should return actual numpy array
         result = np.asarray(traced)
-        
+
         self.assertIsInstance(result, np.ndarray)
         self.assertNotIsInstance(result, TracedTensor)
         np.testing.assert_array_almost_equal(result, [[1.0, 2.0], [3.0, 4.0]])
-        
-        annotate.output_tensors('test_node', {'tensor': traced}, export_with="jit")
+
+        annotate.output_tensors("test_node", {"tensor": traced}, export_with="jit")
         leapp.stop()
+
+
+def test_conversion_patches_during_capture():
+    numpy_patch, torch_patch = NumpyPatchBackend(), TorchPatchBackend()
+    try:
+        numpy_patch.install()
+        torch_patch.install()
+        fn = lambda x: np.linalg.norm(x, axis=-1)
+        x = np.arange(6, dtype=np.float32).reshape(2, 3)
+        ctx = TracedTensorNode(name="numpy_patches", node_index=0)
+        traced = ctx.create_input(x.copy(), name="x")
+        ctx.compile_trace({"y": fn(traced)})
+        model = ctx.m
+    finally:
+        torch_patch.uninstall()
+        numpy_patch.uninstall()
+    torch.testing.assert_close(
+        model(torch.from_numpy(x + 2)), torch.from_numpy(fn(x + 2))
+    )
+
+
+def test_public_lifecycle_export_and_replay(tmp_path):
+    x = np.arange(1, 7, dtype=np.float32).reshape(2, 3)
+    leapp.start(name="numpy_aten", save_path=str(tmp_path))
+    try:
+        traced = leapp.annotate.input_tensors("norm", {"x": x})
+        np.spacing(traced)  # A failed, unused branch must not prevent export.
+        result = np.linalg.norm(traced, axis=-1)
+        leapp.annotate.output_tensors("norm", {"y": result}, export_with="jit")
+    finally:
+        leapp.stop()
+    leapp.compile_graph(visualize=False)
+    model = torch.jit.load(str(next(tmp_path.rglob("norm.pt"))))
+    torch.testing.assert_close(
+        model(torch.from_numpy(x + 2)), torch.from_numpy(np.linalg.norm(x + 2, axis=-1))
+    )
+
+
+@pytest.mark.parametrize("case", ["dtype_only", "bad_values", "cancelled"])
+def test_numpy_numerical_differences_checked_at_final_validation(
+    case, monkeypatch, tmp_path
+):
+    original = aten_adapter._implementations()[np.sin]
+
+    def different_sin(x):
+        return original(x).astype("float64") + (0 if case == "dtype_only" else 0.5)
+
+    monkeypatch.setitem(aten_adapter.NUMPY_OVERRIDES, np.sin, different_sin)
+    sample = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    leapp.start(name="numpy_final_validation", save_path=str(tmp_path), max_cached_io=2)
+    try:
+        for raw in (sample, sample + 1):
+            x = leapp.annotate.input_tensors("sine", {"x": raw})
+            y = np.sin(x)
+            if case == "cancelled":
+                y = y - y + x
+            y = y.astype(np.float32)
+            leapp.annotate.output_tensors("sine", {"y": y}, export_with="jit")
+    finally:
+        leapp.stop()
+    if case == "bad_values":
+        with pytest.raises(Exception, match="Model validation failed"):
+            leapp.compile_graph(visualize=False)
+    else:
+        leapp.compile_graph(visualize=False)
+        model = torch.jit.load(str(next(tmp_path.rglob("sine.pt"))))
+        changed = sample + 2
+        expected = changed if case == "cancelled" else np.sin(changed)
+        torch.testing.assert_close(
+            model(torch.from_numpy(changed)), torch.from_numpy(expected)
+        )

@@ -22,21 +22,34 @@ import traceback
 from dataclasses import dataclass
 
 _LEAPP_PKG_DIR = os.path.realpath(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_STDLIB_DIRS = tuple(sorted({
-    os.path.realpath(path) for path in (
-        sysconfig.get_paths().get("stdlib"),
-        sysconfig.get_paths().get("platstdlib"),
-    ) if path
-}))
-_SITE_PACKAGE_DIRS = tuple(sorted({
-    os.path.realpath(path) for path in (
-        site.getusersitepackages(),
-        *site.getsitepackages(),
-        sysconfig.get_paths().get("purelib"),
-        sysconfig.get_paths().get("platlib"),
-    ) if path
-}))
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
+_STDLIB_DIRS = tuple(
+    sorted(
+        {
+            os.path.realpath(path)
+            for path in (
+                sysconfig.get_paths().get("stdlib"),
+                sysconfig.get_paths().get("platstdlib"),
+            )
+            if path
+        }
+    )
+)
+_SITE_PACKAGE_DIRS = tuple(
+    sorted(
+        {
+            os.path.realpath(path)
+            for path in (
+                site.getusersitepackages(),
+                *site.getsitepackages(),
+                sysconfig.get_paths().get("purelib"),
+                sysconfig.get_paths().get("platlib"),
+            )
+            if path
+        }
+    )
+)
 
 
 @dataclass(frozen=True)
@@ -101,8 +114,7 @@ def get_caller_stack_identity():
     closest_first = list(reversed(frames))
     anchor = closest_first[0]
     context = tuple(
-        frame for frame in closest_first[1:]
-        if _is_context_relevant_frame(frame)
+        frame for frame in closest_first[1:] if _is_context_relevant_frame(frame)
     )[:2]
     return CallerIdentity(anchor=anchor, context=context)
 
@@ -117,14 +129,17 @@ def format_caller_identity(identity):
         if identity.context:
             lines.append("  context:")
             for frame in identity.context:
-                lines.append(
-                    f"    {frame.filename}:{frame.lineno} in {frame.function}")
+                lines.append(f"    {frame.filename}:{frame.lineno} in {frame.function}")
         return "\n".join(lines)
     if isinstance(identity, CallerFrame):
         return f"{identity.filename}:{identity.lineno} in {identity.function}"
     if not isinstance(identity, tuple) or not identity:
         return str(identity)
-    if len(identity) == 2 and isinstance(identity[0], str) and isinstance(identity[1], int):
+    if (
+        len(identity) == 2
+        and isinstance(identity[0], str)
+        and isinstance(identity[1], int)
+    ):
         return f"{identity[0]}:{identity[1]}"
     lines = []
     for frame in identity:

@@ -37,19 +37,19 @@ from leapp.leapp_graph.datatypes import (  # noqa: F401
 
 def find_with_block_end(filename, start_lineno):
     """Use AST to find the end line of the with block starting at start_lineno.
-    
+
     This is deterministic and doesn't depend on runtime tracing behavior.
-    
+
     Args:
         filename: Path to the source file
         start_lineno: Line number where the 'with' statement starts
-        
+
     Returns:
         The end line number of the with block, or None if not found
     """
-    with open(filename, 'r') as f:
+    with open(filename, "r") as f:
         source = f.read()
-    
+
     tree = ast.parse(source)
     for node in ast.walk(tree):
         if isinstance(node, (ast.With, ast.AsyncWith)):
@@ -74,16 +74,16 @@ def extract_source_from_line_range(executed_lines, context_name, is_function=Fal
     Returns:
         tuple: (source_code, message) where source_code is the extracted code or empty string
     """
-    if executed_lines['filename'] is None:
+    if executed_lines["filename"] is None:
         return "", f"No filename provided for {context_name}"
 
     try:
-        filename = executed_lines['filename']
-        min_line = executed_lines['min_line']
-        max_line = executed_lines['max_line']
+        filename = executed_lines["filename"]
+        min_line = executed_lines["min_line"]
+        max_line = executed_lines["max_line"]
 
         # Read the source file
-        with open(filename, 'r') as f:
+        with open(filename, "r") as f:
             source_lines = f.readlines()
 
         # Extract lines from min_line to max_line (convert to 0-based indexing)
@@ -97,7 +97,7 @@ def extract_source_from_line_range(executed_lines, context_name, is_function=Fal
             )
 
         # Determine the start of the executable body using AST (robust for multiline headers)
-        file_source = ''.join(source_lines)
+        file_source = "".join(source_lines)
         body_start_idx = None
 
         try:
@@ -115,35 +115,39 @@ def extract_source_from_line_range(executed_lines, context_name, is_function=Fal
             # Find the node that contains our line range
             for n in ast.walk(tree):
                 if isinstance(n, wanted):
-                    node_start = getattr(n, 'lineno', None)
-                    node_end = getattr(n, 'end_lineno', None)
+                    node_start = getattr(n, "lineno", None)
+                    node_end = getattr(n, "end_lineno", None)
                     if node_start is None:
                         continue
                     if node_end is None:
-                        if getattr(n, 'body', None):
+                        if getattr(n, "body", None):
                             last_child = n.body[-1]
-                            node_end = getattr(last_child, 'end_lineno', getattr(
-                                last_child, 'lineno', node_start))
+                            node_end = getattr(
+                                last_child,
+                                "end_lineno",
+                                getattr(last_child, "lineno", node_start),
+                            )
                         else:
                             node_end = node_start
 
                     # Check if this node overlaps with our line range
                     # (handles decorators by checking if def line or any body line is in range)
-                    if (min_line <= node_start <= max_line) or (node_start <= min_line <= node_end):
+                    if (min_line <= node_start <= max_line) or (
+                        node_start <= min_line <= node_end
+                    ):
                         if node_start > best_start:
                             best_candidate = n
                             best_start = node_start
 
-            if best_candidate is not None and getattr(best_candidate, 'body', None):
-                body_start_line = getattr(
-                    best_candidate.body[0], 'lineno', None)
+            if best_candidate is not None and getattr(best_candidate, "body", None):
+                body_start_line = getattr(best_candidate.body[0], "lineno", None)
                 if body_start_line is not None:
                     body_start_idx = body_start_line - 1
 
                 # Extend end_idx to capture multiline statements
                 # Python's line tracer only fires once for multiline statements (e.g., dict comprehensions),
                 # so max_line may not include the closing brace. Use AST's end_lineno instead.
-                ast_end_line = getattr(best_candidate, 'end_lineno', None)
+                ast_end_line = getattr(best_candidate, "end_lineno", None)
                 if ast_end_line is not None and ast_end_line > end_idx:
                     end_idx = ast_end_line
         except Exception:
@@ -153,7 +157,7 @@ def extract_source_from_line_range(executed_lines, context_name, is_function=Fal
             # Fallback: scan to the end of the logical header by balancing symbols and strings
             open_paren = open_brack = open_brace = 0
             in_string = False
-            string_char = ''
+            string_char = ""
             header_end_line_idx = start_idx
             i = start_idx
             while i < end_idx:
@@ -164,23 +168,32 @@ def extract_source_from_line_range(executed_lines, context_name, is_function=Fal
                     if not in_string and ch in ('"', "'"):
                         in_string = True
                         string_char = ch
-                    elif in_string and ch == string_char and (j == 0 or line[j-1] != '\\'):
+                    elif (
+                        in_string
+                        and ch == string_char
+                        and (j == 0 or line[j - 1] != "\\")
+                    ):
                         in_string = False
-                        string_char = ''
+                        string_char = ""
                     elif not in_string:
-                        if ch == '(':
+                        if ch == "(":
                             open_paren += 1
-                        elif ch == ')':
-                            open_paren = max(0, open_paren-1)
-                        elif ch == '[':
+                        elif ch == ")":
+                            open_paren = max(0, open_paren - 1)
+                        elif ch == "[":
                             open_brack += 1
-                        elif ch == ']':
-                            open_brack = max(0, open_brack-1)
-                        elif ch == '{':
+                        elif ch == "]":
+                            open_brack = max(0, open_brack - 1)
+                        elif ch == "{":
                             open_brace += 1
-                        elif ch == '}':
-                            open_brace = max(0, open_brace-1)
-                        elif ch == ':' and open_paren == 0 and open_brack == 0 and open_brace == 0:
+                        elif ch == "}":
+                            open_brace = max(0, open_brace - 1)
+                        elif (
+                            ch == ":"
+                            and open_paren == 0
+                            and open_brack == 0
+                            and open_brace == 0
+                        ):
                             header_end_line_idx = i
                             i = i + 1
                             break
@@ -198,7 +211,7 @@ def extract_source_from_line_range(executed_lines, context_name, is_function=Fal
         extracted_lines = source_lines[start_idx:end_idx]
 
         if extracted_lines:
-            dedented_code = textwrap.dedent(''.join(extracted_lines))
+            dedented_code = textwrap.dedent("".join(extracted_lines))
             source_code = dedented_code.rstrip()
         else:
             source_code = ""
@@ -236,7 +249,7 @@ def extract_return_names(func):
                             statement_names.append(elt.id)
                         else:
                             # Complex expression, use generic name
-                            statement_names.append(f"output{i+1}")
+                            statement_names.append(f"output{i + 1}")
                 elif isinstance(node.value, ast.Name):
                     # Single return value: return var1
                     statement_names.append(node.value.id)
@@ -255,8 +268,9 @@ def extract_return_names(func):
 
         if len(unique_counts) > 1:
             # Different number of return values - this is an error
-            count_details = {count: return_counts.count(
-                count) for count in unique_counts}
+            count_details = {
+                count: return_counts.count(count) for count in unique_counts
+            }
             _get_logger().fatal(
                 f"Function {func.__name__} has inconsistent return statements with different numbers of values: "
                 f"{count_details}. All return statements must return the same number of values.",
@@ -268,9 +282,11 @@ def extract_return_names(func):
 
         if len(return_statements) > 1:
             # Multiple return statements - log warning and intelligently merge
-            _get_logger().warning(f"Warning: Function {func.__name__} has {len(return_statements)} return statements. "
-                  f"This may cause unexpected behavior if the return statements return different "
-                  f"data types, shapes, or dtypes.")
+            _get_logger().warning(
+                f"Warning: Function {func.__name__} has {len(return_statements)} return statements. "
+                f"This may cause unexpected behavior if the return statements return different "
+                f"data types, shapes, or dtypes."
+            )
 
         # Intelligently merge return names by position, prioritizing named over generic
         final_names = []
@@ -280,9 +296,11 @@ def extract_return_names(func):
 
             # Separate named variables from generic ones
             named_vars = [
-                name for name in names_at_position if not name.startswith("output")]
+                name for name in names_at_position if not name.startswith("output")
+            ]
             generic_vars = [
-                name for name in names_at_position if name.startswith("output")]
+                name for name in names_at_position if name.startswith("output")
+            ]
 
             # Choose the best name for this position
             if named_vars:
@@ -293,7 +311,7 @@ def extract_return_names(func):
                 chosen_name = generic_vars[0]
             else:
                 # Fallback
-                chosen_name = f"output{pos+1}"
+                chosen_name = f"output{pos + 1}"
 
             final_names.append(chosen_name)
 
@@ -302,7 +320,8 @@ def extract_return_names(func):
     except Exception as e:
         # Fallback to generic names if parsing fails
         _get_logger().error(
-            f"Error extracting return names from {func.__name__}, reverting to defaults: {e}")
+            f"Error extracting return names from {func.__name__}, reverting to defaults: {e}"
+        )
         return ["output1"]
 
 
@@ -321,10 +340,10 @@ def safe_deepcopy(data):
 
 def frame_to_namespace(frame):
     """Convert a Python frame object to a namespace dictionary.
-    
+
     Args:
         frame: A Python frame object from sys._getframe() or similar
-        
+
     Returns:
         dict: A namespace combining globals and locals from the frame
     """
@@ -333,11 +352,11 @@ def frame_to_namespace(frame):
 
 def get_attribute_value_from_namespace(namespace, attr_name):
     """Look up a variable (possibly dotted like 'self.counter') from a namespace dict.
-    
+
     Args:
         namespace: dict containing variables to look up
         attr_name: Variable name, possibly dotted (e.g., 'self.counter', 'my_var')
-    
+
     Returns:
         tuple: (value, final_attr_name) where final_attr_name is the last part of dotted name
     """
@@ -349,7 +368,7 @@ def get_attribute_value_from_namespace(namespace, attr_name):
                 f"Variable '{parts[0]}' not found in namespace",
                 error_type=Exception,
             )
-        
+
         obj = namespace[parts[0]]
         for attr in parts[1:]:
             try:
@@ -379,22 +398,24 @@ def get_attribute_value_from_namespace(namespace, attr_name):
 
 
 def mirror_all_traced_state(source, target):
-    '''
+    """
     Copy the traced boundary state of every tensor in source onto target.
 
     Torch and Warp targets are upgraded in place, so the caller's object is
     updated directly. A raw numpy target becomes a zero-copy view, which is a
     new object, so the rebuilt target is returned and numpy callers must use it.
-    '''
+    """
     if is_tracable_tensor_type(source) and is_tracable_tensor_type(target):
         if not is_traced_type(source):
             _get_logger().error(
                 f"Error: cannot mirror traced state from a plain {type(source).__name__}.\n"
                 "Only values registered as a node output carry the state needed "
-                "to connect nodes.")
+                "to connect nodes."
+            )
             return target
         promoted = promote_in_place(
-            target, source.name, source.context_obj, source.proxy)
+            target, source.name, source.context_obj, source.proxy
+        )
         promoted.output_port = source.output_port
         return promoted
     elif isinstance(source, collections.abc.Mapping):
@@ -431,6 +452,7 @@ def get_relative_path(model_path, yaml_save_path):
         # If relative path calculation fails (e.g., different drives on Windows), keep absolute path
         return model_path
 
+
 def _get_os_description():
     freedesktop_os_release = getattr(platform, "freedesktop_os_release", None)
     if freedesktop_os_release is None:
@@ -461,15 +483,16 @@ def _get_warp_version():
 def get_system_info():
     # lazy import to avoid circular import
     import leapp
-    metadata = {'system information': {}}
-    metadata['system information']['leapp version'] = leapp.__version__
-    metadata['system information']['leapp config version'] = leapp.__config_version__
-    metadata['system information']['torch version'] = str(torch.__version__)
-    metadata['system information']['python version'] = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-    metadata['system information']['cuda version'] = str(torch.version.cuda)
-    metadata['system information']['warp version'] = _get_warp_version()
-    metadata['system information']['os'] = _get_os_description()
+
+    metadata = {"system information": {}}
+    metadata["system information"]["leapp version"] = leapp.__version__
+    metadata["system information"]["leapp config version"] = leapp.__config_version__
+    metadata["system information"]["torch version"] = str(torch.__version__)
+    metadata["system information"]["python version"] = (
+        f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    )
+    metadata["system information"]["cuda version"] = str(torch.version.cuda)
+    metadata["system information"]["warp version"] = _get_warp_version()
+    metadata["system information"]["os"] = _get_os_description()
 
     return metadata
-
-

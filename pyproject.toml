@@ -64,7 +64,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest",
-    "black",
+    "ruff==0.17.1",
     "flake8",
     "mypy",
 ]
@@ -83,6 +83,16 @@ warp-cu13 = [
     "cupti-python>=13,<14; sys_platform == 'linux'",
     "onnxruntime-gpu[cuda,cudnn]>=1.27.0; python_version >= '3.11'",
 ]
+
+[tool.ruff]
+required-version = "==0.17.1"
+target-version = "py310"
+line-length = 88
+include = ["*.py", "*.pyi", "*.ipynb", "scripts/leapp-build-warp-runtime"]
+force-exclude = true
+
+[tool.ruff.format]
+exclude = ["examples/**"]
 
 [tool.uv]
 conflicts = [
