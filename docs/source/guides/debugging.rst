@@ -30,6 +30,21 @@ the exported model on each sample, compares outputs with
 ``torch.allclose(..., rtol=..., atol=...)``, logs any deviation, and
 returns a dict mapping node names to results.
 
+After the last sample, LEAPP runs sample 0 again, with buffers declared
+through ``annotate.register_buffer()`` restored to their exported values.
+The export must give the same result for the same inputs. If the replay
+differs, the exported model carries state between calls that the
+annotations do not declare. A common cause is a buffer allocated outside
+the node that the node resets and then accumulates into, such as a Warp
+array cleared with ``zero_()`` and written with ``wp.atomic_add``. LEAPP
+only records work on traced data, so the reset is lost and the exported
+model keeps adding to the previous call's result. Declare the buffer with
+``annotate.register_buffer()``, or allocate it inside the node. Declare
+state that should carry over between calls, such as a warm start or a filter
+value, with ``annotate.state_tensors()`` and ``annotate.update_state()``
+so it becomes an explicit model input and output. ``compile_graph(check_replay=False)`` skips only this
+check.
+
 .. code-block:: python
 
    leapp.compile_graph(

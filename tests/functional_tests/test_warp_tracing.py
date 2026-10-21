@@ -1101,5 +1101,57 @@ class TestGlobalPatchingAliasScan(WarpTestCase, LEAPPFunctionalTestBase):
         leapp.stop()
 
 
+class TestWarpHiddenStateValidation(WarpTestCase, LEAPPFunctionalTestBase):
+    """Validation replays an example and catches state the export keeps between calls."""
+
+    NODE_NAME = "node_a"
+
+    def _trace_accumulator(self, export_with, register):
+        total = wp.zeros(1, dtype=wp.float32, device=self.DEVICE)
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        # A Warp node traces on both calls, so validation gets one sample.
+        for _ in range(2):
+            values = annotate.input_tensors(
+                self.NODE_NAME, {"in_a": torch.arange(4.0, device=self.DEVICE)}
+            )
+            accumulator = total
+            if register:
+                buffer = annotate.register_buffer(
+                    self.NODE_NAME, {"total": wp.to_torch(total)}
+                )
+                accumulator = wp.from_torch(buffer)
+            accumulator.zero_()
+            wp.launch(
+                self.kernels.sum_into,
+                dim=4,
+                inputs=[wp.from_torch(values)],
+                outputs=[accumulator],
+                device=self.DEVICE,
+            )
+            annotate.output_tensors(
+                self.NODE_NAME,
+                {"out_a": wp.to_torch(accumulator).clone()},
+                export_with=export_with,
+            )
+        leapp.stop()
+
+    def test_unregistered_accumulator_fails_validation(self):
+        for export_with in ("onnx", "pt2"):
+            with self.subTest(export_with=export_with):
+                self._trace_accumulator(export_with, register=False)
+                with self.assertRaisesRegex(Exception, "annotate.register_buffer"):
+                    leapp.compile_graph(visualize=False)
+
+    def test_replay_check_can_be_disabled(self):
+        self._trace_accumulator("onnx", register=False)
+        leapp.compile_graph(visualize=False, check_replay=False)
+
+    def test_registered_accumulator_passes_validation(self):
+        for export_with in ("onnx", "pt2"):
+            with self.subTest(export_with=export_with):
+                self._trace_accumulator(export_with, register=True)
+                leapp.compile_graph(visualize=False)
+
+
 if __name__ == "__main__":
     unittest.main()

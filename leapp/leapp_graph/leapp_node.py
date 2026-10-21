@@ -29,6 +29,18 @@ from leapp.leapp_graph.custom_operator_registry.warp_operator.bundle import (
 )
 from leapp.utils.logging import _get_logger
 
+_HIDDEN_STATE_HINT = (
+    "Sample 0 passed validation, but replaying it after the other samples gave a "
+    "different result, so the exported model keeps state between calls that was "
+    "not declared. This usually means a buffer allocated outside the node is "
+    "reset and then accumulated into inside it, for example a Warp array cleared "
+    "with zero_() and written with wp.atomic_add. Declare such buffers with "
+    "annotate.register_buffer() for this node, or allocate them inside the node. "
+    "Declare state that should carry over between calls with "
+    "annotate.state_tensors() and annotate.update_state(). To skip this check, "
+    "pass check_replay=False to leapp.compile_graph()."
+)
+
 
 class LeappNode:
     def __init_subclass__(cls, **kwargs):
@@ -500,8 +512,108 @@ class LeappNode:
             "it with annotate.input_tensors() for this node."
         )
 
+    def _sample_matches(
+        self, label: str, input_values, source_outputs, rtol: float, atol: float
+    ) -> bool:
+        """Run the compiled model on one sample and log how its outputs differ."""
+        with torch.no_grad():
+            exported_outputs = self.compiled_model(*input_values)
+
+        if not isinstance(exported_outputs, tuple):
+            exported_outputs = (exported_outputs,)
+
+        if len(exported_outputs) != len(source_outputs):
+            _get_logger().error(
+                f"{self.name} {label}: Output count mismatch - "
+                f"got {len(exported_outputs)}, expected {len(source_outputs)}"
+            )
+            return False
+
+        matched = True
+        for idx, (exported, source) in enumerate(zip(exported_outputs, source_outputs)):
+            output_name = (
+                self.outputs[idx].name if idx < len(self.outputs) else f"output_{idx}"
+            )
+
+            if exported.device != source.device:
+                exported = exported.to(source.device)
+
+            exported_nan = torch.isnan(exported).sum().item()
+            exported_inf = torch.isinf(exported).sum().item()
+            source_nan = torch.isnan(source).sum().item()
+            source_inf = torch.isinf(source).sum().item()
+
+            if exported_nan > 0 or exported_inf > 0 or source_nan > 0 or source_inf > 0:
+                matched = False
+                num_elements = exported.numel()
+                _get_logger().error(
+                    f"{self.name}/{output_name} {label}: NaN/Inf detected!"
+                )
+                if exported_nan > 0:
+                    _get_logger().error(
+                        f"  Exported has {exported_nan}/{num_elements} NaN values ({100 * exported_nan / num_elements:.3f}%)"
+                    )
+                if exported_inf > 0:
+                    _get_logger().error(
+                        f"  Exported has {exported_inf}/{num_elements} Inf values ({100 * exported_inf / num_elements:.3f}%)"
+                    )
+                if source_nan > 0:
+                    _get_logger().warning(
+                        f"  Source has {source_nan}/{num_elements} NaN values ({100 * source_nan / num_elements:.3f}%)"
+                    )
+                if source_inf > 0:
+                    _get_logger().warning(
+                        f"  Source has {source_inf}/{num_elements} Inf values ({100 * source_inf / num_elements:.3f}%)"
+                    )
+                continue
+
+            if not torch.allclose(exported, source, rtol=rtol, atol=atol):
+                matched = False
+                diff = (exported - source).abs()
+                diff_flat = diff.flatten().float()
+
+                max_diff = diff.max().item()
+                mean_diff = diff.mean().item()
+
+                percentiles = torch.tensor(
+                    [0.50, 0.75, 0.90, 0.99, 0.995], device=diff_flat.device
+                )
+                pct_values = torch.quantile(diff_flat, percentiles)
+                p50, p75, p90, p99, p995 = pct_values.tolist()
+
+                source_min, source_max = source.min().item(), source.max().item()
+                exported_min, exported_max = (
+                    exported.min().item(),
+                    exported.max().item(),
+                )
+
+                log_path = _get_logger().path
+                _get_logger().error(
+                    f"{self.name}/{output_name} {label}: Mismatch detected (rtol={rtol}, atol={atol}). Please check {log_path} for more details."
+                )
+                _get_logger().info(
+                    f"  Source shape: {source.shape}, dtype: {source.dtype}"
+                )
+                _get_logger().info(
+                    f"  Exported shape: {exported.shape}, dtype: {exported.dtype}"
+                )
+                _get_logger().info(
+                    f"  Source range:   [{source_min:.6e}, {source_max:.6e}]"
+                )
+                _get_logger().info(
+                    f"  Exported range: [{exported_min:.6e}, {exported_max:.6e}]"
+                )
+                _get_logger().info(
+                    f"  Diff stats: max={max_diff:.6e}, mean={mean_diff:.6e}"
+                )
+                _get_logger().info(
+                    f"  Diff percentiles: p50={p50:.6e}, p75={p75:.6e}, p90={p90:.6e}, p99={p99:.6e}, p995={p995:.6e}"
+                )
+
+        return matched
+
     def validate_compiled_model(
-        self, rtol: float = 1e-3, atol: float = 1e-5
+        self, rtol: float = 1e-3, atol: float = 1e-5, check_replay: bool = True
     ) -> tuple[bool, str | None]:
         if self.compiled_model is None:
             _get_logger().warning(
@@ -510,117 +622,34 @@ class LeappNode:
             return True, None
 
         examples = self._build_validation_examples()
-        all_match = True
-        sample_passed = {}
-        for sample_idx, input_values, source_outputs in examples:
-            sample_passed[sample_idx] = True
-            with torch.no_grad():
-                exported_outputs = self.compiled_model(*input_values)
-
-            if not isinstance(exported_outputs, tuple):
-                exported_outputs = (exported_outputs,)
-
-            if len(exported_outputs) != len(source_outputs):
-                _get_logger().error(
-                    f"{self.name} sample {sample_idx}: Output count mismatch - "
-                    f"got {len(exported_outputs)}, expected {len(source_outputs)}"
-                )
-                all_match = False
-                sample_passed[sample_idx] = False
-                continue
-
-            for idx, (exported, source) in enumerate(
-                zip(exported_outputs, source_outputs)
-            ):
-                output_name = (
-                    self.outputs[idx].name
-                    if idx < len(self.outputs)
-                    else f"output_{idx}"
-                )
-
-                if exported.device != source.device:
-                    exported = exported.to(source.device)
-
-                exported_nan = torch.isnan(exported).sum().item()
-                exported_inf = torch.isinf(exported).sum().item()
-                source_nan = torch.isnan(source).sum().item()
-                source_inf = torch.isinf(source).sum().item()
-
-                if (
-                    exported_nan > 0
-                    or exported_inf > 0
-                    or source_nan > 0
-                    or source_inf > 0
-                ):
-                    all_match = False
-                    sample_passed[sample_idx] = False
-                    num_elements = exported.numel()
-                    _get_logger().error(
-                        f"{self.name}/{output_name} sample {sample_idx}: NaN/Inf detected!"
-                    )
-                    if exported_nan > 0:
-                        _get_logger().error(
-                            f"  Exported has {exported_nan}/{num_elements} NaN values ({100 * exported_nan / num_elements:.3f}%)"
-                        )
-                    if exported_inf > 0:
-                        _get_logger().error(
-                            f"  Exported has {exported_inf}/{num_elements} Inf values ({100 * exported_inf / num_elements:.3f}%)"
-                        )
-                    if source_nan > 0:
-                        _get_logger().warning(
-                            f"  Source has {source_nan}/{num_elements} NaN values ({100 * source_nan / num_elements:.3f}%)"
-                        )
-                    if source_inf > 0:
-                        _get_logger().warning(
-                            f"  Source has {source_inf}/{num_elements} Inf values ({100 * source_inf / num_elements:.3f}%)"
-                        )
-                    continue
-
-                if not torch.allclose(exported, source, rtol=rtol, atol=atol):
-                    all_match = False
-                    sample_passed[sample_idx] = False
-                    diff = (exported - source).abs()
-                    diff_flat = diff.flatten().float()
-
-                    max_diff = diff.max().item()
-                    mean_diff = diff.mean().item()
-
-                    percentiles = torch.tensor(
-                        [0.50, 0.75, 0.90, 0.99, 0.995], device=diff_flat.device
-                    )
-                    pct_values = torch.quantile(diff_flat, percentiles)
-                    p50, p75, p90, p99, p995 = pct_values.tolist()
-
-                    source_min, source_max = source.min().item(), source.max().item()
-                    exported_min, exported_max = (
-                        exported.min().item(),
-                        exported.max().item(),
-                    )
-
-                    log_path = _get_logger().path
-                    _get_logger().error(
-                        f"{self.name}/{output_name} sample {sample_idx}: Mismatch detected (rtol={rtol}, atol={atol}). Please check {log_path} for more details."
-                    )
-                    _get_logger().info(
-                        f"  Source shape: {source.shape}, dtype: {source.dtype}"
-                    )
-                    _get_logger().info(
-                        f"  Exported shape: {exported.shape}, dtype: {exported.dtype}"
-                    )
-                    _get_logger().info(
-                        f"  Source range:   [{source_min:.6e}, {source_max:.6e}]"
-                    )
-                    _get_logger().info(
-                        f"  Exported range: [{exported_min:.6e}, {exported_max:.6e}]"
-                    )
-                    _get_logger().info(
-                        f"  Diff stats: max={max_diff:.6e}, mean={mean_diff:.6e}"
-                    )
-                    _get_logger().info(
-                        f"  Diff percentiles: p50={p50:.6e}, p75={p75:.6e}, p90={p90:.6e}, p99={p99:.6e}, p995={p995:.6e}"
-                    )
-
+        buffers = (
+            dict(self.compiled_model.named_buffers())
+            if isinstance(self.compiled_model, torch.nn.Module)
+            else {}
+        )
+        initial_buffers = {name: buffer.clone() for name, buffer in buffers.items()}
+        sample_passed = {
+            sample_idx: self._sample_matches(
+                f"sample {sample_idx}", input_values, source_outputs, rtol, atol
+            )
+            for sample_idx, input_values, source_outputs in examples
+        }
+        all_match = all(sample_passed.values())
         error_hint = self._reentry_validation_hint(sample_passed)
+
+        # Replay the first sample with declared buffers restored. A different
+        # result means the export kept undeclared state from the earlier calls.
+        if check_replay and sample_passed[0]:
+            with torch.no_grad():
+                for name, buffer in buffers.items():
+                    buffer.copy_(initial_buffers[name])
+            _, input_values, source_outputs = examples[0]
+            if not self._sample_matches(
+                "sample 0 (replayed)", input_values, source_outputs, rtol, atol
+            ):
+                all_match = False
+                error_hint = _HIDDEN_STATE_HINT
+
         if error_hint is not None:
             _get_logger().warning(f"  {self.name}: {error_hint}")
 

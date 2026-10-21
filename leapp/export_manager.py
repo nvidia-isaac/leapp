@@ -959,7 +959,11 @@ class ExportManager:
             _get_logger().info("Success\n")
 
     def validate_all_models(
-        self, rtol: float = 1e-3, atol: float = 1e-5, strict: bool = True
+        self,
+        rtol: float = 1e-3,
+        atol: float = 1e-5,
+        strict: bool = True,
+        check_replay: bool = True,
     ):
         """Validate all exported models by comparing computed outputs against captured outputs.
 
@@ -969,6 +973,8 @@ class ExportManager:
         Args:
             rtol (float): Relative tolerance for torch.allclose comparison. Default: 1e-3
             atol (float): Absolute tolerance for torch.allclose comparison. Default: 1e-5
+            check_replay (bool): Replay sample 0 after the other samples and fail
+                if the result differs. Default: True
 
         Returns:
             dict: A dictionary mapping node names to validation results:
@@ -1001,7 +1007,9 @@ class ExportManager:
             _get_logger().info(f"Validating {node_name}...")
 
             try:
-                passed, error_hint = node.validate_compiled_model(rtol=rtol, atol=atol)
+                passed, error_hint = node.validate_compiled_model(
+                    rtol=rtol, atol=atol, check_replay=check_replay
+                )
                 results[node_name] = passed
                 if error_hint is not None:
                     error_hints.append(f"{node_name}: {error_hint}")

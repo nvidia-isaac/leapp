@@ -138,6 +138,7 @@ def compile_graph(
     atol=1e-5,
     strict=True,
     graph_configs=None,
+    check_replay=True,
 ):
     """Compile and save the computational graph from traced nodes.
 
@@ -223,7 +224,9 @@ def compile_graph(
     manager.set_detected_graph(models, pipeline)
 
     if validate and not manager.is_dry_run():
-        return manager.validate_all_models(rtol=rtol, atol=atol, strict=strict)
+        return manager.validate_all_models(
+            rtol=rtol, atol=atol, strict=strict, check_replay=check_replay
+        )
 
     return True
 

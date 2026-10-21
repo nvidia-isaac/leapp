@@ -113,6 +113,7 @@ A Warp operation must not consume active arrays owned by different nodes. Finish
 | Missing CUDA provider / CPU validation fails | Check GPU runtime/provider and device placement; CPU fallback cannot run Warp. |
 | Cross-context / owner-token error | Keep one node per active operation; leave explicit regions before another node starts. |
 | Replay mismatch | Inspect inputs, mutations, region boundaries, and logs; compare fresh inputs with the original before changing tolerances. |
+| Replayed sample 0 differs | The export keeps undeclared state between calls, usually an array allocated outside the node that is reset and then accumulated into. Declare it with `annotate.register_buffer()` or allocate it inside the node. |
 
 Deliver the full LEAPP bundle plus native-runtime setup information. Embedded kernels do not make the model self-contained: the destination needs the adapter for its ONNX/PT2 backend and compatible CUDA/runtime dependencies. Test loading and replay there when available. Do not claim portability from a CPU-only smoke test.
 

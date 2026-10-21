@@ -172,6 +172,13 @@ class WarpTestCase(unittest.TestCase):
             data[i] = data[i] / divisor
 
         @wp.kernel
+        def sum_into(
+            src: wp.array(dtype=wp.float32),
+            total: wp.array(dtype=wp.float32),
+        ):
+            wp.atomic_add(total, 0, src[wp.tid()])
+
+        @wp.kernel
         def increment_in_place(data: wp.array(dtype=wp.float32)):
             i = wp.tid()
             data[i] = data[i] + 1.0
