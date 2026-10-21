@@ -21,7 +21,7 @@ Start with the [online LEAPP documentation](https://nvidia-isaac.github.io/leapp
 | Export formats, parameters, prebuilt models | [Export](https://nvidia-isaac.github.io/leapp/guides/export.html) |
 | Unsupported functions and trace loss | [Function patches](https://nvidia-isaac.github.io/leapp/guides/patching.html), [Torch limitations](https://nvidia-isaac.github.io/leapp/tensor_libraries/torch_limitations.html), [NumPy limitations](https://nvidia-isaac.github.io/leapp/tensor_libraries/limitations.html) |
 | State and resets | [State](https://nvidia-isaac.github.io/leapp/guides/graph.html) |
-| Optional deployment metadata | [Semantics](https://nvidia-isaac.github.io/leapp/semantics/usage.html), [standard kinds](https://nvidia-isaac.github.io/leapp/semantics/kind_element_names.html), [temporal axes](https://nvidia-isaac.github.io/leapp/semantics/temporal.html) |
+| Optional deployment metadata | [Semantics](https://nvidia-isaac.github.io/leapp/semantics/usage.html), [standard kinds](https://nvidia-isaac.github.io/leapp/semantics/kind_element_names.html), [convenience helpers](https://nvidia-isaac.github.io/leapp/semantics/convenience.html), [temporal axes](https://nvidia-isaac.github.io/leapp/semantics/kind_element_names.html#semantics-time-axes) |
 | Validation and deployment | [Debugging](https://nvidia-isaac.github.io/leapp/guides/debugging.html), [runtime](https://nvidia-isaac.github.io/leapp/leapp_runtime.html), [bundle/YAML](https://nvidia-isaac.github.io/leapp/generated_configs.html) |
 | Warp | [Setup](https://nvidia-isaac.github.io/leapp/tensor_libraries/installation.html), [capture](https://nvidia-isaac.github.io/leapp/tensor_libraries/warp.html), [limitations](https://nvidia-isaac.github.io/leapp/tensor_libraries/warp_limitations.html) |
 
@@ -168,7 +168,7 @@ Supported NumPy/Torch conversions such as `torch.from_numpy()` and `.numpy()` ca
 
 Add semantics when a user requests them or an identified downstream consumer needs tensor meaning to bind observations, map joint order, interpret commands, or apply action chunks. They are not required for tracing, export, numerical validation, or state feedback. Default to named raw tensors for ordinary internal node connections; do not annotate every intermediate value or add nodes solely for metadata.
 
-When needed, read [deployment semantics](references/semantics.md). **Prefer standard `InputKindEnum` / `OutputKindEnum` kinds** over custom strings or `extra`. Keep annotations compact: reuse existing ordered names, specify only consumed fields, and avoid repeated wrappers or metadata factories. Do not guess physical meaning for normalized features, latent vectors, or mixed observations. State/reset contracts are covered separately in [state](references/state.md).
+When needed, read [deployment semantics](references/semantics.md). **Prefer quantity helpers or `Kind` with `Axis`** over custom strings or `extra` for new integrations whose consumers support them. These APIs remain experimental. Existing `InputKindEnum`, `OutputKindEnum`, `TemporalAxis`, and `element_names` APIs are fully supported, not deprecated; preserve existing contracts unless migration is requested. The reference includes migration guidance. Keep annotations compact: reuse existing ordered names, specify only consumed fields, and avoid repeated wrappers or metadata factories. Do not guess physical meaning for normalized features, latent vectors, or mixed observations. State/reset contracts are covered separately in [state](references/state.md).
 
 ## Warp setup and export (experimental)
 

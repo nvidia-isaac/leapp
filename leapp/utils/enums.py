@@ -53,3 +53,43 @@ class OutputKindEnum(Enum):
     BODY_ORIENTATION = "target/body/orientation"
     BODY_LINEAR_VELOCITY = "target/body/linear_velocity"
     BODY_ANGULAR_ACCELERATION = "target/body/angular_acceleration"
+
+
+# Experimental quantity and axis vocabulary; existing enums remain unchanged.
+class Kind(str, Enum):
+    """Experimental quantities independent of input/output direction."""
+
+    JOINT_POSITION = "joint/position"
+    JOINT_VELOCITY = "joint/velocity"
+    JOINT_EFFORT = "joint/effort"
+    FRAME_POSE = "frame/pose"
+    FRAME_POSITION = "frame/position"
+    FRAME_ORIENTATION = "frame/orientation"
+    FRAME_TWIST = "frame/twist"
+    FRAME_LINEAR_VELOCITY = "frame/linear_velocity"
+    FRAME_ANGULAR_VELOCITY = "frame/angular_velocity"
+    FRAME_ACCELERATION = "frame/acceleration"
+    FRAME_LINEAR_ACCELERATION = "frame/linear_acceleration"
+    FRAME_ANGULAR_ACCELERATION = "frame/angular_acceleration"
+    FORCE_APPLICATION_POSITION = "frame/force_application_position"
+    FRAME_WRENCH = "frame/wrench"
+    VECTOR3D = "vector3d"
+    KP = "kp"
+    KD = "kd"
+    IMAGE = "image"
+
+
+class AxisKind(str, Enum):
+    """Experimental meanings for individual tensor dimensions."""
+
+    SYSTEM = "system"
+    ELEMENT = "element"
+    COMPONENT = "component"
+    TIME = "time"
+
+
+class ExpressionFrame(Enum):
+    """Experimental frame selectors, distinct from literal frame names."""
+
+    SELF = "self"
+    REFERENCE = "reference"

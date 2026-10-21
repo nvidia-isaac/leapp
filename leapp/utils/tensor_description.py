@@ -16,6 +16,7 @@
 #
 
 import collections.abc
+import math
 from dataclasses import dataclass, field, fields
 from typing import Optional, Any, Dict, Tuple, List
 
@@ -42,7 +43,13 @@ from leapp.leapp_graph.datatypes import (
     TRACABLE_BASE_TYPES,
 )
 from leapp.utils.utils import safe_deepcopy
-from leapp.utils.enums import InputKindEnum, OutputKindEnum
+from leapp.utils.enums import (
+    InputKindEnum,
+    OutputKindEnum,
+    Kind,
+    AxisKind,
+    ExpressionFrame,
+)
 
 
 class CompactYamlList(list):
@@ -96,6 +103,48 @@ class TemporalAxis:
             )
 
 
+@dataclass(frozen=True)
+class Axis:
+    """Experimental meaning and labels for one tensor dimension."""
+
+    kind: AxisKind | str | None = None
+    names: list[str] | None = None
+    period_ms: float | None = None
+
+    def __post_init__(self):
+        if self.kind is not None and (not isinstance(self.kind, str) or not self.kind):
+            raise TypeError("Axis.kind must be an AxisKind, non-empty string, or None")
+        if self.names is not None and (
+            not isinstance(self.names, list)
+            or any(not isinstance(name, str) or not name for name in self.names)
+        ):
+            raise TypeError("Axis.names must be a list of non-empty strings or None")
+        if self.period_ms is not None:
+            if self.kind != AxisKind.TIME:
+                raise ValueError("period_ms is only valid for a time axis")
+            if (
+                isinstance(self.period_ms, bool)
+                or not isinstance(self.period_ms, (int, float))
+                or not math.isfinite(self.period_ms)
+                or self.period_ms <= 0
+            ):
+                raise ValueError("Axis.period_ms must be finite and positive")
+        elif self.kind == AxisKind.TIME:
+            raise ValueError("A time axis requires period_ms")
+
+    def to_dict(self):
+        result = {}
+        if self.kind is not None:
+            result["kind"] = (
+                self.kind.value if isinstance(self.kind, AxisKind) else self.kind
+            )
+        if self.names is not None:
+            result["names"] = list(self.names)
+        if self.period_ms is not None:
+            result["period_ms"] = self.period_ms
+        return result
+
+
 @dataclass
 class GraphConfigs:
     """User-facing graph-level metadata for YAML serialization."""
@@ -128,6 +177,10 @@ class GraphConfigs:
 class TensorSemantics:
     """User-facing semantic metadata for a tensor.
 
+    ``axes``, ``is_setpoint``, ``reference``, and ``expressed_in`` are
+    experimental keyword-only fields. Existing kinds and element names retain
+    their original behavior.
+
     Add new semantic fields here — they automatically propagate to
     TensorDescription, YAML serialization, and the unwrap/apply flow.
 
@@ -143,10 +196,26 @@ class TensorSemantics:
     ref: Any = None
 
     # Semantic fields
-    kind: Optional[InputKindEnum | OutputKindEnum | str] = None
+    kind: Optional[InputKindEnum | OutputKindEnum | Kind | str] = None
     element_names: Optional[List] = None  # deprecated
     temporal_period_ms: Optional[float] = field(default=None, init=False)
     extra: Optional[Dict[str, Any]] = None
+
+    # Experimental fields are keyword-only to preserve the existing constructor.
+    axes: list[Axis | None] | None = field(default=None, kw_only=True)
+    is_setpoint: bool | None = field(default=None, kw_only=True)
+    reference: str | None = field(default=None, kw_only=True)
+    expressed_in: ExpressionFrame | str | None = field(default=None, kw_only=True)
+
+    @property
+    def _uses_experimental_semantics(self):
+        return (
+            isinstance(self.kind, Kind)
+            or self.axes is not None
+            or self.is_setpoint is not None
+            or self.reference is not None
+            or self.expressed_in is not None
+        )
 
     def __post_init__(self):
         """error checking, auto conditioning"""
@@ -168,6 +237,62 @@ class TensorSemantics:
             )
             self.temporal_period_ms = detected_period_ms or existing_period_ms
 
+        if not self._uses_experimental_semantics:
+            return
+        if self.axes is not None and self.element_names is not None:
+            raise ValueError("Use either element_names or axes, not both")
+        if (
+            self.kind is not None
+            and not isinstance(self.kind, (InputKindEnum, OutputKindEnum))
+            and (not isinstance(self.kind, str) or not self.kind)
+        ):
+            raise TypeError(
+                "kind must be an existing kind enum, Kind, non-empty string, or None"
+            )
+        if self.is_setpoint is not None and not isinstance(self.is_setpoint, bool):
+            raise TypeError("is_setpoint must be a boolean or None")
+        if self.reference is not None and (
+            not isinstance(self.reference, str) or not self.reference
+        ):
+            raise TypeError("reference must be a non-empty frame name or None (world)")
+        if self.expressed_in is not None and not isinstance(
+            self.expressed_in, ExpressionFrame
+        ):
+            if not isinstance(self.expressed_in, str) or not self.expressed_in:
+                raise TypeError(
+                    "expressed_in must be an ExpressionFrame or non-empty frame name"
+                )
+        if (
+            self.kind in (Kind.FRAME_WRENCH, Kind.FORCE_APPLICATION_POSITION)
+            and self.expressed_in is ExpressionFrame.REFERENCE
+        ):
+            raise ValueError("A wrench cannot use REFERENCE")
+        if self.extra and set(self.extra) & {
+            "axes",
+            "is_setpoint",
+            "reference",
+            "expressed_in",
+            "spatial",
+        }:
+            raise ValueError(
+                "Use TensorSemantics fields rather than extra for axes and spatial metadata"
+            )
+        if self.axes is not None:
+            if not isinstance(self.axes, list):
+                raise TypeError("axes must be a list or None")
+            _, shape = value_to_name_and_shape(self.ref)
+            if len(self.axes) != len(shape):
+                raise ValueError("axes must have one entry per tensor dimension")
+            for size, axis in zip(shape, self.axes):
+                if axis is None:
+                    continue
+                if not isinstance(axis, Axis):
+                    raise TypeError("axes entries must be Axis or None")
+                if axis.names is not None and len(axis.names) != size:
+                    raise ValueError("Axis label count must match its tensor dimension")
+            if sum(a is not None and a.kind == AxisKind.TIME for a in self.axes) > 1:
+                raise ValueError("A tensor may contain at most one time axis")
+
     def to_dict(self) -> Dict[str, Any]:
         """Return all non-None semantic fields, excluding internal fields.
 
@@ -176,11 +301,42 @@ class TensorSemantics:
         """
         result = {}
         for f in fields(self):
-            if f.name in self._INTERNAL_FIELDS or f.name == "extra":
+            if f.name in self._INTERNAL_FIELDS or f.name in (
+                "extra",
+                "reference",
+                "expressed_in",
+            ):
                 continue
             value = getattr(self, f.name)
+            if f.name == "axes" and value is not None:
+                value = [axis.to_dict() if axis is not None else None for axis in value]
             if value is not None:
                 result[f.name] = value
+        spatial = {}
+        if (
+            self._uses_experimental_semantics
+            and isinstance(self.kind, str)
+            and self.kind.startswith("frame/")
+        ):
+            if self.kind not in (Kind.FRAME_WRENCH, Kind.FORCE_APPLICATION_POSITION):
+                spatial["reference"] = self.reference
+            if self.kind not in (
+                Kind.FRAME_POSE,
+                Kind.FRAME_POSITION,
+                Kind.FRAME_ORIENTATION,
+            ):
+                spatial["expressed_in"] = None
+        # Preserve supplied metadata regardless of the quantity's conventions.
+        if self.reference is not None:
+            spatial["reference"] = self.reference
+        if self.expressed_in is not None:
+            spatial["expressed_in"] = (
+                {"selector": self.expressed_in.value}
+                if isinstance(self.expressed_in, ExpressionFrame)
+                else {"frame": self.expressed_in}
+            )
+        if spatial:
+            result["spatial"] = spatial
         if self.extra:
             result.update(self.extra)
         return result
@@ -192,6 +348,12 @@ class TensorSemantics:
         in the ``extra`` dict so they still appear in the serialized YAML.
         """
         valid_fields = {f.name for f in fields(self) if f.init} - self._INTERNAL_FIELDS
+        # Existing callers used these names as arbitrary extra metadata. Only
+        # interpret them as fields after opting into experimental semantics.
+        if not self._uses_experimental_semantics and not isinstance(
+            values.get("kind"), Kind
+        ):
+            valid_fields -= {"axes", "is_setpoint", "reference", "expressed_in"}
         for key, value in values.items():
             if key in valid_fields:
                 setattr(self, key, value)

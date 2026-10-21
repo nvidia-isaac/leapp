@@ -47,9 +47,11 @@ YAML structure
          dtype: float32
          shape: [6]
          type: tensor
-         kind: state/joint/position
-         element_names: [left_hip, left_knee, left_ankle, right_hip,
-           right_knee, right_ankle]
+         kind: joint/position
+         axes:
+         - kind: element
+           names: [left_hip, left_knee, left_ankle, right_hip,
+             right_knee, right_ankle]
        outputs:
        - name: obs_features
          dtype: float32
@@ -70,9 +72,11 @@ YAML structure
          dtype: float32
          shape: [6]
          type: tensor
-         kind: target/joint/position
-         element_names: [left_hip, left_knee, left_ankle, right_hip,
-           right_knee, right_ankle]
+         kind: joint/position
+         axes:
+         - kind: element
+           names: [left_hip, left_knee, left_ankle, right_hip,
+             right_knee, right_ankle]
        parameters:
          backend: jit
          model_path: policy.pt
@@ -95,6 +99,105 @@ YAML structure
      python version: 3.12.9
      cuda version: '12.8'
      os: Ubuntu 24.04
+
+.. _yaml-minimum-contract:
+
+Required and optional fields
+============================
+
+The tables below describe the fields emitted by LEAPP. **Always
+present** means the key exists; its value may still be empty or ``null``.
+Application-specific metadata should not override built-in fields.
+
+Minimum YAML structure
+----------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 30 50
+
+   * - Location
+     - Fields
+     - Presence and meaning
+   * - Top level
+     - ``models``, ``pipeline``, ``system information``
+     - Always present.
+   * - Each model
+     - ``inputs``, ``outputs``, ``parameters``
+     - Always present. Input/output lists may be empty.
+   * - Each tensor entry
+     - ``name``, ``dtype``, ``shape``, ``type``
+     - Always present. These describe the port independently of semantic
+       annotations.
+   * - Model ``parameters``
+     - ``backend``, ``model_path``, ``md5sum``, ``sha256sum``, ``warp_segments``
+     - Always present. Artifact paths and hashes may be ``null``, such as
+       during a dry run.
+   * - Model ``parameters``
+     - Additional backend metadata
+     - Backend-dependent; consumers must not assume these fields exist.
+   * - ``pipeline``
+     - ``data_flow``, ``feedback_flow``, ``inputs``, ``outputs``
+     - Always present; mappings may be empty.
+   * - ``pipeline``
+     - ``configs``
+     - Present when ``GraphConfigs`` is supplied; may be ``{}``.
+   * - ``pipeline.configs``
+     - ``frequency``
+     - Present when supplied. Its absence means no execution frequency was
+       declared.
+   * - ``pipeline``
+     - ``initial_values``
+     - Present when a feedback-initialization file was written.
+
+Optional tensor metadata
+------------------------
+
+A consumer must not assume semantic metadata is present merely because a
+tensor has a name or a particular shape.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 40 40
+
+   * - Field
+     - When present
+     - Meaning when absent
+   * - ``kind``
+     - A quantity or custom kind was supplied.
+     - The quantity is unspecified.
+   * - ``axes``
+     - Axis metadata was supplied.
+     - The tensor layout has no declared axis metadata.
+   * - ``axes[i]``
+     - Each entry corresponds to one dimension. An entry may be ``null`` or
+       ``{}``.
+     - A ``null`` entry leaves that dimension unspecified; ``{}`` declares
+       no axis fields. When ``axes`` is supplied, an entry is required for
+       every dimension.
+   * - ``axes[i].kind``
+     - An axis kind was supplied.
+     - The axis category is unspecified.
+   * - ``axes[i].names``
+     - Labels were supplied.
+     - Entries along that dimension are unnamed.
+   * - ``axes[i].period_ms``
+     - Required for a ``TIME`` axis; otherwise omitted.
+     - No sample period is declared.
+   * - ``is_setpoint``
+     - Emitted when explicitly set to ``true`` or ``false``.
+     - Unspecified (``None`` in Python); no setpoint purpose is declared.
+   * - ``spatial``
+     - Emitted for applicable built-in spatial quantities or explicitly
+       supplied spatial fields.
+     - No explicit spatial metadata; applicable spatial fields default to
+       global. See :ref:`spatial-yaml-fields` for helper-specific output.
+   * - ``element_names``, ``temporal_period_ms``
+     - Supplied through legacy annotations.
+     - No corresponding legacy labels or timing metadata.
+   * - Application-specific fields
+     - Supplied through ``extra``, flattened into the entry.
+     - No application-specific default is implied.
 
 Field Reference
 ===============
@@ -198,81 +301,56 @@ Python, CUDA, or OS versions.
 Semantic Fields
 ===============
 
-Semantic fields are optional tensor-port fields. A deployment library can use
-these fields to connect raw tensors to robot concepts, message formats, topic
-names, controller APIs, coordinate frames, or UI labels.
+.. warning::
 
-``kind``
+   ``Kind``, ``AxisKind``, ``ExpressionFrame``, ``Axis``, the quantity helpers,
+   and the ``axes``, ``is_setpoint``, ``reference``, and ``expressed_in`` fields
+   are experimental. They are imported directly from ``leapp``. Their contract
+   may evolve in future releases.
+
+Semantic fields are optional tensor-port fields. The example above uses the
+quantity and axis representation. See :doc:`semantics/legacy` for the
+``element_names`` representation.
+
+``kind`` and ``is_setpoint``
+----------------------------
+
+``kind`` describes a quantity, such as ``joint/position`` or ``frame/twist``.
+The ``inputs`` and ``outputs`` lists determine direction. An input with
+``is_setpoint: true`` carries a desired value that a controller aims to reach
+or maintain. Explicit ``true`` and ``false`` values are preserved; ``None``
+(the default) omits the field. Outputs accept ``False`` or ``None`` in Python
+but reject ``True``. See :doc:`semantics/usage` for setpoints and
+:doc:`semantics/kind_element_names` for quantities.
+
+``axes``
 --------
 
-   Describes the physical role of a tensor, such as ``state/joint/position``
-   or ``target/joint/position``. A deployment library can use it to route
-   values to the right subscriber, publisher, command interface, or adapter
-   without relying only on tensor names. See
-   :doc:`semantics/kind_element_names`.
+The list contains one mapping or ``null`` per tensor dimension. Each mapping
+can describe the axis kind and ordered names. Time axes also include sample
+spacing in milliseconds. For example, a tensor with shape ``[4, 3]`` can use:
 
-   .. code-block:: yaml
+.. code-block:: yaml
 
-      models:
-        policy:
-          inputs:
-          - name: joint_pos
-            dtype: float32
-            shape: [6]
-            type: tensor
-            kind: state/joint/position
-          outputs:
-          - name: joint_targets
-            dtype: float32
-            shape: [6]
-            type: tensor
-            kind: target/joint/position
+   axes:
+   - {kind: time, period_ms: 100}
+   - {kind: element, names: [hip, knee, ankle]}
 
-``element_names``
------------------
+See :ref:`semantics-time-axes`. Axis periods are independent of graph frequency.
 
-   Describes the order and identity of elements along tensor axes, such as
-   joint names or vector components. A deployment library can use it to reorder
-   robot messages into model order, verify that expected joints are present,
-   and label outputs. See :doc:`semantics/kind_element_names`.
+``spatial``
+-----------
 
-   .. code-block:: yaml
+Spatial metadata identifies a reference frame and coordinate basis. For example:
 
-      models:
-        policy:
-          inputs:
-          - name: joint_pos
-            dtype: float32
-            shape: [6]
-            type: tensor
-            element_names: [[left_hip, left_knee, left_ankle,
-              right_hip, right_knee, right_ankle]]
-          outputs:
-          - name: joint_targets
-            dtype: float32
-            shape: [6]
-            type: tensor
-            element_names: [[left_hip, left_knee, left_ankle,
-              right_hip, right_knee, right_ankle]]
+.. code-block:: yaml
 
-``__temporal_axis__`` and ``temporal_period_ms``
-------------------------------------------------
+   kind: frame/twist
+   spatial:
+     reference: base
+     expressed_in: {selector: self}
 
-   Mark one tensor axis as time-like and record sample spacing in milliseconds.
-   A deployment library can use these fields to interpret action chunks,
-   trajectories, history windows, or other batched time samples. See
-   :doc:`semantics/temporal`.
-
-   .. code-block:: yaml
-
-      models:
-        policy:
-          outputs:
-          - name: actions
-            dtype: float32
-            shape: [4, 3]
-            type: tensor
-            element_names:
-            - __temporal_axis__
-            - [hip, knee, ankle]
-            temporal_period_ms: 100
+A literal frame name uses ``expressed_in: {frame: world}``; a selector uses
+``{selector: self}`` or ``{selector: reference}``. Null or missing spatial
+fields mean global. Fields apply according to the quantity; see
+:doc:`semantics/spatial`. Metadata does not transform tensor values.

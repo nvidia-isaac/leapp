@@ -668,3 +668,214 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestStructuredSemantics(LEAPPFunctionalTestBase):
+    def test_helpers_export_and_runtime(self):
+        from leapp import (
+            Axis,
+            AxisKind,
+            Kind,
+            frame_twist,
+            image,
+            joint_effort,
+            joint_position,
+        )
+
+        q = torch.tensor([[1.0, 2.0]])
+        target = torch.tensor([[3.0, 5.0]])
+        velocity = torch.zeros(1, 1, 6)
+        pixels = torch.zeros(1, 3, 2, 2, dtype=torch.uint8)
+        joints = [
+            Axis(AxisKind.SYSTEM, names=["robot0"]),
+            Axis(AxisKind.ELEMENT, names=["shoulder", "elbow"]),
+        ]
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        tq, tt, tv, ti = leapp.annotate.input_tensors(
+            "policy",
+            [
+                joint_position("q", q, axes=joints),
+                joint_position("target", target, axes=joints, is_setpoint=True),
+                frame_twist(
+                    "twist",
+                    velocity,
+                    reference="base",
+                    axes=[
+                        Axis(AxisKind.SYSTEM),
+                        Axis(AxisKind.ELEMENT, names=["tool"]),
+                        Axis(
+                            AxisKind.COMPONENT,
+                            names=["vx", "vy", "vz", "wx", "wy", "wz"],
+                        ),
+                    ],
+                ),
+                image("camera", pixels, axes=[Axis(AxisKind.SYSTEM), None, None, None]),
+            ],
+        )
+        command = tt - tq + tv.sum() + ti.float().sum()
+        leapp.annotate.output_tensors(
+            "policy", joint_effort("effort", command, axes=joints), export_with="jit"
+        )
+        leapp.stop()
+        self.assertTrue(leapp.compile_graph(visualize=False))
+        path = os.path.join(self.TEST_GRAPH_NAME, self.TEST_GRAPH_NAME + ".yaml")
+        with open(path) as stream:
+            config = yaml.safe_load(stream)
+        inputs = config["models"]["policy"]["inputs"]
+        self.assertEqual(inputs[1]["is_setpoint"], True)
+        self.assertNotIn("is_setpoint", inputs[0])
+        self.assertEqual(
+            inputs[2]["spatial"],
+            {"reference": "base", "expressed_in": None},
+        )
+        self.assertEqual(inputs[2]["axes"][1], {"kind": "element", "names": ["tool"]})
+        self.assertEqual(
+            config["models"]["policy"]["outputs"][0]["kind"], Kind.JOINT_EFFORT.value
+        )
+        runtime = leapp.InferenceManager(path)
+        result = runtime(
+            {
+                "policy/q": q,
+                "policy/target": target,
+                "policy/twist": velocity,
+                "policy/camera": pixels,
+            }
+        )
+        torch.testing.assert_close(result["policy/effort"], target - q)
+
+    def test_optional_setpoint_values_survive_export(self):
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        omitted, unspecified, measured, target = leapp.annotate.input_tensors(
+            "policy",
+            [
+                leapp.joint_position("omitted", torch.ones(2)),
+                leapp.joint_position("unspecified", torch.ones(2), is_setpoint=None),
+                leapp.joint_position("measured", torch.ones(2), is_setpoint=False),
+                leapp.joint_position("target", torch.ones(2), is_setpoint=True),
+            ],
+        )
+        leapp.annotate.output_tensors(
+            "policy",
+            leapp.joint_effort(
+                "effort", omitted + unspecified + target - measured, is_setpoint=False
+            ),
+            export_with="jit",
+        )
+        leapp.stop()
+        self.assertTrue(leapp.compile_graph(visualize=False))
+        path = os.path.join(self.TEST_GRAPH_NAME, self.TEST_GRAPH_NAME + ".yaml")
+        with open(path) as stream:
+            node = yaml.safe_load(stream)["models"]["policy"]
+        self.assertNotIn("is_setpoint", node["inputs"][0])
+        self.assertNotIn("is_setpoint", node["inputs"][1])
+        self.assertIs(node["inputs"][2]["is_setpoint"], False)
+        self.assertIs(node["inputs"][3]["is_setpoint"], True)
+        self.assertIs(node["outputs"][0]["is_setpoint"], False)
+        runtime = leapp.InferenceManager(path)
+        result = runtime(
+            {
+                f"policy/{name}": torch.ones(2)
+                for name in ("omitted", "unspecified", "measured", "target")
+            }
+        )
+        torch.testing.assert_close(result["policy/effort"], torch.full((2,), 2.0))
+
+    def test_setpoints_rejected_on_outputs_and_static_outputs(self):
+        for static in (False, True):
+            with self.subTest(static=static):
+                leapp.start(name=self.TEST_GRAPH_NAME)
+                value = leapp.annotate.input_tensors("policy", {"x": torch.zeros(2)})
+                bad = leapp.joint_position("target", value + 1, is_setpoint=True)
+                with self.assertRaisesRegex(ValueError, "only to inputs"):
+                    if static:
+                        leapp.annotate.output_tensors(
+                            "policy", {"out": value + 1}, static_outputs=bad
+                        )
+                    else:
+                        leapp.annotate.output_tensors("policy", bad)
+                leapp.stop()
+
+
+class TestMixedSemantics(LEAPPFunctionalTestBase):
+    def test_existing_and_experimental_annotations_share_graph_and_version(self):
+        q = torch.tensor([1.0, 2.0])
+        target = torch.tensor([3.0, 5.0])
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        for _ in range(2):
+            measured, requested = leapp.annotate.input_tensors(
+                "policy",
+                [
+                    TensorSemantics("q", q, InputKindEnum.JOINT_POSITION, ["a", "b"]),
+                    leapp.joint_position(
+                        "target",
+                        target,
+                        is_setpoint=True,
+                        axes=[leapp.Axis(leapp.AxisKind.ELEMENT, names=["a", "b"])],
+                    ),
+                ],
+            )
+            leapp.annotate.output_tensors(
+                "policy",
+                [
+                    TensorSemantics(
+                        "legacy",
+                        requested - measured,
+                        OutputKindEnum.JOINT_TORQUES,
+                        ["a", "b"],
+                    ),
+                    leapp.joint_effort("new", requested - measured),
+                ],
+                export_with="jit",
+            )
+        leapp.stop()
+        self.assertTrue(leapp.compile_graph(visualize=False))
+        path = os.path.join(self.TEST_GRAPH_NAME, self.TEST_GRAPH_NAME + ".yaml")
+        with open(path) as stream:
+            config = yaml.safe_load(stream)
+        self.assertEqual(
+            config["system information"]["leapp version"], leapp.__version__
+        )
+        self.assertEqual(
+            config["system information"]["leapp config version"],
+            leapp.__config_version__,
+        )
+        node = config["models"]["policy"]
+        self.assertEqual(node["inputs"][0]["kind"], "state/joint/position")
+        self.assertEqual(node["inputs"][0]["element_names"], [["a", "b"]])
+        self.assertNotIn("axes", node["inputs"][0])
+        self.assertEqual(node["inputs"][1]["kind"], "joint/position")
+        self.assertTrue(node["inputs"][1]["is_setpoint"])
+        self.assertEqual(node["outputs"][0]["kind"], "target/joint/torques")
+        self.assertEqual(node["outputs"][1]["kind"], "joint/effort")
+        runtime = leapp.InferenceManager(path)
+        result = runtime({"policy/q": q, "policy/target": target})
+        torch.testing.assert_close(result["policy/legacy"], target - q)
+        torch.testing.assert_close(result["policy/new"], target - q)
+
+    def test_existing_output_extra_setpoint_is_not_reinterpreted(self):
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        value = leapp.annotate.input_tensors("policy", {"q": torch.ones(2)})
+        leapp.annotate.output_tensors(
+            "policy",
+            TensorSemantics(
+                "out",
+                value + 1,
+                OutputKindEnum.JOINT_POSITION,
+                extra={
+                    "is_setpoint": True,
+                    "axes": "custom",
+                    "spatial": {"custom": True},
+                },
+            ),
+            export_with="jit",
+        )
+        leapp.stop()
+        self.assertTrue(leapp.compile_graph(visualize=False))
+        path = os.path.join(self.TEST_GRAPH_NAME, self.TEST_GRAPH_NAME + ".yaml")
+        with open(path) as stream:
+            config = yaml.safe_load(stream)
+        entry = config["models"]["policy"]["outputs"][0]
+        self.assertEqual(entry["kind"], "target/joint/position")
+        self.assertIs(entry["is_setpoint"], True)
+        self.assertEqual(entry["axes"], "custom")
+        self.assertEqual(entry["spatial"], {"custom": True})

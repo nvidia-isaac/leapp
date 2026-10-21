@@ -198,7 +198,9 @@ Documentation Map
 
    semantics/usage
    semantics/kind_element_names
-   semantics/temporal
+   semantics/spatial
+   semantics/convenience
+   semantics/legacy
 
 .. toctree::
    :caption: Tensor Libraries
