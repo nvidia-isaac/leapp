@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [workspace]
-members = ["bindings/python", "bindings/cxx"]
+members = ["bindings/common", "bindings/python", "bindings/cxx"]
 default-members = ["."]
 resolver = "2"
 
@@ -12,7 +12,7 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 publish = false
-description = "Backend-independent LEAPP bundle loading and inspection"
+description = "LEAPP bundle inspection and core Session API"
 
 [dependencies]
 anyhow = "1"
@@ -30,6 +30,10 @@ tempfile = "3"
 [[test]]
 name = "bundle"
 path = "tests/unit_tests/bundle.rs"
+
+[[test]]
+name = "dlpack"
+path = "tests/unit_tests/dlpack.rs"
 
 [[test]]
 name = "binding_lifecycle"

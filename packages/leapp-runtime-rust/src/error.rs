@@ -61,6 +61,17 @@ impl std::error::Error for BundleError {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct Unsupported(pub String);
+
+impl fmt::Display for Unsupported {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Unsupported {}
+
 pub(crate) fn in_phase<T>(
     path: &Path,
     phase: &'static str,
@@ -77,14 +88,73 @@ pub(crate) fn in_phase<T>(
     })
 }
 
+#[derive(Debug)]
+pub(crate) struct Internal(pub String);
+
+impl fmt::Display for Internal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Internal {}
+
 fn classify_error(source: &anyhow::Error) -> ErrorCode {
+    if let Some(error) = source.downcast_ref::<RuntimeError>() {
+        return error.code();
+    }
+    if source.is::<Internal>() {
+        return ErrorCode::Internal;
+    }
     if let Some(error) = source.downcast_ref::<io::Error>() {
         if error.kind() == io::ErrorKind::NotFound {
             ErrorCode::NotFound
         } else {
             ErrorCode::Io
         }
+    } else if source.is::<Unsupported>() {
+        ErrorCode::Unsupported
     } else {
         ErrorCode::InvalidArgument
+    }
+}
+
+/// Execution failure with its phase and underlying diagnostic.
+#[derive(Debug)]
+pub struct RuntimeError {
+    code: ErrorCode,
+    phase: &'static str,
+    source: anyhow::Error,
+}
+
+impl RuntimeError {
+    pub(crate) fn new(phase: &'static str, source: anyhow::Error) -> Self {
+        Self {
+            code: classify_error(&source),
+            phase,
+            source,
+        }
+    }
+
+    /// Category suitable for programmatic error handling.
+    pub fn code(&self) -> ErrorCode {
+        self.code
+    }
+
+    /// Operation that failed, such as `convert`, `load`, `state`, or `execute`.
+    pub fn phase(&self) -> &'static str {
+        self.phase
+    }
+}
+
+impl fmt::Display for RuntimeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {:#}", self.phase, self.source)
+    }
+}
+
+impl std::error::Error for RuntimeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
     }
 }

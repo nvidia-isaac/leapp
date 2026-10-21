@@ -1,11 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Compile the shared lifecycle source against a test-only runtime API.
-// The real dependency still supplies Bundle and ErrorCode; no production shim.
+// Compile the binding lifecycle against a test-only session.
 extern crate leapp_runtime as bundle_api;
 extern crate self as leapp_runtime;
-
 pub use bundle_api::{Bundle, ErrorCode};
 use std::{
     fmt,
@@ -15,125 +13,102 @@ use std::{
 };
 
 mod lifecycle {
-    include!("../src/runtime.rs");
-
+    include!("../src/session.rs");
+    pub fn set_wait(
+        session: &SessionHandle,
+        entered: std::sync::mpsc::Sender<()>,
+        resume: std::sync::mpsc::Receiver<()>,
+    ) {
+        session.session.lock().unwrap().wait = Some((entered, resume));
+    }
     #[test]
-    fn close_recovers_poisoned_locks_and_releases_every_session() {
-        use std::panic::{catch_unwind, AssertUnwindSafe};
-
-        for poisoned in ["session", "registry", "runtime"] {
-            let (runtime, owner) = crate::runtime();
-            let sessions: Vec<_> = (0..3).map(|_| runtime.create_session().unwrap()).collect();
-            assert!(catch_unwind(AssertUnwindSafe(|| match poisoned {
-                "session" => {
-                    // Cleanup must visit sessions on both sides of the poisoned one.
-                    let _guard = sessions[1].slot.lock().unwrap();
-                    panic!("simulate session panic");
-                }
-                "registry" => {
-                    let _guard = runtime.0.sessions.lock().unwrap();
-                    panic!("simulate registry panic");
-                }
-                "runtime" => {
-                    let _guard = runtime.0.runtime.write().unwrap();
-                    panic!("simulate runtime panic");
-                }
-                _ => unreachable!(),
-            }))
-            .is_err());
-
-            assert!(matches!(runtime.close(), Err(Error::Lock)), "{poisoned}");
-            assert!(!runtime.is_open().unwrap());
-            assert!(owner.upgrade().is_none());
-            assert!(runtime.0.sessions.lock().unwrap().is_empty());
-            for session in &sessions {
-                assert!(session.slot.lock().unwrap().is_none());
-                assert!(matches!(session.reset(), Err(Error::Closed)));
-                assert!(matches!(
-                    session.run(&[], &RunOptions::default()),
-                    Err(Error::Closed)
-                ));
-            }
-            assert!(matches!(runtime.create_session(), Err(Error::Closed)));
-            runtime.close().unwrap();
-        }
+    fn close_recovers_poison_without_closing_peers() {
+        let (session, owner) = crate::session();
+        let peer = session.new_session().unwrap();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = session.session.lock().unwrap();
+            panic!("simulate session panic");
+        }));
+        assert!(matches!(session.reset(), Err(Error::Lock)));
+        assert!(matches!(session.close(), Err(Error::Lock)));
+        assert!(!session.is_open().unwrap());
+        assert!(session.info().model_names().is_empty());
+        session.close().unwrap();
+        peer.run(&[]).unwrap();
+        peer.close().unwrap();
+        assert!(owner.upgrade().is_none());
     }
 }
-use lifecycle::{Error, RuntimeHandle};
-
-pub type RuntimeOptions = Arc<()>;
-pub type TensorView<'a> = &'a [u8];
+use lifecycle::{Error, SessionHandle};
+pub mod dlpack {
+    pub type BorrowedTensor<'a> = &'a [u8];
+}
 pub type RunResult = ();
-
-#[derive(Default)]
-pub struct RunOptions(Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>);
-
-pub struct Runtime(Arc<()>);
-
-pub struct Session(Weak<()>);
-
+pub struct SessionOptions(Arc<()>);
+pub struct Session {
+    owner: Option<Arc<()>>,
+    wait: Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>,
+}
 #[derive(Debug)]
 pub struct RuntimeError(std::io::Error);
-
 impl RuntimeError {
     pub fn code(&self) -> ErrorCode {
-        ErrorCode::Internal
+        ErrorCode::InvalidArgument
     }
-
     pub fn phase(&self) -> &str {
         "execute"
     }
 }
-
 impl fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "test runtime error: {}", self.0)
+        self.0.fmt(f)
     }
 }
-
 impl std::error::Error for RuntimeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(&self.0)
     }
 }
-
-impl Runtime {
-    pub fn open(_: &Bundle, owner: RuntimeOptions) -> Result<Self, RuntimeError> {
-        Ok(Self(owner))
-    }
-
-    pub fn create_session(&self) -> Result<Session, RuntimeError> {
-        Ok(Session(Arc::downgrade(&self.0)))
-    }
-}
-
 impl Session {
-    pub fn run_with_options(
-        &mut self,
-        _: &[(&str, TensorView<'_>)],
-        options: &RunOptions,
-    ) -> Result<RunResult, RuntimeError> {
-        assert!(
-            self.0.upgrade().is_some(),
-            "runtime dropped during session lifetime"
-        );
-        if let Some((entered, resume)) = &options.0 {
+    pub fn open(_: &Bundle, options: SessionOptions) -> Result<Self, RuntimeError> {
+        Ok(Self {
+            owner: Some(options.0),
+            wait: None,
+        })
+    }
+    pub fn is_open(&self) -> bool {
+        self.owner.is_some()
+    }
+    pub fn new_session(&self) -> Result<Self, RuntimeError> {
+        self.reset_check()?;
+        Ok(Self {
+            owner: self.owner.clone(),
+            wait: None,
+        })
+    }
+    pub fn close(&mut self) {
+        self.owner.take();
+    }
+    fn reset_check(&self) -> Result<(), RuntimeError> {
+        if self.is_open() {
+            Ok(())
+        } else {
+            Err(RuntimeError(std::io::Error::other("session is closed")))
+        }
+    }
+    pub fn reset(&mut self) -> Result<(), RuntimeError> {
+        self.reset_check()
+    }
+    pub fn run(&mut self, _: &[(&str, dlpack::BorrowedTensor<'_>)]) -> Result<(), RuntimeError> {
+        self.reset_check()?;
+        if let Some((entered, resume)) = &self.wait {
             entered.send(()).unwrap();
             resume.recv_timeout(Duration::from_secs(5)).unwrap();
         }
         Ok(())
     }
-
-    pub fn reset(&mut self) -> Result<(), RuntimeError> {
-        assert!(
-            self.0.upgrade().is_some(),
-            "runtime dropped during session lifetime"
-        );
-        Ok(())
-    }
 }
-
-fn runtime() -> (RuntimeHandle, Weak<()>) {
+fn session() -> (SessionHandle, Weak<()>) {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("empty.yaml");
     std::fs::write(
@@ -144,92 +119,40 @@ fn runtime() -> (RuntimeHandle, Weak<()>) {
     let owner = Arc::new(());
     let weak = Arc::downgrade(&owner);
     (
-        RuntimeHandle::open(&Bundle::open(path).unwrap(), owner).unwrap(),
+        SessionHandle::open(&Bundle::open(path).unwrap(), SessionOptions(owner)).unwrap(),
         weak,
     )
 }
-
 #[test]
-fn runtime_errors_preserve_the_source_chain_and_diagnostics() {
-    use std::error::Error as _;
-
-    let runtime = RuntimeError(std::io::Error::other("test backend error"));
-    let message = runtime.to_string();
-    let error = Error::Runtime(runtime);
-    let source = error
-        .source()
+fn errors_preserve_the_source_chain_and_diagnostics() {
+    let error = Error::Runtime(RuntimeError(std::io::Error::other("backend diagnostic")));
+    assert!(error.to_string().contains("backend diagnostic"));
+    assert_eq!(error.phase(), "execute");
+    assert_eq!(error.code(), ErrorCode::InvalidArgument);
+    assert!(std::error::Error::source(&error)
         .unwrap()
-        .downcast_ref::<RuntimeError>()
-        .unwrap();
-    assert_eq!(error.code(), source.code());
-    assert_eq!(error.phase(), source.phase());
-    assert_eq!(error.to_string(), message);
-    assert_eq!(source.source().unwrap().to_string(), "test backend error");
-    assert!(Error::Closed.source().is_none());
-    assert!(Error::Lock.source().is_none());
+        .source()
+        .is_some());
 }
-
 #[test]
-fn sessions_keep_runtime_alive_after_the_last_runtime_handle_is_dropped() {
-    let (runtime, owner) = runtime();
-    let session = runtime.create_session().unwrap();
-    drop(runtime);
-    assert!(owner.upgrade().is_some());
-    session.run(&[], &RunOptions::default()).unwrap();
-    session.reset().unwrap();
-    drop(session);
-    assert!(owner.upgrade().is_none());
-}
-
-#[test]
-fn close_invalidates_all_handles_and_retains_bundle_info() {
-    let (runtime, owner) = runtime();
-    let clone = runtime.clone();
-    let path = runtime.info().yaml_path().to_owned();
-    let sessions = [
-        runtime.create_session().unwrap(),
-        runtime.create_session().unwrap(),
-    ];
-    clone.close().unwrap();
-    assert!(!runtime.is_open().unwrap());
-    assert!(owner.upgrade().is_none());
-    assert_eq!(runtime.info().yaml_path(), path);
-    assert!(matches!(runtime.create_session(), Err(Error::Closed)));
-    for session in sessions {
-        assert!(matches!(
-            session.run(&[], &RunOptions::default()),
-            Err(Error::Closed)
-        ));
-        let error = session.reset().unwrap_err();
-        assert!(matches!(error, Error::Closed));
-        assert_eq!(error.code(), ErrorCode::InvalidArgument);
-        assert_eq!(error.phase(), "execute");
-    }
-    runtime.close().unwrap();
-}
-
-#[test]
-fn close_waits_until_an_active_run_finishes() {
-    let (runtime, owner) = runtime();
-    let session = Arc::new(runtime.create_session().unwrap());
+fn close_waits_until_this_sessions_run_finishes() {
+    let (session, owner) = session();
     let (entered, running) = mpsc::channel();
     let (resume, paused) = mpsc::channel();
+    lifecycle::set_wait(&session, entered, paused);
+    let session = Arc::new(session);
     let run = {
         let session = session.clone();
-        thread::spawn(move || {
-            session
-                .run(&[], &RunOptions(Some((entered, paused))))
-                .unwrap()
-        })
+        thread::spawn(move || session.run(&[]).unwrap())
     };
     running.recv_timeout(Duration::from_secs(5)).unwrap();
     let (started, closing) = mpsc::channel();
     let (finished, closed) = mpsc::channel();
     let close = {
-        let runtime = runtime.clone();
+        let session = session.clone();
         thread::spawn(move || {
             started.send(()).unwrap();
-            runtime.close().unwrap();
+            session.close().unwrap();
             finished.send(()).unwrap();
         })
     };
@@ -243,5 +166,4 @@ fn close_waits_until_an_active_run_finishes() {
     run.join().unwrap();
     close.join().unwrap();
     assert!(owner.upgrade().is_none());
-    assert!(matches!(session.reset(), Err(Error::Closed)));
 }

@@ -1,27 +1,31 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Load and inspect an immutable LEAPP bundle without initializing a backend.
+//! Bundle inspection and the public Session API.
 //!
-//! ```no_run
-//! use leapp_runtime::Bundle;
-//! let bundle = Bundle::open("export/policy.yaml")?;
-//! for input in bundle.pipeline_inputs() {
-//!     if let Some(spec) = bundle.input_info(&input.node, &input.port) {
-//!         println!("{}: {:?}", input.name(), spec.shape);
-//!     }
-//! }
-//! # Ok::<(), leapp_runtime::BundleError>(())
-//! ```
+//! Session execution is supplied by the runtime integration; in this API revision,
+//! [`Session::open`] returns [`ErrorCode::Unsupported`].
+//!
 //! Implementation schema types are intentionally private:
 //!
 //! ```compile_fail
 //! use leapp_runtime::{BundleDescription, NodeSpec, Pipeline};
 //! ```
-#![forbid(unsafe_code)]
+//!
+//! Engine implementations are an internal compile-time choice:
+//!
+//! ```compile_fail
+//! use leapp_runtime::engines;
+//! ```
+#![deny(unsafe_op_in_unsafe_fn)]
 
 mod bundle;
+pub mod dlpack;
+mod engines;
 mod error;
+mod session;
 
 pub use bundle::{Bundle, DataType, Metadata, MetadataValue, PortRef, PortSpec};
-pub use error::{BundleError, ErrorCode};
+pub use engines::{ExecutionDevice, MemoryLocation};
+pub use error::{BundleError, ErrorCode, RuntimeError};
+pub use session::{OutputPlacement, RunResult, Session, SessionOptions};

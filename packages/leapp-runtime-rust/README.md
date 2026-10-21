@@ -3,12 +3,13 @@ SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All 
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# LEAPP Rust bundle API and shared lifecycle sources
+# LEAPP Rust bundle and Session API
 
 This package loads and validates exported LEAPP bundles and exposes their public
-inspection API in Rust, Python, and C++. It also provides shared runtime/session
-lifecycle sources for ownership, error handling, and shutdown. Bundle loading
-does not initialize an inference backend.
+inspection API in Rust, Python, and C++. It also exports the core Rust Session API and compiles its shared binding
+wrapper. This revision defines the execution contract: `Session::open()` returns
+`ErrorCode::Unsupported` until the runtime integration supplies execution.
+Bundle loading does not initialize an inference backend.
 
 The inspection and full-runtime Python distributions share the `leapp_runtime`
 import name and should be installed in separate environments.
@@ -19,17 +20,19 @@ import name and should be installed in separate environments.
 | --- | --- |
 | Rust core | `Bundle`, YAML schema parsing, graph and artifact validation, SHA-256 checks, safetensors initial-state validation |
 | Public inspection types | `PortRef`, `PortSpec`, `DataType`, `Metadata`, `MetadataValue`, `BundleError`, `ErrorCode` |
-| Common lifecycle sources | `RuntimeHandle`, `SessionHandle`, error-source preservation, and cleanup after poisoned locks; five focused regression tests |
+| Core Session API | `Session`, `SessionOptions`, `OutputPlacement`, `RunResult`, device/memory types, and `RuntimeError` |
+| Tensor API | Backend-independent DLPack descriptors and ownership types used by Session inputs and results |
+| Common lifecycle crate | `SessionHandle`, independent closure, error-source preservation, and cleanup after poisoned locks; three focused regression tests |
 | Python | PyO3 bundle bindings, detached metadata and port descriptors, typed stubs and structured exceptions |
 | C++ | C++20 bundle facade, typed metadata, status and data-type headers, private cxx transport, installable CMake target |
 | Tests | Rust bundle regression suite and independent Python/C++ inspection and lifetime tests |
 
-Concrete engine runtimes, sessions, results, tensor/DLPack code, graph planners,
-and backend adapters are supplied by the full runtime packages.
-Python and C++ share the core bundle implementation. The `bindings/common`
-lifecycle source depends on concrete execution types, so it is not a separate
-compiled crate in this inspection-only package. See the
-[common lifecycle sources](bindings/common/README.md) for integration and testing.
+Execution, feedback state, graph planning, native storage, and backend adapters
+are supplied by the runtime integration. The Rust Session contract and the
+`bindings/common` crate compile here against the same exported API types.
+Python and C++ currently expose bundle inspection; their executable Session
+bindings arrive with runtime integration. See the
+[common lifecycle crate](bindings/common/README.md) for integration and testing.
 This package has no Triton, CUDA, ONNX Runtime, PyTorch, or NumPy dependency.
 The C++ binding currently supports Unix platforms (Linux and macOS), using native
 path bytes.
@@ -84,7 +87,7 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo fmt --all --check
 ```
 
-The default workspace member is the core crate, including the five common
+The default workspace member is the core crate, including the three common
 lifecycle tests. These tests require no engine or language-binding SDK. Building
 the complete workspace
 also requires a C++20 compiler and Python 3.10 or newer. See
@@ -94,10 +97,41 @@ Core bundle tests live in `tests/unit_tests/`, with shared fixtures in
 `tests/fixtures/`. Language-binding tests stay under their respective bindings.
 All inspection tests create opaque artifact bytes; no model generation is needed.
 
+## Core Session contract
+
+`Session::open(&bundle, options)` accepts immutable construction options:
+
+```rust
+use leapp_runtime::{ExecutionDevice, OutputPlacement, Session, SessionOptions};
+
+let options = SessionOptions {
+    device: ExecutionDevice::Cpu,
+    output_placement: OutputPlacement::default(),
+};
+# let bundle = leapp_runtime::Bundle::open("export/policy.yaml")?;
+let session = Session::open(&bundle, options);
+// This API revision returns a RuntimeError with ErrorCode::Unsupported.
+# Ok::<(), leapp_runtime::BundleError>(())
+```
+
+The public lifecycle is `open`, `info`, `is_open`, `new_session`, `run`, `reset`,
+and `close`. `run` accepts named `dlpack::BorrowedTensor` inputs and returns a
+`RunResult` retaining `SharedTensor` outputs. There is no separate public Runtime
+owner, no per-call RunOptions, and no engine field in SessionOptions. Output
+placement is configured at construction and inherited by every new session.
+
+The execution contract requires `new_session()` to share loaded models and
+immutable options while starting from captured initial state, not current
+feedback. `reset()` restores that initial state. Closing one session preserves
+its peers and retained results. Execution is deliberately unavailable in this
+revision; the runtime integration implements these operations without changing
+the public signatures. There is no runtime selector or optional backend feature.
+
 ## Shared lifecycle
 
-`bindings/common/src/runtime.rs` preserves runtime error sources and completes
-shutdown cleanup even when locks are poisoned. The lifecycle regression target
-compiles this implementation against a small test-only runtime API, without
-inference SDKs. See the [session reset contract](bindings/common/README.md#session-reset)
-for state ownership and reset behavior.
+`bindings/common` compiles its `SessionHandle` wrapper against the exported core
+Session API. It provides serialization, error-source preservation, and independent
+closure. Its existing three lifecycle tests use a small test-only session to
+exercise waiting and poisoned-lock cleanup before native execution is available.
+The wrapper itself is built against the real core crate by workspace checks.
+See the [session reset contract](bindings/common/README.md#session-reset).
