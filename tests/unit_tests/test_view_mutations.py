@@ -191,6 +191,84 @@ def test_copy_and_metadata_contracts(function, library):
     check_replay(capture(function, library), function, library)
 
 
+SLICE_BOUNDS = [
+    (None, None),
+    (-3, None),
+    (2, 100),
+    (4, 2),
+    (100, None),
+    (-100, None),
+    (None, -2),
+    (-4, -1),
+    (None, -100),
+    (2, 4),
+]
+
+
+def mutation_then_slices(x, delta):
+    x = x.reshape(2, 6)
+    x += delta
+    return tuple(x[:, start:stop] for start, stop in SLICE_BOUNDS) + (x[:, ::2],)
+
+
+def rewritten_slices(copy=False):
+    graph = torch.fx.Graph()
+    x = graph.placeholder("x")
+    target = torch.ops.aten.slice_copy.Tensor if copy else torch.ops.aten.slice.Tensor
+    outputs = [
+        graph.call_function(target, (x, -1, start, stop, 1))
+        for start, stop in SLICE_BOUNDS
+    ]
+    graph.output(tuple(outputs))
+    TracedTensorNode._rewrite_aten_ops(graph)
+    return torch.fx.GraphModule(torch.nn.Module(), graph)
+
+
+@pytest.mark.parametrize("copy", [False, True])
+def test_rewritten_slice_bounds_use_runtime_size(copy):
+    model = rewritten_slices(copy)
+    traced = torch.jit.trace(model, (torch.ones(2, 6),))
+    for loaded in (model, torch.jit.script(model), traced):
+        for size in (0, 1, 3, 6, 11, 101):
+            x = torch.arange(2.0 * size).reshape(2, size)
+            actual = loaded(x)
+            for value, (start, stop) in zip(actual, SLICE_BOUNDS):
+                torch.testing.assert_close(value, x[:, start:stop])
+            if copy:
+                actual[0].add_(10)
+                torch.testing.assert_close(x, torch.arange(2.0 * size).reshape(2, size))
+
+
+@pytest.mark.parametrize("backend", ["pt2", "onnx"])
+def test_rewritten_slice_dynamic_artifact_reload(tmp_path, backend):
+    model = rewritten_slices()
+    inputs = (torch.arange(24.0).reshape(2, 12),)
+    program = torch.export.export(
+        model,
+        inputs,
+        dynamic_shapes=({1: torch.export.Dim("width", min=8, max=32)},),
+    )
+    if backend == "pt2":
+        path = tmp_path / "dynamic_slices.pt2"
+        torch.export.save(program, path)
+        loaded = torch.export.load(path).module()
+    else:
+        path = tmp_path / "dynamic_slices.onnx"
+        torch.onnx.export(program, f=path, dynamo=True)
+        session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+        name = session.get_inputs()[0].name
+
+        def loaded(x):
+            return tuple(
+                torch.from_numpy(y) for y in session.run(None, {name: x.numpy()})
+            )
+
+    for size in (8, 11, 12, 20, 32):
+        x = torch.arange(2.0 * size).reshape(2, size)
+        for value, (start, stop) in zip(loaded(x), SLICE_BOUNDS):
+            torch.testing.assert_close(value, x[:, start:stop])
+
+
 @pytest.mark.parametrize("force_native", [False, True])
 def test_tensor_slice_bounds_keep_runtime_mutations(force_native, monkeypatch):
     if force_native:
@@ -225,11 +303,14 @@ def test_tensor_slice_bounds_keep_runtime_mutations(force_native, monkeypatch):
 
 
 @pytest.mark.parametrize("library", ["torch", "numpy"])
-@pytest.mark.parametrize("backend", ["jit", "pt2", "onnx"])
-def test_returned_alias_artifact_reload(tmp_path, library, backend):
-    model = capture(nested, library)
+@pytest.mark.parametrize("backend", ["fx", "jit", "pt2", "onnx"])
+@pytest.mark.parametrize("function", [nested, mutation_then_slices])
+def test_returned_alias_artifact_reload(tmp_path, library, backend, function):
+    model = capture(function, library)
     inputs = (torch.arange(12.0), torch.tensor([1.0]))
-    if backend == "jit":
+    if backend == "fx":
+        loaded = model
+    elif backend == "jit":
         path = tmp_path / "views.pt"
         torch.jit.save(torch.jit.script(model), path)
         loaded = torch.jit.load(path)
@@ -247,7 +328,7 @@ def test_returned_alias_artifact_reload(tmp_path, library, backend):
             values = session.run(None, dict(zip(names, [x.numpy(), delta.numpy()])))
             return tuple(torch.from_numpy(value) for value in values)
 
-    check_replay(loaded, nested, library)
+    check_replay(loaded, function, library)
 
 
 @pytest.mark.parametrize("library", ["torch", "numpy"])

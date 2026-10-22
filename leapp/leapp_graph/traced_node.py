@@ -10,7 +10,7 @@ from leapp.leapp_graph.leapp_node import LeappNode
 import torch
 import torch.fx as fx
 from torch.fx.proxy import Proxy
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 import operator
 
 from leapp.utils.logging import _get_logger
@@ -42,6 +42,33 @@ from dataclasses import replace
 
 if TYPE_CHECKING:
     from leapp.leapp_graph.datatypes.warp import WarpSegment
+
+
+def _normalize_slice_bound(bound: int, size: int) -> int:
+    bound = bound + size if bound < 0 else bound
+    if bound < 0:
+        return 0
+    return size if bound > size else bound
+
+
+def _slice_with_narrow(
+    tensor: torch.Tensor,
+    dim: int,
+    start: Optional[int],
+    end: Optional[int],
+    copy: bool,
+) -> torch.Tensor:
+    """Lower a unit-step slice while preserving runtime bounds and copy semantics."""
+    # The legacy tracer represents size() as a Tensor; script the integer math
+    # so tracing retains runtime sizes rather than freezing Python integers.
+    if not torch.jit.is_scripting() and torch.jit.is_tracing():
+        return torch.jit.script(_slice_with_narrow)(tensor, dim, start, end, copy)
+    size = tensor.size(dim)
+    start = _normalize_slice_bound(0 if start is None else start, size)
+    end = size if end is None else _normalize_slice_bound(end, size)
+    length = max(end - start, 0)
+    result = torch.narrow(tensor, dim, start, length)
+    return result.clone() if copy else result
 
 
 # fx graph overloads to create custom behavior when interacting with the graph.
@@ -411,7 +438,7 @@ class TracedTensorNode(LeappNode):
         # -----------------------------------------------------------------
         # Ops that can be handled by torch.narrow (slice with dim/start/end).
         # aten::slice.Tensor(self, dim, start, end, step=1)
-        # When step==1 this is equivalent to torch.narrow.
+        # Unit-step bounds must be normalized before lowering to torch.narrow.
         # Identity slices (start=0, end>=2^62) are replaced by the input.
         # -----------------------------------------------------------------
         _SLICE_OPS = {"slice", "slice_copy"}
@@ -475,21 +502,25 @@ class TracedTensorNode(LeappNode):
             # Rewrite to torch.narrow for all backends:
             #   - jit-script can't resolve aten OpOverloads
             #   - onnx-dynamo produces bad ONNX Slice nodes for MAX_INT end
-            # Identity slices (start=0, end=MAX) are removed entirely.
-            # "To end" slices compute length dynamically via size()-start.
+            # Slice bounds are normalized against the runtime dimension size.
             if op_name in _SLICE_OPS:
                 tensor_arg = node.args[0]
                 dim = node.args[1] if len(node.args) > 1 else 0
                 start = node.args[2] if len(node.args) > 2 else 0
                 end = node.args[3] if len(node.args) > 3 else (1 << 62)
                 step = node.args[4] if len(node.args) > 4 else 1
-                is_end_max = isinstance(end, int) and end >= (1 << 62)
+                is_end_max = end is None or (isinstance(end, int) and end >= (1 << 62))
 
                 if isinstance(start, fx.Node) or isinstance(end, fx.Node):
                     node.target = target.overloadpacket
                     continue
 
-                if step == 1 and start == 0 and is_end_max:
+                if (
+                    op_name == "slice"
+                    and step == 1
+                    and start in (None, 0)
+                    and is_end_max
+                ):
                     # Identity slice — remove (no-op)
                     node.replace_all_uses_with(tensor_arg)
                     nodes_to_erase.append(node)
@@ -497,26 +528,15 @@ class TracedTensorNode(LeappNode):
                     continue
 
                 if step == 1:
-                    if is_end_max:
-                        # "To end" slice: length = tensor.size(dim) - start
-                        with graph.inserting_before(node):
-                            size_node = graph.call_function(
-                                torch.Tensor.size,
-                                args=(tensor_arg, dim),
-                            )
-                            length_node = graph.call_function(
-                                torch.sub,
-                                args=(size_node, start),
-                            )
-                        node.target = torch.narrow
-                        node.args = (tensor_arg, dim, start, length_node)
-                        node.kwargs = {}
-                    else:
-                        # Bounded slice: length = end - start
-                        length = end - start
-                        node.target = torch.narrow
-                        node.args = (tensor_arg, dim, start, length)
-                        node.kwargs = {}
+                    node.target = _slice_with_narrow
+                    node.args = (
+                        tensor_arg,
+                        dim,
+                        start,
+                        None if is_end_max else end,
+                        op_name == "slice_copy",
+                    )
+                    node.kwargs = {}
                 else:
                     # TorchScript resolves overload packets, not .Tensor.
                     node.target = target.overloadpacket
