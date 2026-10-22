@@ -27,14 +27,10 @@ def functionalize_graph(graph, root, inputs):
     input-copyback operations to reproduce eager caller mutation. LEAPP exposes
     updates through declared outputs/state, so only USER_OUTPUT values belong
     in its artifact. This also handles an output which is the updated input.
+
+    The caller applies LEAPP's pruning and capture-error checks first,
+    preserving mutations until their alias effects have been normalized.
     """
-    # Drop orphan metadata reads and diagnostics, but never prune a recorded
-    # mutation by data dependencies before its alias effects are normalized.
-    graph.eliminate_dead_code(
-        is_impure_node=lambda node: (
-            node.is_impure() or node.meta.get("leapp_mutation", False)
-        )
-    )
     original_inputs = [node.target for node in graph.nodes if node.op == "placeholder"]
     raw = fx.GraphModule(root, graph)
     with torch.inference_mode(False):

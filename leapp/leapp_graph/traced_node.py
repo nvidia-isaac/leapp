@@ -848,6 +848,11 @@ class TracedTensorNode(LeappNode):
             node.meta.pop(STORAGE_LAYOUT_META_KEY, None)
         self.graph.recording = False
         if self.graph.requires_functionalization:
+            # A write through a view can affect an output without an explicit
+            # data edge yet. Keep writes and their inputs until normalized,
+            # while pruning unused work and reporting required capture errors
+            # through the same LEAPP checks as the final graph.
+            self._prune_graph(output_nodes, preserve_mutations=True)
             self.graph.output(
                 output_nodes[0] if len(output_nodes) == 1 else tuple(output_nodes)
             )
@@ -858,6 +863,30 @@ class TracedTensorNode(LeappNode):
             )
             output_node = next(n for n in self.graph.nodes if n.op == "output")
             output_nodes = list(output_node.all_input_nodes)
+
+        self._prune_graph(
+            output_nodes,
+            preserve_mutations=getattr(self.graph, "preserve_mutations", False),
+        )
+
+        # After pruning, record which Warp-segment outputs survived (are actually
+        # used) as a binary mask on the segment marker node's metadata.
+        self._stamp_warp_used_output_masks()
+
+        # Check if graph already has an output node
+        has_output = any(node.op == "output" for node in self.graph.nodes)
+
+        if not has_output:
+            # If single output, return it directly; if multiple, return as tuple
+            if len(output_nodes) == 1:
+                self.graph.output(output_nodes[0])
+            else:
+                self.graph.output(tuple(output_nodes))
+
+    def _prune_graph(
+        self, output_nodes: list[fx.Node], *, preserve_mutations: bool = False
+    ) -> None:
+        """Prune unused computation, validate capture, and update the node inputs."""
         used_nodes = set()
 
         def mark_used(node):
@@ -873,7 +902,7 @@ class TracedTensorNode(LeappNode):
         for output_node in output_nodes:
             mark_used(output_node)
 
-        if getattr(self.graph, "preserve_mutations", False):
+        if preserve_mutations:
             for node in self.graph.nodes:
                 if node.meta.get("leapp_mutation", False) or (
                     node.op.startswith("call_") and node.is_impure()
@@ -901,6 +930,7 @@ class TracedTensorNode(LeappNode):
                 nodes_to_remove.append(node)
 
         # Erase nodes in reverse order to avoid issues with dependencies
+        trimmed_inputs = set()
         for node in reversed(nodes_to_remove):
             if node.op == "placeholder":
                 input_description = LeappNode.get_io_description_by_name(
@@ -912,37 +942,24 @@ class TracedTensorNode(LeappNode):
                         f"could not find input description for placeholder '{node.target}'"
                     )
                     continue
-                self.trimmed_inputs.add(input_description.name_str)
+                trimmed_inputs.add(input_description.name_str)
 
             if len(node.users) == 0:
                 self.graph.erase_node(node)
 
-        if len(self.trimmed_inputs) > 0:
+        if trimmed_inputs:
+            self.trimmed_inputs.update(trimmed_inputs)
             _get_logger().warning(
                 f"Warning: when building the graph module for {self.name}, "
                 "detected the following inputs are not used in the computation or directly returned as output: "
-                f"{self.trimmed_inputs} \n"
+                f"{trimmed_inputs} \n"
                 "For clarity and efficiency, consider removing these inputs"
             )
 
             # Remove trimmed inputs from self.inputs
             self.inputs = [
-                inp for inp in self.inputs if inp.name_str not in self.trimmed_inputs
+                inp for inp in self.inputs if inp.name_str not in trimmed_inputs
             ]
-
-        # After pruning, record which Warp-segment outputs survived (are actually
-        # used) as a binary mask on the segment marker node's metadata.
-        self._stamp_warp_used_output_masks()
-
-        # Check if graph already has an output node
-        has_output = any(node.op == "output" for node in self.graph.nodes)
-
-        if not has_output:
-            # If single output, return it directly; if multiple, return as tuple
-            if len(output_nodes) == 1:
-                self.graph.output(output_nodes[0])
-            else:
-                self.graph.output(tuple(output_nodes))
 
     def _stamp_warp_used_output_masks(self) -> None:
         """Compute runner output masks from the live graph after normalization.
