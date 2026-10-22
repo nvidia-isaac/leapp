@@ -10,7 +10,7 @@ import functools
 import torch
 
 from .._attribute_patching import AttributePatchRegistry
-from ..proxy_view import conversion_proxy
+from ..proxy import conversion_proxy
 
 
 class TorchPatchBackend:

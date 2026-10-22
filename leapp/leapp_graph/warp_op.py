@@ -88,8 +88,7 @@ else:
     def _update_output_ref_proxy(node_ref: Any, ref, proxy) -> None:
         """Point this segment output's value at the runner output that produced it.
 
-        Updates the traced array's shared view so every Torch or NumPy alias of
-        that buffer follows the runner output too.
+        Record a write into the stable handle used by the array and its aliases.
         """
         if isinstance(ref.array, TracedWpArray):
             ref.array.rebind_tracing_proxy(ref.name, node_ref, proxy)
