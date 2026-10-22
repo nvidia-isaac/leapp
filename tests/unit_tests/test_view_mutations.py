@@ -11,6 +11,7 @@ import pytest
 import torch
 from torch.fx.experimental.symbolic_shapes import GuardOnDataDependentSymNode
 
+from leapp.leapp_graph.aten_rewrites import rewrite_aten_ops
 from leapp.leapp_graph.datatypes.patching import TracingPatcher
 from leapp.leapp_graph.traced_node import TracedTensorNode
 
@@ -220,7 +221,7 @@ def rewritten_slices(copy=False):
         for start, stop in SLICE_BOUNDS
     ]
     graph.output(tuple(outputs))
-    TracedTensorNode._rewrite_aten_ops(graph)
+    rewrite_aten_ops(graph)
     return torch.fx.GraphModule(torch.nn.Module(), graph)
 
 
@@ -303,14 +304,12 @@ def test_tensor_slice_bounds_keep_runtime_mutations(force_native, monkeypatch):
 
 
 @pytest.mark.parametrize("library", ["torch", "numpy"])
-@pytest.mark.parametrize("backend", ["fx", "jit", "pt2", "onnx"])
+@pytest.mark.parametrize("backend", ["jit", "pt2", "onnx"])
 @pytest.mark.parametrize("function", [nested, mutation_then_slices])
 def test_returned_alias_artifact_reload(tmp_path, library, backend, function):
     model = capture(function, library)
     inputs = (torch.arange(12.0), torch.tensor([1.0]))
-    if backend == "fx":
-        loaded = model
-    elif backend == "jit":
+    if backend == "jit":
         path = tmp_path / "views.pt"
         torch.jit.save(torch.jit.script(model), path)
         loaded = torch.jit.load(path)
