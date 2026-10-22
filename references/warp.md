@@ -6,7 +6,7 @@ LEAPP records Warp regions as `leapp::warp_runner` custom operations, embedding 
 
 ## Set up the export environment
 
-Current export/capture requirements are Linux, a CUDA GPU, Warp >=1.16, and a matching CUDA toolkit with `nvcc`. Native builds also need a C++17 compiler, CMake >=3.18, and network access to download ONNX Runtime headers. PTX is currently targeted at compute capability 7.5: older GPUs and kernels relying on newer hardware features are outside this export contract. Verify version-specific requirements before installing.
+Current export/capture requirements are Linux, a CUDA GPU, Warp >=1.18, and a matching CUDA toolkit with `nvcc`. Native builds also need a C++17 compiler, CMake >=3.18, and network access to download ONNX Runtime headers. PTX is currently targeted at compute capability 7.5: older GPUs and kernels relying on newer hardware features are outside this export contract. Verify version-specific requirements before installing.
 
 Use the application's environment and package manager. A default `leapp` installation does not install Warp support. Select **one** extra matching the CUDA toolkit (not merely the driver's maximum supported CUDA version):
 

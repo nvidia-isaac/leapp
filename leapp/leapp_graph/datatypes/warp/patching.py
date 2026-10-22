@@ -58,6 +58,8 @@ import inspect
 import sys
 
 import torch
+from torch.fx.proxy import Proxy
+from torch.multiprocessing.reductions import StorageWeakRef
 import warp as wp
 from warp._src.context import Function as WarpKernelLanguageFunction
 
@@ -68,7 +70,7 @@ from leapp.utils.caller_identity import (
 from leapp.utils.logging import _get_logger
 
 from .._attribute_patching import AttributePatchRegistry
-from ..proxy_view import may_adopt_view
+from ..proxy_view import STORAGE_LAYOUT_META_KEY, may_adopt_view, conversion_proxy
 from .cupti_oracle import WarpCudaOracle
 from .session import WarpTraceSession
 from .traced_wp_array import TracedWpArray
@@ -508,7 +510,7 @@ class WarpPatchBackend:
         if may_adopt_view(src, args[0]):
             view, proxy = src.proxy_view, None
         else:
-            view, proxy = None, src.proxy
+            view, proxy = None, conversion_proxy(src, args[0])
         TracedWpArray.make_traced_in_place(
             args[0], src.name, src.context_obj, proxy, view=view
         )
@@ -556,6 +558,65 @@ class WarpPatchBackend:
         for array in traced_inputs:
             if not segment.knows_array(array):
                 segment.add_input_ref(array)
+
+    def resolve_storage_array(self, array: TracedWpArray) -> TracedWpArray:
+        """Bind a Torch-backed view to APIC's whole-allocation graph value.
+
+        Kernel offsets and strides remain in the APIC capture. Both segment
+        inputs and outputs must expose the allocation, so a later Torch read
+        or write observes the same storage, including bytes outside the view.
+        """
+        owner = getattr(array, "_tensor", None)
+        if not isinstance(owner, torch.Tensor):
+            return array
+        allocation_bytes = array._storage_nbytes
+        owner = owner.as_subclass(torch.Tensor)
+        storage = owner.untyped_storage()
+        if (
+            owner.storage_offset() == 0
+            and owner.is_contiguous()
+            and owner.numel() * owner.element_size() == storage.nbytes()
+        ):
+            return array
+        if (
+            allocation_bytes != storage.nbytes()
+            or array._storage_base_ptr != storage.data_ptr()
+        ):
+            raise RuntimeError("Warp view allocation does not match its Torch storage")
+
+        proxy = getattr(array, "proxy", None)
+        identity = StorageWeakRef(storage)
+        pending, seen = ([proxy.node] if proxy is not None else []), set()
+        while pending:
+            node = pending.pop()
+            if node in seen:
+                continue
+            seen.add(node)
+            layout = node.meta.get(STORAGE_LAYOUT_META_KEY)
+            if layout is not None and layout.identity == identity:
+                if layout.dtype != owner.dtype:
+                    raise RuntimeError(
+                        "Warp views cannot reinterpret Torch storage dtype"
+                    )
+                # Reconstruct a zero-copy native alias; do not trace allocation
+                # plumbing or add a second conversion operation to the graph.
+                with self.pause_context():
+                    full = torch.empty(0, device=owner.device, dtype=layout.dtype)
+                    full.set_(storage, 0, layout.shape, layout.strides)
+                    raw = wp.from_torch(full)
+                return TracedWpArray.make_traced_in_place(
+                    raw,
+                    array.name,
+                    array.context_obj,
+                    proxy=Proxy(node, proxy.tracer),
+                )
+            pending.extend(node.all_input_nodes)
+        # Only follow this view's graph ancestry. A separately declared parent
+        # is not evidence of an alias relationship in the exported program.
+        raise RuntimeError(
+            "Warp view has no full storage value in this node's graph; "
+            "declare the covering Torch tensor before creating the view"
+        )
 
     #########################################################
     # static Helper functions

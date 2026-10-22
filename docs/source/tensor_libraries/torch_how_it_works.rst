@@ -35,8 +35,8 @@ node being traced. That graph is the only thing an export backend ever sees.
       :class-card: leapp-fit-card sd-rounded-3
 
       It is the one form every torch export path already accepts, so a single
-      recording can leave as TorchScript, ``.pt2``, or ONNX with no second
-      trace. It is also plain Python, so LEAPP can edit it after the fact.
+      recording can leave as TorchScript, ``.pt2``, or ONNX through the same
+      FX interface. It is also plain Python, so LEAPP can edit it after the fact.
 
    .. grid-item-card:: How LEAPP fills it
       :class-card: leapp-fit-card sd-rounded-3

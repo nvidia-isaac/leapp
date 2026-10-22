@@ -17,6 +17,8 @@
 """Tests for several traced carriers over one shared allocation."""
 
 import unittest
+import tempfile
+from pathlib import Path
 import numpy as np
 import torch
 import warp as wp
@@ -364,6 +366,70 @@ class TestWarpSharedMemory(WarpTestCase, LEAPPFunctionalTestBase):
     left on the pre-segment proxy produces a graph whose runner has no consumers
     and gets pruned, so the export silently returns the unmodified input.
     """
+
+    def test_strided_torch_views_bind_one_warp_allocation(self):
+        """Replay Torch and Warp writes through sibling views after artifact reload."""
+        for backend in ("onnx", "pt2"):
+            with self.subTest(backend=backend), tempfile.TemporaryDirectory() as folder:
+                leapp.start(name=self.TEST_GRAPH_NAME, save_path=folder)
+                try:
+                    for offset, amount in ((0, 1), (100, 7)):
+                        source, delta = annotate.input_tensors(
+                            "policy",
+                            {
+                                "source": torch.arange(32.0, device=self.DEVICE)
+                                + offset,
+                                "delta": torch.tensor(
+                                    [float(amount)], device=self.DEVICE
+                                ),
+                            },
+                        )
+                        root = source * delta
+                        first, second = root[1:12][::2], root[17:28:2]
+                        first += delta
+                        a, b = wp.from_torch(first), wp.from_torch(second)
+                        wp.launch(
+                            self.kernels.mutate_both_in_place,
+                            dim=a.size,
+                            inputs=[a, b],
+                            device=self.DEVICE,
+                        )
+                        annotate.output_tensors(
+                            "policy",
+                            {"root": root * 2, "view": first},
+                            export_with=backend,
+                        )
+                finally:
+                    leapp.stop()
+                leapp.compile_graph(visualize=False, validate=True, strict=True)
+                manager = leapp.InferenceManager(
+                    str(
+                        Path(folder)
+                        / self.TEST_GRAPH_NAME
+                        / f"{self.TEST_GRAPH_NAME}.yaml"
+                    )
+                )
+                for offset, amount in ((100, 1), (0, 7), (-20, -3)):
+                    source = torch.arange(32.0, device=self.DEVICE) + offset
+                    delta = torch.tensor([float(amount)], device=self.DEVICE)
+                    expected = source * delta
+                    expected[1:12:2] += amount + 1
+                    expected[17:28:2] *= 2
+                    actual = manager.run_policy(
+                        {"policy/source": source, "policy/delta": delta}
+                    )
+                    torch.testing.assert_close(
+                        actual["policy/root"].to(self.DEVICE), expected * 2
+                    )
+                    torch.testing.assert_close(
+                        actual["policy/view"].to(self.DEVICE), expected[1:12:2]
+                    )
+                    torch.testing.assert_close(
+                        source, torch.arange(32.0, device=self.DEVICE) + offset
+                    )
+                    torch.testing.assert_close(
+                        delta, torch.tensor([float(amount)], device=self.DEVICE)
+                    )
 
     def test_from_torch_alias_follows_the_segment(self):
         """A segment writing a converted buffer moves its Torch carrier too.
@@ -934,6 +1000,38 @@ class TestNumpySharedMemory(LEAPPFunctionalTestBase):
     sharing there would report a mutation eager NumPy never applied.
     """
 
+    def test_view_mutation_feedback(self):
+        """A NumPy view write updates the state restored on the next policy call."""
+        leapp.start(name=self.TEST_GRAPH_NAME, max_cached_io=2)
+        try:
+            for amount in (1.0, 3.0):
+                observation = annotate.input_tensors(
+                    "policy", {"obs": np.array([amount], dtype=np.float32)}
+                )
+                state = annotate.state_tensors(
+                    "policy", {"history": np.zeros(12, dtype=np.float32)}
+                )
+                view = state.reshape(3, 4)[:, 1:3]
+                view += observation
+                annotate.update_state("policy", {"history": state})
+                annotate.output_tensors(
+                    "policy", {"action": state * 2}, export_with="pt2"
+                )
+        finally:
+            leapp.stop()
+        leapp.compile_graph(visualize=False, validate=True, strict=True)
+        manager = leapp.InferenceManager(
+            f"{self.TEST_GRAPH_NAME}/{self.TEST_GRAPH_NAME}.yaml"
+        )
+        expected = torch.zeros(12)
+        for amount in (2.0, -1.0, 4.0):
+            expected.reshape(3, 4)[:, 1:3] += amount
+            device = manager.nodes["policy"].device
+            result = manager.run_policy(
+                {"policy/obs": torch.tensor([amount], device=device)}
+            )
+            torch.testing.assert_close(result["policy/action"].cpu(), expected * 2)
+
     def test_cpu_numpy_conversion_shares_a_root(self):
         """``.numpy()`` on a CPU tensor is a second handle, not a copy."""
         leapp.start(name=self.TEST_GRAPH_NAME)
@@ -1015,15 +1113,13 @@ class TestNumpySharedMemory(LEAPPFunctionalTestBase):
     def test_torch_mutation_reaches_the_numpy_carrier(self):
         """The reverse direction: a Torch write is visible through NumPy.
 
-        Asserted on provenance rather than through an export, because reading
-        the mutated value back out of the NumPy carrier is the same shared-cell
-        property the test above already drives end to end.
+        Validate exported behavior: native view handles remain stable while
+        functionalization resolves their recorded mutation.
         """
         leapp.start(name=self.TEST_GRAPH_NAME)
         obs = annotate.input_tensors("policy", {"obs": torch.tensor([-1.0, 2.0, -3.0])})
 
         np_view = obs.numpy()
-        placeholder_proxy = obs.proxy
         torch.relu_(obs)
 
         self.assertIs(
@@ -1031,10 +1127,12 @@ class TestNumpySharedMemory(LEAPPFunctionalTestBase):
             np_view.proxy_view,
             "the Torch mutation replaced the root instead of its proxy",
         )
-        self.assertIsNot(
-            placeholder_proxy,
-            np_view.proxy,
-            "the NumPy carrier still reports the pre-mutation proxy",
+        annotate.output_tensors("policy", {"action": np_view * 2}, export_with="jit")
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+        self.verify_inference_manager(
+            source_inputs={"policy/obs": torch.tensor([-4.0, 5.0, -6.0])},
+            source_outputs={"policy/action": torch.tensor([0.0, 10.0, 0.0])},
         )
 
 
