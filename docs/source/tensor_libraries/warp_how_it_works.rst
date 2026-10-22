@@ -97,22 +97,6 @@ three ``wp.launch()`` calls between them.
       Runtime, and a torch custom operator under PT2. Both libraries come from
       ``leapp-build-warp-runtime``; see :doc:`installation`.
 
-Torch views at a segment boundary
-=================================
-
-When Warp exposes allocation-wide bounds for a Torch-backed array, a sliced
-array can refer to a larger allocation than its logical shape suggests. LEAPP
-binds the covering Torch graph value to both segment inputs and outputs, while
-the captured Warp program retains the slice's offsets and strides. Sibling
-views of that allocation share one binding in each direction. A Warp write
-therefore updates the full graph value, including what later Torch consumers
-observe through other views.
-
-Capture records weak storage identities and layout descriptions on existing
-graph nodes, without retaining intermediate tensor allocations. These temporary
-descriptions are removed before export. The view must descend from a traced,
-contiguous Torch value covering the allocation; see :doc:`warp_limitations`.
-
 What breaks a segment
 =====================
 

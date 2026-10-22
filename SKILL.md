@@ -175,7 +175,7 @@ When needed, read [deployment semantics](references/semantics.md). **Prefer stan
 Warp is part of this skill. **Before integrating Warp, read [the complete Warp guide](references/warp.md)** for prerequisites, native runtime setup, automatic/explicit capture, limitations, replay, and troubleshooting. No separate skill or LEAPP source checkout is required.
 
 - Use the matching `leapp[warp-cu12]` or `leapp[warp-cu13]` extra, then run `leapp-build-warp-runtime` and `leapp-build-warp-runtime --status` in that environment.
-- Export capture currently requires Linux, a CUDA GPU, the matching CUDA toolkit, and Warp >=1.16. Verify current requirements in the online setup guide.
+- Export capture currently requires Linux, a CUDA GPU, the matching CUDA toolkit, and Warp >=1.18. Verify current requirements in the online setup guide.
 - Initialize Warp before `start(global_patching=True)`. Run the same Warp path at least twice: discovery then capture. A segment groups Warp calls inside a node; it is not a reason to split the full pipeline into multiple models.
 - Use ONNX Dynamo by default; PT2 is the other supported Warp exporter. Deploy the corresponding native runtime dependency along with the bundle.
 

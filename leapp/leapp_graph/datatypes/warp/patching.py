@@ -567,10 +567,9 @@ class WarpPatchBackend:
         or write observes the same storage, including bytes outside the view.
         """
         owner = getattr(array, "_tensor", None)
-        allocation_bytes = getattr(array, "_storage_nbytes", None)
-        if not isinstance(owner, torch.Tensor) or allocation_bytes is None:
-            # Older Warp releases describe the view rather than its allocation.
+        if not isinstance(owner, torch.Tensor):
             return array
+        allocation_bytes = array._storage_nbytes
         owner = owner.as_subclass(torch.Tensor)
         storage = owner.untyped_storage()
         if (
@@ -581,7 +580,7 @@ class WarpPatchBackend:
             return array
         if (
             allocation_bytes != storage.nbytes()
-            or getattr(array, "_storage_base_ptr", None) != storage.data_ptr()
+            or array._storage_base_ptr != storage.data_ptr()
         ):
             raise RuntimeError("Warp view allocation does not match its Torch storage")
 

@@ -369,10 +369,6 @@ class TestWarpSharedMemory(WarpTestCase, LEAPPFunctionalTestBase):
 
     def test_strided_torch_views_bind_one_warp_allocation(self):
         """Replay Torch and Warp writes through sibling views after artifact reload."""
-        probe = wp.from_torch(torch.zeros(1, device=self.DEVICE))
-        if getattr(probe, "_storage_nbytes", None) is None:
-            self.skipTest("Warp does not expose allocation-wide Torch storage bounds")
-
         for backend in ("onnx", "pt2"):
             with self.subTest(backend=backend), tempfile.TemporaryDirectory() as folder:
                 leapp.start(name=self.TEST_GRAPH_NAME, save_path=folder)

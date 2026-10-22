@@ -35,8 +35,8 @@ node being traced. That graph is the only thing an export backend ever sees.
       :class-card: leapp-fit-card sd-rounded-3
 
       It is the one form every torch export path already accepts, so a single
-      recording can leave as TorchScript, ``.pt2``, or ONNX with no second
-      trace. It is also plain Python, so LEAPP can edit it after the fact.
+      recording can leave as TorchScript, ``.pt2``, or ONNX through the same
+      FX interface. It is also plain Python, so LEAPP can edit it after the fact.
 
    .. grid-item-card:: How LEAPP fills it
       :class-card: leapp-fit-card sd-rounded-3
@@ -81,25 +81,6 @@ that no IR would accept, such as method calls recorded as functions,
 decomposed ``aten`` operations, and constants left as transposed views. They
 change how the computation is written down, never what it computes, and they
 are what keeps one trace usable across TorchScript, PT2, and ONNX.
-
-Mutations through views
-=======================
-
-During capture, each tensor keeps a stable graph handle. An in-place value
-update records a copy into that handle, so earlier slices, reshapes, and
-transposes retain their relationship to the same storage. Before pruning a
-graph containing mutations, LEAPP uses PyTorch's export functionalization to
-replace those updates with functional operations, including writeback through
-views. NumPy operations and Warp segment outputs use this same mechanism
-after their conversion into the shared graph.
-
-The exported computation returns the updated values through declared outputs
-and feedback state. It does not mutate caller inputs. Copying conversions
-remain independent allocations; a zero-copy conversion retains its alias
-relationship. Graphs without recorded mutations skip this normalization.
-If PyTorch cannot normalize tensor-valued indices, LEAPP retains ordered
-mutations on local copies for FX and TorchScript. PT2 and ONNX remain subject
-to their exporters' support for those indices.
 
 Tracing spreads by data, not by scope
 =====================================
