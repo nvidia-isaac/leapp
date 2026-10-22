@@ -14,7 +14,7 @@ from torch.fx.proxy import Proxy
 from leapp.utils.logging import _get_logger
 from leapp.utils.dtype import dtype_to_name
 
-from .proxy_view import ProxyView, bind_new_view, update_view_proxy
+from .proxy import bind_proxy, update_proxy
 
 import torch
 
@@ -43,7 +43,7 @@ class TracedData(ABC):
             proxy: The fx.Proxy for graph recording
         """
         self._value = value
-        bind_new_view(self, name, context, proxy)
+        bind_proxy(self, name, context, proxy)
 
     # =========================================================================
     # Common Properties
@@ -58,18 +58,28 @@ class TracedData(ABC):
 
     @property
     def proxy(self) -> Proxy:
-        """Get the fx.Proxy for graph recording."""
-        return self._proxy_view.proxy
+        """Get the FX handle, reattaching declared aliases after a capture reset."""
+        proxy = self._proxy
+        context = self._context
+        graph = getattr(context, "graph", None)
+        if proxy is None or graph is None:
+            return proxy
+        rebindings = context._input_rebindings
+        while proxy.node in rebindings:
+            proxy = rebindings[proxy.node]
+        self._proxy = proxy
+        if self._output_port is None and graph is not proxy.node.graph:
+            # A declaration on a new pass installs a new placeholder. Retained
+            # identical-layout aliases attach on use instead of sharing a cell
+            # that rewrites their provenance behind their backs.
+            declared = context.find_declared_alias(self)
+            if declared is not None:
+                bind_proxy(self, declared.name, context, declared.proxy)
+        return self._proxy
 
-    @property
-    def proxy_view(self) -> ProxyView:
-        """The view holding this value's current proxy.
-
-        Exposed for code that outlives a single call and must read the proxy
-        later, such as the Warp boundary, where snapshotting ``proxy`` would let
-        a mutation in between go unseen.
-        """
-        return self._proxy_view
+    @proxy.setter
+    def proxy(self, proxy: Proxy) -> None:
+        update_proxy(self, self.name, self.context_obj, proxy)
 
     @property
     def name(self) -> str:
@@ -393,7 +403,7 @@ class TracedData(ABC):
             and tuple(value.shape) == tuple(self.shape)
             and value.dtype == self.dtype
         ):
-            update_view_proxy(self, value.name, value.context_obj, value.proxy)
+            update_proxy(self, value.name, value.context_obj, value.proxy)
             self._output_port = value.output_port
             return
         self._output_port = None
@@ -755,5 +765,5 @@ class TracedData(ABC):
         proxy_out = self._create_setitem_proxy(key, value_proxy, real_value=real_value)
         if proxy_out is None:
             return False
-        self._proxy_view.proxy = proxy_out
+        self.proxy = proxy_out
         return True

@@ -20,7 +20,7 @@ from torch.fx.proxy import Proxy
 
 from leapp.utils.logging import _get_logger
 from leapp.utils.dtype import DtypeCodec, dtype_to_name, register_dtype_codec
-from ..proxy_view import bind_new_view, may_adopt_view, share_view
+from ..proxy import bind_proxy
 from ..traced_data import TracedData
 from .aten_adapter import capture_numpy_call
 
@@ -100,7 +100,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         """
         # Create a view of the input array as our subclass
         obj = np.asarray(array).view(cls)
-        bind_new_view(obj, name, context, proxy)
+        bind_proxy(obj, name, context, proxy)
         return obj
 
     def __array_finalize__(self, obj):
@@ -113,18 +113,9 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         if obj is None:
             # Called from __new__, attributes already set
             return
-        # A view covering exactly the source's bytes is a second handle on one
-        # value, so it shares that cell and a mutation through either is visible
-        # through both. A slice covers fewer bytes and a freshly allocated ufunc
-        # result covers different bytes, so both fail the comparison and keep a
-        # root of their own. The view guard covers a source still
-        # mid-construction, which has no cell to share yet.
-        if getattr(obj, "_proxy_view", None) is not None and may_adopt_view(obj, self):
-            share_view(self, obj)
-            return
         # Copy tracing state from the source array. ``getattr`` covers a plain
         # ndarray source and a source still mid-construction.
-        bind_new_view(
+        bind_proxy(
             self,
             getattr(obj, "_name", "derived"),
             getattr(obj, "_context", None),
@@ -316,7 +307,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         if active:
             result = ufunc(self, other)
             np.copyto(self.view(np.ndarray), result.view(np.ndarray))
-            self._proxy_view.proxy = result.proxy
+            self.proxy = result.proxy
         else:
             ufunc(
                 self.view(np.ndarray),
@@ -464,7 +455,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
 
         if not self._record_assignment(key, value, real_value):
             value_proxy = value.proxy if isinstance(value, TracedData) else value
-            self._proxy_view.proxy = self._context.tracer.create_proxy(
+            self.proxy = self._context.tracer.create_proxy(
                 "call_method", "__setitem__", (self.proxy, key, value_proxy), {}
             )
 

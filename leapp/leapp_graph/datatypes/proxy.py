@@ -3,33 +3,23 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-"""ProxyView cells and the free functions that bind, share, and classify them.
+"""FX tensor handles, physical allocation snapshots, and conversion semantics.
 
-Traced carriers hold a ``ProxyView`` rather than an ``fx.Proxy`` so the proxy a
-carrier reports can change without every reader holding a stale reference.
-Torch, NumPy, and Warp can expose several logical arrays over one allocation
-while FX proxies are immutable graph values; sharing one view is how a mutation
-through one alias becomes visible through the others.
+Carriers store FX proxies directly. Numerical writes record copy_ against the
+existing handle; PyTorch functionalization propagates them through native views.
+Construction and input declarations bind provenance without a data write.
+TracedTensorNode owns input redeclarations and its per-pass layout index;
+TracedData.proxy resolves these bindings when retained aliases are next used.
+Ports remain per carrier and are independent of its numerical storage.
 
-Binding primitives
-------------------
-``bind_new_view``
-    Private root: new ``ProxyView(proxy)``.
-``bind_shared_view``
-    Attach an existing view object (zero-copy alias).
-``update_view_proxy``
-    Mutate the proxy inside the carrier's existing view (in-place change).
-``share_view``
-    ``bind_shared_view`` using ``source``'s name, context, and view.
-``may_adopt_view``
-    Whether two values cover the same bytes and policy allows sharing.
-``layout_key``
-    Framework-neutral description of the bytes a value covers, used both by
-    ``may_adopt_view`` and by the per-node index that finds aliases created
-    before tracing began.
+TorchStorageLayout is a weak allocation snapshot on an FX node. Warp uses it
+to bind the covering allocation behind partial views; graph finalization removes
+it before export. It neither owns tensors nor propagates numerical mutations.
+Layout comparisons also distinguish independent copying conversions, which must
+allocate in the graph even when their sample values and dtypes are identical.
 """
 
-from typing import Any, NamedTuple, Optional, Union
+from typing import Any, NamedTuple, Optional
 
 import numpy as np
 import torch
@@ -37,66 +27,6 @@ from torch.fx.proxy import Proxy
 from torch.multiprocessing.reductions import StorageWeakRef
 
 from leapp.utils.dtype import value_to_name_and_shape
-
-
-class ProxyView:
-    """One mutable reference to the FX proxy that currently represents a value.
-
-    ``proxy`` is ``None`` when the value carries no graph provenance, which is
-    the normal state outside an active trace.
-
-    During capture the proxy is a stable native tensor handle. Assigning a
-    functional update records a copy into that handle, preserving relationships
-    with existing views until PyTorch functionalizes the complete graph.
-    An independent allocation gets a new cell instead of mutating this one.
-
-    The stored cell may itself be a ``ProxyView`` so later nesting can redirect
-    through another view without rewriting every carrier that already holds this
-    object. Reading ``proxy`` always walks to the underlying ``fx.Proxy``.
-    """
-
-    __slots__ = ("_proxy", "pending")
-
-    def __init__(self, proxy: Optional[Union[Proxy, "ProxyView"]]):
-        self._proxy = proxy
-        self.pending = False
-
-    def rebind(self, proxy: Optional[Proxy]) -> None:
-        """Replace provenance at a declaration rather than record a data write."""
-        self._proxy = proxy
-        self.pending = False
-
-    @property
-    def proxy(self) -> Optional[Proxy]:
-        value = self._proxy
-        while isinstance(value, ProxyView):
-            value = value._proxy
-        return value
-
-    @proxy.setter
-    def proxy(self, value: Optional[Union[Proxy, "ProxyView"]]) -> None:
-        if self.pending:
-            # A new Warp allocation borrows provenance until its segment
-            # closes; that borrowed handle is not its storage destination.
-            self._proxy = value
-            self.pending = False
-            return
-        old = self.proxy
-        new = value.proxy if isinstance(value, ProxyView) else value
-        if (
-            old is not None
-            and new is not None
-            and old.node.graph is new.node.graph
-            and getattr(old.node.graph, "recording", False)
-        ):
-            if old.node is not new.node:
-                mutation = old.tracer.create_proxy(
-                    "call_method", "copy_", (old, new), {}
-                )
-                mutation.node.meta["leapp_mutation"] = True
-                old.node.graph.requires_functionalization = True
-            return
-        self._proxy = value
 
 
 STORAGE_LAYOUT_META_KEY = "leapp_storage_layout"
@@ -137,47 +67,39 @@ def _record_storage_layout(carrier: Any, proxy: Optional[Proxy]) -> None:
         )
 
 
-def bind_new_view(carrier: Any, name: str, context, proxy: Optional[Proxy]) -> None:
-    """Attach a new root ``ProxyView`` holding ``proxy``."""
+def bind_proxy(carrier: Any, name: str, context, proxy: Optional[Proxy]) -> None:
+    """Bind provenance at construction or declaration, without a numerical write."""
     carrier._name = name
     carrier._context = context
-    carrier._proxy_view = ProxyView(proxy)
+    carrier._proxy = proxy
     carrier._output_port = None
     _record_storage_layout(carrier, proxy)
 
 
-def bind_shared_view(carrier: Any, name: str, context, view: ProxyView) -> None:
-    """Attach an existing ``ProxyView`` so ``carrier`` shares that cell."""
-    carrier._name = name
-    carrier._context = context
-    carrier._proxy_view = view
-    carrier._output_port = None
-    _record_storage_layout(carrier, view.proxy)
-
-
-def update_view_proxy(
-    carrier: Any, name: str, context, proxy: Optional[Proxy], *, rebind=False
-) -> None:
-    """Write a new proxy into ``carrier``'s existing view after an in-place change."""
-    carrier._name = name
-    carrier._context = context
-    if rebind:
-        carrier._proxy_view.rebind(proxy)
-        _record_storage_layout(carrier, proxy)
+def update_proxy(carrier: Any, name: str, context, proxy: Optional[Proxy]) -> None:
+    """Record a write against the stable FX tensor handle during capture."""
+    old = carrier.proxy
+    if (
+        old is not None
+        and proxy is not None
+        and old.node.graph is proxy.node.graph
+        and getattr(old.node.graph, "recording", False)
+    ):
+        if old.node is not proxy.node:
+            mutation = old.tracer.create_proxy("call_method", "copy_", (old, proxy), {})
+            mutation.node.meta["leapp_mutation"] = True
+            old.node.graph.requires_functionalization = True
     else:
-        carrier._proxy_view.proxy = proxy
+        carrier._proxy = proxy
+    carrier._name = name
+    carrier._context = context
     carrier._output_port = None
-
-
-def share_view(carrier: Any, source: Any) -> None:
-    """Make ``carrier`` use ``source``'s view, name, and context."""
-    bind_shared_view(carrier, source.name, source.context_obj, source.proxy_view)
 
 
 def conversion_proxy(source, result):
     """Preserve independent storage in representation-only conversions.
 
-    Two separate proxy cells may initially hold the same graph value. Native
+    Two carriers may initially hold the same graph value. Native
     mutation needs an actual graph copy as well when the eager conversion
     allocated, even if device, dtype and numerical values did not change.
     """
@@ -215,7 +137,7 @@ def layout_key(value):
     comparing equal to something it does not alias.
     """
     # Lazy: this module must not import TracedData at load time (TracedData
-    # imports ProxyView from here).
+    # imports binding helpers from here).
     from .traced_data import TracedData
 
     native = value.data if isinstance(value, TracedData) else value
@@ -271,25 +193,8 @@ def layout_key(value):
     return (device, dtype_name, storage_shape, byte_strides, pointer)
 
 
-def may_adopt_view(source, result) -> bool:
-    """Whether ``result`` may share ``source``'s view instead of a new root.
-
-    True when the two cover exactly the same bytes with the same interpretation
-    and policy allows sharing. Sharing an allocation is not enough on its own:
-    ``view`` and storage-sharing ``reshape`` keep the pointer and change the
-    shape, and letting those share a root would leave a carrier reporting a
-    proxy of the wrong shape, so the shape and stride comparisons are what keep
-    them out.
-
-    A source is excluded even when the layouts match if it is:
-
-    - a published value, because it has to stay available to fan out to other
-      nodes and sharing would let a consumer of one alias rewrite the
-      provenance the boundary depends on;
-    - a value whose node has finished, because rewrapping it at a boundary
-      hands a consumer its own carrier rather than a second handle on a value
-      still being built.
-    """
+def is_same_value(source, result) -> bool:
+    """Whether an active, unpublished source describes exactly this layout."""
     from .traced_data import TracedData
 
     if not isinstance(source, TracedData):

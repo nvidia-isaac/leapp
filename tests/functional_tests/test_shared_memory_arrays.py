@@ -17,6 +17,7 @@
 """Tests for several traced carriers over one shared allocation."""
 
 import unittest
+from contextlib import nullcontext
 import tempfile
 from pathlib import Path
 import numpy as np
@@ -227,8 +228,8 @@ class TestTorchSharedMemory(LEAPPFunctionalTestBase):
 
             if pass_index == 0:
                 self.assertIs(
-                    traced_buffer.proxy_view,
-                    traced_alias.proxy_view,
+                    traced_buffer.proxy,
+                    traced_alias.proxy,
                     "a declared alias did not adopt the declared buffer's root",
                 )
 
@@ -471,10 +472,8 @@ class TestWarpSharedMemory(WarpTestCase, LEAPPFunctionalTestBase):
     def test_to_torch_inside_an_open_segment_follows_the_close(self):
         """A conversion made before the runner exists still ends up on it.
 
-        Inside an open segment the Warp array only carries placeholder
-        provenance, because the runner output it will resolve to has not been
-        created yet. Sharing a root is what lets the close move both carriers at
-        once instead of rebinding the Warp array and orphaning the tensor.
+        The conversion keeps the input's stable FX handle. Segment close
+        records the runner's write before the alias is consumed.
         """
         source_value = torch.tensor([1.0, 2.0, 3.0], device=self.DEVICE)
         expected = (source_value + 1.0) * 2.0
@@ -508,6 +507,59 @@ class TestWarpSharedMemory(WarpTestCase, LEAPPFunctionalTestBase):
             source_inputs={"node_a/in_a": source_value},
             source_outputs={"node_a/action": expected},
         )
+
+    def test_new_warp_output_alias_replays_after_segment_close(self):
+        """A new output converted before publication retains the runner result."""
+        for backend in ("onnx", "pt2"):
+            for placement in ("inside", "after", "automatic"):
+                with self.subTest(backend=backend, placement=placement):
+                    with tempfile.TemporaryDirectory() as folder:
+                        leapp.start(name="publication", save_path=folder)
+                        try:
+                            for offset in (0.0, 5.0):
+                                x = annotate.input_tensors(
+                                    "policy",
+                                    {
+                                        "x": torch.arange(3.0, device=self.DEVICE)
+                                        + offset
+                                    },
+                                )
+                                source = wp.from_torch(x)
+                                region = (
+                                    annotate.warp_op("policy")
+                                    if placement != "automatic"
+                                    else nullcontext()
+                                )
+                                with region:
+                                    output = wp.empty_like(source)
+                                    wp.launch(
+                                        self.kernels.add_scalar,
+                                        dim=3,
+                                        inputs=[source, wp.float32(1.0)],
+                                        outputs=[output],
+                                        device=self.DEVICE,
+                                    )
+                                    if placement == "inside":
+                                        alias = wp.to_torch(output)
+                                if placement != "inside":
+                                    alias = wp.to_torch(output)
+                                annotate.output_tensors(
+                                    "policy", {"y": alias * 2}, export_with=backend
+                                )
+                        finally:
+                            leapp.stop()
+                        leapp.compile_graph(visualize=False, validate=True, strict=True)
+                        manager = leapp.InferenceManager(
+                            str(Path(folder) / "publication/publication.yaml")
+                        )
+                        for values in ([10.0, 20.0, 30.0], [-2.0, 0.0, 4.0]):
+                            fresh = torch.tensor(values, device=self.DEVICE)
+                            given = fresh.clone()
+                            actual = manager.run_policy({"policy/x": given})["policy/y"]
+                            torch.testing.assert_close(
+                                actual.cpu(), (fresh.cpu() + 1) * 2
+                            )
+                            torch.testing.assert_close(given, fresh)
 
     def test_second_warp_handle_on_one_buffer_follows_the_segment(self):
         """A launch writing one buffer through a second Warp handle moves it too.
@@ -693,15 +745,15 @@ class TestWarpSharedMemory(WarpTestCase, LEAPPFunctionalTestBase):
 
         host = array.numpy()
         self.assertIsNot(
-            array.proxy_view,
-            host.proxy_view,
+            array.proxy,
+            host.proxy,
             "a host readback shared a root with its device buffer",
         )
 
         returned = wp.from_numpy(host, device=self.DEVICE)
         self.assertIsNot(
-            host.proxy_view,
-            returned.proxy_view,
+            host.proxy,
+            returned.proxy,
             "a host-to-device copy shared a root with its host source",
         )
 
@@ -753,8 +805,8 @@ class TestPersistentAliasAttachment(WarpTestCase, LEAPPFunctionalTestBase):
                 "declaring a raw wp.array did not promote the caller's object",
             )
             self.assertIs(
-                obs.proxy_view,
-                warp_buffer.proxy_view,
+                obs.proxy,
+                warp_buffer.proxy,
                 "the declared aliases did not share one root",
             )
 
@@ -830,8 +882,8 @@ class TestPersistentAliasAttachment(WarpTestCase, LEAPPFunctionalTestBase):
                 "declaring a raw wp.array did not promote the caller's object",
             )
             self.assertIs(
-                obs.proxy_view,
-                warp_buffer.proxy_view,
+                obs.proxy,
+                warp_buffer.proxy,
                 "the declared aliases did not share one root",
             )
 
@@ -962,7 +1014,7 @@ class TestPersistentAliasAttachment(WarpTestCase, LEAPPFunctionalTestBase):
             type(warp_buffer), wp.array, "an undeclared persistent alias was promoted"
         )
         self.assertIsNone(
-            getattr(warp_buffer, "_proxy_view", None),
+            getattr(warp_buffer, "_proxy", None),
             "an undeclared persistent alias was given provenance",
         )
         self.assertIsNotNone(obs.proxy, "the declared input lost its provenance")
@@ -985,8 +1037,8 @@ class TestPersistentAliasAttachment(WarpTestCase, LEAPPFunctionalTestBase):
         consumed = annotate.input_tensors("node_b", {"hidden": hidden})
 
         self.assertIsNot(
-            consumed.proxy_view,
-            hidden.proxy_view,
+            consumed.proxy,
+            hidden.proxy,
             "a boundary rewrap shared the producer's root",
         )
 
@@ -1038,8 +1090,8 @@ class TestNumpySharedMemory(LEAPPFunctionalTestBase):
         obs = annotate.input_tensors("policy", {"obs": torch.tensor([1.0, 2.0])})
 
         self.assertIs(
-            obs.proxy_view,
-            obs.numpy().proxy_view,
+            obs.proxy,
+            obs.numpy().proxy,
             "a zero-copy .numpy() did not share the tensor's root",
         )
 
@@ -1051,8 +1103,8 @@ class TestNumpySharedMemory(LEAPPFunctionalTestBase):
         )
 
         self.assertIs(
-            arr.proxy_view,
-            arr.view(type(arr)).proxy_view,
+            arr.proxy,
+            arr.view(type(arr)).proxy,
             "an identical-layout view did not share its source's root",
         )
 
@@ -1068,13 +1120,13 @@ class TestNumpySharedMemory(LEAPPFunctionalTestBase):
         )
 
         self.assertIsNot(
-            arr.proxy_view,
-            arr[0:2].proxy_view,
+            arr.proxy,
+            arr[0:2].proxy,
             "a narrowing slice shared its source's root",
         )
         self.assertIsNot(
-            arr.proxy_view,
-            np.add(arr, 1.0).proxy_view,
+            arr.proxy,
+            np.add(arr, 1.0).proxy,
             "a freshly allocated ufunc result shared its source's root",
         )
 
@@ -1123,8 +1175,8 @@ class TestNumpySharedMemory(LEAPPFunctionalTestBase):
         torch.relu_(obs)
 
         self.assertIs(
-            obs.proxy_view,
-            np_view.proxy_view,
+            obs.proxy,
+            np_view.proxy,
             "the Torch mutation replaced the root instead of its proxy",
         )
         annotate.output_tensors("policy", {"action": np_view * 2}, export_with="jit")
