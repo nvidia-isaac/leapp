@@ -28,8 +28,7 @@ from leapp.leapp_graph.datatypes import (
 )
 from leapp.leapp_graph.datatypes.patching import get_warp_backend
 from leapp.leapp_graph.datatypes.proxy_view import STORAGE_LAYOUT_META_KEY
-from leapp.leapp_graph.aten_rewrites import rewrite_aten_ops
-from leapp.leapp_graph.functionalization import functionalize_graph
+from leapp.leapp_graph.aten_rewrites import functionalize_graph, rewrite_aten_ops
 from leapp.utils.tensor_description import (
     resolve_tensor_descriptions_to_names,
     flatten_io_structure,
