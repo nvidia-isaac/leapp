@@ -56,7 +56,14 @@ def _record_storage_layout(carrier: Any, proxy: Optional[Proxy]) -> None:
         and value.is_contiguous()
         and value.numel() * value.element_size() == storage.nbytes()
     ):
-        proxy.node.meta.setdefault(
+        # A pending Warp output only borrows its donor's node. Keep its weak
+        # layout on the proxy until publication identifies the actual producer.
+        metadata = (
+            proxy.__dict__
+            if proxy.__dict__.get("_leapp_pending_warp_output", False)
+            else proxy.node.meta
+        )
+        metadata.setdefault(
             STORAGE_LAYOUT_META_KEY,
             TorchStorageLayout(
                 StorageWeakRef(storage),

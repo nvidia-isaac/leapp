@@ -548,7 +548,28 @@ class TestWarpSharedMemory(WarpTestCase, LEAPPFunctionalTestBase):
                                 )
                         finally:
                             leapp.stop()
+                        node = annotate.get_nodes()["policy"]
+                        # A new Warp result is already allocated by the runner.
+                        # Publishing it must not allocate/copy another tensor.
+                        self.assertFalse(
+                            any(
+                                item.target is torch.empty
+                                or "aten.copy" in str(item.target)
+                                for item in node.m.graph.nodes
+                            )
+                        )
                         leapp.compile_graph(visualize=False, validate=True, strict=True)
+                        if backend == "pt2":
+                            program = torch.export.load(
+                                Path(folder) / "publication/policy.pt2"
+                            )
+                            self.assertFalse(
+                                any(
+                                    "aten.empty" in str(item.target)
+                                    or "aten.copy" in str(item.target)
+                                    for item in program.graph_module.graph.nodes
+                                )
+                            )
                         manager = leapp.InferenceManager(
                             str(Path(folder) / "publication/publication.yaml")
                         )

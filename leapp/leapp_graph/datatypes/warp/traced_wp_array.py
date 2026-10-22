@@ -8,6 +8,7 @@ from torch.fx.proxy import Proxy
 import warp as wp
 
 from ..proxy import (
+    STORAGE_LAYOUT_META_KEY,
     bind_proxy,
     layout_key,
     is_same_value,
@@ -113,12 +114,21 @@ class TracedWpArray(wp.array, TracedData):
         return array
 
     def rebind_tracing_proxy(self, name: str, context, proxy: Proxy) -> None:
-        """Record the runner's write into this array's stable FX handle.
-
-        Existing Torch/NumPy aliases keep that handle; functionalization makes
-        the runner result visible through all of their recorded views.
-        """
-        update_proxy(self, name, context, proxy)
+        """Publish a new allocation, or record a write to existing storage."""
+        previous = self.proxy
+        if previous is not None and previous.__dict__.pop(
+            "_leapp_pending_warp_output", False
+        ):
+            # Aliases hold this same FX Proxy directly. Resolve its producer
+            # once the runner exists; publication is not a tensor data write.
+            previous.node = proxy.node
+            previous.tracer = proxy.tracer
+            layout = previous.__dict__.pop(STORAGE_LAYOUT_META_KEY, None)
+            if layout is not None:
+                previous.node.meta.setdefault(STORAGE_LAYOUT_META_KEY, layout)
+            bind_proxy(self, name, context, previous)
+        else:
+            update_proxy(self, name, context, proxy)
 
     @classmethod
     def __warp_function__(
@@ -152,11 +162,7 @@ class TracedWpArray(wp.array, TracedData):
         with backend.pause_context():
             result = func(*call_args, **call_kwargs)
 
-            # Allocation handles are capture bookkeeping, not Torch consumers
-            # that should close an automatic Warp region.
-            cls._process_post_call_arrays(
-                func, segment, args, kwargs, result, trace_source
-            )
+        cls._process_post_call_arrays(func, segment, args, kwargs, result, trace_source)
         if segment is not None and getattr(func, "__name__", None) == "launch":
             outputs = kwargs.get("outputs", args[3] if len(args) > 3 else ())
             if any(getattr(array, "_tensor", None) is not None for array in outputs):
@@ -345,7 +351,7 @@ class TracedWpArray(wp.array, TracedData):
                 if owner is trace_source.context_obj and not published:
                     traced_array = obj
                 else:
-                    proxy = cls._allocation_proxy(obj, trace_source)
+                    proxy = cls._pending_output_proxy(obj, trace_source)
                     if published or owner is not None:
                         traced_array = as_traced(
                             obj, trace_source.name, trace_source.context_obj, proxy
@@ -397,21 +403,19 @@ class TracedWpArray(wp.array, TracedData):
             )
 
     @staticmethod
-    def _allocation_proxy(array, source):
-        """Give an unfinished Warp output its own stable graph allocation.
+    def _pending_output_proxy(array, source):
+        """Borrow provenance until this new allocation's runner is recorded.
 
-        Conversions made before segment close keep this handle. Publication is
-        an ordinary copy_ from the runner output, normalized with other writes.
+        A separate FX Proxy keeps the producer distinct from the source. Its
+        aliases hold that proxy directly and follow its one-time publication.
+        No allocation or copy is added to the graph for this bookkeeping.
         """
-        if is_same_value(source, array):
-            return source.proxy
-        value = wp.to_torch(array)
-        return source.context_obj.tracer.create_proxy(
-            "call_function",
-            torch.empty,
-            (tuple(value.shape),),
-            {"dtype": value.dtype, "device": value.device},
-        )
+        proxy = source.proxy
+        if proxy is None or not source.is_tracing or is_same_value(source, array):
+            return proxy
+        pending = Proxy(proxy.node, proxy.tracer)
+        pending._leapp_pending_warp_output = True
+        return pending
 
     @staticmethod
     def _carry_full_copy_port(

@@ -88,7 +88,7 @@ else:
     def _update_output_ref_proxy(node_ref: Any, ref, proxy) -> None:
         """Point this segment output's value at the runner output that produced it.
 
-        Record a write into the stable handle used by the array and its aliases.
+        Publish new allocation provenance; existing buffers record a data write.
         """
         if isinstance(ref.array, TracedWpArray):
             ref.array.rebind_tracing_proxy(ref.name, node_ref, proxy)

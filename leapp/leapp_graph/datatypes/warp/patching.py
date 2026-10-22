@@ -19,11 +19,11 @@ they first touch actively traced Warp data.
 ``wp.to_torch`` inside an open segment
 ---------------------------------------
 A zero-copy conversion directly keeps the source's FX tensor handle.
-New Warp outputs get an explicit graph allocation before any conversion;
-segment close records a copy_ from the runner result into that handle. PyTorch
-functionalization then propagates this write to aliases created before close.
-Existing buffers use their input handle in the same way. Copying conversions
-still record independent graph storage.
+New Warp outputs temporarily borrow provenance through their own FX Proxy.
+At segment close, publication resolves that proxy to the runner output, so
+aliases created before close follow it without a graph allocation or copy.
+Writes to existing buffers still use stable handles and PyTorch functionalization.
+Copying conversions continue to record independent graph storage.
 
 Regression coverage lives in ``tests/functional_tests/test_shared_memory_arrays.py``
 and ``tests/unit_tests/test_warp_torch_boundaries.py``.
