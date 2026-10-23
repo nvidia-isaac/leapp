@@ -23,7 +23,10 @@
 
 namespace leapp::internal {
 
-struct NativeRtModel : ModelConfig {};
+struct NativeRtModel : ModelConfig {
+  // Keep dispatcher registrations loaded until all model instances are gone.
+  std::shared_ptr<void> custom_op_library;
+};
 
 // Triton owns model state until all its instances have been destroyed.
 class NativeRtInstance {

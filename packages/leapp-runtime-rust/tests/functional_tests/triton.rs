@@ -13,4 +13,6 @@ pub(crate) mod support;
 mod tensorrt;
 #[path = "triton/torchscript.rs"]
 mod torchscript;
+#[path = "triton/warp.rs"]
+mod warp;
 // state.rs is included under Session to inspect its private feedback state.

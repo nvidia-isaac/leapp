@@ -26,7 +26,8 @@ struct ModelConfig {
   std::vector<ModelPort> outputs;
 };
 
-Status ReadModelConfig(TRITONBACKEND_Model* model, ModelConfig* config);
+Status ReadModelConfig(TRITONBACKEND_Model* model, ModelConfig* config,
+                       std::filesystem::path* custom_op_library = nullptr);
 
 }  // namespace leapp::internal
 
