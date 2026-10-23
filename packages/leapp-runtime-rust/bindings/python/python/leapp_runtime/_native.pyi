@@ -2,13 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from os import PathLike
-from typing import Any
+from typing import Any, final
+from collections.abc import Mapping
 
 class BundleError(Exception):
     code: int
     phase: str
     message: str
     path: PathLike[str]
+
+class RuntimeError(Exception):
+    code: int
+    phase: str
+    message: str
 
 class PortRef:
     @property
@@ -49,3 +55,34 @@ class Bundle:
     def model_metadata(self, node: str) -> dict[str, Any] | None: ...
     def input_info(self, node: str, port: str) -> PortSpec | None: ...
     def output_info(self, node: str, port: str) -> PortSpec | None: ...
+
+@final
+class Session:
+    @staticmethod
+    def open(bundle: Bundle, options: Any = None) -> Session: ...
+    def info(self) -> Bundle: ...
+    def new_session(self) -> Session: ...
+    def close(self) -> None: ...
+    def __enter__(self) -> Session: ...
+    def __exit__(self, ty: Any, value: Any, traceback: Any) -> None: ...
+    def run(
+        self,
+        inputs: Mapping[str, Any],
+    ) -> RunResult: ...
+    def reset(self) -> None: ...
+
+class RunResult:
+    def __getitem__(self, name: str) -> DLPackOutput: ...
+    def __len__(self) -> int: ...
+    def keys(self) -> tuple[str, ...]: ...
+
+class DLPackOutput:
+    def __dlpack_device__(self) -> tuple[int, int]: ...
+    def __dlpack__(
+        self,
+        *,
+        stream: int | None = None,
+        max_version: tuple[int, int] | None = None,
+        dl_device: tuple[int, int] | None = None,
+        copy: bool | None = None,
+    ) -> Any: ...

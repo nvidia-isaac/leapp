@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::bundle::*;
+use crate::{bundle::*, session::*};
 
 #[cxx::bridge(namespace = "leapp::detail")]
 pub mod ffi {
@@ -25,6 +25,17 @@ pub mod ffi {
         Bfloat16,
         Float32,
         Float64,
+    }
+
+    enum Memory {
+        Cpu,
+        Pinned,
+        Cuda,
+    }
+
+    struct Location {
+        memory: Memory,
+        device: u32,
     }
 
     enum MetadataKind {
@@ -83,19 +94,68 @@ pub mod ffi {
         nodes: Vec<MetadataNode>,
     }
 
+    // Only the address of the standard DLTensor crosses this private bridge.
+    struct Input {
+        name: Vec<u8>,
+        descriptor: usize,
+    }
+
+    struct Placement {
+        name: Vec<u8>,
+        location: Location,
+    }
+
     extern "Rust" {
         type BundleHandle;
+
         fn bundle_new() -> Box<BundleHandle>;
+
         fn bundle_open(path: &[u8], output: &mut BundleHandle) -> StatusData;
+
         fn bundle_path(bundle: &BundleHandle) -> Vec<u8>;
+
         fn bundle_models(bundle: &BundleHandle) -> Vec<String>;
+
         fn bundle_model_io(bundle: &BundleHandle, node: &[u8]) -> ModelIoData;
+
         fn bundle_ports(bundle: &BundleHandle, inputs: bool) -> Vec<PortName>;
+
         fn bundle_port(bundle: &BundleHandle, node: &[u8], port: &[u8], input: bool) -> PortData;
+
         fn bundle_metadata(
             bundle: &BundleHandle,
             field: MetadataField,
             node: &[u8],
         ) -> MetadataData;
+
+        type SessionHandle;
+        fn session_new() -> Box<SessionHandle>;
+        fn session_open(
+            bundle: &BundleHandle,
+            location: Location,
+            output_location: Location,
+            overrides: &[Placement],
+            output: &mut SessionHandle,
+        ) -> StatusData;
+        fn session_close(session: &SessionHandle) -> StatusData;
+        fn session_duplicate(session: &SessionHandle, output: &mut SessionHandle) -> StatusData;
+
+        fn session_reset(session: &SessionHandle) -> StatusData;
+
+        // C++ guarantees that all addresses reference readable allocations until return.
+        unsafe fn session_run(
+            session: &SessionHandle,
+            inputs: &[Input],
+            output: &mut ResultHandle,
+        ) -> StatusData;
+
+        type ResultHandle;
+
+        fn result_new() -> Box<ResultHandle>;
+
+        fn result_names(result: &ResultHandle) -> Vec<String>;
+
+        fn result_tensor(result: &ResultHandle, name: &[u8], output: &mut usize) -> StatusData;
+
     }
 }

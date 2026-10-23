@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Backend-independent DLPack ABI, lifetime guards, and borrowed CPU-slice access.
+//! DLPack ABI, lifetime guards, borrowed CPU-slice access, and producer handoff.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 #[path = "dlpack/cpu.rs"]
@@ -16,6 +16,29 @@ use std::{
     sync::{Arc, Mutex},
 };
 pub use sys::*;
+
+/// DLPack producer synchronization used by language bindings.
+/// Native stream ownership stays in the compiled engine implementation.
+#[doc(hidden)]
+pub struct HandoffStream(crate::engines::HandoffStream);
+
+impl HandoffStream {
+    pub fn new(device: u32) -> Result<Self, crate::RuntimeError> {
+        crate::engines::HandoffStream::new(device).map(Self)
+    }
+
+    pub fn with_device<T>(&self, producer: impl FnOnce() -> T) -> Result<T, crate::RuntimeError> {
+        self.0.with_device(producer)
+    }
+
+    pub fn address(&self) -> usize {
+        self.0.address()
+    }
+
+    pub fn synchronize(&self) -> Result<(), crate::RuntimeError> {
+        self.0.synchronize()
+    }
+}
 
 /// An exclusively owned producer lease. Foreign owners remain on their importing thread.
 pub struct ManagedTensor(ManagedTensorPointer);

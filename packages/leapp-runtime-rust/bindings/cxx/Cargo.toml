@@ -10,6 +10,7 @@ crate-type = ["staticlib"]
 
 [dependencies]
 leapp-runtime = { path = "../.." }
+leapp-runtime-bindings = { path = "../common" }
 cxx = "=1.0.205"
 
 [build-dependencies]

@@ -1,10 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "leapp/bundle.h"
+#include "leapp/runtime.h"
 
 #include <algorithm>
 #include <cstdlib>
+#include <cstring>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -47,6 +49,12 @@ static_assert(static_cast<uint8_t>(DataType::kFloat32) ==
               static_cast<uint8_t>(wire::Dtype::Float32));
 static_assert(static_cast<uint8_t>(DataType::kFloat64) ==
               static_cast<uint8_t>(wire::Dtype::Float64));
+static_assert(static_cast<uint8_t>(MemoryType::kCpu) ==
+              static_cast<uint8_t>(wire::Memory::Cpu));
+static_assert(static_cast<uint8_t>(MemoryType::kPinnedCpu) ==
+              static_cast<uint8_t>(wire::Memory::Pinned));
+static_assert(static_cast<uint8_t>(MemoryType::kCuda) ==
+              static_cast<uint8_t>(wire::Memory::Cuda));
 
 std::string String(const rust::String& value) {
   return {value.data(), value.size()};
@@ -56,6 +64,15 @@ rust::Slice<const uint8_t> Bytes(std::string_view value) {
   return {reinterpret_cast<const uint8_t*>(value.data()), value.size()};
 }
 
+rust::Vec<uint8_t> OwnedBytes(std::string_view value) {
+  rust::Vec<uint8_t> result;
+  result.reserve(value.size());
+  for (unsigned char c : value) {
+    result.push_back(c);
+  }
+  return result;
+}
+
 Status Convert(const wire::StatusData& status) {
   return {static_cast<ErrorCode>(status.code), String(status.phase),
           String(status.message)};
@@ -63,6 +80,10 @@ Status Convert(const wire::StatusData& status) {
 
 Status Invalid(std::string message) {
   return {ErrorCode::kInvalidArgument, "binding", std::move(message)};
+}
+
+wire::Location Location(MemoryLocation location) {
+  return {static_cast<wire::Memory>(location.type), location.device_id};
 }
 
 const Metadata& EmptyMetadata() {
@@ -309,6 +330,133 @@ const PortSpec* Bundle::input_info(std::string_view node,
 const PortSpec* Bundle::output_info(std::string_view node,
                                     std::string_view port) const {
   return data_ ? data_->Port(node, port, false) : nullptr;
+}
+
+struct Session::Data {
+  rust::Box<wire::SessionHandle> handle = wire::session_new();
+};
+
+struct RunResult::Data {
+  explicit Data(rust::Box<wire::ResultHandle> value)
+      : handle(std::move(value)) {
+    for (const auto& name : wire::result_names(*handle)) {
+      names.push_back(String(name));
+    }
+  }
+
+  rust::Box<wire::ResultHandle> handle;
+  std::vector<std::string> names;
+};
+
+Session::Session() = default;
+
+Session::~Session() = default;
+
+Session::Session(Session&&) noexcept = default;
+
+Session& Session::operator=(Session&&) noexcept = default;
+
+Status Session::Open(const Bundle& bundle, const SessionOptions& options,
+                     Session* session) {
+  if (session == nullptr || session->data_ || !bundle.is_valid()) {
+    return Invalid("expected a valid bundle and an empty session destination");
+  }
+  MemoryLocation location;
+  switch (options.device) {
+    case ExecutionDevice::kCpu:
+      location.type = MemoryType::kCpu;
+      break;
+    case ExecutionDevice::kCuda:
+      location.type = MemoryType::kCuda;
+      break;
+    default:
+      return Invalid("unknown execution device");
+  }
+  location.device_id = options.device_id;
+  std::vector<wire::Placement> overrides;
+  for (const auto& [name, location] : options.output_overrides) {
+    overrides.push_back({OwnedBytes(name), Location(location)});
+  }
+  auto data = std::make_unique<Data>();
+  auto status = Convert(wire::session_open(
+      *bundle.data_->handle, Location(location),
+      Location(options.output_location),
+      {overrides.data(), overrides.size()}, *data->handle));
+  if (!status.ok()) {
+    return status;
+  }
+  session->bundle_ = bundle;
+  session->data_ = std::move(data);
+  return {};
+}
+
+Status Session::NewSession(Session* session) const {
+  if (!data_ || session == nullptr || session->data_) {
+    return Invalid("expected a session and an empty session destination");
+  }
+  auto data = std::make_unique<Session::Data>();
+  auto status = Convert(wire::session_duplicate(*data_->handle, *data->handle));
+  if (!status.ok()) {
+    return status;
+  }
+  session->bundle_ = bundle_;
+  session->data_ = std::move(data);
+  return {};
+}
+
+Status Session::Close() {
+  return data_ ? Convert(wire::session_close(*data_->handle)) : Status{};
+}
+
+Status Session::Reset() {
+  return data_ ? Convert(wire::session_reset(*data_->handle))
+               : Invalid("session is empty");
+}
+
+Status Session::Run(std::span<const NamedTensor> inputs,
+                    RunResult* result) {
+  if (!data_ || result == nullptr) {
+    return Invalid("expected a session and result destination");
+  }
+  // Only descriptors cross the bridge; tensor data remains in caller-owned
+  // storage.
+  std::vector<wire::Input> views;
+  views.reserve(inputs.size());
+  for (const auto& [name, tensor] : inputs) {
+    wire::Input input{};
+    input.name = OwnedBytes(name);
+    input.descriptor = reinterpret_cast<uintptr_t>(tensor);
+    views.push_back(std::move(input));
+  }
+  auto handle = wire::result_new();
+  auto status =
+      Convert(wire::session_run(*data_->handle, {views.data(), views.size()},
+                                *handle));
+  if (!status.ok()) {
+    return status;
+  }
+  result->data_ = std::make_shared<RunResult::Data>(std::move(handle));
+  return {};
+}
+
+std::vector<std::string_view> RunResult::names() const {
+  if (!data_) {
+    return {};
+  }
+  return {data_->names.begin(), data_->names.end()};
+}
+
+Status RunResult::GetTensor(std::string_view name, ManagedTensor* tensor) const {
+  if (!data_ || tensor == nullptr) {
+    return Invalid("expected a result and DLPack destination");
+  }
+  size_t pointer = 0;
+  auto status = Convert(wire::result_tensor(*data_->handle, Bytes(name), pointer));
+  if (!status.ok()) {
+    return status;
+  }
+  tensor->reset(reinterpret_cast<DLManagedTensorVersioned*>(pointer));
+  return {};
 }
 
 }  // namespace leapp
