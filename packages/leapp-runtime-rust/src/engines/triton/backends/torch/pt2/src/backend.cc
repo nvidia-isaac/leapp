@@ -1,8 +1,11 @@
 // Copyright 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+#include <dlfcn.h>
+
 #include <cstdint>
 #include <exception>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -29,9 +32,21 @@ TRITONSERVER_Error* TRITONBACKEND_Initialize(TRITONBACKEND_Backend*) {
 TRITONSERVER_Error* TRITONBACKEND_ModelInitialize(TRITONBACKEND_Model* model) {
   try {
     auto state = std::make_unique<leapp::internal::NativeRtModel>();
-    auto status = leapp::internal::ReadModelConfig(model, state.get());
+    std::filesystem::path custom_op_library;
+    auto status =
+        leapp::internal::ReadModelConfig(model, state.get(), &custom_op_library);
     if (!status.ok()) {
       return leapp::internal::NewBackendError(status);
+    }
+    if (!custom_op_library.empty()) {
+      void* library = dlopen(custom_op_library.c_str(), RTLD_NOW | RTLD_LOCAL);
+      if (library == nullptr) {
+        const auto message = "cannot load custom-op library '" +
+                             custom_op_library.string() + "': " + dlerror();
+        return TRITONSERVER_ErrorNew(TRITONSERVER_ERROR_UNAVAILABLE,
+                                     message.c_str());
+      }
+      state->custom_op_library = std::shared_ptr<void>(library, dlclose);
     }
     auto* transferred = state.release();
     if (auto* error = TRITONBACKEND_ModelSetState(model, transferred)) {
@@ -52,7 +67,23 @@ TRITONSERVER_Error* TRITONBACKEND_ModelFinalize(TRITONBACKEND_Model* model) {
   if (auto* error = TRITONBACKEND_ModelState(model, &state)) {
     return error;
   }
-  delete static_cast<leapp::internal::NativeRtModel*>(state);
+  auto* model_state = static_cast<leapp::internal::NativeRtModel*>(state);
+  if (model_state == nullptr) {
+    return nullptr;
+  }
+  using ReleaseUnusedRunners = int (*)();
+  auto release_unused = model_state->custom_op_library
+      ? reinterpret_cast<ReleaseUnusedRunners>(dlsym(
+            model_state->custom_op_library.get(), "LEAPP_WARP_ReleaseUnusedRunners"))
+      : nullptr;
+  // Instance teardown has released model constants; keep the library loaded
+  // until its optional Warp cache cleanup has finished.
+  const int cleanup_status = release_unused ? release_unused() : 0;
+  delete model_state;
+  if (cleanup_status != 0) {
+    return TRITONSERVER_ErrorNew(TRITONSERVER_ERROR_INTERNAL,
+                                 "failed to release unused Warp runners");
+  }
   return nullptr;
 }
 

@@ -18,7 +18,7 @@ use crate::{
     session::graph::{port_ref, require, Graph as ModelPorts},
     Bundle, ExecutionDevice, PortRef, PortSpec,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use proto::model_config::{model_ensembling::Step, ModelConfig, ModelEnsembling};
 use std::{
     collections::{HashMap, HashSet},
@@ -26,6 +26,60 @@ use std::{
 };
 
 const MODEL_VERSION: i64 = 1;
+
+pub(super) fn configure_plugins(
+    pipeline: &mut TritonPipeline,
+    backend_directory: &std::path::Path,
+) -> Result<()> {
+    for (backend, library) in [
+        ("onnxruntime", "libleapp_wrp_onnx_custom_op.so"),
+        ("leapp_pt2", "libleapp_wrp_torch_custom_op.so"),
+    ] {
+        if !pipeline.models.iter().any(|m| m.config.backend == backend) {
+            continue;
+        }
+        let path = backend_directory.join(backend).join(library);
+        match std::fs::symlink_metadata(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            result => result.with_context(|| format!("inspect Warp adapter {}", path.display()))?,
+        };
+        let resolved = path
+            .canonicalize()
+            .with_context(|| format!("resolve Warp adapter {}", path.display()))?;
+        require(
+            resolved.is_file(),
+            format!("Warp adapter is not a file: {}", path.display()),
+        )?;
+        std::fs::File::open(&resolved)
+            .with_context(|| format!("read Warp adapter {}", path.display()))?;
+        let filename = resolved
+            .to_str()
+            .context("Warp adapter path must be UTF-8")?;
+        for model in pipeline
+            .models
+            .iter_mut()
+            .filter(|m| m.config.backend == backend)
+        {
+            if backend == "onnxruntime" {
+                model
+                    .config
+                    .model_operations
+                    .mut_or_insert_default()
+                    .op_library_filename
+                    .push(filename.into());
+            } else {
+                model.config.parameters.insert(
+                    "custom_op_library".into(),
+                    proto::model_config::ModelParameter {
+                        string_value: filename.into(),
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+    }
+    Ok(())
+}
 
 #[derive(Debug)]
 pub(crate) struct TritonModelSpec {

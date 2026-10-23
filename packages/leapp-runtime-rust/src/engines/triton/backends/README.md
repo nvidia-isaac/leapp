@@ -56,7 +56,8 @@ loader, for example with `LD_LIBRARY_PATH`.
 For integration tests, also make the installed ONNX Runtime backend available:
 
 ```sh
-ln -s "$TRITON_ROOT/backends/onnxruntime" target/plugins/backends/onnxruntime
+mkdir -p target/plugins/backends/onnxruntime
+ln -s "$TRITON_ROOT/backends/onnxruntime/"* target/plugins/backends/onnxruntime/
 export LEAPP_TRITON_BACKENDS="$PWD/target/plugins/backends"
 python tests/generators/generate_models.py --output target/triton-fixtures
 python tests/generators/generate_pt2_models.py --output target/pt2-fixtures
@@ -69,6 +70,59 @@ checks cover weights, noncontiguous outputs, input mutation, concurrent requests
 dynamic and empty tensors, error recovery, integer tensors, incompatible archive
 devices, and ONNX/PT2 ensembles. `LEAPP_TRITON_FIXTURES` and `LEAPP_PT2_FIXTURES`
 override fixture directories.
+
+## Warp operators
+
+Build LEAPP's native Warp adapters with PyTorch matching NativeRT. Select the
+ONNX Runtime header version shipped by Triton's ONNX backend, for example:
+
+```sh
+leapp-build-warp-runtime --build-dir /path/to/warp-build -- \
+  -DLEAPP_WARP_ONNXRUNTIME_VERSION=1.24.4 -DCMAKE_INSTALL_LIBDIR=lib
+```
+
+Use your installed backend's version; omitting the setting uses Python's ONNX
+Runtime version. Alternatively, supply `-DORT_INCLUDE_DIR=/path/to/headers`.
+`-DWARP_ROOT`, `-DTorch_DIR`, and `-DCUDAToolkit_ROOT` select existing SDKs;
+the build does not install them. Keep Warp's export and runtime releases aligned.
+Replay requires CUDA even for CPU model instances.
+The runner supports CUDA device 0 only. ONNX GPU models use a CUDA custom-op kernel,
+keeping replay tensors on the GPU; CPU models retain host staging. The embedded
+archive is copied to host once when loading. Warm each model serially before
+concurrent inference.
+PT2 model unload releases expired Warp cache entries while preserving live models.
+
+Install the adapters and link them beside the backends under
+`LEAPP_TRITON_BACKENDS`. Use local backend directories as above so the links do
+not modify the Triton SDK:
+
+```sh
+cmake --install /path/to/warp-build --prefix "$PWD/target/plugins"
+ln -s ../../lib/libleapp_wrp_onnx_custom_op.so \
+  target/plugins/backends/onnxruntime/libleapp_wrp_onnx_custom_op.so
+ln -s ../../lib/libleapp_wrp_torch_custom_op.so \
+  target/plugins/backends/leapp_pt2/libleapp_wrp_torch_custom_op.so
+```
+
+Make the selected Warp `bin/`, LibTorch `lib/`, and CUDA library directories
+available to the loader, alongside NativeRT and Triton, through `LD_LIBRARY_PATH`
+or an explicitly configured `CMAKE_INSTALL_RPATH`. The installation contains the
+LEAPP adapters; the SDK libraries stay in their existing locations.
+
+Session construction discovers adapters for the backends used by the bundle.
+Absent adapters leave ordinary models unchanged; Warp models need their adapter
+installed. An invalid installed adapter causes a load error, even for ordinary
+models using that backend. PT2 loads the library before creating model instances
+and retains its handle until those instances are destroyed.
+
+Generate and run the optional integration fixtures from this package directory:
+
+```sh
+python tests/generators/generate_warp_models.py --output target/warp-fixtures
+export LEAPP_WARP_FIXTURES="$PWD/target/warp-fixtures"
+export WARP_APIC_TMPDIR="$(mktemp -d)"
+cargo test --locked engines::triton::tests::warp -- --ignored --test-threads=1
+```
 
 ## TorchScript
 
