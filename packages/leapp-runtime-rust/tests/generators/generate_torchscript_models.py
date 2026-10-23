@@ -4,6 +4,7 @@
 """Export small TorchScript bundles and direct PyTorch reference outputs."""
 
 import argparse
+import copy
 import json
 from pathlib import Path
 
@@ -19,6 +20,49 @@ class Weighted(torch.nn.Module):
 
     def forward(self, values, bias):
         return values * self.weight + bias, values.reshape(2, 2).t()
+
+
+class Mutating(torch.nn.Module):
+    def forward(self, values):
+        values.add_(2)
+        return values * 3
+
+
+class Producer(torch.nn.Module):
+    def forward(self, values):
+        return values + 0.0
+
+
+class Observer(torch.nn.Module):
+    def forward(self, original, dependency):
+        return original + dependency * 0.0
+
+
+class MutatingAccumulator(torch.nn.Module):
+    def forward(self, observation, state):
+        state.add_(observation)
+        if bool(observation[0] < 0):
+            raise RuntimeError("failure after mutation")
+        return state
+
+
+class Reshape(torch.nn.Module):
+    def forward(self, values):
+        return values.reshape(-1, 2)
+
+
+class Forked(torch.nn.Module):
+    def read(self, values):
+        return values + 1
+
+    def forward(self, values):
+        future = torch.jit.fork(self.read, values)
+        return torch.jit.wait(future)
+
+
+class Integer(torch.nn.Module):
+    def forward(self, values):
+        return values + 1
 
 
 def bundle(model, node="model"):
@@ -68,6 +112,16 @@ def generate(root):
 
     expected = [t.flatten().tolist() for t in Weighted()(values, bias)]
     (root / "expected.json").write_text(json.dumps(expected) + "\n")
+    for name, module, dtype, input_shape, output_shape in [
+        ("mutating", Mutating(), "float32", [4], [4]),
+        ("dynamic", Reshape(), "float32", [-1], [-1, 2]),
+        ("integer", Integer(), "int64", [4], [4]),
+        ("forked", Forked(), "float32", [4], [4]),
+    ]:
+        source = dict(port("values", input_shape), dtype=dtype)
+        target = dict(port("result", output_shape), dtype=dtype)
+        write(name, bundle(export(name, module, [source], [target], (values,))))
+
     preprocess = save_model(
         root,
         "preprocess",
@@ -80,6 +134,54 @@ def generate(root):
     mixed["pipeline"]["inputs"] = {"model": ["INPUT__9"], "preprocess": ["values"]}
     mixed["pipeline"]["data_flow"] = {"preprocess/features": ["model/z_values"]}
     write("mixed", mixed)
+
+    mutating_accumulator = export(
+        "mutating_accumulator",
+        MutatingAccumulator(),
+        [port("observation", [4]), port("state", [4])],
+        [port("next", [4])],
+        (values, values),
+    )
+    mutating_feedback = bundle(mutating_accumulator, "accumulator")
+    mutating_feedback["pipeline"]["inputs"] = {"accumulator": ["observation"]}
+    mutating_feedback["pipeline"]["feedback_flow"] = {
+        "accumulator/next": ["accumulator/state"]
+    }
+    write("mutating_feedback", mutating_feedback)
+
+    producer = export(
+        "producer", Producer(), [port("values", [4])], [port("result", [4])], (values,)
+    )
+    observer = export(
+        "observer",
+        Observer(),
+        [port("original", [4]), port("dependency", [4])],
+        [port("result", [4])],
+        (values, values),
+    )
+    consumer = export(
+        "mutating", Mutating(), [port("values", [4])], [port("result", [4])], (values,)
+    )
+    fanout = bundle(producer, "producer")
+    fanout["models"].update(consumer=consumer, observer=observer)
+    fanout["pipeline"]["data_flow"] = {
+        "producer/result": ["consumer/values", "observer/original"],
+        "consumer/result": ["observer/dependency"],
+    }
+    # The extra edge makes the observer run after the mutation deterministically.
+    fanout["pipeline"]["outputs"] = {"observer": ["result"], "consumer": ["result"]}
+    write("fanout", fanout)
+
+    # Exercise NativeRT and TorchScript in the same process.
+    pt2 = copy.deepcopy(mixed)
+    torch.export.save(
+        torch.export.export(Integer(), (values,)), root / "preprocess.pt2"
+    )
+    pt2["models"]["preprocess"]["parameters"] = {
+        "backend": "pt2",
+        "model_path": "preprocess.pt2",
+    }
+    write("mixed_pt2", pt2)
 
 
 if __name__ == "__main__":
