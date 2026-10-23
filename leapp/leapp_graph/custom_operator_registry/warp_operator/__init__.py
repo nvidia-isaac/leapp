@@ -120,12 +120,18 @@ def _register() -> None:
         and hasattr(getattr(torch.ops, NAMESPACE), OP_NAME)
     ):
         _LIB.define(_SCHEMA)
-        torch.library.register_fake(QUALIFIED_NAME, fx_impl.warp_runner_fake, lib=_LIB)
-        _LIB.impl(OP_NAME, fx_impl.warp_runner_eager, "CompositeExplicitAutograd")
 
         _get_logger().debug(
             f"Registered custom op {QUALIFIED_NAME} with schema: {_SCHEMA}"
         )
+
+    # The native adapter may register the schema before Python is imported.
+    if not torch._C._dispatch_has_kernel_for_dispatch_key(QUALIFIED_NAME, "Meta"):
+        torch.library.register_fake(QUALIFIED_NAME, fx_impl.warp_runner_fake, lib=_LIB)
+    if not torch._C._dispatch_has_kernel_for_dispatch_key(
+        QUALIFIED_NAME, "CompositeExplicitAutograd"
+    ):
+        _LIB.impl(OP_NAME, fx_impl.warp_runner_eager, "CompositeExplicitAutograd")
 
     if wp is not None:
         onnx_impl.register_onnx_lowering()

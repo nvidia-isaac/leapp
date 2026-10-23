@@ -40,6 +40,10 @@ explicit unsafe borrows only for private initial state and feedback descriptors.
 The `bindings/common` crate adds one lock per session and explicit closure for
 Python and C++. The Rust core and both bindings require Linux and the native SDKs.
 
+Embedded Warp operators in ONNX/PT2 bundles use optional native adapters installed
+beside their Triton backends. See [Warp operators](src/engines/triton/backends/README.md#warp-operators)
+for SDK requirements, installation, and integration tests.
+
 ## Rust
 
 ```rust
