@@ -391,10 +391,29 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
 
         return num_fixed
 
+    @staticmethod
+    def _clone_aliased_outputs(module):
+        # Dynamo names shared ONNX values in place, losing input or output names.
+        if not isinstance(module, torch.fx.GraphModule):
+            return
+        output = next(node for node in module.graph.nodes if node.op == "output")
+        seen = set()
+
+        def separate(node):
+            if node.op == "placeholder" or node in seen:
+                return module.graph.call_function(torch.clone, (node,))
+            seen.add(node)
+            return node
+
+        with module.graph.inserting_before(output):
+            output.args = torch.fx.node.map_arg(output.args, separate)
+        module.recompile()
+
     def compile(self, m: torch.nn.Module = None):
         if m is None:
             m = self.module_builder()
         m = m.eval()
+        self._clone_aliased_outputs(m)
         self._handle_duplicate_io_names()
         # Get flat tensor values directly from inputs (not input_formats which preserves nested structure)
         input_values = tuple(
