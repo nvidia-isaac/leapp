@@ -1,0 +1,2186 @@
+{
+  "kind": "minimal_supported_layers",
+  "rule": "gpu=true in every tensorrt_catalogs layer table",
+  "releases": [
+    "v10.7.0",
+    "v10.8.0",
+    "v10.9.0",
+    "v10.10.0",
+    "v10.11",
+    "v10.12.0",
+    "v10.13.0",
+    "v10.13.2",
+    "v10.13.3",
+    "v10.14",
+    "v10.15",
+    "v10.16",
+    "v11.0",
+    "v11.1",
+    "v11.2"
+  ],
+  "platforms": [
+    "dgx",
+    "orin",
+    "thor",
+    "x86"
+  ],
+  "catalog_count": 32,
+  "layer_count": 51,
+  "layers": {
+    "ACTIVATION": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "ASSERTION": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "CAST": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "CONCATENATION": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "CONDITION": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "CONDITIONAL_INPUT": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "CONDITIONAL_OUTPUT": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "CONSTANT": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "CONVOLUTION": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "CUMULATIVE": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "DECONVOLUTION": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "DEQUANTIZE": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "EINSUM": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "ELEMENTWISE": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "FILL": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "GATHER": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "GRID_SAMPLE": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "IDENTITY": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "ITERATOR": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "LOOP": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "LOOP_OUTPUT": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "LRN": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "MATRIX_MULTIPLY": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "NMS": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "NON_ZERO": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "NORMALIZATION": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "ONE_HOT": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "PADDING": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "PARAMETRIC_RELU": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "PLUGIN": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "PLUGIN_V2": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "PLUGIN_V3": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "POOLING": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "QUANTIZE": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "RAGGED_SOFTMAX": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "RECURRENCE": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "REDUCE": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "RESIZE": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "REVERSE_SEQUENCE": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "SCALE": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "SCATTER": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "SELECT": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "SHAPE": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "SHUFFLE": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "SLICE": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "SOFTMAX": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "SQUEEZE": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "TOPK": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "TRIP_LIMIT": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "UNARY": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    },
+    "UNSQUEEZE": {
+      "gpu": true,
+      "dla": false,
+      "notes": "GPU-supported in every checked-in TensorRT catalog."
+    }
+  },
+  "onnx_operators": {
+    "Abs": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Acos": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Acosh": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Add": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "AffineGrid": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "And": {
+      "supported": true,
+      "types": [
+        "BOOL"
+      ],
+      "restrictions": ""
+    },
+    "ArgMax": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "ArgMin": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Asin": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Asinh": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Atan": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Atanh": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Attention": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT8"
+      ],
+      "restrictions": ""
+    },
+    "AveragePool": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "BatchNormalization": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Bernoulli": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "BitShift": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "BitwiseAnd": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "BitwiseNot": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "BitwiseOr": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "BitwiseXor": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "BlackmanWindow": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Cast": {
+      "supported": true,
+      "types": [
+        "BOOL",
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64",
+        "UINT8"
+      ],
+      "restrictions": ""
+    },
+    "CastLike": {
+      "supported": true,
+      "types": [
+        "BOOL",
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64",
+        "UINT8"
+      ],
+      "restrictions": ""
+    },
+    "Ceil": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Celu": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "CenterCropPad": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "Clip": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Col2Im": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "Compress": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "Concat": {
+      "supported": true,
+      "types": [
+        "BOOL",
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "ConcatFromSequence": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "Constant": {
+      "supported": true,
+      "types": [
+        "BOOL",
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "ConstantOfShape": {
+      "supported": true,
+      "types": [
+        "BOOL",
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Conv": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "ConvInteger": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "ConvTranspose": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Cos": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Cosh": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "CumSum": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "DFT": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "DeformConv": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "DepthToSpace": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "DequantizeLinear": {
+      "supported": true,
+      "types": [
+        "INT8"
+      ],
+      "restrictions": ""
+    },
+    "Det": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "Div": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Dropout": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "DynamicQuantizeLinear": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "Einsum": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Elu": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Equal": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Erf": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Exp": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Expand": {
+      "supported": true,
+      "types": [
+        "BOOL",
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "EyeLike": {
+      "supported": true,
+      "types": [
+        "BOOL",
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Flatten": {
+      "supported": true,
+      "types": [
+        "BOOL",
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Floor": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "GRU": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Gather": {
+      "supported": true,
+      "types": [
+        "BOOL",
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "GatherElements": {
+      "supported": true,
+      "types": [
+        "BOOL",
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "GatherND": {
+      "supported": true,
+      "types": [
+        "BOOL",
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Gelu": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64",
+        "INT8"
+      ],
+      "restrictions": ""
+    },
+    "Gemm": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "GlobalAveragePool": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "GlobalLpPool": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "GlobalMaxPool": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Greater": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "GreaterOrEqual": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "GridSample": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "GroupNormalization": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "HammingWindow": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "HannWindow": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "HardSigmoid": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "HardSwish": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Hardmax": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Identity": {
+      "supported": true,
+      "types": [
+        "BOOL",
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "If": {
+      "supported": true,
+      "types": [
+        "BOOL",
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "ImageDecoder": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "ImageScaler": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "InstanceNormalization": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "IsInf": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "IsNaN": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "LRN": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "LSTM": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "LayerNormalization": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "LeakyRelu": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Less": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "LessOrEqual": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Log": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "LogSoftmax": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Loop": {
+      "supported": true,
+      "types": [
+        "BOOL",
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "LpNormalization": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "LpPool": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "MatMul": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "MatMulInteger": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "Max": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "MaxPool": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "MaxRoiPool": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "MaxUnpool": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "Mean": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "MeanVarianceNormalization": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "MelWeightMatrix": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "Min": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Mish": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Mod": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Mul": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Multinomial": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "Neg": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "NegativeLogLikelihoodLoss": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "NonMaxSuppression": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "NonZero": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Not": {
+      "supported": true,
+      "types": [
+        "BOOL"
+      ],
+      "restrictions": ""
+    },
+    "OneHot": {
+      "supported": true,
+      "types": [
+        "BOOL",
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Optional": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "OptionalGetElement": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "OptionalHasElement": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "Or": {
+      "supported": true,
+      "types": [
+        "BOOL"
+      ],
+      "restrictions": ""
+    },
+    "PRelu": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Pad": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "ParametricSoftplus": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Pow": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "QLinearConv": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "QLinearMatMul": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "QuantizeLinear": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "RMSNormalization": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "RNN": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "RandomNormal": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "RandomNormalLike": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "RandomUniform": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "RandomUniformLike": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Range": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Reciprocal": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "ReduceL1": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "ReduceL2": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "ReduceLogSum": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "ReduceLogSumExp": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "ReduceMax": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "ReduceMean": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "ReduceMin": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "ReduceProd": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "ReduceSum": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "ReduceSumSquare": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "RegexFullMatch": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "Relu": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Reshape": {
+      "supported": true,
+      "types": [
+        "BOOL",
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Resize": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "ReverseSequence": {
+      "supported": true,
+      "types": [
+        "BOOL",
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "RoiAlign": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "RotaryEmbedding": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Round": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "STFT": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "ScaledTanh": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Scan": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Scatter": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "ScatterElements": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "ScatterND": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Selu": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "SequenceAt": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "SequenceConstruct": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "SequenceEmpty": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "SequenceErase": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "SequenceInsert": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "SequenceLength": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "SequenceMap": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "Shape": {
+      "supported": true,
+      "types": [
+        "BOOL",
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Shrink": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Sigmoid": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Sign": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Sin": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Sinh": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Size": {
+      "supported": true,
+      "types": [
+        "BOOL",
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Slice": {
+      "supported": true,
+      "types": [
+        "BOOL",
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Softmax": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "SoftmaxCrossEntropyLoss": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "Softplus": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Softsign": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "SpaceToDepth": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Split": {
+      "supported": true,
+      "types": [
+        "BOOL",
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "SplitToSequence": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "Sqrt": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Squeeze": {
+      "supported": true,
+      "types": [
+        "BOOL",
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "StringConcat": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "StringNormalizer": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "StringSplit": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "Sub": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Sum": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Swish": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Tan": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Tanh": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "TensorScatter": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32"
+      ],
+      "restrictions": ""
+    },
+    "TfIdfVectorizer": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "ThresholdedRelu": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Tile": {
+      "supported": true,
+      "types": [
+        "BOOL",
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "TopK": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Transpose": {
+      "supported": true,
+      "types": [
+        "BOOL",
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Trilu": {
+      "supported": true,
+      "types": [
+        "BOOL",
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Unique": {
+      "supported": false,
+      "types": [],
+      "restrictions": "Not supported in every checked-in TensorRT catalog."
+    },
+    "Unsqueeze": {
+      "supported": true,
+      "types": [
+        "BOOL",
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Upsample": {
+      "supported": true,
+      "types": [
+        "FP16",
+        "FP32"
+      ],
+      "restrictions": ""
+    },
+    "Where": {
+      "supported": true,
+      "types": [
+        "BOOL",
+        "FP16",
+        "FP32",
+        "INT32",
+        "INT64"
+      ],
+      "restrictions": ""
+    },
+    "Xor": {
+      "supported": true,
+      "types": [
+        "BOOL"
+      ],
+      "restrictions": ""
+    }
+  },
+  "excluded": [
+    {
+      "name": "ATTENTION",
+      "missing_from": [],
+      "gpu_false_on": [
+        "v10.11/orin",
+        "v10.11/thor",
+        "v10.13.3/orin",
+        "v10.13.3/thor",
+        "v10.14/orin",
+        "v10.14/thor",
+        "v10.15/orin",
+        "v10.15/thor",
+        "v10.16/orin",
+        "v10.16/thor",
+        "v10.7.0/orin",
+        "v10.7.0/thor",
+        "v10.8.0/orin",
+        "v10.8.0/thor",
+        "v11.2/orin",
+        "v11.2/thor"
+      ]
+    },
+    {
+      "name": "ATTENTION_INPUT",
+      "missing_from": [
+        "v10.11/dgx",
+        "v10.11/orin",
+        "v10.11/thor",
+        "v10.11/x86",
+        "v10.13.3/dgx",
+        "v10.13.3/orin",
+        "v10.13.3/thor",
+        "v10.13.3/x86",
+        "v10.7.0/dgx",
+        "v10.7.0/orin",
+        "v10.7.0/thor",
+        "v10.7.0/x86",
+        "v10.8.0/dgx",
+        "v10.8.0/orin",
+        "v10.8.0/thor",
+        "v10.8.0/x86"
+      ],
+      "gpu_false_on": [
+        "v10.14/orin",
+        "v10.14/thor",
+        "v10.15/orin",
+        "v10.15/thor",
+        "v10.16/orin",
+        "v10.16/thor",
+        "v11.2/orin",
+        "v11.2/thor"
+      ]
+    },
+    {
+      "name": "ATTENTION_OUTPUT",
+      "missing_from": [
+        "v10.11/dgx",
+        "v10.11/orin",
+        "v10.11/thor",
+        "v10.11/x86",
+        "v10.13.3/dgx",
+        "v10.13.3/orin",
+        "v10.13.3/thor",
+        "v10.13.3/x86",
+        "v10.7.0/dgx",
+        "v10.7.0/orin",
+        "v10.7.0/thor",
+        "v10.7.0/x86",
+        "v10.8.0/dgx",
+        "v10.8.0/orin",
+        "v10.8.0/thor",
+        "v10.8.0/x86"
+      ],
+      "gpu_false_on": [
+        "v10.14/orin",
+        "v10.14/thor",
+        "v10.15/orin",
+        "v10.15/thor",
+        "v10.16/orin",
+        "v10.16/thor",
+        "v11.2/orin",
+        "v11.2/thor"
+      ]
+    },
+    {
+      "name": "DIST_COLLECTIVE",
+      "missing_from": [
+        "v10.11/dgx",
+        "v10.11/orin",
+        "v10.11/thor",
+        "v10.11/x86",
+        "v10.13.3/dgx",
+        "v10.13.3/orin",
+        "v10.13.3/thor",
+        "v10.13.3/x86",
+        "v10.14/dgx",
+        "v10.14/orin",
+        "v10.14/thor",
+        "v10.14/x86",
+        "v10.15/dgx",
+        "v10.15/orin",
+        "v10.15/thor",
+        "v10.15/x86",
+        "v10.7.0/dgx",
+        "v10.7.0/orin",
+        "v10.7.0/thor",
+        "v10.7.0/x86",
+        "v10.8.0/dgx",
+        "v10.8.0/orin",
+        "v10.8.0/thor",
+        "v10.8.0/x86"
+      ],
+      "gpu_false_on": [
+        "v10.16/orin",
+        "v10.16/thor",
+        "v11.2/orin",
+        "v11.2/thor"
+      ]
+    },
+    {
+      "name": "DYNAMIC_QUANTIZE",
+      "missing_from": [],
+      "gpu_false_on": [
+        "v10.11/orin",
+        "v10.11/thor",
+        "v10.13.3/orin",
+        "v10.13.3/thor",
+        "v10.14/orin",
+        "v10.14/thor",
+        "v10.15/orin",
+        "v10.15/thor",
+        "v10.16/orin",
+        "v10.16/thor",
+        "v10.7.0/orin",
+        "v10.7.0/thor",
+        "v10.8.0/orin",
+        "v10.8.0/thor",
+        "v11.2/orin",
+        "v11.2/thor"
+      ]
+    },
+    {
+      "name": "KVCACHE_UPDATE",
+      "missing_from": [
+        "v10.11/dgx",
+        "v10.11/orin",
+        "v10.11/thor",
+        "v10.11/x86",
+        "v10.13.3/dgx",
+        "v10.13.3/orin",
+        "v10.13.3/thor",
+        "v10.13.3/x86",
+        "v10.14/dgx",
+        "v10.14/orin",
+        "v10.14/thor",
+        "v10.14/x86",
+        "v10.7.0/dgx",
+        "v10.7.0/orin",
+        "v10.7.0/thor",
+        "v10.7.0/x86",
+        "v10.8.0/dgx",
+        "v10.8.0/orin",
+        "v10.8.0/thor",
+        "v10.8.0/x86"
+      ],
+      "gpu_false_on": [
+        "v10.15/orin",
+        "v10.15/thor",
+        "v10.16/orin",
+        "v10.16/thor",
+        "v11.2/orin",
+        "v11.2/thor"
+      ]
+    },
+    {
+      "name": "MOE",
+      "missing_from": [
+        "v10.11/dgx",
+        "v10.11/orin",
+        "v10.11/thor",
+        "v10.11/x86",
+        "v10.13.3/dgx",
+        "v10.13.3/orin",
+        "v10.13.3/thor",
+        "v10.13.3/x86",
+        "v10.14/dgx",
+        "v10.14/orin",
+        "v10.14/thor",
+        "v10.14/x86",
+        "v10.15/dgx",
+        "v10.15/orin",
+        "v10.15/thor",
+        "v10.15/x86",
+        "v10.7.0/dgx",
+        "v10.7.0/orin",
+        "v10.7.0/thor",
+        "v10.7.0/x86",
+        "v10.8.0/dgx",
+        "v10.8.0/orin",
+        "v10.8.0/thor",
+        "v10.8.0/x86"
+      ],
+      "gpu_false_on": [
+        "v10.16/orin",
+        "v10.16/thor",
+        "v11.2/orin",
+        "v11.2/thor"
+      ]
+    },
+    {
+      "name": "ROTARY_EMBEDDING",
+      "missing_from": [
+        "v10.11/dgx",
+        "v10.11/orin",
+        "v10.11/thor",
+        "v10.11/x86",
+        "v10.13.3/dgx",
+        "v10.13.3/orin",
+        "v10.13.3/thor",
+        "v10.13.3/x86",
+        "v10.14/dgx",
+        "v10.14/orin",
+        "v10.14/thor",
+        "v10.14/x86",
+        "v10.7.0/dgx",
+        "v10.7.0/orin",
+        "v10.7.0/thor",
+        "v10.7.0/x86",
+        "v10.8.0/dgx",
+        "v10.8.0/orin",
+        "v10.8.0/thor",
+        "v10.8.0/x86"
+      ],
+      "gpu_false_on": [
+        "v10.15/orin",
+        "v10.15/thor",
+        "v10.16/orin",
+        "v10.16/thor",
+        "v11.2/orin",
+        "v11.2/thor"
+      ]
+    }
+  ],
+  "notes": [
+    "DLA is not part of this set. x86 and Thor catalogs have no DLA.",
+    "onnx_operators is the intersection used when no TensorRT version is requested."
+  ]
+}

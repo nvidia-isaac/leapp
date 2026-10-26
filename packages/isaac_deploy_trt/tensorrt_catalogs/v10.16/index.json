@@ -1,0 +1,22 @@
+{
+  "cuda": "13.2",
+  "platforms": [
+    "x86",
+    "orin",
+    "thor",
+    "dgx"
+  ],
+  "supported_releases": [
+    "v10.16"
+  ],
+  "files": [
+    "tensorrt_layers_cuda132_x86.json",
+    "tensorrt_layers_cuda132_x86.md",
+    "tensorrt_layers_cuda132_orin.json",
+    "tensorrt_layers_cuda132_orin.md",
+    "tensorrt_layers_cuda132_thor.json",
+    "tensorrt_layers_cuda132_thor.md",
+    "tensorrt_layers_cuda132_dgx.json",
+    "tensorrt_layers_cuda132_dgx.md"
+  ]
+}

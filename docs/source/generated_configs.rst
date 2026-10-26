@@ -145,6 +145,28 @@ The ``models`` mapping is deterministically ordered. LEAPP guarantees:
       use these fields to verify that the model file has not changed since
       export.
 
+   ``opset_version``
+      Present on ONNX backends. The ONNX opset used at export.
+
+   ``optimization``
+      Present on ONNX backends unless
+      ``backend_params={"annotate_tensorrt_compatible": False}``.
+      ``true`` means every ONNX operator in the exported graph is supported
+      by the minimal TensorRT catalog: the intersection of every checked-in
+      release and platform. If ``validate_tensorrt_build`` was enabled, it
+      also means the installed TensorRT package parsed and built the model.
+      This does **not** switch the runtime ``backend``; Isaac Deploy / Triton
+      still load ``backend: onnx`` unless the deployer maps this flag itself.
+      Operators that fail the catalog are omitted from the YAML. They are
+      written to ``log.txt`` as ``tensorrt_blockers <model.onnx>: ...``.
+      Catalog ``true`` is not a guarantee that TensorRT can build engines
+      with dynamic shapes or shape-tensor inputs without optimization profiles.
+
+   ``tensorrt_version``
+      Written next to ``optimization``. ``minimal`` means validation and
+      optimize used the intersection of every checked-in TensorRT release.
+      A release such as ``10.16`` means that catalog was selected.
+
 ``pipeline``
 ------------
 

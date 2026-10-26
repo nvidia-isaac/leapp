@@ -16,6 +16,7 @@ annotations.
    #     or annotate.input_tensors() / annotate.output_tensors()
    leapp.stop()
    leapp.compile_graph(visualize=True)
+   leapp.optimize_graph(trt_compatible=True)
 
 Graph lifecycle
 ===============
@@ -225,6 +226,43 @@ The method performs the complete pipeline:
 #. Generate ``{name}.png`` if ``visualize=True`` and Python 3.11 or later is
    running.
 #. Log graph statistics.
+
+``leapp.optimize_graph()``
+--------------------------
+
+Post-compile graph optimizations. Call after ``compile_graph()``.
+
+Signature
+~~~~~~~~~
+
+.. code-block:: python
+
+   leapp.optimize_graph(
+       trt_compatible: bool = False,
+   )
+
+Parameters
+~~~~~~~~~~
+
+* ``trt_compatible`` (bool, optional): Optimize exported ONNX files in the
+  graph output directory so TensorRT can parse them. Always edits UINT8
+  intermediate Casts, Resize ``antialias``, and rank-9 Reshape. Also
+  decomposes operators the minimal TensorRT catalog marks unsupported.
+  That catalog is the intersection of every checked-in release and platform
+  (``tensorrt_catalogs/minimal/tensorrt_layers.json``). Updates YAML
+  checksums, ``parameters.optimization``, and ``parameters.tensorrt_version``.
+  Graph I/O names, dtypes,
+  and shapes are unchanged. Requires ``isaac_deploy_trt``. Defaults to
+  ``False``.
+
+Behavior
+~~~~~~~~
+
+* Requires ``stop()`` and ``compile_graph()`` first (the graph YAML must
+  exist in the output directory).
+* With no options enabled, logs a warning and returns ``{}``.
+* Returns a dict of applied passes (for example
+  ``{"trt_compatible": <bundle result>}``).
 
 ``GraphConfigs``
 ----------------
