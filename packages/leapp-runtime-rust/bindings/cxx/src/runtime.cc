@@ -361,6 +361,14 @@ Status Session::Open(const Bundle& bundle, const SessionOptions& options,
   if (session == nullptr || session->data_ || !bundle.is_valid()) {
     return Invalid("expected a valid bundle and an empty session destination");
   }
+  wire::EngineKind engine;
+  switch (options.engine) {
+    case EngineKind::kTriton:
+      engine = wire::EngineKind::Triton;
+      break;
+    default:
+      return Invalid("unsupported engine; expected EngineKind::kTriton");
+  }
   MemoryLocation location;
   switch (options.device) {
     case ExecutionDevice::kCpu:
@@ -379,7 +387,7 @@ Status Session::Open(const Bundle& bundle, const SessionOptions& options,
   }
   auto data = std::make_unique<Data>();
   auto status = Convert(wire::session_open(
-      *bundle.data_->handle, Location(location),
+      *bundle.data_->handle, engine, Location(location),
       Location(options.output_location),
       {overrides.data(), overrides.size()}, *data->handle));
   if (!status.ok()) {

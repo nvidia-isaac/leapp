@@ -11,7 +11,7 @@ mod tests;
 use crate::{
     dlpack::{BorrowedTensor, SharedTensor},
     engines::{self, Engine},
-    Bundle, ExecutionDevice, MemoryLocation, RuntimeError,
+    Bundle, EngineKind, ExecutionDevice, MemoryLocation, RuntimeError,
 };
 use anyhow::{ensure, Context};
 use indexmap::{IndexMap, IndexSet};
@@ -37,6 +37,8 @@ impl OutputPlacement {
 pub struct SessionOptions {
     pub device: ExecutionDevice,
     pub output_placement: OutputPlacement,
+    /// Select the engine once at initialization; new sessions share that engine.
+    pub engine: EngineKind,
 }
 
 /// Managed DLPack public outputs in bundle declaration order, independent of the session.

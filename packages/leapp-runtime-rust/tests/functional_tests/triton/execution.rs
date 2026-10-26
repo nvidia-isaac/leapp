@@ -4,7 +4,8 @@
 use super::support;
 use leapp_runtime::dlpack::BorrowedTensor;
 use leapp_runtime::{
-    Bundle, ErrorCode, ExecutionDevice, MemoryLocation, RunResult, Session, SessionOptions,
+    Bundle, EngineKind, ErrorCode, ExecutionDevice, MemoryLocation, RunResult, Session,
+    SessionOptions,
 };
 use serde_json::{json, Value};
 use std::{env, fs, path::PathBuf, thread};
@@ -21,6 +22,7 @@ fn fixtures(kind: &str) -> PathBuf {
 fn options(device: ExecutionDevice) -> SessionOptions {
     SessionOptions {
         device,
+        engine: EngineKind::Triton,
         ..Default::default()
     }
 }

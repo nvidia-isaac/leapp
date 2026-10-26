@@ -39,6 +39,7 @@ fn feedback_with_host_and_device_memory_placement() {
                         overrides: [("accumulator/next".into(), output_location)].into(),
                         ..Default::default()
                     },
+                    ..Default::default()
                 };
                 let mut session = Session::open(&bundle, options.clone()).unwrap();
                 check_state(&session, 0.);

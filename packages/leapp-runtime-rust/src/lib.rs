@@ -9,7 +9,7 @@
 //! use leapp_runtime::{BundleDescription, NodeSpec, Pipeline};
 //! ```
 //!
-//! Engine implementations are an internal compile-time choice:
+//! Select an engine with [`SessionOptions::engine`]; implementations remain private:
 //!
 //! ```compile_fail
 //! use leapp_runtime::engines;
@@ -23,7 +23,7 @@ mod error;
 mod session;
 
 pub use bundle::{Bundle, DataType, Metadata, MetadataValue, PortRef, PortSpec};
-pub use engines::{ExecutionDevice, MemoryLocation};
+pub use engines::{EngineKind, ExecutionDevice, MemoryLocation};
 pub use error::{BundleError, ErrorCode, RuntimeError};
 pub use session::{OutputPlacement, RunResult, Session, SessionOptions};
 

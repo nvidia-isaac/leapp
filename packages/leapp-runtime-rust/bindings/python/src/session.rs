@@ -6,10 +6,10 @@ use crate::{
     dlpack::{import_items, Output},
 };
 use leapp_runtime::dlpack::BorrowedTensor;
-use leapp_runtime::{ExecutionDevice, RunResult, SessionOptions};
+use leapp_runtime::{EngineKind, ExecutionDevice, RunResult, SessionOptions};
 use leapp_runtime_bindings::{Error, SessionHandle};
 use pyo3::{
-    exceptions::{PyKeyError, PyTypeError},
+    exceptions::{PyKeyError, PyTypeError, PyValueError},
     prelude::*,
     types::PyTuple,
 };
@@ -41,6 +41,15 @@ impl PySession {
     ) -> PyResult<Self> {
         let mut opts = SessionOptions::default();
         if let Some(options) = options {
+            let engine: String = options.getattr("engine")?.extract()?;
+            opts.engine = match engine.as_str() {
+                "triton" => EngineKind::Triton,
+                _ => {
+                    return Err(PyValueError::new_err(format!(
+                        "unknown engine '{engine}'; expected 'triton'"
+                    )))
+                }
+            };
             let device: String = options.getattr("device")?.extract()?;
             opts.device = match crate::location(&device)? {
                 leapp_runtime::MemoryLocation::Cpu => ExecutionDevice::Cpu,

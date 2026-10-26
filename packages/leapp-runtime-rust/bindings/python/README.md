@@ -24,7 +24,7 @@ import numpy as np
 import leapp_runtime as lr
 
 bundle = lr.Bundle.open("exports/policy.yaml")
-options = lr.SessionOptions(device="cuda:0", output_device="cpu")
+options = lr.SessionOptions(engine="triton", device="cuda:0", output_device="cpu")
 with lr.Session.open(bundle, options) as session:
     result = session.run(
         {"preprocess/obs": np.zeros(18, dtype=np.float32)},
@@ -86,10 +86,12 @@ starts from captured initial state rather than the source's current feedback.
 sessions remain usable. Results, arrays, DLPack allocations and bundle metadata
 remain valid after close. Context-manager exit closes only its session.
 
-`SessionOptions` captures output placement at construction; `run` takes only inputs.
+`SessionOptions` selects the engine and output placement at construction;
+`run` takes only inputs. `engine="triton"` is the default and the only supported
+engine. Unknown engine names raise `ValueError` when opening the session.
 Set `output_device` to `"cpu"`, `"pinned"`, or `"cuda:N"` and use `output_overrides`
-for individual public outputs. The engine is fixed by the build. Configure its
-installation before starting Python, as described in the
+for individual public outputs. Configure the engine installation before starting
+Python, as described in the
 [runtime guide](../../README.md#synchronous-execution).
 
 Bundle and execution failures raise `BundleError` and `RuntimeError` with

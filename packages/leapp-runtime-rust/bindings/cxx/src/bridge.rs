@@ -11,6 +11,10 @@ pub mod ffi {
         message: String,
     }
 
+    enum EngineKind {
+        Triton,
+    }
+
     enum Dtype {
         Bool,
         Uint8,
@@ -132,6 +136,7 @@ pub mod ffi {
         fn session_new() -> Box<SessionHandle>;
         fn session_open(
             bundle: &BundleHandle,
+            engine: EngineKind,
             location: Location,
             output_location: Location,
             overrides: &[Placement],

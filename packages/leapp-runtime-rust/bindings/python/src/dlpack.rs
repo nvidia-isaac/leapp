@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Python capsule protocol only. Tensor interpretation belongs to the compiled engine.
+//! Python capsule protocol only. Tensor interpretation belongs to the selected engine.
 use leapp_runtime::dlpack::{ManagedTensor, SharedTensor};
 use pyo3::{
     exceptions::{PyBufferError, PyTypeError},
