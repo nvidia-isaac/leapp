@@ -25,10 +25,12 @@ and results. Each `Session` holds a shared `Arc<dyn Engine>` with synchronous
 execution and tensor-copy operations. The `src/engines/triton` module owns Triton
 conversion, configuration, repositories, native calls, CUDA, allocation pooling,
 and backend plugins. There is no separate engine crate or executor layer.
-`src/engines.rs` defines the internal contract and wires in the implementation at
-compile time. Engine modules and configuration are private; callers use the same
-Session API when the implementation changes. Each subdirectory under
-`src/engines/` contains one engine; currently the only engine is `triton/`. Its model backends remain nested there.
+`src/engines.rs` defines the internal contract and selects an implementation at
+session initialization using `SessionOptions::engine`. Engine implementations
+and installation settings are private. Each subdirectory under `src/engines/`
+contains one engine; currently the only engine is `triton/`. Its model backends
+remain nested there. Additional engines can be included in the same binary and
+selected independently for each session.
 
 Module entry points use `name.rs` beside `name/` subdirectories. Within Triton,
 `native` owns server calls, requests, errors, and C bindings;
@@ -116,9 +118,22 @@ the receiving consumer must invoke that lease's deleter exactly once.
 
 See `examples/run.rs` for a complete CPU example.
 
-`SessionOptions` selects `ExecutionDevice` and output placement, defaulting to
-CPU execution and outputs. The engine is fixed by the build and is not part of
-the public options. The Triton adapter reads `LEAPP_TRITON_BACKENDS` when opening
+`SessionOptions` selects the engine, `ExecutionDevice`, and output placement,
+defaulting to `EngineKind::Triton`, CPU execution, and CPU outputs:
+
+```rust
+use leapp_runtime::{EngineKind, Session, SessionOptions};
+
+let options = SessionOptions {
+    engine: EngineKind::Triton,
+    ..Default::default()
+};
+let session = Session::open(&bundle, options)?;
+```
+
+Triton is currently the only supported engine. The engine is selected when
+opening a session, and `new_session()` retains that selection by sharing the
+loaded engine. The Triton adapter reads `LEAPP_TRITON_BACKENDS` when opening
 a session, falling back to `$TRITON_ROOT/backends` or `/opt/tritonserver/backends`
 when `TRITON_ROOT` is unset. Set installation variables before starting the process;
 `new_session()` shares the already-loaded engine without rediscovering it.

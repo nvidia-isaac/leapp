@@ -18,6 +18,8 @@
 
 namespace leapp {
 
+enum class EngineKind { kTriton };
+
 enum class ExecutionDevice { kCpu, kCuda };
 
 enum class MemoryType : uint8_t { kCpu, kPinnedCpu, kCuda };
@@ -32,6 +34,7 @@ struct SessionOptions {
   uint32_t device_id = 0;
   MemoryLocation output_location;
   std::unordered_map<std::string, MemoryLocation> output_overrides;
+  EngineKind engine = EngineKind::kTriton;
 };
 
 /// @brief Retained outputs; copies share allocations.
