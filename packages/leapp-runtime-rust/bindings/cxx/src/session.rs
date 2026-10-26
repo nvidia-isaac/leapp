@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{bundle::BundleHandle, ffi};
-use leapp_runtime::{ExecutionDevice, MemoryLocation, RunResult, SessionOptions};
+use leapp_runtime::{EngineKind, ExecutionDevice, MemoryLocation, RunResult, SessionOptions};
 
 pub struct SessionHandle(Option<leapp_runtime_bindings::SessionHandle>);
 
@@ -18,6 +18,7 @@ pub fn result_new() -> Box<ResultHandle> {
 
 pub fn session_open(
     bundle: &BundleHandle,
+    engine: ffi::EngineKind,
     device: ffi::Location,
     output_location: ffi::Location,
     overrides: &[ffi::Placement],
@@ -35,7 +36,13 @@ pub fn session_open(
         Ok(_) => return crate::invalid("pinned memory is not an execution device"),
         Err(e) => return e,
     };
-    let mut options = SessionOptions::default();
+    let mut options = SessionOptions {
+        engine: match engine {
+            ffi::EngineKind::Triton => EngineKind::Triton,
+            _ => return crate::invalid("unsupported engine; expected Triton"),
+        },
+        ..SessionOptions::default()
+    };
     options.output_placement.default_location = match location(output_location) {
         Ok(v) => v,
         Err(e) => return e,

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Internal engine contract and compile-time implementation wiring.
+//! Runtime engine selection and the internal execution contract.
 pub(crate) mod triton;
 
 use crate::{
@@ -10,6 +10,13 @@ use crate::{
 };
 use indexmap::IndexMap;
 use std::sync::Arc;
+
+/// Execution engine selected when opening a session.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum EngineKind {
+    #[default]
+    Triton,
+}
 
 /// Device used by model instances, independently of input and output storage.
 #[derive(Debug, Clone, Copy, Default)]
@@ -52,7 +59,9 @@ pub(crate) fn open(
     graph: &crate::session::graph::Graph<'_>,
     options: &crate::SessionOptions,
 ) -> Result<Arc<dyn Engine>, RuntimeError> {
-    triton::open(bundle, graph, options)
+    match options.engine {
+        EngineKind::Triton => triton::open(bundle, graph, options),
+    }
 }
 
 /// DLPack producer handoff support for language bindings.

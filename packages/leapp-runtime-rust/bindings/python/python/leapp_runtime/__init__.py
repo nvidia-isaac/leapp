@@ -32,11 +32,12 @@ class ErrorCode(IntEnum):
 
 @dataclass(frozen=True)
 class SessionOptions:
-    """Construction-time model placement and output storage."""
+    """Construction-time engine, model placement, and output storage."""
 
     device: str = "cpu"
     output_device: str = "cpu"
     output_overrides: dict[str, str] = field(default_factory=dict)
+    engine: str = "triton"
 
 
 __all__ = [

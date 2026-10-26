@@ -18,7 +18,7 @@ use std::{
 pub use sys::*;
 
 /// DLPack producer synchronization used by language bindings.
-/// Native stream ownership stays in the compiled engine implementation.
+/// Native stream ownership stays in the CUDA handoff implementation.
 #[doc(hidden)]
 pub struct HandoffStream(crate::engines::HandoffStream);
 

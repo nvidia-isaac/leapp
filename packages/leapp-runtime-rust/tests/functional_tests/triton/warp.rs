@@ -35,6 +35,7 @@ fn warp_plugins_execute_through_sessions() {
                         default_location: location,
                         ..Default::default()
                     },
+                    ..Default::default()
                 },
             )
             .unwrap();

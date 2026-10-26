@@ -50,7 +50,9 @@ if (!status.ok()) return status;
 const auto* action_info = bundle.output_info("policy", "action");
 
 leapp::Session session;
-status = leapp::Session::Open(bundle, {}, &session);
+leapp::SessionOptions options;
+options.engine = leapp::EngineKind::kTriton;
+status = leapp::Session::Open(bundle, options, &session);
 if (!status.ok()) return status;
 
 std::vector<float> obs(18);
@@ -73,6 +75,10 @@ if (!status.ok()) return status;
 - Open and NewSession require empty destinations. Reset a handle through
   assignment to a default instance before reusing it. Failed operations preserve
   destinations; successful Run/GetTensor replace them.
+- `SessionOptions.engine` selects the runtime engine when opening a session.
+  `EngineKind::kTriton` is the default and currently the only supported engine.
+  Invalid engine values return `InvalidArgument` without opening an engine or
+  changing the destination; there is no fallback.
 - Bundle copies share the Rust snapshot and cached C++ inspection values.
   Getter references remain valid while a copy retains that snapshot.
 - Missing model/port getters return `nullptr`. Pipeline input/output maps preserve
@@ -112,8 +118,9 @@ if (!status.ok()) return status;
 Execution placement and storage placement are independent. Set
 `SessionOptions.device = ExecutionDevice::kCuda` for GPU model execution.
 Set `SessionOptions.output_location` or individual `output_overrides` at construction.
-`Run` takes only inputs and a result destination. The engine is fixed by the
-build. Configure its installation before starting the application, as described
+`Run` takes only inputs and a result destination. Engine selection is independent
+of execution and storage placement. Configure the selected engine's installation
+before starting the application, as described
 in the [runtime guide](../../README.md#synchronous-execution).
 
 Construct a `DLTensor` with `DLDevice{kDLCUDA, device_id}` and a device pointer.

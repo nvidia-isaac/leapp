@@ -31,8 +31,11 @@ def step(session, value=1):
     )["accumulator/next"]
 
 
-def test_read_only_lifetime_feedback_and_close():
-    with open_session() as rt:
+@pytest.mark.parametrize(
+    "options", [{}, {"engine": "triton"}], ids=["default", "triton"]
+)
+def test_read_only_lifetime_feedback_and_close(options):
+    with open_session(**options) as rt:
         session = rt.new_session()
         tensor = step(session)
         view = np.from_dlpack(tensor)
@@ -69,6 +72,11 @@ def test_read_only_lifetime_feedback_and_close():
     del tensor, rt, session
     gc.collect()
     np.testing.assert_array_equal(view, [1] * 4)
+
+
+def test_unknown_engine_is_rejected():
+    with pytest.raises(ValueError, match="unknown engine 'unknown'; expected 'triton'"):
+        open_session(engine="unknown")
 
 
 def test_dlpack_exports_alias_and_retain_storage():

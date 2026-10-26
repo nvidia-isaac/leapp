@@ -92,6 +92,28 @@ void Expect(const leapp::ManagedTensor& tensor, float value) {
   CHECK(Values(tensor) == std::vector<float>(4, value));
 }
 
+void EngineSelection(const std::filesystem::path& fixtures) {
+  leapp::Bundle bundle;
+  Ok(leapp::Bundle::Open(fixtures / "feedback.yaml", &bundle));
+  leapp::SessionOptions options{leapp::ExecutionDevice::kCpu, 0, {}, {}};
+  CHECK(options.engine == leapp::EngineKind::kTriton);
+  leapp::Session session;
+  for (int invalid : {-1, 256}) {
+    options.engine = static_cast<leapp::EngineKind>(invalid);
+    auto status = leapp::Session::Open(bundle, options, &session);
+    CHECK(status.code() == leapp::ErrorCode::kInvalidArgument);
+    CHECK(status.message().find("engine") != std::string::npos);
+    CHECK(!session.bundle().is_valid());
+  }
+  options.engine = leapp::EngineKind::kTriton;
+  Ok(leapp::Session::Open(bundle, options, &session));
+  Expect(Step(session), 1);
+  options.engine = static_cast<leapp::EngineKind>(-1);
+  auto status = leapp::Session::Open(bundle, options, &session);
+  CHECK(status.code() == leapp::ErrorCode::kInvalidArgument);
+  Expect(Step(session), 2);
+}
+
 void FeedbackAndLifetimes(const std::filesystem::path& fixtures) {
   auto runtime = Open(fixtures, "feedback");
   leapp::Session session;
@@ -305,6 +327,7 @@ int main(int argc, char** argv) {
   static_assert(!std::is_copy_constructible_v<leapp::ManagedTensor>);
   CHECK(argc == 3);
   const std::filesystem::path fixtures = argv[1];
+  EngineSelection(fixtures);
   FeedbackAndLifetimes(fixtures);
   InvalidInputs(fixtures);
   ConcurrentSessions(fixtures);

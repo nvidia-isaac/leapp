@@ -22,6 +22,7 @@ int main(int argc, char** argv) {
     return 1;
   }
   leapp::SessionOptions options;
+  options.engine = leapp::EngineKind::kTriton;
   leapp::Session session;
   status = leapp::Session::Open(bundle, options, &session);
   if (!status.ok()) {
