@@ -33,8 +33,11 @@ from .leapp_graph.custom_operator_registry import warp_operator  # noqa: F401
 from .leapp_graph.datatypes.patching import FunctionPatch
 from .leapp import annotate, start, stop, compile_graph
 from .utils.enums import InputKindEnum, OutputKindEnum, Kind, AxisKind, ExpressionFrame
-from .utils.tensor_description import GraphConfigs, TensorSemantics, TemporalAxis, Axis
+from .utils.tensor_description import GraphConfigs
 from .utils.semantics import (
+    Axis,
+    TemporalAxis,
+    TensorSemantics,
     joint_position,
     joint_velocity,
     joint_effort,

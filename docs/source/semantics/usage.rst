@@ -14,8 +14,9 @@ Tensor Semantics Usage
 
    The interfaces presented here are intended to replace ``InputKindEnum``,
    ``OutputKindEnum``, ``element_names``, and ``TemporalAxis``. They are
-   experimental; the legacy APIs remain fully supported and are not deprecated.
-   See :doc:`legacy` for their reference and optional migration guidance.
+   experimental; the legacy APIs are deprecated and emit ``FutureWarning``
+   messages when used. Existing annotations retain their behavior and YAML
+   representation. See :doc:`legacy` for their reference and migration guidance.
 
 A tensor's shape tells a runtime how many values to expect, but not what those
 values mean. For example, a tensor shaped ``[1, 2]`` might contain:

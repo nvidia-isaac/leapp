@@ -2,13 +2,16 @@
 Legacy Semantics API
 ====================
 
-.. note::
+.. warning::
 
    This page describes the legacy alternative to the quantity and axis APIs
-   presented in the preceding guides. These legacy APIs are **fully supported
-   and are not deprecated**.
+   presented in the preceding guides. ``InputKindEnum``, ``OutputKindEnum``,
+   ``element_names``, and ``TemporalAxis`` are **deprecated**. Constructing
+   ``TensorSemantics`` with a legacy kind or ``element_names``, or constructing
+   ``TemporalAxis``, emits a ``FutureWarning`` visible in the terminal by default.
 
-   Updating to the quantity and axis APIs is recommended, but optional.
+   Migrate to quantity helpers or ``Kind`` with ``Axis`` when your consumer
+   supports their YAML representation. No removal version is scheduled.
    Existing annotations retain their behavior and YAML representation, and
    both styles can coexist in the same graph or annotation list. See
    :doc:`usage` to get started with quantity and axis annotations.
@@ -340,10 +343,10 @@ Downstream consumers can find the temporal axis by locating
    sentinel directly. A tensor may contain at most one temporal axis marker.
 
 
-Optional migration
-==================
+Migration
+=========
 
-Updating is recommended, but optional. Before changing annotations:
+Before changing deprecated annotations:
 
 * Confirm that the downstream consumer understands quantity kinds and ``axes``.
 * Check the tensor's physical meaning, coordinate frames, and component order.

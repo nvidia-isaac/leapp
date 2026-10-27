@@ -16,10 +16,10 @@
 #
 import functools
 import torch
+from leapp.utils.semantics import TensorSemantics
 from leapp.utils.tensor_description import (
     describe_io,
     flatten_io_structure,
-    TensorSemantics,
 )
 from leapp.leapp_graph.datatypes import is_traced_type
 from leapp.backends.export_backend import NoneExportBackend

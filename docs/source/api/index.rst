@@ -344,7 +344,8 @@ Semantic metadata
 
 * ``name`` and ``ref`` supply the port name and tensor value.
 * ``kind`` accepts ``Kind``, ``InputKindEnum``, ``OutputKindEnum``,
-  custom strings, or ``None``.
+  custom strings, or ``None``. The legacy input/output enums are deprecated
+  and emit ``FutureWarning`` when used in an annotation.
 * ``axes`` accepts ``None`` or a list of ``Axis`` / ``None`` entries, one per
   tensor dimension. Names must match the dimension size.
 * ``is_setpoint`` accepts ``True``, ``False``, or ``None`` (the default).
@@ -356,8 +357,9 @@ Semantic metadata
   ``ExpressionFrame.REFERENCE``, or ``None`` (global).
 * ``extra`` is a dictionary flattened into the tensor YAML entry. Use it only
   for agreed consumer-specific metadata and avoid built-in field names.
-* ``element_names`` supplies element labels and cannot accompany ``axes``.
-  See :doc:`/semantics/legacy` for accepted formats.
+* ``element_names`` supplies deprecated element labels and cannot accompany
+  ``axes``. It emits ``FutureWarning``; use ``Axis`` labels instead.
+  See :doc:`/semantics/legacy` for accepted formats and migration guidance.
 
 .. warning::
 

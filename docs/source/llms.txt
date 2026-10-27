@@ -34,7 +34,7 @@ Capture follows the executed tensor path. Data-dependent Python branches are not
 - [Kind and Axes](https://nvidia-isaac.github.io/leapp/semantics/kind_element_names.html): Understand quantities, axis layout, and timing.
 - [Spatial Metadata](https://nvidia-isaac.github.io/leapp/semantics/spatial.html): Interpret reference frames, coordinate axes, and wrench application positions.
 - [Convenience API](https://nvidia-isaac.github.io/leapp/semantics/convenience.html): Choose quantity helpers and understand their arguments and validation.
-- [Legacy semantics](https://nvidia-isaac.github.io/leapp/semantics/legacy.html): Fully supported existing enums, element names, and temporal metadata.
+- [Legacy semantics](https://nvidia-isaac.github.io/leapp/semantics/legacy.html): Deprecated enums, element names, and temporal metadata; migration guidance.
 - [Ecosystem integrations](https://nvidia-isaac.github.io/leapp/ecosystem.html): Isaac Lab export and Isaac ROS Deploy runtime documentation.
 
 ## Capture limits

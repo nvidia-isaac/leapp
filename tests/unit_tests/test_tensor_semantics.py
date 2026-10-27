@@ -16,6 +16,7 @@
 #
 
 import inspect
+import warnings
 
 import numpy as np
 import pytest
@@ -24,7 +25,52 @@ import yaml
 
 import leapp
 from leapp import Axis, AxisKind, ExpressionFrame, Kind, TensorSemantics
+from leapp.utils import semantics, tensor_description
 from leapp.utils.tensor_description import TensorDescription
+
+
+@pytest.mark.parametrize("name", ["Axis", "TemporalAxis", "TensorSemantics"])
+def test_existing_semantic_imports_share_the_same_class(name):
+    assert getattr(tensor_description, name) is getattr(semantics, name)
+    assert getattr(leapp, name) is getattr(semantics, name)
+
+
+@pytest.mark.parametrize(
+    "kind", [leapp.InputKindEnum.JOINT_POSITION, leapp.OutputKindEnum.JOINT_POSITION]
+)
+def test_legacy_kind_warns_and_preserves_yaml(kind):
+    ref = torch.zeros(2)
+    with pytest.warns(FutureWarning, match="deprecated.*Kind with Axis"):
+        annotation = TensorSemantics("q", ref, kind=kind)
+    entry = yaml.safe_load(yaml.dump(TensorDescription("q", ref, annotation).dict()))
+    assert entry["kind"] == kind.value
+    assert "axes" not in entry
+
+
+def test_legacy_element_names_warn_and_preserve_yaml():
+    ref = torch.zeros(2)
+    with pytest.warns(FutureWarning, match="element_names are deprecated"):
+        annotation = TensorSemantics("q", ref, element_names=["hip", "knee"])
+    entry = yaml.safe_load(yaml.dump(TensorDescription("q", ref, annotation).dict()))
+    assert entry["element_names"] == [["hip", "knee"]]
+    assert "axes" not in entry
+
+
+def test_legacy_temporal_axis_warns_with_replacement():
+    with pytest.warns(FutureWarning, match=r"TemporalAxis is deprecated; use Axis"):
+        axis = leapp.TemporalAxis(period_ms=20)
+    assert axis.period_ms == 20
+
+
+def test_current_semantics_do_not_warn():
+    ref = torch.zeros(2)
+    axes = [Axis(AxisKind.ELEMENT, names=["hip", "knee"])]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        TensorSemantics("raw", ref)
+        TensorSemantics("custom", ref, kind="embedding", axes=axes)
+        leapp.joint_position("q", ref, axes=axes)
+        leapp.joint_effort("actions", ref, axes=[Axis(AxisKind.TIME, period_ms=20)])
 
 
 @pytest.mark.parametrize("axis_kind", [AxisKind.SYSTEM, "system"])

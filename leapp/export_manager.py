@@ -35,7 +35,7 @@ from leapp.leapp_graph.datatypes.patching import (
     TracingPatcher,
     warn_if_script_functions_in_scope,
 )
-from leapp.utils.tensor_description import TensorSemantics
+from leapp.utils.semantics import TensorSemantics
 from leapp.utils.tensor_description import (
     verify_data_exact_match,
     flatten_io_structure,

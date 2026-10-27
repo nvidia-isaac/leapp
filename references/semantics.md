@@ -22,7 +22,7 @@ Do not split a model, convert a working `method` annotation, or label every inte
 
 ## Use standard kinds first
 
-For new integrations, prefer quantity helpers such as `joint_position` or the matching `Kind` enum with `Axis`. These APIs are experimental and imported directly from `leapp`; confirm consumer support. Direction comes from the input/output list. Set `is_setpoint=True` only for incoming references; outputs reject it. A tensor named `action` is not necessarily an effort command. Existing enums and `element_names` remain fully supported and are not deprecated; preserve existing contracts unless migration is requested.
+For new integrations, prefer quantity helpers such as `joint_position` or the matching `Kind` enum with `Axis`. These APIs are experimental and imported directly from `leapp`; confirm consumer support. Direction comes from the input/output list. Set `is_setpoint=True` only for incoming references; outputs reject it. A tensor named `action` is not necessarily an effort command. `InputKindEnum`, `OutputKindEnum`, `TemporalAxis`, and `element_names` are deprecated and emit terminal-visible `FutureWarning` messages. Their behavior and YAML representation are retained; migrate in coordination with the consumer.
 
 Use a custom kind only when no standard kind fits **and** the consumer explicitly supports the agreed label. Do not create synonyms for existing kinds or repeat `kind` in `extra`. Unknown meaning should remain unspecified. In particular, normalized joint features, learned latent vectors, and concatenated mixed observations must not be mislabeled as physical joint positions.
 
@@ -91,7 +91,7 @@ Inspect the exported YAML for the intended standard kinds, actual element order 
 
 ## Migrating an existing integration
 
-Migration is optional. The [legacy API](https://nvidia-isaac.github.io/leapp/semantics/legacy.html) remains fully supported and is not deprecated. Confirm the installed checkout exposes `Kind` and the keyword-only fields before using them; do not bump package or config versions to enable annotations.
+The [legacy API](https://nvidia-isaac.github.io/leapp/semantics/legacy.html) is deprecated; using legacy kinds, `element_names`, or `TemporalAxis` emits `FutureWarning` messages visible in the terminal by default. No removal version is scheduled. Existing YAML representations remain supported, so coordinate migration with the consumer. Confirm the installed checkout exposes `Kind` and the keyword-only fields before using them; do not bump package or config versions to enable annotations.
 
 - Coordinate changes with the YAML consumer: old `state/`, `command/`, and `target/` kind strings are not converted automatically. Old and new annotations can coexist in one graph or annotation list.
 - Replace joint position/velocity kinds with `joint_position` / `joint_velocity`; `JOINT_EFFORT`, `JOINT_TORQUES`, and `COMMAND_JOINT_TORQUES` map to `joint_effort`. Incoming `COMMAND_*` kinds need `is_setpoint=True`; output targets do not.

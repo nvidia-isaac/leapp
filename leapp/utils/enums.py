@@ -19,6 +19,8 @@ from enum import Enum
 
 
 class InputKindEnum(Enum):
+    """Deprecated input kinds; use Kind or quantity helpers."""
+
     JOINT_POSITION = "state/joint/position"
     JOINT_VELOCITY = "state/joint/velocity"
     JOINT_EFFORT = "state/joint/effort"
@@ -42,6 +44,8 @@ class InputKindEnum(Enum):
 
 
 class OutputKindEnum(Enum):
+    """Deprecated output kinds; use Kind or quantity helpers."""
+
     KP = "kp"
     KD = "kd"
     JOINT_POSITION = "target/joint/position"
