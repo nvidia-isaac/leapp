@@ -6,3 +6,6 @@ mod execution;
 
 #[path = "session/support.rs"]
 pub(crate) mod support;
+
+#[path = "session/torchscript.rs"]
+mod torchscript;

@@ -40,6 +40,21 @@ class Integer(torch.nn.Module):
         return values + 1
 
 
+class Identity(torch.nn.Module):
+    def forward(self, values):
+        return values
+
+
+class Stateful(torch.nn.Module):
+    def __init__(self, device):
+        super().__init__()
+        self.register_buffer("total", torch.zeros(4, device=device))
+
+    def forward(self, values):
+        self.total.add_(values)
+        return self.total.clone()
+
+
 def generate(root):
     root.mkdir(parents=True, exist_ok=True)
     devices = ["cpu"] + (["cuda:0"] if torch.cuda.is_available() else [])
@@ -55,6 +70,21 @@ def generate(root):
                 {"values": {0: 2 * torch.export.Dim("half", min=1, max=16)}},
             ),
             ("integer", Integer(), torch.arange(4, device=device), None),
+            ("scalar", Identity(), torch.tensor(3.0, device=device), None),
+            ("empty", Identity(), torch.empty(0, device=device), None),
+            (
+                "double",
+                Identity(),
+                torch.arange(4, dtype=torch.float64, device=device),
+                None,
+            ),
+            (
+                "short",
+                Identity(),
+                torch.arange(4, dtype=torch.int16, device=device),
+                None,
+            ),
+            ("stateful", Stateful(device), torch.ones(4, device=device), None),
         ]:
             module.eval()
             directory = root / f"{name}_{suffix}"

@@ -11,8 +11,5 @@ pub(crate) use crate::engines::tests::support;
 #[path = "triton/tensorrt.rs"]
 mod tensorrt;
 
-#[path = "triton/torchscript.rs"]
-mod torchscript;
-
 #[path = "triton/warp.rs"]
 mod warp;

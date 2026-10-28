@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 # Native backend plugins
 
 The native engine uses [`BackendPlugin`](../backends.rs) to execute model nodes
-with ONNX Runtime. The engine handles graph routing,
+with ONNX, TorchScript, or NativeRT. The engine handles graph routing,
 workspace buffers, and public results; each plugin handles model execution.
 This is an internal contributor interface. Applications use the runtime's
 Session API, and Triton has its own backend interface.
@@ -30,7 +30,7 @@ Plugins support two execution paths:
 
 To add a backend, implement `BackendPlugin` and register its validation and
 loading functions in [`backends.rs`](../backends.rs). ONNX implements the trait
-in Rust. See the
+in Rust; C++ backends can reuse the [shared bridge](bridge.rs). See the
 [runtime README](../../../../README.md) for build and configuration instructions.
 
 ## Interface contract
