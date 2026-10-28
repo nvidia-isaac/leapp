@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{bundle::BundleHandle, ffi};
-use lrt::{ExecutionDevice, MemoryLocation, RunResult, SessionOptions};
+use lrt::{EngineKind, ExecutionDevice, MemoryLocation, RunResult, SessionOptions};
 
 pub struct SessionHandle(Option<leapp_runtime_bindings::SessionHandle>);
 
@@ -18,6 +18,7 @@ pub fn result_new() -> Box<ResultHandle> {
 
 pub fn session_open(
     bundle: &BundleHandle,
+    engine: ffi::EngineKind,
     max_entries: usize,
     device: ffi::Location,
     output_location: ffi::Location,
@@ -36,7 +37,14 @@ pub fn session_open(
         Ok(_) => return crate::invalid("pinned memory is not an execution device"),
         Err(e) => return e,
     };
-    let mut options = SessionOptions::default();
+    let mut options = SessionOptions {
+        engine: match engine {
+            ffi::EngineKind::Triton => EngineKind::Triton,
+            ffi::EngineKind::Native => EngineKind::Native,
+            _ => return crate::invalid("unsupported engine; expected Triton or Native"),
+        },
+        ..SessionOptions::default()
+    };
     options.output_pool.max_entries = max_entries;
     options.output_placement.default_location = match location(output_location) {
         Ok(v) => v,
@@ -71,10 +79,7 @@ pub fn session_close(session: &SessionHandle) -> ffi::StatusData {
     }
 }
 
-pub fn session_duplicate(
-    session: &SessionHandle,
-    output: &mut SessionHandle,
-) -> ffi::StatusData {
+pub fn session_duplicate(session: &SessionHandle, output: &mut SessionHandle) -> ffi::StatusData {
     if output.0.is_some() {
         return crate::invalid("session destination is not empty");
     }
@@ -144,11 +149,7 @@ pub fn result_names(result: &ResultHandle) -> Vec<String> {
         .unwrap_or_default()
 }
 
-pub fn result_tensor(
-    result: &ResultHandle,
-    name: &[u8],
-    output: &mut usize,
-) -> ffi::StatusData {
+pub fn result_tensor(result: &ResultHandle, name: &[u8], output: &mut usize) -> ffi::StatusData {
     let Some(result) = &result.0 else {
         return crate::invalid("result is empty");
     };

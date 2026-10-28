@@ -34,6 +34,7 @@ fn warp_plugins_execute_through_sessions() {
                 let mut session = Session::open(
                     &bundle,
                     SessionOptions {
+                        engine: crate::EngineKind::Triton,
                         device,
                         output_placement: OutputPlacement {
                             default_location: location,

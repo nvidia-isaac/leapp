@@ -3,16 +3,16 @@
 
 #[path = "triton/engine.rs"]
 mod engine;
-#[path = "triton/execution.rs"]
-mod execution;
 #[path = "triton/nativert.rs"]
 mod nativert;
-#[path = "triton/support.rs"]
-pub(crate) mod support;
+pub(crate) use crate::engines::tests::support;
+// state.rs is included under Session to inspect its private feedback state.
+
 #[path = "triton/tensorrt.rs"]
 mod tensorrt;
+
 #[path = "triton/torchscript.rs"]
 mod torchscript;
+
 #[path = "triton/warp.rs"]
 mod warp;
-// state.rs is included under Session to inspect its private feedback state.

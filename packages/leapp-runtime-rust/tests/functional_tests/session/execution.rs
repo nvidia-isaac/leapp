@@ -3,9 +3,7 @@
 
 use super::support;
 use lrt::dlpack::BorrowedTensor;
-use lrt::{
-    Bundle, ErrorCode, ExecutionDevice, MemoryLocation, RunResult, Session, SessionOptions,
-};
+use lrt::{Bundle, ErrorCode, ExecutionDevice, MemoryLocation, RunResult, Session, SessionOptions};
 use serde_json::{json, Value};
 use std::{env, fs, path::PathBuf, thread};
 use support::TestTensor;
@@ -20,6 +18,7 @@ fn fixtures(kind: &str) -> PathBuf {
 
 fn options(device: ExecutionDevice) -> SessionOptions {
     SessionOptions {
+        engine: support::engine(),
         device,
         ..Default::default()
     }
@@ -52,6 +51,44 @@ fn step(session: &mut Session, value: f32) -> RunResult {
         .unwrap()
 }
 
+#[test]
+fn runtime_engine_selection_and_independent_feedback() {
+    use lrt::EngineKind;
+
+    assert_eq!(SessionOptions::default().engine, EngineKind::Triton);
+    let bundle = Bundle::open(fixtures("triton").join("feedback.yaml")).unwrap();
+    for device in devices() {
+        let mut sessions = Vec::new();
+        for engine in [EngineKind::Triton, EngineKind::Native] {
+            let result = Session::open(
+                &bundle,
+                SessionOptions {
+                    engine,
+                    device,
+                    ..Default::default()
+                },
+            );
+            sessions.push(result.unwrap());
+        }
+        // Keep both engines alive and interleave their independent feedback updates.
+        for expected in [1., 2.] {
+            for session in &mut sessions {
+                assert_eq!(
+                    values(&step(session, 1.), "accumulator/next"),
+                    [expected; 4]
+                );
+            }
+        }
+        let peers: Vec<_> = sessions.iter().map(|s| s.new_session().unwrap()).collect();
+        drop(sessions);
+        for mut peer in peers {
+            assert_eq!(values(&step(&mut peer, 3.), "accumulator/next"), [3.; 4]);
+            peer.reset().unwrap();
+            assert_eq!(values(&step(&mut peer, 1.), "accumulator/next"), [1.; 4]);
+        }
+    }
+}
+
 // Modified fixtures keep artifact references absolute while their YAML remains temporary.
 fn fixture(name: &str) -> Value {
     let root = fixtures("triton");
@@ -72,15 +109,80 @@ fn bundle(value: &Value, directory: &tempfile::TempDir) -> Bundle {
 
 fn initial(value: &mut Value, directory: &tempfile::TempDir, port: &str, data: &[f32]) {
     let bytes: Vec<_> = data.iter().flat_map(|v| v.to_le_bytes()).collect();
-    let tensor = safetensors::tensor::TensorView::new(
-        safetensors::Dtype::F32,
-        vec![data.len()],
-        &bytes,
-    )
-    .unwrap();
+    let tensor =
+        safetensors::tensor::TensorView::new(safetensors::Dtype::F32, vec![data.len()], &bytes)
+            .unwrap();
     let path = directory.path().join("initial.safetensors");
     safetensors::serialize_to_file([(port, tensor)], None, &path).unwrap();
     value["pipeline"]["initial_values"] = json!(path);
+}
+
+#[test]
+fn onnx_ports_bind_by_name_for_all_declaration_orders() {
+    for device in devices() {
+        for name in ["named_ports", "named_ports_dynamic"] {
+            for (reverse_inputs, reverse_outputs) in
+                [(false, false), (true, false), (false, true), (true, true)]
+            {
+                let directory = tempfile::tempdir().unwrap();
+                let mut data = fixture(name);
+                for (ports, reverse) in [("inputs", reverse_inputs), ("outputs", reverse_outputs)] {
+                    if reverse {
+                        data["models"]["arithmetic"][ports]
+                            .as_array_mut()
+                            .unwrap()
+                            .reverse();
+                    }
+                }
+                let mut session =
+                    Session::open(&bundle(&data, &directory), options(device)).unwrap();
+                let mut retained = Vec::new();
+                for (step, dynamic_length) in [4, 2, 7].into_iter().enumerate() {
+                    let length = if name == "named_ports" {
+                        4
+                    } else {
+                        dynamic_length
+                    };
+                    let left: Vec<f32> =
+                        (0..length).map(|i| i as f32 + 7.0 + step as f32).collect();
+                    let right = vec![2.0 + step as f32 * 3.0; length];
+                    let shape = [length as i64];
+                    let result = session
+                        .run(&std::collections::HashMap::from([
+                            (
+                                "arithmetic/right",
+                                BorrowedTensor::cpu(&right, &shape).unwrap(),
+                            ),
+                            (
+                                "arithmetic/left",
+                                BorrowedTensor::cpu(&left, &shape).unwrap(),
+                            ),
+                        ]))
+                        .unwrap();
+                    let expected = [
+                        left.iter()
+                            .zip(&right)
+                            .map(|(a, b)| a - b)
+                            .collect::<Vec<_>>(),
+                        left.iter()
+                            .zip(&right)
+                            .map(|(a, b)| a + b)
+                            .collect::<Vec<_>>(),
+                    ];
+                    for (port, expected) in ["difference", "sum"].into_iter().zip(&expected) {
+                        assert_eq!(values(&result, &format!("arithmetic/{port}")), *expected,
+                            "{device:?} {name}: inputs reversed={reverse_inputs}, outputs reversed={reverse_outputs}");
+                    }
+                    retained.push((result, expected));
+                }
+                session.close();
+                for (result, expected) in retained {
+                    assert_eq!(values(&result, "arithmetic/difference"), expected[0]);
+                    assert_eq!(values(&result, "arithmetic/sum"), expected[1]);
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -378,7 +480,7 @@ fn failed_backend_load_reports_an_error() {
         let status = std::process::Command::new(env::current_exe().unwrap())
             .args([
                 "--exact",
-                "engines::triton::tests::execution::failed_backend_load_reports_an_error",
+                "engines::tests::execution::failed_backend_load_reports_an_error",
                 "--test-threads=1",
             ])
             .env(CHILD, "1")
@@ -394,7 +496,11 @@ fn failed_backend_load_reports_an_error() {
         .err()
         .unwrap();
     assert_eq!(error.phase(), "load");
-    assert!(error.to_string().contains("failed to load"));
+    let expected = match support::engine() {
+        lrt::EngineKind::Triton => "failed to load",
+        lrt::EngineKind::Native => "incompatible dtype or shape",
+    };
+    assert!(error.to_string().contains(expected));
 }
 
 #[test]
@@ -405,9 +511,15 @@ fn public_pt2_execution() {
             ExecutionDevice::Cpu => "cpu",
             _ => "cuda",
         };
-        let bundle =
-            Bundle::open(fixtures("pt2").join(format!("weighted_{suffix}.yaml"))).unwrap();
-        let runtime = Session::open(&bundle, options(device)).unwrap();
+        let bundle = Bundle::open(fixtures("pt2").join(format!("weighted_{suffix}.yaml"))).unwrap();
+        let runtime = Session::open(
+            &bundle,
+            SessionOptions {
+                engine: lrt::EngineKind::Triton,
+                ..options(device)
+            },
+        )
+        .unwrap();
         let mut session = runtime.new_session().unwrap();
         let name = bundle.pipeline_inputs()[0].name();
         let result = session

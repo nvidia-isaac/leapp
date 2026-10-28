@@ -16,9 +16,11 @@ import pytest
 
 FIXTURES = Path(os.environ.get("LEAPP_TRITON_FIXTURES", "target/triton-fixtures"))
 CUDA = os.environ.get("LEAPP_TEST_CUDA") == "1"
+ENGINE = os.environ.get("LEAPP_TEST_ENGINE", "triton")
 
 
 def open_session(name="feedback", device="cpu", **options):
+    options.setdefault("engine", ENGINE)
     return lr.Session.open(
         lr.Bundle.open(FIXTURES / f"{name}.yaml"),
         lr.SessionOptions(device=device, **options),
@@ -40,20 +42,26 @@ def step(session, value=1):
     ],
     ids=["default", "no-cache", "one-entry"],
 )
-def test_read_only_lifetime_feedback_and_close(options):
+def test_output_lifetime_feedback_and_close(options):
     with open_session(**options) as rt:
         session = rt.new_session()
         tensor = step(session)
         view = np.from_dlpack(tensor)
-        assert not view.flags.writeable
-        with pytest.raises(ValueError):
-            view[0] = 99
-        with pytest.raises(ValueError):
-            view.setflags(write=True)
+        # NumPy versions differ in whether they expose writable DLPack leases.
+        # Both must retain the result without exposing private feedback storage.
+        if view.flags.writeable:
+            view[:] = 99
+            retained_value = 99
+        else:
+            with pytest.raises(ValueError):
+                view[0] = 99
+            with pytest.raises(ValueError):
+                view.setflags(write=True)
+            retained_value = 1
         mutable = view.copy()
         mutable[:] = 99
         np.testing.assert_array_equal(np.from_dlpack(step(session)), [2] * 4)
-        np.testing.assert_array_equal(view, [1] * 4)
+        np.testing.assert_array_equal(view, [retained_value] * 4)
         session.reset()
         np.testing.assert_array_equal(np.from_dlpack(step(session)), [1] * 4)
         assert view.shape == (4,)
@@ -77,12 +85,28 @@ def test_read_only_lifetime_feedback_and_close(options):
     assert rt.info().model_names() == ["accumulator"]
     del tensor, rt, session
     gc.collect()
-    np.testing.assert_array_equal(view, [1] * 4)
+    np.testing.assert_array_equal(view, [retained_value] * 4)
 
 
 def test_negative_cache_limit_is_rejected():
     with pytest.raises(OverflowError):
         open_session(output_pool=lr.OutputPoolOptions(-1))
+
+
+def test_unknown_engine_is_rejected():
+    with pytest.raises(
+        ValueError, match="unknown engine 'unknown'; expected 'triton' or 'native'"
+    ):
+        open_session(engine="unknown")
+
+
+@pytest.mark.skipif(ENGINE != "triton", reason="default engine is Triton")
+def test_default_engine():
+    assert lr.SessionOptions().engine == "triton"
+    bundle = lr.Bundle.open(FIXTURES / "feedback.yaml")
+    for options in [None, lr.SessionOptions()]:
+        with lr.Session.open(bundle, options) as session:
+            np.testing.assert_array_equal(np.from_dlpack(step(session)), [1] * 4)
 
 
 def test_dlpack_exports_alias_and_retain_storage():

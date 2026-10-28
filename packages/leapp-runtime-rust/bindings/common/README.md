@@ -13,7 +13,8 @@ Close reports the lock error after cleanup; subsequent close calls succeed.
 Normal run/reset operations still fail on poisoned locks.
 
 The `leapp-runtime-bindings` crate compiles these wrappers against the core
-runtime. It requires Linux and the Triton/CUDA SDKs.
+runtime. It requires Linux and the Triton and CUDA runtime SDKs. Both engines
+are included; `SessionOptions.engine` selects one when opening a session.
 Language bindings use these handles to share closure and session serialization.
 
 The root Cargo test target includes `session.rs` against a small session API
@@ -28,7 +29,7 @@ cargo test --locked --test binding_lifecycle
 ## Session reset
 
 `SessionHandle::reset()` delegates to the execution session. State belongs to
-each session. `new_session()` shares its engine and construction options, but starts
+each session. `new_session()` shares loaded models and construction options, but starts
 from the captured initial state rather than current feedback. Reset restores its feedback and default inputs to their
 captured initial values. Those values are loaded when the session opens:
 exported initial tensors are used when present, otherwise zeros are used for

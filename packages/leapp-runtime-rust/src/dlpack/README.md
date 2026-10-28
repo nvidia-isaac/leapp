@@ -13,7 +13,7 @@ The runtime compiles this module once as `lrt::dlpack`. Every engine
 uses these same ownership types; no separate crate or re-export is needed.
 Language bindings use the hidden `HandoffStream` support type for producer
 synchronization. Its native implementation stays behind the private engine
-module; builds require the native dependencies of their included engines.
+module. See [runtime installation](../../README.md#installation) for build requirements.
 
 `include/dlpack/dlpack.h` is the unmodified upstream v1.0 header:
 https://github.com/dmlc/dlpack/blob/v1.0/include/dlpack/dlpack.h

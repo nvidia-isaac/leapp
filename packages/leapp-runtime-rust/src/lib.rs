@@ -23,7 +23,7 @@ mod error;
 mod session;
 
 pub use bundle::{Bundle, DataType, Metadata, MetadataValue, PortRef, PortSpec};
-pub use engines::{ExecutionDevice, MemoryLocation};
+pub use engines::{EngineKind, ExecutionDevice, MemoryLocation};
 pub use error::{BundleError, ErrorCode, RuntimeError};
 pub use session::{OutputPlacement, OutputPoolOptions, RunResult, Session, SessionOptions};
 

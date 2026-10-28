@@ -29,6 +29,23 @@ extern "C" {
 
     fn cudaMemcpy(dst: *mut c_void, src: *const c_void, size: usize, kind: c_int) -> c_int;
 
+    fn cudaMemcpyAsync(
+        dst: *mut c_void,
+        src: *const c_void,
+        size: usize,
+        kind: c_int,
+        stream: *mut c_void,
+    ) -> c_int;
+
+    fn cudaMemcpyPeerAsync(
+        dst: *mut c_void,
+        dst_device: c_int,
+        src: *const c_void,
+        src_device: c_int,
+        size: usize,
+        stream: *mut c_void,
+    ) -> c_int;
+
     fn cudaMemcpyPeer(
         dst: *mut c_void,
         dst_device: c_int,
@@ -83,13 +100,13 @@ pub(crate) fn validate(location: MemoryLocation) -> Result<()> {
     Ok(())
 }
 
-struct Device {
+pub(crate) struct Device {
     previous: c_int,
     changed: bool,
 }
 
 impl Device {
-    fn select(device: u32) -> Result<Self> {
+    pub(crate) fn select(device: u32) -> Result<Self> {
         let device = c_int::try_from(device).map_err(|_| {
             Error::new(
                 ErrorKind::InvalidArgument,
@@ -123,11 +140,7 @@ impl Drop for Device {
     }
 }
 
-pub(crate) fn allocate(
-    len: usize,
-    location: MemoryLocation,
-    zeroed: bool,
-) -> Result<NonNull<u8>> {
+pub(crate) fn allocate(len: usize, location: MemoryLocation, zeroed: bool) -> Result<NonNull<u8>> {
     let mut raw = ptr::null_mut();
     // SAFETY: raw is writable and the caller validated location and allocation size.
     unsafe {
@@ -142,8 +155,8 @@ pub(crate) fn allocate(
                 let _device = Device::select(device_id)?;
                 check(cudaMalloc(&mut raw, len))?;
                 if zeroed {
-                    if let Err(error) = check(cudaMemset(raw, 0, len))
-                        .and_then(|_| check(cudaDeviceSynchronize()))
+                    if let Err(error) =
+                        check(cudaMemset(raw, 0, len)).and_then(|_| check(cudaDeviceSynchronize()))
                     {
                         cudaFree(raw);
                         return Err(error);
@@ -198,6 +211,12 @@ pub(crate) unsafe fn copy(
     }
 }
 
+pub(crate) fn synchronize(device: u32) -> Result<()> {
+    let _device = Device::select(device)?;
+    // SAFETY: synchronize work on the selected device before releasing borrowed storage.
+    unsafe { check(cudaDeviceSynchronize()) }
+}
+
 /// A nonblocking CUDA stream used to receive producer completion dependencies.
 pub(crate) struct HandoffStream {
     stream: *mut c_void,
@@ -234,12 +253,65 @@ impl HandoffStream {
         Ok(producer())
     }
 
+    /// Copy ready storage and wait only for this stream, including on errors.
+    /// # Safety
+    /// Source/destination must be disjoint, live regions of `len` bytes on the
+    /// declared devices. This stream must belong to the CUDA destination, or
+    /// the source device for device-to-host copies.
+    pub(crate) unsafe fn copy_ready(
+        &self,
+        dst: *mut c_void,
+        target: MemoryLocation,
+        src: *const c_void,
+        source: MemoryLocation,
+        len: usize,
+    ) -> Result<()> {
+        let _device = Device::select(self.device)?;
+        // SAFETY: caller supplies valid regions and retains them through this wait.
+        unsafe {
+            let result = match (source, target) {
+                (
+                    MemoryLocation::Cuda { device_id: from },
+                    MemoryLocation::Cuda { device_id: to },
+                ) if from != to => check(cudaMemcpyPeerAsync(
+                    dst,
+                    to as c_int,
+                    src,
+                    from as c_int,
+                    len,
+                    self.stream,
+                )),
+                (_, MemoryLocation::Cuda { .. }) => check(cudaMemcpyAsync(
+                    dst,
+                    src,
+                    len,
+                    if matches!(source, MemoryLocation::Cuda { .. }) {
+                        COPY_DEVICE_TO_DEVICE
+                    } else {
+                        COPY_HOST_TO_DEVICE
+                    },
+                    self.stream,
+                )),
+                (MemoryLocation::Cuda { .. }, _) => check(cudaMemcpyAsync(
+                    dst,
+                    src,
+                    len,
+                    COPY_DEVICE_TO_HOST,
+                    self.stream,
+                )),
+                _ => unreachable!("CPU copies do not require a CUDA stream"),
+            };
+            let completed = check(cudaStreamSynchronize(self.stream));
+            result.and(completed)
+        }
+    }
+
     /// Handle passed to a DLPack producer's stream argument.
     pub fn address(&self) -> usize {
         self.stream as usize
     }
 
-    /// Wait for producer work before handing data to Triton's internal streams.
+    /// Wait for producer work before handing data to engine execution streams.
     pub fn synchronize(&self) -> std::result::Result<(), crate::RuntimeError> {
         let _device = Device::select(self.device)?;
         // SAFETY: this object owns a live stream on the selected device.

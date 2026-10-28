@@ -85,13 +85,18 @@ impl TritonEngine {
 }
 
 impl crate::engines::Engine for TritonEngine {
+    fn new_session(
+        self: std::sync::Arc<Self>,
+    ) -> std::result::Result<std::sync::Arc<dyn crate::engines::Engine>, crate::RuntimeError> {
+        Ok(self)
+    }
+
     fn run(
         &self,
         inputs: &[(&str, BorrowedTensor<'_>)],
         placement: &OutputPlacement,
         pool: &Arc<OutputPool>,
-    ) -> std::result::Result<indexmap::IndexMap<String, SharedTensor>, crate::RuntimeError>
-    {
+    ) -> std::result::Result<indexmap::IndexMap<String, SharedTensor>, crate::RuntimeError> {
         let inputs = inputs
             .iter()
             .map(|(name, value)| {

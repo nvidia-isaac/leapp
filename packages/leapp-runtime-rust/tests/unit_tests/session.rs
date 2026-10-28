@@ -39,6 +39,10 @@ fn tensor(values: Vec<f32>) -> SharedTensor {
 }
 
 impl Engine for CpuEngine {
+    fn new_session(self: Arc<Self>) -> Result<Arc<dyn Engine>, RuntimeError> {
+        Ok(self)
+    }
+
     fn run(
         &self,
         inputs: &[(&str, BorrowedTensor<'_>)],
@@ -96,8 +100,7 @@ fn copy_failure_preserves_feedback() {
     let graph = graph::Graph::new(&bundle).unwrap();
     let engine = Arc::new(CpuEngine::default());
     let mut session =
-        Session::initialize(&bundle, SessionOptions::default(), &graph, engine.clone())
-            .unwrap();
+        Session::initialize(&bundle, SessionOptions::default(), &graph, engine.clone()).unwrap();
     let step = |session: &mut Session| {
         session
             .run(&std::collections::HashMap::from([(
@@ -137,8 +140,7 @@ fn peer_caches_inherit_policy_and_close_independently() {
             ..Default::default()
         };
         let mut session =
-            Session::initialize(&bundle, options, &graph, Arc::new(CpuEngine::default()))
-                .unwrap();
+            Session::initialize(&bundle, options, &graph, Arc::new(CpuEngine::default())).unwrap();
         let source = session
             .output_pool
             .allocate(12, MemoryLocation::Cpu)
