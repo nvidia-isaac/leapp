@@ -12,7 +12,7 @@ inspection values; it does not implement another runtime.
 ## Build and install
 
 Linux x86-64 requires Rust 1.88 or newer, CMake 3.22 or newer, a C++20 compiler,
-the Triton and CUDA SDKs, and the selected backend libraries. Run from `packages/leapp-runtime-rust`:
+the CUDA SDK, and the Triton SDK. Run from `packages/leapp-runtime-rust`:
 
 ```sh
 cmake -S bindings/cxx -B target/cxx-build \
@@ -23,6 +23,9 @@ cmake -S bindings/cxx -B target/cxx-build \
 cmake --build target/cxx-build -j
 cmake --install target/cxx-build --prefix /your/sdk
 ```
+
+Both engines are included in the same library. Install the model backends
+you need as described in the [native engine guide](../../README.md#native-engine).
 
 CPU, pinned-host, and CUDA buffers are supported by every build. Native backend
 and SDK libraries remain external dependencies; configure the loader search path
@@ -74,7 +77,11 @@ if (!status.ok()) return status;
 - Open and NewSession require empty destinations. Reset a handle through
   assignment to a default instance before reusing it. Failed operations preserve
   destinations; successful Run/GetTensor replace them.
-- Triton is selected automatically when opening a session.
+- `SessionOptions.engine` selects the runtime engine when opening a session.
+  The linked runtime defaults to `EngineKind::kTriton`. Both engines are
+  included; set `engine` explicitly to choose `kTriton` or `kNative`.
+  Invalid engine values return `InvalidArgument` without opening an engine or
+  changing the destination; there is no fallback.
 - Bundle copies share the Rust snapshot and cached C++ inspection values.
   Getter references remain valid while a copy retains that snapshot.
 - Missing model/port getters return `nullptr`. Pipeline input/output maps preserve
@@ -89,8 +96,11 @@ if (!status.ok()) return status;
   and duplicates. Missing models return `nullptr`; empty models return empty
   vectors. References follow the bundle snapshot lifetime.
 - Session is movable and noncopyable. Operations on one session serialize;
-  separate sessions can execute concurrently. `NewSession` shares the loaded
-  engine and construction options but starts from captured initial state.
+  separate sessions may be called concurrently. Native peers share models/weights
+  and own separate fixed buffers and bindings. ONNX peers can overlap; graphs
+  containing optional ONNX custom operators retain a shared execution guard.
+  `NewSession` shares loaded
+  models and construction options but starts from captured initial state.
   Close waits for that session's active call and releases its engine reference;
   peers remain usable. Poisoned locks are recovered for cleanup, then reported
   as an error; subsequent Close succeeds. `session.bundle()` exposes the retained

@@ -37,6 +37,12 @@ void Ok(lrt::Status status) {
   }
 }
 
+lrt::EngineKind TestEngine() {
+  const char* engine = std::getenv("LEAPP_TEST_ENGINE");
+  return engine && std::string_view(engine) == "native"
+      ? lrt::EngineKind::kNative : lrt::EngineKind::kTriton;
+}
+
 lrt::Session Open(const std::filesystem::path& fixtures,
                     std::string_view name, bool cuda = false,
                     lrt::MemoryLocation output_location = {}) {
@@ -44,6 +50,7 @@ lrt::Session Open(const std::filesystem::path& fixtures,
   Ok(lrt::Bundle::Open(fixtures / (std::string(name) + ".yaml"), &bundle));
   lrt::Session runtime;
   lrt::SessionOptions options;
+  options.engine = TestEngine();
   options.output_overrides.emplace("accumulator/next", output_location);
   if (name != "feedback") options.output_overrides.clear();
   options.device =
@@ -97,6 +104,7 @@ void PoolOptions(const std::filesystem::path& fixtures) {
   Ok(lrt::Bundle::Open(fixtures / "feedback.yaml", &bundle));
   for (size_t count : {size_t{0}, size_t{1}, size_t{64}}) {
     lrt::SessionOptions options;
+    options.engine = TestEngine();
     options.output_pool.max_entries = count;
     lrt::Session session;
     Ok(lrt::Session::Open(bundle, options, &session));
@@ -105,6 +113,15 @@ void PoolOptions(const std::filesystem::path& fixtures) {
     Expect(Step(session), 2);
     Expect(first, 1);
   }
+  lrt::SessionOptions options;
+  options.engine = TestEngine();
+  lrt::Session session;
+  Ok(lrt::Session::Open(bundle, options, &session));
+  Expect(Step(session), 1);
+  options.engine = static_cast<lrt::EngineKind>(-1);
+  auto status = lrt::Session::Open(bundle, options, &session);
+  CHECK(status.code() == lrt::ErrorCode::kInvalidArgument);
+  Expect(Step(session), 2);
 }
 
 void FeedbackAndLifetimes(const std::filesystem::path& fixtures) {
@@ -201,6 +218,7 @@ void InvalidInputs(const std::filesystem::path& fixtures) {
   CHECK(!result.GetTensor("missing", &retained).ok());
   CHECK(retained->dl_tensor.data == original);
   lrt::SessionOptions options;
+  options.engine = TestEngine();
   options.output_overrides.emplace("missing", lrt::MemoryLocation{});
   lrt::Session invalid_session;
   CHECK(!lrt::Session::Open(session.bundle(), options, &invalid_session).ok());

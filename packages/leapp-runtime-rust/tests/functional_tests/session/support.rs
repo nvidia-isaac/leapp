@@ -5,11 +5,20 @@
 
 use lrt::{dlpack::*, MemoryLocation};
 
+pub fn engine() -> lrt::EngineKind {
+    match std::env::var("LEAPP_TEST_ENGINE").as_deref() {
+        Ok("triton") => lrt::EngineKind::Triton,
+        Ok("native") => lrt::EngineKind::Native,
+        Err(std::env::VarError::NotPresent) => lrt::EngineKind::Triton,
+        value => panic!("invalid LEAPP_TEST_ENGINE: {value:?}"),
+    }
+}
+
 pub fn placed<T: CpuElement>(
     values: &[T],
     shape: &[i64],
     location: MemoryLocation,
-) -> crate::engines::triton::Result<SharedTensor> {
+) -> crate::engines::error::Result<SharedTensor> {
     crate::engines::memory::dlpack::copy(
         BorrowedTensor::cpu(values, shape).unwrap(),
         Some(location),

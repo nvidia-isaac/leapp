@@ -191,6 +191,31 @@ fn invalid_copy_does_not_populate_the_cache() {
 }
 
 #[test]
+fn failed_transfer_does_not_cache_uninitialized_storage() {
+    let values = [1_f32; 4];
+    let input = BorrowedTensor::cpu(&values, &[4]).unwrap();
+    for location in locations() {
+        let pool = OutputPool::new(crate::OutputPoolOptions::default(), 16);
+        // SAFETY: the callback performs no accesses and reports failure, so no
+        // uninitialized result may be published or retained in the cache.
+        let result = unsafe {
+            pool.copy_with(input, location, |_, _| {
+                Err(Error::new(
+                    ErrorKind::Internal,
+                    "copy",
+                    "injected transfer failure",
+                ))
+            })
+        };
+        assert!(result.is_err());
+        assert!(pool.state.lock().unwrap().entries.is_empty());
+        let output = pool.copy(input, location).unwrap();
+        assert_eq!(output.to_cpu_vec::<f32>().unwrap(), values);
+        assert_eq!(pool.state.lock().unwrap().entries.len(), 1);
+    }
+}
+
+#[test]
 fn concurrent_requests_reserve_distinct_cached_idle_allocations() {
     const THREADS: usize = 8;
     const ROUNDS: usize = 128;

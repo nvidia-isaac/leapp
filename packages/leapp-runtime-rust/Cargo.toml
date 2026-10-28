@@ -12,13 +12,14 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 publish = false
-description = "LEAPP bundle inspection and synchronous Triton execution"
+description = "LEAPP bundle inspection and synchronous native or Triton execution"
 
 [lib]
 name = "lrt"
 
 [dependencies]
 protobuf = "=3.7.2"
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic", "api-24", "cuda"] }
 tempfile = "3"
 anyhow = "1"
 indexmap = { version = "2", features = ["serde"] }

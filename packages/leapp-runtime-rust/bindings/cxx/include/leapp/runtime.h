@@ -19,6 +19,8 @@
 
 namespace lrt {
 
+enum class EngineKind { kTriton, kNative };
+
 enum class ExecutionDevice { kCpu, kCuda };
 
 enum class MemoryType : uint8_t { kCpu, kPinnedCpu, kCuda };
@@ -34,6 +36,7 @@ struct OutputPoolOptions {
 };
 
 struct SessionOptions {
+  EngineKind engine = EngineKind::kTriton;
   ExecutionDevice device = ExecutionDevice::kCpu;
   uint32_t device_id = 0;
   MemoryLocation output_location;

@@ -1,15 +1,61 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Shared DLPack validation, transport, and output ownership.
+//! Validated DLPack layouts, copies, and shared output ownership.
+
 use super::Buffer;
 use crate::dlpack::{sys::*, BorrowedTensor, ManagedTensor, SharedTensor};
 use crate::engines::error::{Error, ErrorKind, Result};
-use crate::MemoryLocation;
+use crate::{DataType, MemoryLocation};
 use std::{ptr, sync::Arc};
 
 fn invalid(message: &str) -> Error {
     Error::new(ErrorKind::InvalidArgument, "dlpack", message)
+}
+
+pub(crate) fn data_type(dtype: DLDataType) -> Result<DataType> {
+    if dtype.lanes != 1 {
+        return Err(invalid("DLPack vector lanes are unsupported"));
+    }
+    Ok(match (dtype.code, dtype.bits) {
+        (0, 8) => DataType::Int8,
+        (0, 16) => DataType::Int16,
+        (0, 32) => DataType::Int32,
+        (0, 64) => DataType::Int64,
+        (1, 8) => DataType::Uint8,
+        (1, 16) => DataType::Uint16,
+        (1, 32) => DataType::Uint32,
+        (1, 64) => DataType::Uint64,
+        (2, 16) => DataType::Float16,
+        (2, 32) => DataType::Float32,
+        (2, 64) => DataType::Float64,
+        (4, 16) => DataType::Bfloat16,
+        (6, 8) => DataType::Bool,
+        _ => return Err(invalid("unsupported DLPack dtype")),
+    })
+}
+
+pub(crate) fn dl_type(dtype: DataType) -> DLDataType {
+    let (code, bits) = match dtype {
+        DataType::Int8 => (0, 8),
+        DataType::Int16 => (0, 16),
+        DataType::Int32 => (0, 32),
+        DataType::Int64 => (0, 64),
+        DataType::Uint8 => (1, 8),
+        DataType::Uint16 => (1, 16),
+        DataType::Uint32 => (1, 32),
+        DataType::Uint64 => (1, 64),
+        DataType::Float16 => (2, 16),
+        DataType::Float32 => (2, 32),
+        DataType::Float64 => (2, 64),
+        DataType::Bfloat16 => (4, 16),
+        DataType::Bool => (6, 8),
+    };
+    DLDataType {
+        code,
+        bits,
+        lanes: 1,
+    }
 }
 
 pub fn location(device: DLDevice) -> Result<MemoryLocation> {
@@ -23,7 +69,7 @@ pub fn location(device: DLDevice) -> Result<MemoryLocation> {
     }
 }
 
-fn device(location: MemoryLocation) -> Result<DLDevice> {
+pub(crate) fn device(location: MemoryLocation) -> Result<DLDevice> {
     let (device_type, device_id) = match location {
         MemoryLocation::Cpu => (1, 0),
         MemoryLocation::PinnedCpu => (3, 0),
@@ -39,14 +85,7 @@ fn device(location: MemoryLocation) -> Result<DLDevice> {
 }
 
 pub(crate) fn byte_size(dtype: DLDataType, shape: &[i64]) -> Result<usize> {
-    if dtype.lanes != 1
-        || !matches!(
-            (dtype.code, dtype.bits),
-            (0 | 1, 8 | 16 | 32 | 64) | (2, 16 | 32 | 64) | (4, 16) | (6, 8)
-        )
-    {
-        return Err(invalid("unsupported DLPack dtype"));
-    }
+    data_type(dtype)?;
     let mut count = 1usize;
     for &d in shape {
         count = count
@@ -88,8 +127,7 @@ pub(crate) fn layout(input: BorrowedTensor<'_>) -> Result<(&[i64], usize)> {
                 .ok_or_else(|| invalid("stride overflow"))?;
         }
     }
-    let offset =
-        usize::try_from(t.byte_offset).map_err(|_| invalid("byte offset overflow"))?;
+    let offset = usize::try_from(t.byte_offset).map_err(|_| invalid("byte offset overflow"))?;
     (t.data as usize)
         .checked_add(offset)
         .and_then(|v| v.checked_add(len))
@@ -169,10 +207,7 @@ pub(crate) fn from_buffer(
 
 /// Engine allocation used for initial state and isolation of writable public outputs.
 /// This is deliberately not a tensor method or framework conversion API.
-pub fn copy(
-    input: BorrowedTensor<'_>,
-    target: Option<MemoryLocation>,
-) -> Result<SharedTensor> {
+pub fn copy(input: BorrowedTensor<'_>, target: Option<MemoryLocation>) -> Result<SharedTensor> {
     copy_with(input, target, |len, location| {
         Ok(Arc::new(Buffer::allocate_for_copy(len, location)?))
     })
@@ -188,6 +223,25 @@ pub(crate) fn copy_with(
     let source = location(t.device)?;
     let target = target.unwrap_or(source);
     let buffer = allocate(len, target)?;
+    copy_into(input, &buffer)?;
+    from_buffer(t.dtype, shape.to_vec(), buffer)
+}
+
+#[cfg(test)]
+#[path = "../../../tests/unit_tests/memory/dlpack.rs"]
+mod tests;
+
+/// Copy ready borrowed storage into a private fixed slot of exactly the same byte size.
+/// # Safety
+/// The destination must be exclusive, disjoint from input, and outlive this synchronous copy.
+pub(crate) unsafe fn write_buffer(input: BorrowedTensor<'_>, buffer: &Buffer) -> Result<()> {
+    let t = input.descriptor();
+    let (_, len) = layout(input)?;
+    if len != buffer.len {
+        return Err(invalid("fixed buffer byte size mismatch"));
+    }
+    let source = location(t.device)?;
+    let target = buffer.location;
     let ptr = t
         .data
         .cast::<u8>()
@@ -197,16 +251,15 @@ pub(crate) fn copy_with(
         // SAFETY: validated borrowed source and new, disjoint output allocation.
         unsafe {
             match (source, target) {
-                (
-                    MemoryLocation::Cuda { device_id },
-                    MemoryLocation::Cuda { device_id: dst },
-                ) => crate::engines::memory::cuda::copy_device(
-                    buffer.ptr.as_ptr().cast(),
-                    ptr,
-                    len,
-                    device_id,
-                    dst,
-                )?,
+                (MemoryLocation::Cuda { device_id }, MemoryLocation::Cuda { device_id: dst }) => {
+                    crate::engines::memory::cuda::copy_device(
+                        buffer.ptr.as_ptr().cast(),
+                        ptr,
+                        len,
+                        device_id,
+                        dst,
+                    )?
+                }
                 (MemoryLocation::Cuda { device_id }, _) => crate::engines::memory::cuda::copy(
                     buffer.ptr.as_ptr().cast(),
                     ptr,
@@ -218,9 +271,10 @@ pub(crate) fn copy_with(
             }
         }
     }
-    from_buffer(t.dtype, shape.to_vec(), buffer)
+    Ok(())
 }
 
-#[cfg(test)]
-#[path = "../../../tests/unit_tests/memory/dlpack.rs"]
-mod tests;
+fn copy_into(input: BorrowedTensor<'_>, buffer: &Buffer) -> Result<()> {
+    // SAFETY: only called with a newly reserved allocation, disjoint from input.
+    unsafe { write_buffer(input, buffer) }
+}

@@ -1,7 +1,8 @@
 # Python bindings
 
 PyO3 bindings to the Rust bundle and synchronous runtime APIs. Linux x86-64
-requires the Triton SDK, CUDA runtime, and selected backend libraries at runtime.
+requires the Triton and CUDA runtime SDKs. Both Triton and native execution
+are included in the same extension.
 NumPy is a package dependency; PyTorch and CuPy are optional DLPack
 producers/consumers.
 
@@ -12,6 +13,9 @@ python -m pip install maturin
 maturin build --release --manifest-path bindings/python/Cargo.toml --auditwheel skip
 python -m pip install target/wheels/leapp_runtime-*.whl
 ```
+
+Install the model backends you need as described in the
+[native engine guide](../../README.md#native-engine). ONNX supports CPU and CUDA execution.
 
 Set `TRITON_ROOT` and `CUDA_ROOT` when their SDKs are not in
 `/opt/tritonserver` and `/usr/local/cuda`. Make the SDK and backend dependencies
@@ -55,7 +59,7 @@ All inputs must be C-contiguous with supported native-endian numeric dtypes.
 Materialize noncontiguous inputs explicitly, for example `np.ascontiguousarray(x)`,
 `x.contiguous()` in PyTorch, or `cp.ascontiguousarray(x)`. Read-only inputs are
 accepted when their producer can export them through DLPack; producer export
-errors are propagated. Input leases remain alive until Triton releases the request.
+errors are propagated. Input leases remain alive until the synchronous engine call completes.
 Do not modify or resize input storage during a call.
 
 CUDA producers hand work to an engine-owned stream per device. After importing
@@ -79,15 +83,20 @@ access or DLPack export permanently excludes that allocation from reuse. Retain 
 consumer's DLPack owner until all its uses complete, including work on CUDA streams.
 
 `Session.run`, loading, reset and close release the GIL while doing native work.
-Calls on one session serialize; separate sessions may run concurrently.
-`session.new_session()` shares the loaded engine and construction options, but
+Calls on one session serialize. Separate sessions may be called concurrently;
+native peers own separate fixed buffers/bindings and share loaded models and weights.
+ONNX peers can overlap. Graphs containing optional ONNX custom operators retain
+a shared execution guard.
+`session.new_session()` shares loaded models and construction options, but
 starts from captured initial state rather than the source's current feedback.
 `Session.close()` waits for that session's active call and is idempotent. Other
 sessions remain usable. Results, arrays, DLPack allocations and bundle metadata
 remain valid after close. Context-manager exit closes only its session.
 
-`SessionOptions` configures execution and output placement at construction;
-`run` takes only inputs. Triton is selected automatically.
+`SessionOptions` selects the engine and output placement at construction;
+`run` takes only inputs. The default is `engine="triton"`; set `engine` to
+`"triton"` or `"native"` to select either engine in the same extension. Unknown
+engine names raise `ValueError` when opening the session.
 Set `output_device` to `"cpu"`, `"pinned"`, or `"cuda:N"` and use `output_overrides`
 for individual public outputs. Configure the engine installation before starting
 Python, as described in the

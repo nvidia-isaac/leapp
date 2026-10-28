@@ -71,9 +71,7 @@ impl Buffer {
                     alloc(layout)
                 }
             })
-            .ok_or_else(|| {
-                Error::new(ErrorKind::Internal, "buffer", "CPU allocation failed")
-            })?
+            .ok_or_else(|| Error::new(ErrorKind::Internal, "buffer", "CPU allocation failed"))?
         } else {
             crate::engines::memory::cuda::allocate(len, location, zeroed)?
         };
@@ -138,11 +136,7 @@ impl Buffer {
         }
         // SAFETY: caller provides len writable bytes, disjoint from this allocation.
         unsafe {
-            std::ptr::copy_nonoverlapping(
-                self.ptr.as_ptr(),
-                destination.cast::<u8>(),
-                self.len,
-            );
+            std::ptr::copy_nonoverlapping(self.ptr.as_ptr(), destination.cast::<u8>(), self.len);
         }
         Ok(())
     }
@@ -207,11 +201,7 @@ impl OutputPool {
         drop(retired);
     }
 
-    pub(crate) fn allocate(
-        &self,
-        len: usize,
-        location: MemoryLocation,
-    ) -> Result<Arc<Buffer>> {
+    pub(crate) fn allocate(&self, len: usize, location: MemoryLocation) -> Result<Arc<Buffer>> {
         if let Some(buffer) = self.reserve(len, location) {
             return Ok(buffer);
         }
@@ -224,15 +214,34 @@ impl OutputPool {
         input: BorrowedTensor<'_>,
         target: MemoryLocation,
     ) -> Result<SharedTensor> {
-        let mut fresh = None;
-        let result = dlpack::copy_with(input, Some(target), |len, location| {
-            if let Some(buffer) = self.reserve(len, location) {
-                return Ok(buffer);
-            }
-            let buffer = Arc::new(Buffer::allocate_for_copy(len, location)?);
-            fresh = Some(buffer.clone());
-            Ok(buffer)
-        })?;
+        // SAFETY: write_buffer fills the exclusive destination synchronously.
+        unsafe {
+            self.copy_with(input, target, |input, buffer| {
+                dlpack::write_buffer(input, buffer)
+            })
+        }
+    }
+
+    /// Copy into a reserved buffer using the engine's existing transfer mechanism.
+    ///
+    /// # Safety
+    /// `copy` must initialize every destination byte before returning success and
+    /// finish all accesses before returning, including on error or unwinding.
+    /// The destination is exclusive and disjoint from the ready input.
+    pub(crate) unsafe fn copy_with<E: From<Error>>(
+        &self,
+        input: BorrowedTensor<'_>,
+        target: MemoryLocation,
+        copy: impl FnOnce(BorrowedTensor<'_>, &Buffer) -> std::result::Result<(), E>,
+    ) -> std::result::Result<SharedTensor, E> {
+        let (shape, len) = dlpack::layout(input)?;
+        let (buffer, fresh) = match self.reserve(len, target) {
+            Some(buffer) => (buffer, false),
+            None => (Arc::new(Buffer::allocate_for_copy(len, target)?), true),
+        };
+        copy(input, &buffer)?;
+        let fresh = fresh.then(|| buffer.clone());
+        let result = dlpack::from_buffer(input.descriptor().dtype, shape.to_vec(), buffer)?;
         // A failed copy must never leave uninitialized storage in the pool.
         if let Some(buffer) = fresh {
             self.cache(buffer);
@@ -272,8 +281,7 @@ impl OutputPool {
         // overflow allocations still succeed without becoming cache entries.
         let mut index = 0;
         while index < entries.len()
-            && (entries.len() >= self.options.max_entries
-                || len > max_bytes.saturating_sub(bytes))
+            && (entries.len() >= self.options.max_entries || len > max_bytes.saturating_sub(bytes))
         {
             if Arc::get_mut(&mut entries[index]).is_some() {
                 let entry = entries.swap_remove(index);

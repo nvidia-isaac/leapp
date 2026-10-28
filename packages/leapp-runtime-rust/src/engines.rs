@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Internal execution contract and shared tensor storage.
+//! Runtime engine selection and the internal execution contract.
 pub(crate) mod error;
 pub(crate) mod memory;
+mod native;
 pub(crate) mod triton;
 
 use crate::{
@@ -13,6 +14,14 @@ use crate::{
 use indexmap::IndexMap;
 use memory::OutputPool;
 use std::sync::Arc;
+
+/// Execution engine selected when opening a session.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum EngineKind {
+    #[default]
+    Triton,
+    Native,
+}
 
 /// Device used by model instances, independently of input and output storage.
 #[derive(Debug, Clone, Copy, Default)]
@@ -35,8 +44,10 @@ pub enum MemoryLocation {
     },
 }
 
-/// A loaded engine is shared by independent sessions. Calls complete before returning.
+/// Session execution over shared loaded models. Calls complete before returning.
 pub(crate) trait Engine: Send + Sync {
+    fn new_session(self: Arc<Self>) -> Result<Arc<dyn Engine>, RuntimeError>;
+
     fn run(
         &self,
         inputs: &[(&str, BorrowedTensor<'_>)],
@@ -63,8 +74,15 @@ pub(crate) fn open(
     graph: &crate::session::graph::Graph<'_>,
     options: &crate::SessionOptions,
 ) -> Result<Arc<dyn Engine>, RuntimeError> {
-    triton::open(bundle, graph, options)
+    match options.engine {
+        EngineKind::Triton => triton::open(bundle, graph, options),
+        EngineKind::Native => native::open(bundle, graph, options),
+    }
 }
 
 /// DLPack producer handoff support for language bindings.
 pub(crate) use memory::cuda::HandoffStream;
+
+#[cfg(test)]
+#[path = "../tests/functional_tests/session.rs"]
+pub(crate) mod tests;

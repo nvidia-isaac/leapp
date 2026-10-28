@@ -11,7 +11,7 @@ mod tests;
 use crate::{
     dlpack::{BorrowedTensor, SharedTensor},
     engines::{self, memory::OutputPool, Engine},
-    Bundle, ExecutionDevice, MemoryLocation, RuntimeError,
+    Bundle, EngineKind, ExecutionDevice, MemoryLocation, RuntimeError,
 };
 use anyhow::{ensure, Context};
 use indexmap::{IndexMap, IndexSet};
@@ -66,6 +66,8 @@ pub struct SessionOptions {
     pub output_placement: OutputPlacement,
     /// Each session has its own cache; peers inherit this policy, not its buffers.
     pub output_pool: OutputPoolOptions,
+    /// Select the engine once at initialization; new sessions inherit that selection.
+    pub engine: EngineKind,
 }
 
 /// Managed DLPack public outputs in bundle declaration order, independent of the session.
@@ -90,7 +92,8 @@ impl RunResult {
 }
 
 /// Independent feedback state sharing loaded models with sessions from `new_session`.
-/// Separate sessions can execute concurrently. Model-internal state remains shared.
+/// Separate sessions may be called concurrently; an engine may serialize execution.
+/// Model-internal state sharing depends on the backend.
 pub struct Session {
     engine: Option<Arc<dyn Engine>>,
     bundle: Bundle,
@@ -136,10 +139,7 @@ impl Session {
             .values()
             .filter(|spec| spec.shape.iter().all(|&dim| dim >= 0))
             .map(|spec| {
-                engines::memory::dlpack::byte_size(
-                    initial_state::dl_dtype(spec.dtype),
-                    &spec.shape,
-                )
+                engines::memory::dlpack::byte_size(initial_state::dl_dtype(spec.dtype), &spec.shape)
             })
             .try_fold(0, |largest, size| size.map(|size| largest.max(size)))?;
         let output_pool = Arc::new(OutputPool::new(options.output_pool, largest_output));
@@ -190,7 +190,7 @@ impl Session {
     /// Configuration and captured initial values are inherited; current feedback is not.
     pub fn new_session(&self) -> Result<Self, RuntimeError> {
         Ok(Self {
-            engine: Some(self.engine()?.clone()),
+            engine: Some(self.engine()?.clone().new_session()?),
             bundle: self.bundle.clone(),
             output_pool: Arc::new(self.output_pool.fresh()),
             public_inputs: self.public_inputs.clone(),
@@ -248,10 +248,7 @@ impl Session {
             })
     }
 
-    fn execute(
-        &mut self,
-        inputs: &HashMap<&str, BorrowedTensor<'_>>,
-    ) -> anyhow::Result<RunResult> {
+    fn execute(&mut self, inputs: &HashMap<&str, BorrowedTensor<'_>>) -> anyhow::Result<RunResult> {
         let engine = self.engine()?;
         for name in inputs.keys() {
             ensure!(
@@ -326,5 +323,5 @@ impl Session {
 }
 
 #[cfg(test)]
-#[path = "../tests/functional_tests/triton/state.rs"]
+#[path = "../tests/functional_tests/session/state.rs"]
 mod native_tests;
