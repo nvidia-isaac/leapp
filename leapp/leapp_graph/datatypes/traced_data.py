@@ -715,10 +715,6 @@ class TracedData(ABC):
                 "call_method", "reshape", (selected_proxy, (-1,)), {}
             )
 
-        # A one-element source is expanded to the flattened indices below, so
-        # it matches the selection at run time even when traced indices select
-        # a data-dependent number of positions. ONNX constant folding cannot
-        # fold an index_put that relies on broadcasting a one-element source.
         source_proxy = value_proxy
         if not isinstance(source_proxy, Proxy):
             source_tensor = torch.as_tensor(
@@ -752,6 +748,10 @@ class TracedData(ABC):
         flat_source_proxy = self._context.tracer.create_proxy(
             "call_method", "reshape", (source_proxy, (-1,)), {}
         )
+        # Expand a one-element source to the indices so it matches the selection
+        # at run time, even when traced indices select a data-dependent number of
+        # positions. ONNX constant folding cannot fold an index_put that relies on
+        # broadcasting a one-element source.
         if one_element:
             flat_source_proxy = self._context.tracer.create_proxy(
                 "call_method", "expand_as", (flat_source_proxy, indices_proxy), {}
