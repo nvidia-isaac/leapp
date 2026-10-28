@@ -22,7 +22,7 @@ Do not split a model, convert a working `method` annotation, or label every inte
 
 ## Use standard kinds first
 
-For new integrations, prefer quantity helpers such as `joint_position` or the matching `Kind` enum with `Axis`. These APIs are experimental and imported directly from `leapp`; confirm consumer support. Direction comes from the input/output list. Set `is_setpoint=True` only for incoming references; outputs reject it. A tensor named `action` is not necessarily an effort command. `InputKindEnum`, `OutputKindEnum`, `TemporalAxis`, and `element_names` are deprecated and emit terminal-visible `FutureWarning` messages. Their behavior and YAML representation are retained; migrate in coordination with the consumer.
+For new integrations, prefer quantity helpers such as `joint_position` or the matching `Kind` enum with `Axis`. These APIs are experimental and imported directly from `leapp`; confirm consumer support. Direction comes from the input/output list. Set `is_setpoint=True` only for incoming references; outputs reject it. A tensor named `action` is not necessarily an effort command.
 
 Use a custom kind only when no standard kind fits **and** the consumer explicitly supports the agreed label. Do not create synonyms for existing kinds or repeat `kind` in `extra`. Unknown meaning should remain unspecified. In particular, normalized joint features, learned latent vectors, and concatenated mixed observations must not be mislabeled as physical joint positions.
 
@@ -85,34 +85,6 @@ leapp.compile_graph(visualize=False, validate=True, strict=True,
 
 ## Custom fields and validation
 
-Use `extra` only for agreed consumer-specific metadata that standard fields cannot express. Entries are flattened into the tensor YAML mapping; graph-level extras are flattened into `pipeline.configs`. Avoid collisions with built-ins such as `name`, `shape`, `dtype`, `type`, `kind`, `axes`, `is_setpoint`, `spatial`, `reference`, `expressed_in`, `element_names`, `temporal_period_ms`, or `__temporal_axis__`. Units, frames, and external IDs are not automatic conversion or routing instructions; arbitrary fields do not become portable merely by appearing in YAML.
+Use `extra` only for agreed consumer-specific metadata that standard fields cannot express. Entries are flattened into the tensor YAML mapping; graph-level extras are flattened into `pipeline.configs`. Avoid collisions with built-ins such as `name`, `shape`, `dtype`, `type`, `kind`, `axes`, `is_setpoint`, `spatial`, `reference`, or `expressed_in`. Units, frames, and external IDs are not automatic conversion or routing instructions; arbitrary fields do not become portable merely by appearing in YAML.
 
 Inspect the exported YAML for the intended standard kinds, actual element order and axes, and any required timing/config fields. Confirm that the deployment consumer recognizes the contract. Numerical parity tests alone cannot detect mislabeled units, joint order, or physical meaning. Report missing consumer information instead of filling it with plausible metadata.
-
-## Migrating an existing integration
-
-The [legacy API](https://nvidia-isaac.github.io/leapp/semantics/legacy.html) is deprecated; using legacy kinds, `element_names`, or `TemporalAxis` emits `FutureWarning` messages visible in the terminal by default. No removal version is scheduled. Existing YAML representations remain supported, so coordinate migration with the consumer. Confirm the installed checkout exposes `Kind` and the keyword-only fields before using them; do not bump package or config versions to enable annotations.
-
-- Coordinate changes with the YAML consumer: old `state/`, `command/`, and `target/` kind strings are not converted automatically. Old and new annotations can coexist in one graph or annotation list.
-- Replace joint position/velocity kinds with `joint_position` / `joint_velocity`; `JOINT_EFFORT`, `JOINT_TORQUES`, and `COMMAND_JOINT_TORQUES` map to `joint_effort`. Incoming `COMMAND_*` kinds need `is_setpoint=True`; output targets do not.
-- Body pose/position/orientation, velocity, and acceleration map to the corresponding `frame_*` quantities; `BODY_VEL` maps to `frame_twist`, `BODY_ACC` to `frame_acceleration`, and `WRENCH` to `frame_wrench`. Inspect actual representations before relabeling: an old body rotation is not automatically a quaternion. Helpers validate supplied pose/orientation/position/velocity component labels, but do not convert values. The generic constructor permits custom conventions.
-- Replace `element_names` with `axes` without changing shape or order. Include `None` for unspecified dimensions; labels must match dimension sizes. Replace each `TemporalAxis(period_ms=...)` with `Axis(AxisKind.TIME, period_ms=...)`. Never supply both `element_names` and `axes`.
-- Use `reference` for pose/motion reference frames and `expressed_in` for motion/wrench bases. `None` means global. `ExpressionFrame.SELF` / `REFERENCE` serialize as selectors; literal strings serialize as frame names. Pose helpers accept only `reference`; wrench and force-application-position helpers accept only `expressed_in`, and forbid `REFERENCE`. No coordinate transform is performed.
-- `Kind` or a new field opts into experimental validation. A custom string alone, even `"frame/twist"`, retains legacy behavior. Existing `.update()` calls store new field names in `extra` until opted in. Construct a new annotation with `Kind` or new fields when migrating; do not expect changing metadata strings to opt in.
-
-For example, an existing output:
-
-```python
-TensorSemantics("actions", actions, kind=OutputKindEnum.JOINT_TORQUES,
-                element_names=[TemporalAxis(period_ms=20), joint_names])
-```
-
-becomes (after importing the new helpers):
-
-```python
-joint_effort("actions", actions,
-             axes=[Axis(AxisKind.TIME, period_ms=20),
-                   Axis(AxisKind.ELEMENT, names=joint_names)])
-```
-
-Verify the consumer reads `kind: joint/effort` and `axes` instead of `kind: target/joint/torques`, `element_names`, and `temporal_period_ms`. Compare exported metadata and numerical outputs; preserve values and ordering throughout migration.
