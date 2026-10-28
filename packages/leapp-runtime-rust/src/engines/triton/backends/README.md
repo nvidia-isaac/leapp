@@ -129,6 +129,7 @@ Generate and run the optional integration fixtures from this package directory:
 python tests/generators/generate_warp_models.py --output target/warp-fixtures
 export LEAPP_WARP_FIXTURES="$PWD/target/warp-fixtures"
 export WARP_APIC_TMPDIR="$(mktemp -d)"
+LEAPP_TEST_ENGINE=triton cargo test --locked engines::tests::warp -- --ignored --test-threads=1
 cargo test --locked engines::triton::tests::warp -- --ignored --test-threads=1
 ```
 

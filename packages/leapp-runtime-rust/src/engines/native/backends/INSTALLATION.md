@@ -36,11 +36,6 @@ make their CUDA/cuDNN dependencies discoverable. CUDA provider initialization
 errors fail session loading. One ONNX Runtime library is retained per process;
 changing its path after loading is unsupported.
 
-An optional `libleapp_wrp_onnx_custom_op.so` beside the default ONNX library is
-registered when present. See the
-[shared adapter recipe](../../triton/backends/README.md#warp-operators)
-to build it.
-
 ## TorchScript
 
 Supply `TORCH_ROOT` with the `include/` and `lib/` directories from a CUDA-enabled
@@ -90,3 +85,25 @@ cmake --install target/tensorrt-backend
 
 Build engine artifacts ahead of time for the deployed TensorRT version and GPU.
 See [TensorRT model support](../../../../README.md#tensorrt-engines) for I/O limits.
+
+## Warp operators
+
+Build LEAPP's shared adapters using the
+[Warp build recipe](../../triton/backends/README.md#warp-operators), with ONNX
+Runtime headers and LibTorch matching the selected native backends. Install and
+link the required adapters beside their backends:
+
+```sh
+cmake --install /path/to/warp-build --prefix "$PWD/target/warp-adapters"
+mkdir -p "$LEAPP_NATIVE_BACKENDS/onnxruntime" "$LEAPP_NATIVE_BACKENDS/nativert"
+ln -s "$PWD/target/warp-adapters/lib/libleapp_wrp_onnx_custom_op.so" \
+  "$LEAPP_NATIVE_BACKENDS/onnxruntime/libleapp_wrp_onnx_custom_op.so"
+ln -s "$PWD/target/warp-adapters/lib/libleapp_wrp_torch_custom_op.so" \
+  "$LEAPP_NATIVE_BACKENDS/nativert/libleapp_wrp_torch_custom_op.so"
+```
+
+Keep Warp's export and runtime releases aligned. Make its `bin/`, LibTorch, and
+CUDA library directories available to the loader. Ordinary models do not need
+these adapters; an invalid installed adapter causes a load error for models
+using that backend. See [Warp model support](../../../../README.md#native-warp-support)
+for execution requirements.

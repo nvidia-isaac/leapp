@@ -98,7 +98,8 @@ cargo test --locked engines::triton::tests::tensorrt -- --ignored --test-threads
 For Warp, install the adapters as described in `src/engines/triton/backends/README.md`.
 Generate `tests/generators/generate_warp_models.py` fixtures, set
 `LEAPP_WARP_FIXTURES` and an empty `WARP_APIC_TMPDIR`, then run
-`cargo test --locked engines::triton::tests::warp -- --ignored --test-threads=1`.
+`LEAPP_TEST_ENGINE=triton cargo test --locked engines::tests::warp -- --ignored --test-threads=1`.
+Repeat with `LEAPP_TEST_ENGINE=native` to exercise native execution.
 This covers ONNX/PT2 CPU and GPU instances, CPU/pinned/CUDA output placement,
 pool limits 0/1/64, changed inputs, retained results, peer sessions, and unload.
 Warp replay requires CUDA even with CPU model instances.

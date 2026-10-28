@@ -32,7 +32,8 @@ set_target_properties(leapp_nativert_backend PROPERTIES
   OUTPUT_NAME leapp_nativert_backend
   CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON
   BUILD_WITH_INSTALL_RPATH ON INSTALL_RPATH "$ORIGIN;$ORIGIN/lib")
-target_link_libraries(leapp_nativert_backend PRIVATE leapp_native_torch "${NATIVERT_LIBRARY}")
+target_link_libraries(leapp_nativert_backend PRIVATE
+  leapp_native_torch "${NATIVERT_LIBRARY}" ${CMAKE_DL_LIBS})
 target_compile_definitions(leapp_nativert_backend PRIVATE
   FMT_HEADER_ONLY LEAPP_TORCH_ENTRY=leapp_native_nativert_v2)
 target_include_directories(leapp_nativert_backend PRIVATE

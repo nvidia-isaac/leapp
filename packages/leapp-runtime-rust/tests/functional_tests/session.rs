@@ -12,3 +12,6 @@ mod tensorrt;
 
 #[path = "session/torchscript.rs"]
 mod torchscript;
+
+#[path = "session/warp.rs"]
+mod warp;

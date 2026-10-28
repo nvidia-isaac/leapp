@@ -221,8 +221,8 @@ Native sessions share loaded models and weights, with private reusable workspace
 buffers. Concrete-shaped models reuse fixed addresses and prepared bindings where
 supported. Returned results own storage independent of the workspace.
 
-Peers may run concurrently, but TorchScript, NativeRT, and ONNX models with
-custom operators serialize execution across peers. Nodes within one graph
+Peers may run concurrently, but TorchScript, NativeRT, and Warp models
+serialize execution across peers. Nodes within one graph
 execute sequentially. Each peer requires memory for its workspace and execution
 resources. See the [installation guide](src/engines/native/backends/INSTALLATION.md)
 for backend setup, and the
@@ -259,10 +259,13 @@ External custom-plugin configuration is not supported by either integration.
 Each native session owns its TensorRT execution context, including RNG state.
 New peers start with fresh context state; `reset()` does not reset it.
 
-### Warp operators
+### Native Warp support
 
-Embedded Warp operators in ONNX/PT2 bundles use optional adapters installed
-beside their Triton backends. See
-[Triton adapter installation](src/engines/triton/backends/README.md#warp-operators)
-for SDK requirements and installation.
+Both engines support embedded Warp operators in ONNX and PT2 through optional
+adapters. Replay requires CUDA device 0 even for CPU model placement. Warm each
+model serially before concurrent use. These adapters do not support Warp operators
+in TorchScript or TensorRT artifacts.
+
+See [native adapter installation](src/engines/native/backends/INSTALLATION.md#warp-operators)
+or [Triton adapter installation](src/engines/triton/backends/README.md#warp-operators).
 For contributor layout and validation commands, see [AGENTS.md](AGENTS.md).

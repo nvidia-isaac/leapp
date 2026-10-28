@@ -95,9 +95,17 @@ impl Model {
                     .error_on_failure()])
                 .map_err(ort::Error::<()>::from)?;
         }
-        // Retain prototype custom-op discovery, without introducing another backend interface.
+        // Reuse the optional Warp custom-op adapter installed for ONNX Runtime.
         let custom = directory.join("onnxruntime/libleapp_wrp_onnx_custom_op.so");
-        let custom_ops = custom.symlink_metadata().is_ok();
+        let custom_ops = match custom.symlink_metadata() {
+            Ok(_) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("inspect ONNX custom operators {}", custom.display())
+                });
+            }
+        };
         if custom_ops {
             builder = builder
                 .with_operator_library(&custom)

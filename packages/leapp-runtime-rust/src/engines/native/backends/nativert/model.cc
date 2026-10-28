@@ -6,6 +6,7 @@
 #include <ATen/core/dispatch/Dispatcher.h>
 #include <c10/core/InferenceMode.h>
 #include <caffe2/serialize/inline_container.h>
+#include <dlfcn.h>
 #include <fmt/format.h>
 #include <torch/csrc/export/pt2_archive_constants.h>
 #include <torch/nativert/executor/Executor.h>
@@ -13,6 +14,9 @@
 #include <torch/nativert/graph/Serialization.h>
 #include <torch/nativert/kernels/KernelHandlerRegistry.h>
 
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
 #include <mutex>
 #include <nlohmann/json.hpp>
 
@@ -24,6 +28,34 @@ namespace nr = torch::nativert;
 namespace archive = torch::_export::archive_spec;
 using Reader = caffe2::serialize::PyTorchStreamReader;
 using Json = nlohmann::json;
+
+std::shared_ptr<void> load_warp_library() {
+  const auto* root = std::getenv("LEAPP_NATIVE_BACKENDS");
+  const auto path = std::filesystem::path(root ? root : "/opt/leapp/backends") /
+                    "nativert/libleapp_wrp_torch_custom_op.so";
+  std::error_code error;
+  const auto status = std::filesystem::symlink_status(path, error);
+  if (error == std::errc::no_such_file_or_directory ||
+      (!error && status.type() == std::filesystem::file_type::not_found)) {
+    return {};
+  }
+  TORCH_CHECK(!error, "inspect Warp adapter ", path.string(), ": ",
+              error.message());
+  // Check the link itself so an installed but dangling link is a load error.
+  auto* library = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+  TORCH_CHECK(library, "load Warp adapter ", path.string(), ": ", dlerror());
+  return {library, [](void* handle) {
+            // Model constants must be gone before pruning the adapter's cache.
+            // Live constants from other models keep their runners intact.
+            const auto release = reinterpret_cast<int (*)()>(
+                dlsym(handle, "LEAPP_WARP_ReleaseUnusedRunners"));
+            if (release && release() != 0) {
+              std::fprintf(stderr,
+                           "LEAPP: failed to release unused Warp runners\n");
+            }
+            dlclose(handle);
+          }};
+}
 
 Json read_json(Reader& reader, const std::string& path) {
   TORCH_CHECK(reader.hasRecord(path), "PT2 archive is missing ", path);
@@ -98,7 +130,8 @@ class Pt2Model final : public Model {
  public:
   Pt2Model(const std::string& path, at::Device device,
            std::span<const Port> inputs, std::span<const Port> outputs)
-      : reader_(std::make_shared<Reader>(path)) {
+      : warp_library_(load_warp_library()),
+        reader_(std::make_shared<Reader>(path)) {
     nr::register_kernel_handlers();
     auto json = read_json(*reader_, "models/model.json");
     auto& specs = json.at("graph_module").at("signature").at("output_specs");
@@ -189,6 +222,9 @@ class Pt2Model final : public Model {
   }
 
  private:
+  // Declared first so cleanup/unloading follows executor and constant release,
+  // including when construction fails. Peers share this model and its handle.
+  std::shared_ptr<void> warp_library_;
   std::shared_ptr<Reader> reader_;
   std::shared_ptr<nr::Graph> graph_;
   std::shared_ptr<nr::Weights> weights_;
