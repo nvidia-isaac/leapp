@@ -98,7 +98,7 @@ if (!status.ok()) return status;
 - Session is movable and noncopyable. Operations on one session serialize;
   separate sessions may be called concurrently. Native peers share models/weights
   and own separate fixed buffers and bindings. ONNX peers can overlap; graphs
-  containing optional ONNX custom operators retain a shared execution guard.
+  containing Torch backends or optional ONNX custom operators retain a shared execution guard.
   `NewSession` shares loaded
   models and construction options but starts from captured initial state.
   Close waits for that session's active call and releases its engine reference;

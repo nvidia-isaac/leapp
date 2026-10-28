@@ -207,8 +207,8 @@ cargo run --locked --example run -- target/triton-fixtures/policy.yaml
 
 ## Model support
 
-Native execution supports ONNX on CPU or CUDA. Triton additionally supports
-TorchScript, PT2, and TensorRT through separately installed backends.
+Both engines support ONNX, TorchScript, and PT2 on CPU or CUDA, including
+mixed-backend graphs. Triton additionally supports TensorRT on CUDA.
 Unsupported backends fail when opening a session; bundle inspection still accepts
 custom backend names. Models must be exported before use; the runtime does not
 compile them.
@@ -221,8 +221,8 @@ Native sessions share loaded models and weights, with private reusable workspace
 buffers. Concrete-shaped models reuse fixed addresses and prepared bindings where
 supported. Returned results own storage independent of the workspace.
 
-Peers may run concurrently, but ONNX models with custom operators serialize
-execution across peers. Nodes within one graph
+Peers may run concurrently, but TorchScript, NativeRT, and ONNX models with
+custom operators serialize execution across peers. Nodes within one graph
 execute sequentially. Each peer requires memory for its workspace and execution
 resources. See the [installation guide](src/engines/native/backends/INSTALLATION.md)
 for backend setup, and the
@@ -232,12 +232,13 @@ for backend setup, and the
 
 PT2 uses raw `torch.export.save` archives with tensor-only inputs and outputs in
 exported-program order. AOTInductor and CUDA Triton delegates are unsupported.
-Triton archive devices must match the selected model instance.
+The native engine places the graph and weights on the selected device; for the
+Triton engine, archive devices must match the selected model instance.
 
 ### TorchScript execution
 
 Scripted and traced models accept positional tensor inputs and return a tensor or
-flat tuple of tensors.
+flat tuple of tensors. The native engine also accepts a flat tensor list.
 Bundle port order determines argument order; public LEAPP names remain unchanged.
 Model-internal mutations are shared between peers and are not reset by `reset()`.
 

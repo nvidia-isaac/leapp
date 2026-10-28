@@ -542,3 +542,6 @@ fn dynamic_outputs_feed_fixed_and_dynamic_nodes_and_recover_after_shape_errors()
         );
     }
 }
+
+#[path = "native/torch.rs"]
+mod torch;

@@ -20,6 +20,7 @@ fn open(name: &str, device: ExecutionDevice) -> Session {
     Session::open(
         &bundle,
         SessionOptions {
+            engine: support::engine(),
             device,
             ..Default::default()
         },
@@ -51,6 +52,7 @@ fn scripted_traced_and_mixed_match_pytorch_with_positional_ports() {
                 let values = placed(&[1f32, 2., 3., 4.], &[4], location).unwrap();
                 let bias = placed(&[10f32, 20., 30., 40.], &[4], location).unwrap();
                 let mut options = SessionOptions {
+                    engine: support::engine(),
                     device,
                     ..Default::default()
                 };

@@ -512,14 +512,7 @@ fn public_pt2_execution() {
             _ => "cuda",
         };
         let bundle = Bundle::open(fixtures("pt2").join(format!("weighted_{suffix}.yaml"))).unwrap();
-        let runtime = Session::open(
-            &bundle,
-            SessionOptions {
-                engine: lrt::EngineKind::Triton,
-                ..options(device)
-            },
-        )
-        .unwrap();
+        let runtime = Session::open(&bundle, options(device)).unwrap();
         let mut session = runtime.new_session().unwrap();
         let name = bundle.pipeline_inputs()[0].name();
         let result = session

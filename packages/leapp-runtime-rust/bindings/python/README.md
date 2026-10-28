@@ -15,7 +15,7 @@ python -m pip install target/wheels/leapp_runtime-*.whl
 ```
 
 Install the model backends you need as described in the
-[native engine guide](../../README.md#native-engine). ONNX supports CPU and CUDA execution.
+[native engine guide](../../README.md#native-engine). ONNX, TorchScript, and NativeRT support CPU and CUDA execution.
 
 Set `TRITON_ROOT` and `CUDA_ROOT` when their SDKs are not in
 `/opt/tritonserver` and `/usr/local/cuda`. Make the SDK and backend dependencies
@@ -85,8 +85,8 @@ consumer's DLPack owner until all its uses complete, including work on CUDA stre
 `Session.run`, loading, reset and close release the GIL while doing native work.
 Calls on one session serialize. Separate sessions may be called concurrently;
 native peers own separate fixed buffers/bindings and share loaded models and weights.
-ONNX peers can overlap. Graphs containing optional ONNX custom operators retain
-a shared execution guard.
+ONNX peers can overlap. Graphs containing Torch backends or optional ONNX custom
+operators retain a shared execution guard.
 `session.new_session()` shares loaded models and construction options, but
 starts from captured initial state rather than the source's current feedback.
 `Session.close()` waits for that session's active call and is idempotent. Other

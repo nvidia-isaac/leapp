@@ -18,6 +18,7 @@ description = "LEAPP bundle inspection and synchronous native or Triton executio
 name = "lrt"
 
 [dependencies]
+libloading = "=0.9.0"
 protobuf = "=3.7.2"
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic", "api-24", "cuda"] }
 tempfile = "3"

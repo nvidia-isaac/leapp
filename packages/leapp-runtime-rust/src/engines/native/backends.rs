@@ -5,7 +5,10 @@
 //!
 //! See `backends/README.md` for the contribution workflow and C ABI.
 
+mod bridge;
+mod nativert;
 mod onnx;
+mod torchscript;
 
 use super::Transfers;
 use crate::{
@@ -113,11 +116,23 @@ struct Backend {
 }
 
 // One registration entry per canonical bundle backend. Lookup is load-time only.
-const BACKENDS: &[Backend] = &[Backend {
-    name: "onnx",
-    validate: |_, _| Ok(()),
-    load: |spec, location| Ok(Box::new(onnx::Model::load(spec, location)?)),
-}];
+const BACKENDS: &[Backend] = &[
+    Backend {
+        name: "onnx",
+        validate: |_, _| Ok(()),
+        load: |spec, location| Ok(Box::new(onnx::Model::load(spec, location)?)),
+    },
+    Backend {
+        name: "jit",
+        validate: |_, _| Ok(()),
+        load: |spec, location| Ok(Box::new(torchscript::load(spec, location)?)),
+    },
+    Backend {
+        name: "pt2",
+        validate: |_, _| Ok(()),
+        load: |spec, location| Ok(Box::new(nativert::load(spec, location)?)),
+    },
+];
 
 fn backend(spec: &NodeSpec) -> Result<&'static Backend> {
     BACKENDS
