@@ -97,9 +97,10 @@ if (!status.ok()) return status;
   vectors. References follow the bundle snapshot lifetime.
 - Session is movable and noncopyable. Operations on one session serialize;
   separate sessions may be called concurrently. Native peers share models/weights
-  and own separate fixed buffers and bindings. ONNX peers can overlap; graphs
-  containing Torch backends or optional ONNX custom operators retain a shared execution guard.
-  `NewSession` shares loaded
+  and own separate fixed buffers, bindings, and execution contexts. ONNX and
+  TensorRT peers can overlap; graphs containing Torch backends or optional ONNX
+  custom operators retain a shared execution guard. Native TensorRT context state,
+  including RNG state, is private to each session. `NewSession` shares loaded
   models and construction options but starts from captured initial state.
   Close waits for that session's active call and releases its engine reference;
   peers remain usable. Poisoned locks are recovered for cleanup, then reported

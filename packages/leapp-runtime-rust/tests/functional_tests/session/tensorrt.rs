@@ -20,6 +20,7 @@ fn bundle(name: &str) -> Bundle {
 
 fn options() -> SessionOptions {
     SessionOptions {
+        engine: support::engine(),
         device: ExecutionDevice::Cuda { device_id: 0 },
         ..Default::default()
     }
@@ -67,7 +68,8 @@ fn ensembles_support_host_and_device_buffers_and_retained_results() {
 fn dynamic_profile_bounds_report_errors_without_poisoning_session() {
     let runtime = Session::open(&bundle("dynamic"), options()).unwrap();
     let mut session = runtime.new_session().unwrap();
-    for size in [1, 4, 8, 9, 4] {
+    // Both engines accept profile 0; native engine tests also switch profiles.
+    for size in [1, 2, 4, 9, 4] {
         let data: Vec<f32> = (0..size).map(|v| v as f32).collect();
         let result = session.run(&std::collections::HashMap::from([(
             "dynamic/input",

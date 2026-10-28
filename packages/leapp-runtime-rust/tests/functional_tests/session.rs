@@ -7,5 +7,8 @@ mod execution;
 #[path = "session/support.rs"]
 pub(crate) mod support;
 
+#[path = "session/tensorrt.rs"]
+mod tensorrt;
+
 #[path = "session/torchscript.rs"]
 mod torchscript;

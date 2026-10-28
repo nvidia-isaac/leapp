@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 # Native backend plugins
 
 The native engine uses [`BackendPlugin`](../backends.rs) to execute model nodes
-with ONNX, TorchScript, or NativeRT. The engine handles graph routing,
+with ONNX, TensorRT, TorchScript, or NativeRT. The engine handles graph routing,
 workspace buffers, and public results; each plugin handles model execution.
 This is an internal contributor interface. Applications use the runtime's
 Session API, and Triton has its own backend interface.

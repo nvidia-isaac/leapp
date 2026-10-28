@@ -266,6 +266,11 @@ impl BackendPlugin for Model {
     }
 
     #[cfg(test)]
+    fn execution_identity(&self) -> Option<usize> {
+        Some(self.session as usize)
+    }
+
+    #[cfg(test)]
     fn loaded_identity(&self) -> usize {
         self.loaded.model as usize
     }
