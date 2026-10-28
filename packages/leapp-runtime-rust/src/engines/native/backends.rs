@@ -8,6 +8,7 @@
 mod bridge;
 mod nativert;
 mod onnx;
+mod tensorrt;
 mod torchscript;
 
 use super::Transfers;
@@ -101,6 +102,11 @@ pub(super) trait BackendPlugin: Send {
 
     // Ownership diagnostics are test-only, not part of plugin execution/ABI.
     #[cfg(test)]
+    fn execution_identity(&self) -> Option<usize> {
+        None
+    }
+
+    #[cfg(test)]
     fn loaded_identity(&self) -> usize;
 
     #[cfg(test)]
@@ -121,6 +127,11 @@ const BACKENDS: &[Backend] = &[
         name: "onnx",
         validate: |_, _| Ok(()),
         load: |spec, location| Ok(Box::new(onnx::Model::load(spec, location)?)),
+    },
+    Backend {
+        name: "trt",
+        validate: tensorrt::validate,
+        load: |spec, location| Ok(Box::new(tensorrt::load(spec, location)?)),
     },
     Backend {
         name: "jit",

@@ -8,8 +8,5 @@ mod nativert;
 pub(crate) use crate::engines::tests::support;
 // state.rs is included under Session to inspect its private feedback state.
 
-#[path = "triton/tensorrt.rs"]
-mod tensorrt;
-
 #[path = "triton/warp.rs"]
 mod warp;

@@ -207,8 +207,8 @@ cargo run --locked --example run -- target/triton-fixtures/policy.yaml
 
 ## Model support
 
-Both engines support ONNX, TorchScript, and PT2 on CPU or CUDA, including
-mixed-backend graphs. Triton additionally supports TensorRT on CUDA.
+Both engines support ONNX, TorchScript, and PT2 on CPU or CUDA, and TensorRT
+on CUDA. These backends can share a graph.
 Unsupported backends fail when opening a session; bundle inspection still accepts
 custom backend names. Models must be exported before use; the runtime does not
 compile them.
@@ -244,13 +244,20 @@ Model-internal mutations are shared between peers and are not reset by `reset()`
 
 ### TensorRT engines
 
-Triton accepts prebuilt `.plan` and `.engine` artifacts. Port names, shapes,
+Both engines accept prebuilt `.plan` and `.engine` artifacts. Port names, shapes,
 and dtypes must describe the engine's I/O. Models execute on CUDA; inputs and
 outputs may use CPU, pinned-host, or CUDA memory. Engines must be compatible with
 the deployed TensorRT version and GPU.
 
-Triton uses profile 0; its shape-tensor and additional-profile configuration
-are not exposed. External custom-plugin configuration is unsupported.
+Native execution supports dynamic dimensions, fixed-size int32/int64 shape controls,
+host shape outputs, and data-dependent outputs, selecting the first compatible
+optimization profile. I/O must be linear, unvectorized, and non-aliased. Supported dtypes are
+bool, uint8, int8, int32, int64, float16, float32, and bfloat16. Triton uses profile
+0; its shape-tensor and additional-profile configuration are not exposed.
+External custom-plugin configuration is not supported by either integration.
+
+Each native session owns its TensorRT execution context, including RNG state.
+New peers start with fresh context state; `reset()` does not reset it.
 
 ### Warp operators
 

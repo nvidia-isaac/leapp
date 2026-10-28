@@ -23,6 +23,7 @@ dependencies available through `LD_LIBRARY_PATH` or the system loader.
 | ONNX | `onnxruntime/libonnxruntime.so` |
 | TorchScript | `torchscript/libleapp_torchscript.so` |
 | NativeRT | `nativert/libleapp_nativert_backend.so` |
+| TensorRT | `tensorrt/libleapp_tensorrt.so` |
 
 ## ONNX
 
@@ -74,3 +75,18 @@ cmake --install target/native-nativert
 ```
 
 Make the LibTorch, NativeRT, and CUDA library directories available to the loader.
+
+## TensorRT
+
+Use TensorRT 10.16 or newer 10.x headers/libraries and CUDA.
+
+```sh
+cmake -S src/engines/native/backends/tensorrt -B target/tensorrt-backend \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$LEAPP_NATIVE_BACKENDS" \
+  -DTENSORRT_ROOT=/path/to/TensorRT -DCUDA_ROOT=/usr/local/cuda
+cmake --build target/tensorrt-backend -j
+cmake --install target/tensorrt-backend
+```
+
+Build engine artifacts ahead of time for the deployed TensorRT version and GPU.
+See [TensorRT model support](../../../../README.md#tensorrt-engines) for I/O limits.
