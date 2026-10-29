@@ -25,6 +25,43 @@ Use `name.rs` beside `name/` directories, rather than `mod.rs`.
 Tests follow `tests/unit_tests/` and `tests/functional_tests/`. Private unit tests
 are included by their implementation modules. Binding tests stay with each binding.
 
+## Updating Triton
+
+Keep the SDK headers, supported server release, and bundled model configuration
+schema aligned. The C API major/minor check alone does not identify a Triton
+release.
+
+1. Obtain the target Triton SDK and compatible backend libraries. Replace
+   `src/engines/triton/convert/model_config.proto` with the schema from the
+   matching `triton-inference-server/common` release tag. Rebuild any custom
+   backend plugins against the target SDK.
+2. Update `TRITON_VERSION` and the release-specific comments and error message in
+   `src/engines/triton/native.rs`, plus the generated-release label in
+   `src/engines/triton/native/generate_bindings.py`. Update the supported-release
+   references in this file and `README.md`, and check build/CI configuration for
+   old release pins.
+3. Set `TRITON_ROOT` to the target SDK and regenerate the C API bindings from
+   this package directory:
+
+   ```sh
+   python src/engines/triton/native/generate_bindings.py \
+     "$TRITON_ROOT/include/triton/core/tritonserver.h"
+   rustfmt --edition 2021 src/engines/triton/native/sys.rs
+   ```
+
+   Review the generated `sys.rs` diff against the new header; API version
+   constants come from the generator. Cargo regenerates the Rust protobuf code
+   from `model_config.proto` during the build.
+4. Review callback signatures, request/response lifetimes, allocator behavior,
+   and error ownership against the target release. In particular, recheck the
+   release-specific `TRITONSERVER_InferenceResponseError` ownership assumption in
+   `src/engines/triton/native/request.rs` against Triton's implementation.
+5. Run the validation below on Linux with the new SDK and backend libraries,
+   including CPU/CUDA execution and the applicable ignored backend tests.
+   Rebuild and test the Python and C++ bindings using their READMEs, and verify
+   the installed C++ SDK with `bindings/cxx/tests/consumer`.
+   `LEAPP_ANALYSIS_ONLY=1` checks do not validate an SDK upgrade.
+
 ## Validation
 
 Run from this package on Linux with Triton 2.69.0, CUDA, and the backend libraries
