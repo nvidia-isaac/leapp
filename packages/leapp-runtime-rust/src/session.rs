@@ -67,6 +67,7 @@ pub struct SessionOptions {
     /// Each session has its own cache; peers inherit this policy, not its buffers.
     pub output_pool: OutputPoolOptions,
     /// Select the engine once at initialization; new sessions inherit that selection.
+    /// Defaults to native.
     pub engine: EngineKind,
 }
 

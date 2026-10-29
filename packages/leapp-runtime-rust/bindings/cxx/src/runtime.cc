@@ -145,6 +145,11 @@ Metadata Field(const wire::BundleHandle& bundle, wire::MetadataField field,
 
 }  // namespace
 
+EngineKind detail::DefaultEngine() noexcept {
+  return wire::engine_default() == wire::EngineKind::Native
+      ? lrt::EngineKind::kNative : lrt::EngineKind::kTriton;
+}
+
 const Metadata* Metadata::Find(std::string_view key) const {
   const auto* mapping = std::get_if<Mapping>(&value);
   if (mapping == nullptr) {

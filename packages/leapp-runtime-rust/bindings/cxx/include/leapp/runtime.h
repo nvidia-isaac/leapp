@@ -21,6 +21,10 @@ namespace lrt {
 
 enum class EngineKind { kTriton, kNative };
 
+namespace detail {
+EngineKind DefaultEngine() noexcept;
+}
+
 enum class ExecutionDevice { kCpu, kCuda };
 
 enum class MemoryType : uint8_t { kCpu, kPinnedCpu, kCuda };
@@ -36,7 +40,8 @@ struct OutputPoolOptions {
 };
 
 struct SessionOptions {
-  EngineKind engine = EngineKind::kTriton;
+  // Native by default. Resolved by the linked runtime.
+  EngineKind engine = detail::DefaultEngine();
   ExecutionDevice device = ExecutionDevice::kCpu;
   uint32_t device_id = 0;
   MemoryLocation output_location;

@@ -134,6 +134,7 @@ pub mod ffi {
         ) -> MetadataData;
 
         type SessionHandle;
+        fn engine_default() -> EngineKind;
         fn session_new() -> Box<SessionHandle>;
         fn session_open(
             bundle: &BundleHandle,

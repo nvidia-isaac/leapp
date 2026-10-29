@@ -7,7 +7,7 @@ mod bundle;
 mod dlpack;
 mod session;
 
-use lrt::{ErrorCode, MemoryLocation};
+use lrt::{EngineKind, ErrorCode, MemoryLocation};
 use pyo3::{
     create_exception,
     exceptions::{PyException, PyValueError},
@@ -55,6 +55,13 @@ fn location(text: &str) -> PyResult<MemoryLocation> {
 
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add(
+        "_DEFAULT_ENGINE",
+        match EngineKind::default() {
+            EngineKind::Native => "native",
+            EngineKind::Triton => "triton",
+        },
+    )?;
     m.add("BundleError", m.py().get_type::<BundleError>())?;
     m.add("RuntimeError", m.py().get_type::<RuntimeError>())?;
     m.add_class::<bundle::PyBundle>()?;

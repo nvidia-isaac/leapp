@@ -118,7 +118,7 @@ the receiving consumer must invoke that lease's deleter exactly once.
 See `examples/run.rs` for a complete CPU example.
 
 `SessionOptions` configures execution and output placement. Defaults use CPU
-execution and CPU outputs. Triton is selected by default:
+execution and CPU outputs. Native is selected by default:
 
 ```rust
 use lrt::{Session, SessionOptions};
@@ -127,8 +127,8 @@ let mut session = Session::open(&bundle, SessionOptions::default())?;
 ```
 
 Set `device` to `ExecutionDevice::Cuda { device_id: 0 }` for GPU execution.
-Select native execution with `SessionOptions { engine: EngineKind::Native, ..Default::default() }`,
-Python `SessionOptions(engine="native")`, or C++ `EngineKind::kNative`.
+Select Triton with `SessionOptions { engine: EngineKind::Triton, ..Default::default() }`,
+Python `SessionOptions(engine="triton")`, or C++ `EngineKind::kTriton`.
 Both engines are available in the same build, and peers inherit the selection.
 
 `session.info()` borrows the retained bundle snapshot. Every public input must be supplied

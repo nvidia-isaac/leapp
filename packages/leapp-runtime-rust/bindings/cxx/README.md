@@ -78,7 +78,7 @@ if (!status.ok()) return status;
   assignment to a default instance before reusing it. Failed operations preserve
   destinations; successful Run/GetTensor replace them.
 - `SessionOptions.engine` selects the runtime engine when opening a session.
-  The linked runtime defaults to `EngineKind::kTriton`. Both engines are
+  The linked runtime defaults to `EngineKind::kNative`. Both engines are
   included; set `engine` explicitly to choose `kTriton` or `kNative`.
   Invalid engine values return `InvalidArgument` without opening an engine or
   changing the destination; there is no fallback.

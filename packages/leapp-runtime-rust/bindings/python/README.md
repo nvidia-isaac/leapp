@@ -97,7 +97,7 @@ sessions remain usable. Results, arrays, DLPack allocations and bundle metadata
 remain valid after close. Context-manager exit closes only its session.
 
 `SessionOptions` selects the engine and output placement at construction;
-`run` takes only inputs. The default is `engine="triton"`; set `engine` to
+`run` takes only inputs. The default is `engine="native"`; set `engine` to
 `"triton"` or `"native"` to select either engine in the same extension. Unknown
 engine names raise `ValueError` when opening the session.
 Set `output_device` to `"cpu"`, `"pinned"`, or `"cuda:N"` and use `output_overrides`

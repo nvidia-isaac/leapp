@@ -124,6 +124,20 @@ void PoolOptions(const std::filesystem::path& fixtures) {
   Expect(Step(session), 2);
 }
 
+void DefaultEngine(const std::filesystem::path& fixtures, bool cuda) {
+  lrt::Bundle bundle;
+  Ok(lrt::Bundle::Open(fixtures / "feedback.yaml", &bundle));
+  lrt::SessionOptions options;
+  if (cuda) options.device = lrt::ExecutionDevice::kCuda;
+  lrt::Session session;
+  Ok(lrt::Session::Open(bundle, options, &session));
+  Expect(Step(session), 1);
+  lrt::Session peer;
+  Ok(session.NewSession(&peer));
+  Ok(session.Close());
+  Expect(Step(peer), 1);
+}
+
 void FeedbackAndLifetimes(const std::filesystem::path& fixtures) {
   auto runtime = Open(fixtures, "feedback");
   lrt::Session session;
@@ -338,11 +352,13 @@ int main(int argc, char** argv) {
   static_assert(!std::is_copy_constructible_v<lrt::ManagedTensor>);
   CHECK(argc == 3);
   const std::filesystem::path fixtures = argv[1];
+  DefaultEngine(fixtures, false);
   PoolOptions(fixtures);
   FeedbackAndLifetimes(fixtures);
   InvalidInputs(fixtures);
   ConcurrentSessions(fixtures);
   if (std::string_view(argv[2]) == "ON") {
+    DefaultEngine(fixtures, true);
     CudaBuffers(fixtures);
   }
   std::cout << "C++ binding integration checks passed\n";
