@@ -28,7 +28,7 @@ from leapp.leapp_graph.datatypes import (
 )
 from leapp.leapp_graph.datatypes.patching import get_warp_backend
 from leapp.leapp_graph.datatypes.proxy import STORAGE_LAYOUT_META_KEY
-from leapp.leapp_graph.functionalization import functionalize_graph, scriptable_sym_ite
+from leapp.leapp_graph.aten_rewrites import functionalize_graph, rewrite_aten_ops
 from leapp.utils.tensor_description import (
     resolve_tensor_descriptions_to_names,
     flatten_io_structure,
@@ -285,7 +285,7 @@ class TracedTensorNode(LeappNode):
         self.m = fx.GraphModule(self.tracer.root, self.graph)
 
         # Sanitize the FX graph for compatibility with export backends.
-        self._rewrite_aten_ops(self.m.graph)
+        rewrite_aten_ops(self.m.graph)
         self._rewrite_method_descriptors(self.m.graph)
         self._make_tensor_attrs_contiguous(self.m)
         self.m.recompile()
@@ -361,200 +361,6 @@ class TracedTensorNode(LeappNode):
             _get_logger().debug(
                 f"Rewrote {len(rewritten)} tensor-method call_function node(s) "
                 f"to call_method: {rewritten}"
-            )
-        graph.lint()
-
-    @staticmethod
-    def _rewrite_aten_ops(graph: fx.Graph):
-        """Replace low-level ``torch.ops.aten.*`` OpOverload targets with their
-        high-level ``torch.*`` or ``torch.nn.functional.*`` equivalents.
-
-        When a TorchScript model is decomposed via ``TS2EPConverter``, the
-        resulting graph contains aten-level ops (e.g.
-        ``torch.ops.aten.addmm.default``).  These work fine for tracing and
-        ONNX export, but ``torch.jit.script`` cannot resolve them.  This
-        pass rewrites them to the public API equivalents that TorchScript
-        understands.
-        """
-        import torch.nn.functional as F
-
-        # -----------------------------------------------------------------
-        # Ops that should become call_method nodes (tensor methods).
-        # key = overloadpacket name, value = method name on the tensor.
-        # -----------------------------------------------------------------
-        _TO_METHOD = {
-            "view": "view",
-            "reshape": "reshape",
-            "contiguous": "contiguous",
-            "to": "to",
-        }
-
-        # -----------------------------------------------------------------
-        # Ops with custom call_function replacements (different name or
-        # needs arg rewriting).  Each value is (replacement_fn, arg_rewriter)
-        # where arg_rewriter is None or a callable(args, kwargs)->(args, kwargs).
-        # -----------------------------------------------------------------
-        def _upsample_bilinear2d_args(args, kwargs):
-            # aten sig: (input, output_size, align_corners)
-            # F.interpolate sig: (input, size=, mode=, align_corners=)
-            inp, size, align_corners = args[0], args[1], args[2]
-            return (inp,), {
-                "size": size,
-                "mode": "bilinear",
-                "align_corners": align_corners,
-            }
-
-        def _upsample_bicubic2d_args(args, kwargs):
-            inp, size, align_corners = args[0], args[1], args[2]
-            return (inp,), {
-                "size": size,
-                "mode": "bicubic",
-                "align_corners": align_corners,
-            }
-
-        def _upsample_nearest2d_args(args, kwargs):
-            inp, size = args[0], args[1]
-            return (inp,), {"size": size, "mode": "nearest"}
-
-        _CUSTOM_FN = {
-            "upsample_bilinear2d": (F.interpolate, _upsample_bilinear2d_args),
-            "upsample_bicubic2d": (F.interpolate, _upsample_bicubic2d_args),
-            "upsample_nearest2d": (F.interpolate, _upsample_nearest2d_args),
-        }
-
-        # -----------------------------------------------------------------
-        # Ops that can be handled by torch.narrow (slice with dim/start/end).
-        # aten::slice.Tensor(self, dim, start, end, step=1)
-        # When step==1 this is equivalent to torch.narrow.
-        # Identity slices (start=0, end>=2^62) are replaced by the input.
-        # -----------------------------------------------------------------
-        _SLICE_OPS = {"slice", "slice_copy"}
-
-        rewritten = []
-        nodes_to_erase = []
-        warp_op = warp_operator.get_op()
-
-        for node in graph.nodes:
-            if node.op != "call_function":
-                continue
-            target = node.target
-            if target is torch.sym_ite:
-                node.target = scriptable_sym_ite
-                continue
-            if not isinstance(target, torch._ops.OpOverload):
-                continue
-            if target.overloadpacket is warp_op:
-                continue
-            op_name = target.overloadpacket.__name__
-
-            if (
-                op_name == "_to_copy"
-                and node.kwargs.get("layout")
-                in (
-                    None,
-                    torch.strided,
-                )
-                and not node.kwargs.get("pin_memory")
-            ):
-                node.op = "call_method"
-                node.target = "to"
-                node.kwargs = {
-                    key: value
-                    for key, value in node.kwargs.items()
-                    if key not in ("layout", "pin_memory") and value is not None
-                }
-                node.kwargs = {**node.kwargs, "copy": True}
-                continue
-
-            # --- Method conversion ---
-            if op_name in _TO_METHOD:
-                method_name = _TO_METHOD[op_name]
-                node.op = "call_method"
-                node.target = method_name
-                # First arg is self; remaining stay as-is.
-                rewritten.append(op_name)
-                continue
-
-            # --- Custom function replacement ---
-            if op_name in _CUSTOM_FN:
-                fn, arg_rewriter = _CUSTOM_FN[op_name]
-                if arg_rewriter is not None:
-                    node.args, node.kwargs = arg_rewriter(node.args, node.kwargs)
-                node.target = fn
-                rewritten.append(op_name)
-                continue
-
-            # --- Slice handling ---
-            # aten::slice.Tensor(self, dim, start, end, step=1)
-            # Rewrite to torch.narrow for all backends:
-            #   - jit-script can't resolve aten OpOverloads
-            #   - onnx-dynamo produces bad ONNX Slice nodes for MAX_INT end
-            # Identity slices (start=0, end=MAX) are removed entirely.
-            # "To end" slices compute length dynamically via size()-start.
-            if op_name in _SLICE_OPS:
-                tensor_arg = node.args[0]
-                dim = node.args[1] if len(node.args) > 1 else 0
-                start = node.args[2] if len(node.args) > 2 else 0
-                end = node.args[3] if len(node.args) > 3 else (1 << 62)
-                step = node.args[4] if len(node.args) > 4 else 1
-                is_end_max = isinstance(end, int) and end >= (1 << 62)
-
-                if isinstance(start, fx.Node) or isinstance(end, fx.Node):
-                    node.target = target.overloadpacket
-                    continue
-
-                if step == 1 and start == 0 and is_end_max:
-                    # Identity slice — remove (no-op)
-                    node.replace_all_uses_with(tensor_arg)
-                    nodes_to_erase.append(node)
-                    rewritten.append(op_name)
-                    continue
-
-                if step == 1:
-                    if is_end_max:
-                        # "To end" slice: length = tensor.size(dim) - start
-                        with graph.inserting_before(node):
-                            size_node = graph.call_function(
-                                torch.Tensor.size,
-                                args=(tensor_arg, dim),
-                            )
-                            length_node = graph.call_function(
-                                torch.sub,
-                                args=(size_node, start),
-                            )
-                        node.target = torch.narrow
-                        node.args = (tensor_arg, dim, start, length_node)
-                        node.kwargs = {}
-                    else:
-                        # Bounded slice: length = end - start
-                        length = end - start
-                        node.target = torch.narrow
-                        node.args = (tensor_arg, dim, start, length)
-                        node.kwargs = {}
-                else:
-                    # TorchScript resolves overload packets, not .Tensor.
-                    node.target = target.overloadpacket
-                rewritten.append(op_name)
-                continue
-
-            # --- Generic name-based lookup ---
-            replacement = getattr(torch, op_name, None)
-            if replacement is None or not callable(replacement):
-                replacement = getattr(F, op_name, None)
-            if replacement is not None and callable(replacement):
-                node.target = replacement
-                rewritten.append(op_name)
-            else:
-                node.target = target.overloadpacket
-
-        # Erase identity-slice nodes (must be done after iteration)
-        for node in nodes_to_erase:
-            graph.erase_node(node)
-
-        if rewritten:
-            _get_logger().debug(
-                f"Rewrote {len(rewritten)} aten OpOverload node(s) to "
-                f"high-level equivalents: {rewritten}"
             )
         graph.lint()
 
