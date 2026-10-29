@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::support;
-use leapp_runtime::dlpack::BorrowedTensor;
-use leapp_runtime::{Bundle, ExecutionDevice, MemoryLocation, Session, SessionOptions};
-use std::{env, fs, path::PathBuf};
+use lrt::dlpack::BorrowedTensor;
+use lrt::{Bundle, ExecutionDevice, MemoryLocation, OutputPoolOptions, Session, SessionOptions};
+use std::{collections::HashMap, env, fs, path::PathBuf};
 use support::{placed, TestTensor};
 
 fn fixtures() -> PathBuf {
@@ -63,7 +63,10 @@ fn scripted_traced_and_mixed_match_pytorch_with_positional_ports() {
                 let mut session = Session::open(runtime.info(), options).unwrap();
                 // Request order differs from the exported argument order.
                 let result = session
-                    .run(&[("model/INPUT__9", bias.view()), (input, values.view())])
+                    .run(&HashMap::from([
+                        ("model/INPUT__9", bias.view()),
+                        (input, values.view()),
+                    ]))
                     .unwrap();
                 assert_eq!(
                     result.iter().map(|(name, _)| name).collect::<Vec<_>>(),
@@ -99,7 +102,9 @@ fn inplace_models_do_not_modify_borrowed_inputs() {
         for location in locations() {
             let values = placed(&[1f32, 2., 3., 4.], &[4], location).unwrap();
             for _ in 0..2 {
-                let result = session.run(&[("model/values", values.view())]).unwrap();
+                let result = session
+                    .run(&HashMap::from([("model/values", values.view())]))
+                    .unwrap();
                 assert_eq!(
                     result
                         .get("model/result")
@@ -122,10 +127,10 @@ fn dynamic_shapes_integer_tensors_and_recoverable_execution_errors() {
         let mut session = runtime.new_session().unwrap();
         for size in [4, 6, 3, 4] {
             let values: Vec<f32> = (0..size).map(|i| i as f32).collect();
-            let result = session.run(&[(
+            let result = session.run(&HashMap::from([(
                 "model/values",
                 BorrowedTensor::cpu(&values, &[size]).unwrap(),
-            )]);
+            )]));
             if size == 3 {
                 assert_eq!(result.err().unwrap().phase(), "execute");
             } else {
@@ -138,10 +143,10 @@ fn dynamic_shapes_integer_tensors_and_recoverable_execution_errors() {
         let runtime = open("integer", device);
         let mut session = runtime.new_session().unwrap();
         let result = session
-            .run(&[(
+            .run(&HashMap::from([(
                 "model/values",
                 BorrowedTensor::cpu(&[1i64, 2, 3, 4], &[4]).unwrap(),
-            )])
+            )]))
             .unwrap();
         assert_eq!(
             result
@@ -160,7 +165,7 @@ fn torchscript_and_nativert_coexist() {
     let runtime = open("mixed_pt2", ExecutionDevice::Cpu);
     let mut session = runtime.new_session().unwrap();
     let result = session
-        .run(&[
+        .run(&HashMap::from([
             (
                 "preprocess/values",
                 BorrowedTensor::cpu(&[1f32, 2., 3., 4.], &[4]).unwrap(),
@@ -169,7 +174,7 @@ fn torchscript_and_nativert_coexist() {
                 "model/INPUT__9",
                 BorrowedTensor::cpu(&[10f32, 20., 30., 40.], &[4]).unwrap(),
             ),
-        ])
+        ]))
         .unwrap();
     assert_eq!(
         result
@@ -190,10 +195,10 @@ fn mutation_does_not_cross_ensemble_consumers() {
         for _ in 0..3 {
             let values = [1f32, 2., 3., 4.];
             let result = session
-                .run(&[(
+                .run(&HashMap::from([(
                     "producer/values",
                     BorrowedTensor::cpu(&values, &[4]).unwrap(),
-                )])
+                )]))
                 .unwrap();
             assert_eq!(
                 result
@@ -220,12 +225,21 @@ fn mutation_does_not_cross_ensemble_consumers() {
 #[ignore = "requires LEAPP TorchScript backend and fixtures"]
 fn failed_mutation_preserves_feedback_and_retained_outputs() {
     for device in devices() {
-        let runtime = open("mutating_feedback", device);
+        let bundle = Bundle::open(fixtures().join("mutating_feedback.yaml")).unwrap();
+        let runtime = Session::open(
+            &bundle,
+            SessionOptions {
+                device,
+                output_pool: OutputPoolOptions { max_entries: 1 },
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let mut first = runtime.new_session().unwrap();
         let mut second = runtime.new_session().unwrap();
         let observation = BorrowedTensor::cpu(&[1f32; 4], &[4]).unwrap();
-        let input = [("accumulator/observation", observation)];
-        let read = |r: &leapp_runtime::RunResult| {
+        let input = HashMap::from([("accumulator/observation", observation)]);
+        let read = |r: &lrt::RunResult| {
             r.get("accumulator/next")
                 .unwrap()
                 .to_cpu_vec::<f32>()
@@ -234,10 +248,10 @@ fn failed_mutation_preserves_feedback_and_retained_outputs() {
         let retained = first.run(&input).unwrap();
         assert_eq!(read(&first.run(&input).unwrap()), [2.; 4]);
         assert!(first
-            .run(&[(
+            .run(&HashMap::from([(
                 "accumulator/observation",
                 BorrowedTensor::cpu(&[-10f32; 4], &[4]).unwrap()
-            )])
+            )]))
             .is_err());
         assert_eq!(read(&first.run(&input).unwrap()), [3.; 4]);
         assert_eq!(read(&second.run(&input).unwrap()), [1.; 4]);
@@ -257,10 +271,10 @@ fn nested_subgraphs_execute_with_owned_inputs() {
         let runtime = open("forked", device);
         let mut session = runtime.new_session().unwrap();
         let result = session
-            .run(&[(
+            .run(&HashMap::from([(
                 "model/values",
                 BorrowedTensor::cpu(&[1f32, 2., 3., 4.], &[4]).unwrap(),
-            )])
+            )]))
             .unwrap();
         assert_eq!(
             result

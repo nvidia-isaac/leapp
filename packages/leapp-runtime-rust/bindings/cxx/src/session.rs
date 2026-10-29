@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{bundle::BundleHandle, ffi};
-use leapp_runtime::{EngineKind, ExecutionDevice, MemoryLocation, RunResult, SessionOptions};
+use lrt::{ExecutionDevice, MemoryLocation, RunResult, SessionOptions};
 
 pub struct SessionHandle(Option<leapp_runtime_bindings::SessionHandle>);
 
@@ -18,7 +18,7 @@ pub fn result_new() -> Box<ResultHandle> {
 
 pub fn session_open(
     bundle: &BundleHandle,
-    engine: ffi::EngineKind,
+    max_entries: usize,
     device: ffi::Location,
     output_location: ffi::Location,
     overrides: &[ffi::Placement],
@@ -36,13 +36,8 @@ pub fn session_open(
         Ok(_) => return crate::invalid("pinned memory is not an execution device"),
         Err(e) => return e,
     };
-    let mut options = SessionOptions {
-        engine: match engine {
-            ffi::EngineKind::Triton => EngineKind::Triton,
-            _ => return crate::invalid("unsupported engine; expected Triton"),
-        },
-        ..SessionOptions::default()
-    };
+    let mut options = SessionOptions::default();
+    options.output_pool.max_entries = max_entries;
     options.output_placement.default_location = match location(output_location) {
         Ok(v) => v,
         Err(e) => return e,
@@ -76,7 +71,10 @@ pub fn session_close(session: &SessionHandle) -> ffi::StatusData {
     }
 }
 
-pub fn session_duplicate(session: &SessionHandle, output: &mut SessionHandle) -> ffi::StatusData {
+pub fn session_duplicate(
+    session: &SessionHandle,
+    output: &mut SessionHandle,
+) -> ffi::StatusData {
     if output.0.is_some() {
         return crate::invalid("session destination is not empty");
     }
@@ -108,18 +106,27 @@ pub unsafe fn session_run(
     let views = inputs
         .iter()
         .map(|input| {
-            let ptr = input.descriptor as *const leapp_runtime::dlpack::DLTensor;
+            let ptr = input.descriptor as *const lrt::dlpack::DLTensor;
             if ptr.is_null() {
                 return Err(crate::invalid("null DLPack input"));
             }
             // SAFETY: Session::Run requires valid descriptors, metadata, and ready
             // immutable storage until this synchronous call completes.
-            let view = unsafe { leapp_runtime::dlpack::BorrowedTensor::new(&*ptr) };
+            let view = unsafe { lrt::dlpack::BorrowedTensor::new(&*ptr) };
             let name = std::str::from_utf8(&input.name)
                 .map_err(|_| crate::invalid("input name is not UTF-8"))?;
             Ok((name, view))
         })
-        .collect::<Result<Vec<_>, ffi::StatusData>>();
+        .try_fold(
+            std::collections::HashMap::with_capacity(inputs.len()),
+            |mut map, item| {
+                let (name, value) = item?;
+                if map.insert(name, value).is_some() {
+                    return Err(crate::invalid("duplicate input name"));
+                }
+                Ok(map)
+            },
+        );
     let views = match views {
         Ok(v) => v,
         Err(e) => return e,
@@ -137,7 +144,11 @@ pub fn result_names(result: &ResultHandle) -> Vec<String> {
         .unwrap_or_default()
 }
 
-pub fn result_tensor(result: &ResultHandle, name: &[u8], output: &mut usize) -> ffi::StatusData {
+pub fn result_tensor(
+    result: &ResultHandle,
+    name: &[u8],
+    output: &mut usize,
+) -> ffi::StatusData {
     let Some(result) = &result.0 else {
         return crate::invalid("result is empty");
     };
@@ -151,7 +162,7 @@ pub fn result_tensor(result: &ResultHandle, name: &[u8], output: &mut usize) -> 
             crate::success()
         }
         None => crate::error(
-            leapp_runtime::ErrorCode::NotFound,
+            lrt::ErrorCode::NotFound,
             "execute",
             format!("output {name} not found"),
         ),

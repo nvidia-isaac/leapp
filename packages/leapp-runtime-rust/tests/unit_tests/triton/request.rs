@@ -133,7 +133,10 @@ impl Drop for Allocation {
 }
 
 fn test_state() -> State {
-    State::new(OutputPlacement::default(), Arc::new(OutputPool::default()))
+    State::new(
+        OutputPlacement::default(),
+        Arc::new(OutputPool::new(crate::OutputPoolOptions::default(), 0)),
+    )
 }
 
 #[test]

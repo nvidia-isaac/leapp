@@ -9,7 +9,7 @@ callback; CUDA selection and synchronization stay in the engine. The method
 synchronizes with first exposure and rejects previously exposed storage, preventing
 races with writable consumers without extending the foreign ownership protocol.
 
-The runtime compiles this module once as `leapp_runtime::dlpack`. Every engine
+The runtime compiles this module once as `lrt::dlpack`. Every engine
 uses these same ownership types; no separate crate or re-export is needed.
 Language bindings use the hidden `HandoffStream` support type for producer
 synchronization. Its native implementation stays behind the private engine

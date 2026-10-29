@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use leapp_runtime::dlpack::*;
+use lrt::dlpack::*;
 
 #[test]
 fn cpu_slices_infer_dtype_and_validate_shape_without_copying() {

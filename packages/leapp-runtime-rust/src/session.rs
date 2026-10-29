@@ -10,8 +10,8 @@ mod tests;
 
 use crate::{
     dlpack::{BorrowedTensor, SharedTensor},
-    engines::{self, Engine},
-    Bundle, EngineKind, ExecutionDevice, MemoryLocation, RuntimeError,
+    engines::{self, memory::OutputPool, Engine},
+    Bundle, ExecutionDevice, MemoryLocation, RuntimeError,
 };
 use anyhow::{ensure, Context};
 use indexmap::{IndexMap, IndexSet};
@@ -32,13 +32,40 @@ impl OutputPlacement {
     }
 }
 
+/// Retention policy for each session's reusable output buffers.
+///
+/// The byte budget is the largest static bundle output size times `max_entries`,
+/// growing it for actual dynamic output sizes. Reuse matches memory placement.
+/// There is no fixed byte limit that excludes large tensors from reuse. This policy does not cap
+/// memory held by models, fixed workspaces, or retained results.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutputPoolOptions {
+    /// Maximum number of cached buffers. Zero disables caching, not allocation.
+    pub max_entries: usize,
+}
+
+impl Default for OutputPoolOptions {
+    fn default() -> Self {
+        Self { max_entries: 64 }
+    }
+}
+
 /// Immutable construction options, inherited by every new session.
+///
+/// ```
+/// use lrt::{OutputPoolOptions, SessionOptions};
+///
+/// let options = SessionOptions {
+///     output_pool: OutputPoolOptions { max_entries: 0 },
+///     ..Default::default()
+/// };
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct SessionOptions {
     pub device: ExecutionDevice,
     pub output_placement: OutputPlacement,
-    /// Select the engine once at initialization; new sessions share that engine.
-    pub engine: EngineKind,
+    /// Each session has its own cache; peers inherit this policy, not its buffers.
+    pub output_pool: OutputPoolOptions,
 }
 
 /// Managed DLPack public outputs in bundle declaration order, independent of the session.
@@ -67,6 +94,7 @@ impl RunResult {
 pub struct Session {
     engine: Option<Arc<dyn Engine>>,
     bundle: Bundle,
+    output_pool: Arc<OutputPool>,
     public_inputs: IndexSet<String>,
     public_outputs: IndexSet<String>,
     initial_inputs: IndexMap<String, SharedTensor>,
@@ -103,6 +131,18 @@ impl Session {
             ExecutionDevice::Cpu => MemoryLocation::Cpu,
             ExecutionDevice::Cuda { device_id } => MemoryLocation::Cuda { device_id },
         };
+        let largest_output = graph
+            .outputs
+            .values()
+            .filter(|spec| spec.shape.iter().all(|&dim| dim >= 0))
+            .map(|spec| {
+                engines::memory::dlpack::byte_size(
+                    initial_state::dl_dtype(spec.dtype),
+                    &spec.shape,
+                )
+            })
+            .try_fold(0, |largest, size| size.map(|size| largest.max(size)))?;
+        let output_pool = Arc::new(OutputPool::new(options.output_pool, largest_output));
         let initial_inputs =
             initial_state::initial_inputs(bundle, graph, state_location, engine.as_ref())?;
         let feedback = bundle
@@ -120,6 +160,7 @@ impl Session {
         Ok(Self {
             engine: Some(engine),
             bundle: bundle.clone(),
+            output_pool,
             public_inputs: bundle.pipeline_inputs().iter().map(|p| p.name()).collect(),
             public_outputs: bundle.pipeline_outputs().iter().map(|p| p.name()).collect(),
             inputs: initial_inputs.clone(),
@@ -151,6 +192,7 @@ impl Session {
         Ok(Self {
             engine: Some(self.engine()?.clone()),
             bundle: self.bundle.clone(),
+            output_pool: Arc::new(self.output_pool.fresh()),
             public_inputs: self.public_inputs.clone(),
             public_outputs: self.public_outputs.clone(),
             initial_inputs: self.initial_inputs.clone(),
@@ -166,6 +208,7 @@ impl Session {
         self.inputs.clear();
         self.initial_inputs.clear();
         self.engine.take();
+        self.output_pool.clear();
     }
 
     /// Restore captured state without rereading files or resetting model-internal state.
@@ -176,10 +219,27 @@ impl Session {
     }
 
     /// Borrow every public input exactly once until synchronous execution completes.
+    /// Names and tensors are borrowed from the map; matching is by name, independent
+    /// of iteration order. Missing or unknown inputs are errors. Inserting a duplicate
+    /// key replaces its earlier value before the runtime receives the map.
     /// Feedback advances only after every output and isolation copy succeeds.
+    ///
+    /// ```
+    /// use lrt::{dlpack::BorrowedTensor, RunResult, RuntimeError, Session};
+    /// use std::collections::HashMap;
+    ///
+    /// fn step(session: &mut Session) -> Result<RunResult, RuntimeError> {
+    ///     let values = [1_f32, 2., 3.];
+    ///     let name = String::from("model/input");
+    ///     let inputs = HashMap::from([
+    ///         (name.as_str(), BorrowedTensor::cpu(&values, &[3]).unwrap()),
+    ///     ]);
+    ///     session.run(&inputs)
+    /// }
+    /// ```
     pub fn run(
         &mut self,
-        inputs: &[(&str, BorrowedTensor<'_>)],
+        inputs: &HashMap<&str, BorrowedTensor<'_>>,
     ) -> Result<RunResult, RuntimeError> {
         self.execute(inputs)
             .map_err(|error| match error.downcast::<RuntimeError>() {
@@ -188,17 +248,15 @@ impl Session {
             })
     }
 
-    fn execute(&mut self, inputs: &[(&str, BorrowedTensor<'_>)]) -> anyhow::Result<RunResult> {
+    fn execute(
+        &mut self,
+        inputs: &HashMap<&str, BorrowedTensor<'_>>,
+    ) -> anyhow::Result<RunResult> {
         let engine = self.engine()?;
-        let mut supplied = HashMap::new();
-        for &(name, tensor) in inputs {
+        for name in inputs.keys() {
             ensure!(
-                self.public_inputs.contains(name),
+                self.public_inputs.contains(*name),
                 "unknown public input {name}"
-            );
-            ensure!(
-                supplied.insert(name, tensor).is_none(),
-                "duplicate public input {name}"
             );
         }
         let mut values = self
@@ -207,7 +265,7 @@ impl Session {
             .map(|name| {
                 Ok((
                     name.as_str(),
-                    *supplied
+                    *inputs
                         .get(name.as_str())
                         .with_context(|| format!("missing public input {name}"))?,
                 ))
@@ -231,7 +289,7 @@ impl Session {
                 .overrides
                 .insert(source.clone(), self.state_location);
         }
-        let outputs = engine.run(&values, &placement)?;
+        let outputs = engine.run(&values, &placement, &self.output_pool)?;
         let output = |name: &str| -> anyhow::Result<SharedTensor> {
             outputs.get(name).cloned().ok_or_else(|| {
                 crate::error::Internal(format!("missing engine output {name}")).into()
@@ -244,7 +302,11 @@ impl Session {
                 let value = output(name)?;
                 let value = if self.feedback.values().any(|source| source == name) {
                     // SAFETY: completed output storage has not been published to a foreign writer.
-                    engine.copy(unsafe { value.borrow() }, self.placement.location(name))?
+                    engine.copy(
+                        unsafe { value.borrow() },
+                        self.placement.location(name),
+                        Some(&self.output_pool),
+                    )?
                 } else {
                     value
                 };

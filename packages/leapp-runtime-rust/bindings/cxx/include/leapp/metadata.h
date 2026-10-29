@@ -10,7 +10,7 @@
 #include <variant>
 #include <vector>
 
-namespace leapp {
+namespace lrt {
 
 /// @brief Detached typed metadata, preserving ordered mappings and non-string
 /// keys.
@@ -34,6 +34,6 @@ struct Metadata::Entry {
   Metadata value;
 };
 
-}  // namespace leapp
+}  // namespace lrt
 
 #endif  // LEAPP_METADATA_H_

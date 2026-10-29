@@ -5,10 +5,8 @@ pub(super) mod error;
 mod request;
 pub(super) mod sys;
 
-use crate::engines::triton::{
-    memory::OutputPool, BorrowedTensor, Error, ErrorKind, MemoryLocation, Result, SharedTensor,
-};
-use crate::OutputPlacement;
+use crate::engines::triton::{BorrowedTensor, Error, ErrorKind, Result, SharedTensor};
+use crate::{engines::memory::OutputPool, OutputPlacement};
 use error::{check, cstring, Handle};
 use std::{os::unix::ffi::OsStrExt, path::Path, ptr, sync::Arc};
 
@@ -28,7 +26,6 @@ pub struct Server {
     // Rust drops fields in declaration order: Triton stops before its allocator.
     server: Handle<sys::TRITONSERVER_Server>,
     allocator: Handle<sys::TRITONSERVER_ResponseAllocator>,
-    output_pool: Arc<OutputPool>,
 }
 
 // SAFETY: Triton permits concurrent requests. The instance is immutable after
@@ -39,19 +36,10 @@ unsafe impl Send for Server {}
 unsafe impl Sync for Server {}
 
 impl Server {
-    /// Copy a completed tensor into independent output storage eligible for pool reuse.
-    pub fn copy_output(
-        &self,
-        input: BorrowedTensor<'_>,
-        target: MemoryLocation,
-    ) -> Result<SharedTensor> {
-        self.output_pool.copy(input, target)
-    }
-
     /// Load the supplied repository using Triton 2.69.0 and compatible backends.
     /// Keep the repository and linked artifacts alive until this object is dropped.
     /// Output allocations are retained by managed DLPack leases. Unexposed, idle
-    /// allocations may be reused by this runtime's bounded pool.
+    /// allocations may be reused by the calling session's pool.
     pub fn open(repository: &Path, backend_directory: &Path) -> Result<Self> {
         let repository = cstring(repository.as_os_str().as_bytes(), "load")?;
         let backend = cstring(backend_directory.as_os_str().as_bytes(), "load")?;
@@ -59,7 +47,6 @@ impl Server {
         let mut runtime = Self {
             server: Handle::empty(sys::TRITONSERVER_ServerDelete),
             allocator: Handle::empty(sys::TRITONSERVER_ResponseAllocatorDelete),
-            output_pool: Arc::new(OutputPool::default()),
         };
         // SAFETY: output pointers are live, strings outlive the calls, and each
         // created object immediately has an owning handle, including error paths.
@@ -84,7 +71,10 @@ impl Server {
                 "load",
             )?;
             check(
-                sys::TRITONSERVER_ServerOptionsSetBackendDirectory(options.ptr, backend.as_ptr()),
+                sys::TRITONSERVER_ServerOptionsSetBackendDirectory(
+                    options.ptr,
+                    backend.as_ptr(),
+                ),
                 "load",
             )?;
             check(
@@ -168,6 +158,7 @@ impl Server {
         model_name: &str,
         inputs: &[(&str, BorrowedTensor<'_>)],
         placement: &OutputPlacement,
+        pool: &Arc<OutputPool>,
     ) -> Result<Vec<(String, SharedTensor)>> {
         placement.validate()?;
         let model = cstring(model_name, "execute")?;
@@ -176,10 +167,7 @@ impl Server {
             .map(|(name, _)| cstring(name, "execute"))
             .collect::<Result<Vec<_>>>()?;
         let mut request = Handle::empty(sys::TRITONSERVER_InferenceRequestDelete);
-        let state = Box::new(request::State::new(
-            placement.clone(),
-            self.output_pool.clone(),
-        ));
+        let state = Box::new(request::State::new(placement.clone(), pool.clone()));
         let userp = (&*state as *const request::State).cast_mut().cast();
 
         const SELECTED_VERSION: i64 = -1;

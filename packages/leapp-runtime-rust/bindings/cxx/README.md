@@ -32,7 +32,7 @@ Consume the installed SDK with:
 
 ```cmake
 find_package(leapp_runtime CONFIG REQUIRED)
-target_link_libraries(my_application PRIVATE leapp::runtime)
+target_link_libraries(my_application PRIVATE lrt::runtime)
 ```
 
 Set `CMAKE_PREFIX_PATH` to the installation prefix. C++ exceptions are not required.
@@ -42,30 +42,29 @@ failure and Rust panics are not recoverable status errors.
 ## API and ownership
 
 ```cpp
-leapp::Bundle bundle;
-auto status = leapp::Bundle::Open("exports/policy.yaml", &bundle);
+lrt::Bundle bundle;
+auto status = lrt::Bundle::Open("exports/policy.yaml", &bundle);
 if (!status.ok()) return status;
 
 // Inspect metadata before initializing model backends.
 const auto* action_info = bundle.output_info("policy", "action");
 
-leapp::Session session;
-leapp::SessionOptions options;
-options.engine = leapp::EngineKind::kTriton;
-status = leapp::Session::Open(bundle, options, &session);
+lrt::Session session;
+lrt::SessionOptions options;
+status = lrt::Session::Open(bundle, options, &session);
 if (!status.ok()) return status;
 
 std::vector<float> obs(18);
 int64_t shape = 18;
 DLTensor input{obs.data(), {kDLCPU, 0}, 1, {kDLFloat, 32, 1},
                &shape, nullptr, 0};
-leapp::RunResult result;
+lrt::RunResult result;
 status = session.Run(
     {{"preprocess/obs", &input}},
     &result);
 if (!status.ok()) return status;
 
-leapp::ManagedTensor action;
+lrt::ManagedTensor action;
 status = result.GetTensor("policy/action", &action);
 if (!status.ok()) return status;
 // Inspect action->dl_tensor or transfer action.release() to a DLPack consumer.
@@ -75,10 +74,7 @@ if (!status.ok()) return status;
 - Open and NewSession require empty destinations. Reset a handle through
   assignment to a default instance before reusing it. Failed operations preserve
   destinations; successful Run/GetTensor replace them.
-- `SessionOptions.engine` selects the runtime engine when opening a session.
-  `EngineKind::kTriton` is the default and currently the only supported engine.
-  Invalid engine values return `InvalidArgument` without opening an engine or
-  changing the destination; there is no fallback.
+- Triton is selected automatically when opening a session.
 - Bundle copies share the Rust snapshot and cached C++ inspection values.
   Getter references remain valid while a copy retains that snapshot.
 - Missing model/port getters return `nullptr`. Pipeline input/output maps preserve
@@ -110,16 +106,21 @@ if (!status.ok()) return status;
   share writable storage. Public outputs that also feed back are detached from
   private session state at the configured public location. Never mutate inputs concurrently
   with execution. There are no LEAPP tensor accessors or copy helpers. Allocation
-  pooling is private to the engine; exporting a lease excludes its storage from
+  pooling belongs to each session; exporting a lease excludes its storage from
   reuse.
+
+`SessionOptions.output_pool.max_entries` limits cached buffers (default 64).
+Zero disables caching. The byte budget follows bundle output sizes and grows for
+larger dynamic outputs; there is no fixed byte cap. `NewSession` inherits the
+policy with an empty cache. The limit does not restrict live results, and closing
+one session leaves retained outputs and peer sessions valid.
 
 ## CUDA buffers
 
 Execution placement and storage placement are independent. Set
 `SessionOptions.device = ExecutionDevice::kCuda` for GPU model execution.
 Set `SessionOptions.output_location` or individual `output_overrides` at construction.
-`Run` takes only inputs and a result destination. Engine selection is independent
-of execution and storage placement. Configure the selected engine's installation
+`Run` takes only inputs and a result destination. Configure the Triton installation
 before starting the application, as described
 in the [runtime guide](../../README.md#synchronous-execution).
 
