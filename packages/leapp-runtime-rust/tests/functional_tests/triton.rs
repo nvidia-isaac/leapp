@@ -5,6 +5,8 @@
 mod engine;
 #[path = "triton/execution.rs"]
 mod execution;
+#[path = "triton/nativert.rs"]
+mod nativert;
 #[path = "triton/support.rs"]
 pub(crate) mod support;
 #[path = "triton/tensorrt.rs"]
