@@ -16,17 +16,22 @@ Python 3.10+ and PyTorch 2.6.0+. Visualization extras install only on
 
 ## Load this first
 
+All instruction and skill references below are relative to the repository
+root and tracked in Git. Do not require machine-local or editor-specific
+skill installations.
+
 | If you are changing… | Read this before editing |
 |---|---|
-| Tracing, `TracedData` / `TracedTensor` / `TracedNpArray`, indexing, mutation, node-boundary identity, FX proxies, NumPy dispatch | `.cursor/skills/leap_agent/SKILL.md` |
-| Warp tracing (`TracedWpArray`, APIC, `warp_op`) | `warp_support.md` |
+| Tracing, `TracedData` / `TracedTensor` / `TracedNpArray`, indexing, mutation, node-boundary identity, FX proxies, NumPy dispatch | [SKILL.md](SKILL.md), especially "Preserve graph connections and computation" and "Diagnose trace loss before changing exporters"; implementation in `leapp/leapp_graph/` |
+| Warp tracing (`TracedWpArray`, APIC, `warp_op`) | [Warp guide](references/warp.md) |
 | Public annotate/lifecycle API or docs examples | `docs/source/api/index.rst` plus the matching guide under `docs/source/` |
 | Graph PNG layout | `packages/leapp-visualization/` |
 | Export backends | `leapp/backends/` |
 | YAML / `InferenceManager` | `leapp/leapp.py` (`compile_graph`), `leapp/inference_manager.py`, `docs/source/generated_configs.rst` |
 
-Do not mix the skill's current `(context_obj, output_port)` identity with
-legacy `leapp_tag` helpers. The skill states which checkout you have.
+Do not mix the current `(context_obj, output_port)` identity with
+legacy `leapp_tag` helpers. Check the implementation in this repository
+when changing tracing internals.
 
 ## Tree (start here)
 
@@ -72,7 +77,35 @@ Narrower (use these while iterating):
 | Annotate / I/O / state | `pytest tests/functional_tests/ -v` |
 | Examples | `pytest tests/test_examples/ -v` |
 | Visualization | `pytest packages/leapp-visualization/tests/ -v` (Python 3.11+) |
-| Warp tracing | see `warp_support.md` |
+| Warp tracing | see [Warp guide](references/warp.md) |
+
+### Python formatting
+
+Use Ruff for Python formatting. The pinned development dependency and
+`[tool.ruff]` configuration in `pyproject.toml` set an 88-character line width
+and Python 3.10 compatibility. Run these commands from the repository root
+after editing Python code and before handing off changes:
+
+```bash
+ruff format .
+ruff format --check .
+```
+
+This covers the main package, visualization package, tests, Python
+docs configuration, and `scripts/leapp-build-warp-runtime`. The separate
+`Ruff formatting` CI job runs `ruff format --check .` on pull requests and
+fails if formatting changes are needed. No local Git hook is required.
+
+The entire `examples/` directory is excluded from Ruff formatting, including
+when example files are passed explicitly. Preserve their existing layout.
+When editing examples, check documentation excerpts and source links; prefer
+function names or text boundaries over fixed line ranges.
+
+Use the pinned Ruff version instead of Black. Formatting does not include
+lint fixes or import sorting; keep those changes out of formatting-only work.
+When upgrading Ruff, update the dependency and `required-version` in
+`pyproject.toml`, the install pin in `.github/workflows/ci.yml`, and `uv.lock`
+together.
 
 ### Warp runtime build
 
@@ -151,6 +184,19 @@ User-facing integration recipes belong here, not in this file.
 
 ## Guardrails when changing behavior
 
+- Tracing can enter branches that are not needed to produce the declared
+  outputs. Report recoverable capture or translation failures with
+  `_get_logger().error(...)`, which logs without raising; do not abort the
+  entire trace merely because such a branch cannot be captured. Keep this
+  distinction from `_get_logger().fatal(...)`, which raises. Test that an
+  unsupported operation on an unused branch does not prevent exporting the
+  supported output graph. Preserve failed-operation dependencies until output
+  pruning, and reject export if a declared output depends on a failed capture;
+  test direct and downstream dependencies separately.
+- NumPy capture checks graph structure and mutation safety. Leave numerical
+  comparisons to final exported-node validation; do not add per-call eager
+  parity checks to the adapter. Retain shape, dtype, value, and changed-input
+  parity coverage in tests, including final validation rejecting wrong outputs.
 - Prefer extending `TracedData` once (`_map_structure`, index lowering,
   port preserve/clear) over copying logic into tensor, NumPy, and Warp
   classes. Warp value semantics live on `TracedWpArray`; `WarpPatchBackend`
@@ -159,7 +205,7 @@ User-facing integration recipes belong here, not in this file.
   lifecycle stays in `warp/session.py`, `warp_op.py`, and
   `warp/warp_segment.py`.
 - After shared indexing changes: both torch and NumPy unit suites, plus
-  FX / jit / exported-program coverage as the skill describes.
+  FX / jit / exported-program coverage in `tests/`.
   `onnx-dynamo` for modern index cases; do not require legacy ONNX if
   that exporter cannot lower the op.
 - Do not invent graph edges for data a node did not publish. Clearing

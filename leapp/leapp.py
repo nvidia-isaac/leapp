@@ -34,8 +34,16 @@ from .leapp_graph.leapp_graph import LeappGraph
 _MANAGER = ExportManager()
 
 
-def start(name, save_path=".", verbose=False, dry_run=False, non_traced=None,
-          max_cached_io=5, global_patching=True, patching=None):
+def start(
+    name,
+    save_path=".",
+    verbose=False,
+    dry_run=False,
+    non_traced=None,
+    max_cached_io=5,
+    global_patching=True,
+    patching=None,
+):
     """Initialize and start LEAPP graph interpretation.
 
     ``name`` may be a bare graph name (``"my_graph"``), a relative path
@@ -49,19 +57,22 @@ def start(name, save_path=".", verbose=False, dry_run=False, non_traced=None,
     if not isinstance(name, str):
         _get_logger().fatal(
             f"leapp.start(name=...) must be a string, got {type(name).__name__}",
-            error_type=TypeError)
+            error_type=TypeError,
+        )
     normalized_name = os.path.normpath(os.path.expanduser(name))
     if normalized_name in ("", ".", os.sep):
         _get_logger().fatal(
             f"leapp.start(name={name!r}) does not contain a usable graph name; "
             "provide a non-empty basename such as 'my_graph' or '/tmp/my_graph'.",
-            error_type=ValueError)
+            error_type=ValueError,
+        )
     name_dir, graph_name = os.path.split(normalized_name)
     if not graph_name:
         _get_logger().fatal(
             f"leapp.start(name={name!r}) resolved to an empty graph name basename; "
             "provide a name whose basename is non-empty (e.g. 'my_graph').",
-            error_type=ValueError)
+            error_type=ValueError,
+        )
 
     manager = _MANAGER
     manager.set_graph_name(graph_name)
@@ -70,8 +81,10 @@ def start(name, save_path=".", verbose=False, dry_run=False, non_traced=None,
     manager.configure_logger(verbose=verbose)
 
     if ExportManager.is_interpret_graph_enabled():
-        _get_logger().warning("LEAPP graph interpretation is already enabled, "
-                              "calling start() again will reset the graph")
+        _get_logger().warning(
+            "LEAPP graph interpretation is already enabled, "
+            "calling start() again will reset the graph"
+        )
         _get_logger().warning("Resetting graph...")
         manager.reset_tracing_lock()
 
@@ -101,11 +114,13 @@ def stop():
     if TracingLock().is_active:
         _get_logger().fatal(
             "leapp.stop() was called while a traced function is still executing",
-            error_type=Exception)
+            error_type=Exception,
+        )
     if not ExportManager.is_interpret_graph_enabled():
         _get_logger().fatal(
             "leapp.stop() called with no active tracing session — did you call leapp.start()?",
-            error_type=Exception)
+            error_type=Exception,
+        )
 
     ExportManager.set_interpret_graph(False)
     manager.restore_pending_buffer_trackers()
@@ -115,8 +130,15 @@ def stop():
         manager.patcher.uninstall()
 
 
-def compile_graph(visualize=True, verbose=None, validate=True,
-                  rtol=1e-3, atol=1e-5, strict=True, graph_configs=None):
+def compile_graph(
+    visualize=True,
+    verbose=None,
+    validate=True,
+    rtol=1e-3,
+    atol=1e-5,
+    strict=True,
+    graph_configs=None,
+):
     """Compile and save the computational graph from traced nodes.
 
     Dry run is declared once via ``leapp.start(dry_run=True)``; when it is
@@ -132,7 +154,8 @@ def compile_graph(visualize=True, verbose=None, validate=True,
     if ExportManager.is_interpret_graph_enabled():
         _get_logger().fatal(
             "LEAPP graph interpretation is enabled. Call leapp.stop() before leapp.compile_graph().",
-            error_type=Exception)
+            error_type=Exception,
+        )
 
     if verbose is not None:
         _get_logger().set_verbose(verbose)
@@ -149,16 +172,18 @@ def compile_graph(visualize=True, verbose=None, validate=True,
         if not isinstance(graph_configs, GraphConfigs):
             _get_logger().fatal(
                 "compile_graph(graph_configs=...) expects a GraphConfigs instance",
-                error_type=TypeError)
+                error_type=TypeError,
+            )
         pipeline["pipeline"]["configs"] = graph_configs.to_dict()
 
     initial_value_filename = None
     if not manager.is_dry_run():
         initial_value_filename = graph.save_feedback_initial_values(
-            manager.get_save_path(), manager.get_graph_name())
+            manager.get_save_path(), manager.get_graph_name()
+        )
 
     if initial_value_filename is not None:
-        pipeline['pipeline']['initial_values'] = initial_value_filename
+        pipeline["pipeline"]["initial_values"] = initial_value_filename
 
     if not manager.is_dry_run():
         manager.save_models()
@@ -178,7 +203,9 @@ def compile_graph(visualize=True, verbose=None, validate=True,
     _get_logger().info(f"- Total edges: {total_edges}")
 
     system_info = get_system_info()
-    with open(os.path.join(manager.get_save_path(), f"{manager.get_graph_name()}.yaml"), "w") as f:
+    with open(
+        os.path.join(manager.get_save_path(), f"{manager.get_graph_name()}.yaml"), "w"
+    ) as f:
         yaml.dump(models, f, sort_keys=False)
         f.write("\n")
         yaml.dump(pipeline, f)
@@ -220,9 +247,7 @@ class AnnotateAPI:
     def __getattr__(self, name):
         if name in self._ALLOWED_APIS:
             return getattr(_MANAGER, name)
-        raise AttributeError(
-            f"leapp.annotate has no attribute '{name}'. "
-        )
+        raise AttributeError(f"leapp.annotate has no attribute '{name}'. ")
 
 
 annotate = AnnotateAPI()

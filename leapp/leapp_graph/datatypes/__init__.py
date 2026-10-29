@@ -57,15 +57,16 @@ TRACED_TYPES: tuple[Type[TracedData], ...] = tuple(TRACED_TYPE_REGISTRY.values()
 # Type Checking Functions
 # =============================================================================
 
+
 def is_tracable_tensor_type(obj) -> bool:
     """Check if an object is a type that can be traced.
-    
+
     This includes both base types (torch.Tensor, np.ndarray) and
     their traced counterparts (TracedTensor, TracedNpArray).
-    
+
     Args:
         obj: Object to check
-        
+
     Returns:
         True if the object is a traceable tensor type
     """
@@ -74,25 +75,27 @@ def is_tracable_tensor_type(obj) -> bool:
 
 def is_traced_type(obj) -> bool:
     """Check if an object is a TracedData subclass instance.
-    
+
     Args:
         obj: Object to check
-        
+
     Returns:
         True if the object is a TracedData instance
     """
     return isinstance(obj, TracedData)
 
 
-def get_traced_class_for(obj_or_type: Union[type, object]) -> Optional[Type[TracedData]]:
+def get_traced_class_for(
+    obj_or_type: Union[type, object],
+) -> Optional[Type[TracedData]]:
     """Get the appropriate TracedData subclass for a given type or object.
-    
+
     Args:
         obj_or_type: Either a type (e.g., torch.Tensor) or an instance
-        
+
     Returns:
         The corresponding TracedData subclass, or None if not traceable
-        
+
     Examples:
         >>> get_traced_class_for(torch.Tensor)
         <class 'TracedTensor'>
@@ -104,7 +107,7 @@ def get_traced_class_for(obj_or_type: Union[type, object]) -> Optional[Type[Trac
     # If already a traced type, return its class
     if isinstance(obj_or_type, TracedData):
         return type(obj_or_type)
-    
+
     # If it's a type, look it up directly
     if isinstance(obj_or_type, type):
         # Check for exact match first
@@ -115,12 +118,12 @@ def get_traced_class_for(obj_or_type: Union[type, object]) -> Optional[Type[Trac
             if issubclass(obj_or_type, base_type):
                 return traced_type
         return None
-    
+
     # It's an instance, find matching type
     for base_type, traced_type in TRACED_TYPE_REGISTRY.items():
         if isinstance(obj_or_type, base_type):
             return traced_type
-    
+
     return None
 
 
@@ -170,9 +173,7 @@ def as_traced(
     if wp is not None and TracedWpArray is not None and isinstance(data, wp.array):
         if was_traced:
             return TracedWpArray(data, name, context, proxy, view=view)
-        return TracedWpArray.make_traced_in_place(
-            data, name, context, proxy, view=view
-        )
+        return TracedWpArray.make_traced_in_place(data, name, context, proxy, view=view)
 
     # Find the appropriate traced class
     traced_class = get_traced_class_for(data)
@@ -237,6 +238,7 @@ def to_export_torch_tensor(data) -> _torch.Tensor:
         f"Cannot convert type {type(data).__name__} to torch.Tensor",
         error_type=TypeError,
     )
+
 
 # =============================================================================
 # Exports

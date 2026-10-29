@@ -80,9 +80,13 @@ def _onnx_graph_contains_warp_runner(graph) -> bool:
         if node.domain == ONNX_WRP_DOMAIN and node.op_type == ONNX_WRP_OP_TYPE:
             return True
         for attribute in node.attribute:
-            if attribute.HasField("g") and _onnx_graph_contains_warp_runner(attribute.g):
+            if attribute.HasField("g") and _onnx_graph_contains_warp_runner(
+                attribute.g
+            ):
                 return True
-            if any(_onnx_graph_contains_warp_runner(graph) for graph in attribute.graphs):
+            if any(
+                _onnx_graph_contains_warp_runner(graph) for graph in attribute.graphs
+            ):
                 return True
     return False
 
@@ -116,9 +120,7 @@ def _register() -> None:
         and hasattr(getattr(torch.ops, NAMESPACE), OP_NAME)
     ):
         _LIB.define(_SCHEMA)
-        torch.library.register_fake(
-            QUALIFIED_NAME, fx_impl.warp_runner_fake, lib=_LIB
-        )
+        torch.library.register_fake(QUALIFIED_NAME, fx_impl.warp_runner_fake, lib=_LIB)
         _LIB.impl(OP_NAME, fx_impl.warp_runner_eager, "CompositeExplicitAutograd")
 
         _get_logger().debug(

@@ -26,7 +26,6 @@ from leapp.leapp_graph.datatypes import TracedTensor, TracedNpArray
 from .base import LEAPPFunctionalTestBase
 
 
-
 class TestStateTensors(LEAPPFunctionalTestBase):
     """Tests for the state_tensors API which handles tensors that are both inputs and outputs."""
 
@@ -34,10 +33,14 @@ class TestStateTensors(LEAPPFunctionalTestBase):
         """state_tensors/update_state should return single tensor for one key, tuple for many keys."""
         leapp.start(name=self.TEST_GRAPH_NAME)
 
-        obs0 = annotate.input_tensors("policy", {"observation": torch.tensor([1.0, 2.0, 3.0])})
+        obs0 = annotate.input_tensors(
+            "policy", {"observation": torch.tensor([1.0, 2.0, 3.0])}
+        )
 
         # First trace: state_tensors returns TracedTensor (single) and tuple[TracedTensor] (multi)
-        single_state = annotate.state_tensors("policy", {"single": torch.tensor([0.1, 0.2, 0.3])})
+        single_state = annotate.state_tensors(
+            "policy", {"single": torch.tensor([0.1, 0.2, 0.3])}
+        )
         self.assertIsInstance(single_state, TracedTensor)
 
         multi_state = annotate.state_tensors(
@@ -74,7 +77,9 @@ class TestStateTensors(LEAPPFunctionalTestBase):
         leapp.stop()
 
         # Passthrough (outside tracing): preserve single-vs-tuple return shape with raw tensors
-        single_passthrough = annotate.state_tensors("policy", {"single": torch.tensor([0.0, 0.0, 0.0])})
+        single_passthrough = annotate.state_tensors(
+            "policy", {"single": torch.tensor([0.0, 0.0, 0.0])}
+        )
         self.assertIsInstance(single_passthrough, torch.Tensor)
 
         multi_passthrough = annotate.state_tensors(
@@ -110,15 +115,11 @@ class TestStateTensors(LEAPPFunctionalTestBase):
 
         obs_value = torch.tensor([1.0, 2.0, 3.0])
         # Create regular input
-        obs = annotate.input_tensors(
-            "policy", {"observation": obs_value}
-        )
+        obs = annotate.input_tensors("policy", {"observation": obs_value})
 
         # Create state tensor (both input and output) — non-trivial initial value
         initial_counter = torch.tensor([5.0, -3.0, 0.5])
-        counter = annotate.state_tensors(
-            "policy", {"counter": initial_counter}
-        )
+        counter = annotate.state_tensors("policy", {"counter": initial_counter})
 
         # Use state in computation
         new_counter = counter + obs
@@ -137,8 +138,12 @@ class TestStateTensors(LEAPPFunctionalTestBase):
         # Verify structure: 1 dangling input (observation), 1 dangling output (action),
         # 1 feedback connection for the recurrent state
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1, internal_connections=0,
-            feedback_connections=1
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=1,
         )
         self.verify_all_models_exist("policy")
 
@@ -149,9 +154,11 @@ class TestStateTensors(LEAPPFunctionalTestBase):
         self.assertEqual(len(model_info["outputs"]), 2)
 
         # Verify feedback initial values safetensors file
-        self.verify_feedback_initial_values({
-            "policy/counter": initial_counter,
-        })
+        self.verify_feedback_initial_values(
+            {
+                "policy/counter": initial_counter,
+            }
+        )
         self.verify_safetensors_matches_feedback(annotate)
         self.verify_inference_manager(
             source_inputs={"policy/observation": obs_value},
@@ -165,12 +172,8 @@ class TestStateTensors(LEAPPFunctionalTestBase):
         obs_value = torch.tensor([1.0, 2.0, 3.0])
         initial_counter = torch.tensor([5.0, -3.0, 0.5])
 
-        obs = annotate.input_tensors(
-            "policy", {"observation": obs_value}
-        )
-        counter = annotate.state_tensors(
-            "policy", {"counter": initial_counter}
-        )
+        obs = annotate.input_tensors("policy", {"observation": obs_value})
+        counter = annotate.state_tensors("policy", {"counter": initial_counter})
 
         action = obs + counter
         annotate.output_tensors("policy", {"action": action}, export_with="onnx")
@@ -179,8 +182,12 @@ class TestStateTensors(LEAPPFunctionalTestBase):
         leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(
-            annotate, nodes=1, inputs=2, outputs=1, internal_connections=0,
-            feedback_connections=0
+            annotate,
+            nodes=1,
+            inputs=2,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=0,
         )
         self.verify_all_models_exist("policy")
         self.verify_safetensors_matches_feedback(annotate)
@@ -207,7 +214,9 @@ class TestStateTensors(LEAPPFunctionalTestBase):
         )
 
         # History buffer as state [batch, history_len, obs_dim] — non-trivial initial value
-        initial_history = torch.arange(history_length * obs_dim, dtype=torch.float32).reshape(1, history_length, obs_dim)
+        initial_history = torch.arange(
+            history_length * obs_dim, dtype=torch.float32
+        ).reshape(1, history_length, obs_dim)
         history = annotate.state_tensors(
             "obs_processor", {"observation_history": initial_history}
         )
@@ -232,15 +241,21 @@ class TestStateTensors(LEAPPFunctionalTestBase):
         # Verify structure: 1 dangling input, 1 dangling output,
         # 1 feedback connection (observation_history)
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1, internal_connections=0,
-            feedback_connections=1
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=1,
         )
         self.verify_all_models_exist("obs_processor")
 
         # Verify feedback initial values safetensors file
-        self.verify_feedback_initial_values({
-            "obs_processor/observation_history": initial_history,
-        })
+        self.verify_feedback_initial_values(
+            {
+                "obs_processor/observation_history": initial_history,
+            }
+        )
         self.verify_safetensors_matches_feedback(annotate)
 
         # Compute expected output for InferenceManager (first iteration uses initial_history)
@@ -260,9 +275,7 @@ class TestStateTensors(LEAPPFunctionalTestBase):
         leapp.start(name=self.TEST_GRAPH_NAME)
 
         # Input
-        obs = annotate.input_tensors(
-            "policy", {"observation": obs_value}
-        )
+        obs = annotate.input_tensors("policy", {"observation": obs_value})
 
         # Multiple state tensors - returns tuple — non-trivial initial values
         initial_mean = torch.tensor([0.1, -0.2, 0.3])
@@ -302,17 +315,23 @@ class TestStateTensors(LEAPPFunctionalTestBase):
         # Verify structure: 1 dangling input (observation), 1 dangling output (normalized),
         # 3 feedback connections (running_mean, running_var, step_count)
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1, internal_connections=0,
-            feedback_connections=3
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=3,
         )
         self.verify_all_models_exist("policy")
 
         # Verify feedback initial values safetensors file
-        self.verify_feedback_initial_values({
-            "policy/running_mean": initial_mean,
-            "policy/running_var": initial_var,
-            "policy/step_count": initial_count,
-        })
+        self.verify_feedback_initial_values(
+            {
+                "policy/running_mean": initial_mean,
+                "policy/running_var": initial_var,
+                "policy/step_count": initial_count,
+            }
+        )
         self.verify_safetensors_matches_feedback(annotate)
 
         # Compute expected output for first iteration (uses initial state values)
@@ -336,9 +355,7 @@ class TestStateTensors(LEAPPFunctionalTestBase):
 
         for step in range(5):
             # Current observation (same value each step for reproducibility)
-            current_obs = annotate.input_tensors(
-                "policy", {"current_obs": obs_value}
-            )
+            current_obs = annotate.input_tensors("policy", {"current_obs": obs_value})
 
             # History as state
             history_state = annotate.state_tensors("policy", {"history": history})
@@ -356,7 +373,9 @@ class TestStateTensors(LEAPPFunctionalTestBase):
             annotate.output_tensors("policy", {"action": action}, export_with="jit")
 
             # Update for next step (only affects non-traced execution)
-            history = new_history.tensor if hasattr(new_history, "tensor") else new_history
+            history = (
+                new_history.tensor if hasattr(new_history, "tensor") else new_history
+            )
 
         leapp.stop()
         leapp.compile_graph(visualize=False, validate=True)
@@ -365,15 +384,21 @@ class TestStateTensors(LEAPPFunctionalTestBase):
         # 1 dangling input (current_obs), 1 dangling output (action),
         # 1 feedback connection (history)
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1, internal_connections=0,
-            feedback_connections=1
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=1,
         )
         self.verify_all_models_exist("policy")
 
         # Verify feedback initial values safetensors file
-        self.verify_feedback_initial_values({
-            "policy/history": initial_history,
-        })
+        self.verify_feedback_initial_values(
+            {
+                "policy/history": initial_history,
+            }
+        )
         self.verify_safetensors_matches_feedback(annotate)
 
         # Compute expected output (first iteration uses initial_history)
@@ -386,7 +411,9 @@ class TestStateTensors(LEAPPFunctionalTestBase):
             source_outputs={"policy/action": expected_action},
         )
 
-    def test_state_reentry_reusing_prior_state_output_tensor_preserves_feedback_source(self):
+    def test_state_reentry_reusing_prior_state_output_tensor_preserves_feedback_source(
+        self,
+    ):
         """Reusing the previous state output tensor should succeed because state feedback shares one source."""
         initial_last_action = torch.tensor([0.0, 0.0, 0.0])
         first_obs_value = torch.tensor([1.0, 2.0, 3.0])
@@ -415,8 +442,9 @@ class TestStateTensors(LEAPPFunctionalTestBase):
 
             if step_idx == 0:
                 self.assertEqual("last_action", returned_last_action.output_port)
-                self.assertIs(annotate.nodes["policy"],
-                              returned_last_action.context_obj)
+                self.assertIs(
+                    annotate.nodes["policy"], returned_last_action.context_obj
+                )
 
             last_action_value = returned_last_action
 
@@ -425,12 +453,18 @@ class TestStateTensors(LEAPPFunctionalTestBase):
 
         # Should trace one node with one dangling input/output and one feedback edge
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1, internal_connections=0,
-            feedback_connections=1
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=1,
         )
-        self.verify_feedback_initial_values({
-            "policy/last_action_in": initial_last_action,
-        })
+        self.verify_feedback_initial_values(
+            {
+                "policy/last_action_in": initial_last_action,
+            }
+        )
         self.verify_inference_manager(
             source_inputs={"policy/obs": first_obs_value},
             source_outputs={"policy/action": first_obs_value - initial_last_action},
@@ -454,12 +488,12 @@ class TestStateTensors(LEAPPFunctionalTestBase):
             state = annotate.state_tensors("policy", {"acc": state_value})
             updated = obs + state
             state_value = annotate.update_state("policy", {"acc": updated})
-            annotate.output_tensors(
-                "policy", {"action": updated}, export_with="onnx")
+            annotate.output_tensors("policy", {"action": updated}, export_with="onnx")
 
             consumed = annotate.input_tensors("sink", {"action": updated})
             annotate.output_tensors(
-                "sink", {"scaled": consumed * 2.0}, export_with="onnx")
+                "sink", {"scaled": consumed * 2.0}, export_with="onnx"
+            )
 
         leapp.stop()
         leapp.compile_graph(visualize=False, validate=True)
@@ -470,15 +504,23 @@ class TestStateTensors(LEAPPFunctionalTestBase):
         # through the regular output, so both ports carry a real edge. The
         # exported names carry the _in/_out suffixes the backend adds for the
         # overlapping state name; the ports underneath are unchanged.
-        data_flow = {source: list(targets) for source, targets
-                     in annotate.detected_pipeline["data_flow"].items()}
-        feedback_flow = {source: list(targets) for source, targets
-                         in annotate.detected_pipeline["feedback_flow"].items()}
+        data_flow = {
+            source: list(targets)
+            for source, targets in annotate.detected_pipeline["data_flow"].items()
+        }
+        feedback_flow = {
+            source: list(targets)
+            for source, targets in annotate.detected_pipeline["feedback_flow"].items()
+        }
         self.assertEqual({"policy/action": ["sink/action"]}, data_flow)
         self.assertEqual({"policy/acc_out": ["policy/acc_in"]}, feedback_flow)
         self.verify_num_connections(
-            annotate, nodes=2, inputs=1, outputs=1, internal_connections=1,
-            feedback_connections=1
+            annotate,
+            nodes=2,
+            inputs=1,
+            outputs=1,
+            internal_connections=1,
+            feedback_connections=1,
         )
         self.verify_feedback_initial_values({"policy/acc_in": initial_state})
         self.verify_inference_manager(
@@ -506,9 +548,9 @@ class TestStateTensorErrors(LEAPPFunctionalTestBase):
         annotate.input_tensors("policy", {"obs": torch.zeros(3)})
 
         with self.assertRaises(TypeError) as exc:
-            annotate.state_tensors("policy", {
-                "state_payload": {"inner": torch.zeros(3)}
-            })
+            annotate.state_tensors(
+                "policy", {"state_payload": {"inner": torch.zeros(3)}}
+            )
 
         self.assertIn("does not support nested state structures", str(exc.exception))
         leapp.stop()
@@ -534,9 +576,7 @@ class TestStateTensorErrors(LEAPPFunctionalTestBase):
         annotate.state_tensors("policy", {"state": torch.zeros(3)})
 
         with self.assertRaises(TypeError) as exc:
-            annotate.update_state("policy", {
-                "state": {"inner": torch.zeros(3)}
-            })
+            annotate.update_state("policy", {"state": {"inner": torch.zeros(3)}})
 
         self.assertIn("does not support nested state structures", str(exc.exception))
         leapp.stop()
@@ -551,7 +591,9 @@ class TestStateTensorErrors(LEAPPFunctionalTestBase):
             annotate.update_state("policy", {"counter": torch.ones(3)})
 
         msg = str(exc.exception)
-        self.assertIn("update_state() for node 'policy' received non-traced tensors", msg)
+        self.assertIn(
+            "update_state() for node 'policy' received non-traced tensors", msg
+        )
         self.assertNotIn("proxy", msg)
 
         annotate.update_state("policy", {"counter": state + obs})
@@ -560,6 +602,7 @@ class TestStateTensorErrors(LEAPPFunctionalTestBase):
 
 
 # ── Test models ──────────────────────────────────────────────────────────────
+
 
 class GRUModel(nn.Module):
     """GRU with a single hidden state buffer that gets reassigned."""
@@ -650,6 +693,7 @@ class NestedBufferModel(nn.Module):
 
 # ── Tests ────────────────────────────────────────────────────────────────────
 
+
 class TestBufferTracking(LEAPPFunctionalTestBase):
     """Tests for annotate.module() auto-detection of stateful buffers."""
 
@@ -665,21 +709,28 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
         annotate.module("policy", model)
         action = model(obs_traced)
 
-        annotate.output_tensors("policy", {"action": action},
-                                export_with="onnx-torchscript")
+        annotate.output_tensors(
+            "policy", {"action": action}, export_with="onnx-torchscript"
+        )
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
         # 1 input (obs), 1 output (action), 1 feedback (h_state)
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1,
-            internal_connections=0, feedback_connections=1
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=1,
         )
         self.verify_all_models_exist("policy")
         self.verify_safetensors_matches_feedback(annotate)
-        self.verify_feedback_initial_values({
-            "policy/h_state_in": torch.zeros(1, 1, 8),
-        })
+        self.verify_feedback_initial_values(
+            {
+                "policy/h_state_in": torch.zeros(1, 1, 8),
+            }
+        )
 
     def test_lstm_two_buffers(self):
         """LSTM with 2 mutated buffers -> 2 feedback connections."""
@@ -693,22 +744,29 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
         annotate.module("policy", model)
         action = model(obs_traced)
 
-        annotate.output_tensors("policy", {"action": action},
-                                export_with="onnx-torchscript")
+        annotate.output_tensors(
+            "policy", {"action": action}, export_with="onnx-torchscript"
+        )
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
         # 1 input (obs), 1 output (action), 2 feedback (h_state, c_state)
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1,
-            internal_connections=0, feedback_connections=2
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=2,
         )
         self.verify_all_models_exist("policy")
         self.verify_safetensors_matches_feedback(annotate)
-        self.verify_feedback_initial_values({
-            "policy/h_state_in": torch.zeros(1, 1, 8),
-            "policy/c_state_in": torch.zeros(1, 1, 8),
-        })
+        self.verify_feedback_initial_values(
+            {
+                "policy/h_state_in": torch.zeros(1, 1, 8),
+                "policy/c_state_in": torch.zeros(1, 1, 8),
+            }
+        )
 
     def test_partial_mutation(self):
         """3 buffers, 2 mutated -> 2 feedback, 1 regular input (const_mask)."""
@@ -730,15 +788,21 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
         # 2 feedback (running_mean, step_count)
         # const_mask is baked as a constant (not a dynamic input)
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1,
-            internal_connections=0, feedback_connections=2
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=2,
         )
         self.verify_all_models_exist("policy")
         self.verify_safetensors_matches_feedback(annotate)
-        self.verify_feedback_initial_values({
-            "policy/running_mean": torch.zeros(1, 4),
-            "policy/step_count": torch.tensor([0.0]),
-        })
+        self.verify_feedback_initial_values(
+            {
+                "policy/running_mean": torch.zeros(1, 4),
+                "policy/step_count": torch.tensor([0.0]),
+            }
+        )
 
     def test_no_buffers_mutated(self):
         """All buffers read but not reassigned -> 0 feedback, all regular inputs."""
@@ -759,8 +823,12 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
         # 1 dangling input (obs), 1 dangling output, 0 feedback
         # scale and bias are baked as constants (not dynamic inputs)
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1,
-            internal_connections=0, feedback_connections=0
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=0,
         )
         self.verify_all_models_exist("policy")
         self.verify_safetensors_matches_feedback(annotate)
@@ -782,8 +850,12 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
         leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1,
-            internal_connections=0, feedback_connections=0
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=0,
         )
         self.verify_all_models_exist("policy")
         self.verify_safetensors_matches_feedback(annotate)
@@ -801,15 +873,20 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
         annotate.module("policy", model, buffer_names=["h_state"])
         action = model(obs_traced)
 
-        annotate.output_tensors("policy", {"action": action},
-                                export_with="onnx-torchscript")
+        annotate.output_tensors(
+            "policy", {"action": action}, export_with="onnx-torchscript"
+        )
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
         # 1 input (obs), 1 output (action), 1 feedback (h_state only)
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1,
-            internal_connections=0, feedback_connections=1
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=1,
         )
         self.verify_all_models_exist("policy")
 
@@ -828,20 +905,27 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
         annotate.module("policy", model)
         action = model(obs_traced)
 
-        annotate.output_tensors("policy", {"action": action},
-                                export_with="onnx-torchscript")
+        annotate.output_tensors(
+            "policy", {"action": action}, export_with="onnx-torchscript"
+        )
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
         # After tracing, all buffers should be restored
         restored_buffers = dict(model.named_buffers())
-        self.assertEqual(set(original_buffers.keys()), set(restored_buffers.keys()),
-                         "Buffer names should be restored after tracing")
+        self.assertEqual(
+            set(original_buffers.keys()),
+            set(restored_buffers.keys()),
+            "Buffer names should be restored after tracing",
+        )
 
         # Restored values should be proper tensors (not TracedTensors)
         for name, buf in restored_buffers.items():
-            self.assertIsInstance(buf, torch.Tensor,
-                                 f"Buffer '{name}' should be a torch.Tensor after restore")
+            self.assertIsInstance(
+                buf,
+                torch.Tensor,
+                f"Buffer '{name}' should be a torch.Tensor after restore",
+            )
 
     def test_non_mutated_buffers_baked_as_constants(self):
         """Non-mutated buffers should be baked into the model, not dynamic inputs.
@@ -849,6 +933,7 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
         Verifies that the exported model produces correct output using the
         baked buffer values (scale=2, bias=1) without needing them as inputs.
         """
+
         class ScaleBiasModel(nn.Module):
             def __init__(self):
                 super().__init__()
@@ -874,8 +959,12 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
 
         # Only 1 input (obs) — scale and bias baked as constants
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1,
-            internal_connections=0, feedback_connections=0
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=0,
         )
 
         # Load exported model and verify it produces correct values
@@ -913,15 +1002,20 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
         annotate.module("policy", model)
         action = model(obs_traced)
 
-        annotate.output_tensors("policy", {"action": action},
-                                export_with="onnx-torchscript")
+        annotate.output_tensors(
+            "policy", {"action": action}, export_with="onnx-torchscript"
+        )
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
         # GRU's h_state is at rnn.h_state (nested) -> 1 feedback
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1,
-            internal_connections=0, feedback_connections=1
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=1,
         )
         self.verify_all_models_exist("policy")
 
@@ -931,6 +1025,7 @@ class TestBufferTrackingEdgeCases(LEAPPFunctionalTestBase):
 
     def test_chained_operations_on_buffer(self):
         """Buffer used in a chain of operations: reshape, multiply, add."""
+
         class ChainedOpsModel(nn.Module):
             def __init__(self):
                 super().__init__()
@@ -958,13 +1053,18 @@ class TestBufferTrackingEdgeCases(LEAPPFunctionalTestBase):
         leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1,
-            internal_connections=0, feedback_connections=1
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=1,
         )
         self.verify_all_models_exist("policy")
 
     def test_buffer_used_in_conditional_arithmetic(self):
         """Buffer combined with torch.where (element-wise conditional)."""
+
         class ConditionalModel(nn.Module):
             def __init__(self):
                 super().__init__()
@@ -992,12 +1092,17 @@ class TestBufferTrackingEdgeCases(LEAPPFunctionalTestBase):
         leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1,
-            internal_connections=0, feedback_connections=1
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=1,
         )
 
     def test_buffer_with_torch_cat(self):
         """Buffer concatenated with input using torch.cat."""
+
         class CatModel(nn.Module):
             def __init__(self):
                 super().__init__()
@@ -1024,12 +1129,17 @@ class TestBufferTrackingEdgeCases(LEAPPFunctionalTestBase):
         leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1,
-            internal_connections=0, feedback_connections=1
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=1,
         )
 
     def test_buffer_with_matmul(self):
         """Buffer used in matrix multiplication."""
+
         class MatmulModel(nn.Module):
             def __init__(self):
                 super().__init__()
@@ -1056,12 +1166,17 @@ class TestBufferTrackingEdgeCases(LEAPPFunctionalTestBase):
         leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1,
-            internal_connections=0, feedback_connections=1
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=1,
         )
 
     def test_buffer_with_slicing(self):
         """Buffer read via slicing (getitem)."""
+
         class SlicingModel(nn.Module):
             def __init__(self):
                 super().__init__()
@@ -1090,12 +1205,17 @@ class TestBufferTrackingEdgeCases(LEAPPFunctionalTestBase):
         leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1,
-            internal_connections=0, feedback_connections=1
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=1,
         )
 
     def test_buffer_with_different_dtypes(self):
         """Buffers with float32 and int64 dtypes coexist."""
+
         class MixedDtypeModel(nn.Module):
             def __init__(self):
                 super().__init__()
@@ -1123,12 +1243,17 @@ class TestBufferTrackingEdgeCases(LEAPPFunctionalTestBase):
         leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1,
-            internal_connections=0, feedback_connections=2
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=2,
         )
 
     def test_scalar_buffer(self):
         """Single scalar buffer (0-dimensional after squeeze, 1-element tensor)."""
+
         class ScalarBufferModel(nn.Module):
             def __init__(self):
                 super().__init__()
@@ -1154,12 +1279,17 @@ class TestBufferTrackingEdgeCases(LEAPPFunctionalTestBase):
         leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1,
-            internal_connections=0, feedback_connections=1
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=1,
         )
 
     def test_deeply_nested_submodule_buffer(self):
         """Buffer three levels deep: model.proj.rnn.h_state."""
+
         class DeepModel(nn.Module):
             def __init__(self):
                 super().__init__()
@@ -1181,19 +1311,25 @@ class TestBufferTrackingEdgeCases(LEAPPFunctionalTestBase):
         annotate.module("policy", model)
         action = model(obs_traced)
 
-        annotate.output_tensors("policy", {"action": action},
-                                export_with="onnx-torchscript")
+        annotate.output_tensors(
+            "policy", {"action": action}, export_with="onnx-torchscript"
+        )
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
         # rnn.rnn.h_state is 3 levels deep -> still detected
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1,
-            internal_connections=0, feedback_connections=1
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=1,
         )
 
     def test_multiple_outputs_with_buffer(self):
         """Model returns multiple outputs alongside buffer mutation."""
+
         class MultiOutputModel(nn.Module):
             def __init__(self):
                 super().__init__()
@@ -1215,18 +1351,24 @@ class TestBufferTrackingEdgeCases(LEAPPFunctionalTestBase):
         annotate.module("policy", model)
         out_a, out_b = model(obs_traced)
 
-        annotate.output_tensors("policy", {"action_a": out_a, "action_b": out_b},
-                                export_with="jit")
+        annotate.output_tensors(
+            "policy", {"action_a": out_a, "action_b": out_b}, export_with="jit"
+        )
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=2,
-            internal_connections=0, feedback_connections=1
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=2,
+            internal_connections=0,
+            feedback_connections=1,
         )
 
     def test_buffer_with_clamp(self):
         """Buffer updated with torch.clamp — common in RL for bounding state."""
+
         class ClampModel(nn.Module):
             def __init__(self):
                 super().__init__()
@@ -1253,8 +1395,12 @@ class TestBufferTrackingEdgeCases(LEAPPFunctionalTestBase):
         leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1,
-            internal_connections=0, feedback_connections=1
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=1,
         )
 
 
@@ -1297,14 +1443,21 @@ class TestBufferTrackingErrors(LEAPPFunctionalTestBase):
 
         # Buffers should still be restored by stop() safety net
         restored_buffer_names = set(dict(model.named_buffers()).keys())
-        self.assertEqual(original_buffer_names, restored_buffer_names,
-                         "stop() should restore buffers even without output_tensors()")
+        self.assertEqual(
+            original_buffer_names,
+            restored_buffer_names,
+            "stop() should restore buffers even without output_tensors()",
+        )
 
         # Verify they're real tensors, not TracedTensors
         from leapp.leapp_graph.datatypes import TracedTensor
+
         for name, buf in model.named_buffers():
-            self.assertNotIsInstance(buf, TracedTensor,
-                                    f"Buffer '{name}' should not be TracedTensor after stop()")
+            self.assertNotIsInstance(
+                buf,
+                TracedTensor,
+                f"Buffer '{name}' should not be TracedTensor after stop()",
+            )
 
     def test_model_functional_after_tracing(self):
         """Model produces correct output after tracing completes (buffers properly restored)."""
@@ -1324,8 +1477,9 @@ class TestBufferTrackingErrors(LEAPPFunctionalTestBase):
         obs_traced = annotate.input_tensors("policy", {"obs": obs})
         annotate.module("policy", model)
         action = model(obs_traced)
-        annotate.output_tensors("policy", {"action": action},
-                                export_with="onnx-torchscript")
+        annotate.output_tensors(
+            "policy", {"action": action}, export_with="onnx-torchscript"
+        )
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
@@ -1336,7 +1490,8 @@ class TestBufferTrackingErrors(LEAPPFunctionalTestBase):
 
         self.assertTrue(
             torch.allclose(ref_output, post_trace_output, atol=1e-6),
-            "Model should produce identical output before and after tracing")
+            "Model should produce identical output before and after tracing",
+        )
 
     def test_buffer_names_filter_nonexistent_name(self):
         """Filtering by a buffer name that doesn't exist -> no buffers tracked."""
@@ -1357,8 +1512,12 @@ class TestBufferTrackingErrors(LEAPPFunctionalTestBase):
 
         # No buffers were tracked -> 0 feedback
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1,
-            internal_connections=0, feedback_connections=0
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=0,
         )
 
 
@@ -1375,45 +1534,47 @@ class TestNumpyStateAndBufferEquivalents(LEAPPFunctionalTestBase):
         leapp.start(name=self.TEST_GRAPH_NAME)
 
         obs_value = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-        obs = annotate.input_tensors(
-            "policy", {"observation": obs_value}
-        )
+        obs = annotate.input_tensors("policy", {"observation": obs_value})
 
         initial_counter = np.array([5.0, -3.0, 0.5], dtype=np.float32)
-        counter = annotate.state_tensors(
-            "policy", {"counter": initial_counter}
-        )
+        counter = annotate.state_tensors("policy", {"counter": initial_counter})
 
         new_counter = counter + obs
-        returned_state = annotate.update_state(
-            "policy", {"counter": new_counter})
+        returned_state = annotate.update_state("policy", {"counter": new_counter})
         self.assertIs(returned_state, new_counter)
 
         action = obs * 2.0
-        annotate.output_tensors(
-            "policy", {"action": action}, export_with=None)
+        annotate.output_tensors("policy", {"action": action}, export_with=None)
 
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1, internal_connections=0,
-            feedback_connections=1
+            annotate,
+            nodes=1,
+            inputs=1,
+            outputs=1,
+            internal_connections=0,
+            feedback_connections=1,
         )
-        self.verify_feedback_initial_values({
-            "policy/counter": torch.from_numpy(initial_counter),
-        })
+        self.verify_feedback_initial_values(
+            {
+                "policy/counter": torch.from_numpy(initial_counter),
+            }
+        )
         self.verify_safetensors_matches_feedback(annotate)
 
     def test_register_buffer_with_inplace_assignment(self):
         """register_buffer with numpy in-place assignment, matching the torch case."""
+
         class MockModule:
             def __init__(self):
                 self.values = np.array([1.0, 2.0, 3.0], dtype=np.float32)
 
             def run(self, traced_input):
                 self.values = annotate.register_buffer(
-                    "buffer_test", {"values": self.values})
+                    "buffer_test", {"values": self.values}
+                )
                 self.values[:] = traced_input
                 return self.values * 100.0
 
@@ -1422,21 +1583,20 @@ class TestNumpyStateAndBufferEquivalents(LEAPPFunctionalTestBase):
         leapp.start(name=self.TEST_GRAPH_NAME)
 
         input_array = np.array([4.0, 5.0, 6.0], dtype=np.float32)
-        traced_input = annotate.input_tensors(
-            "buffer_test", {"input": input_array})
+        traced_input = annotate.input_tensors("buffer_test", {"input": input_array})
 
         result = module.run(traced_input)
         self.assertIsInstance(module.values, TracedNpArray)
         self.assertIs(module.values.context_obj, annotate.nodes["buffer_test"])
 
-        annotate.output_tensors(
-            "buffer_test", {"result": result}, export_with=None)
+        annotate.output_tensors("buffer_test", {"result": result}, export_with=None)
 
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
         self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=1, internal_connections=0)
+            annotate, nodes=1, inputs=1, outputs=1, internal_connections=0
+        )
 
 
 if __name__ == "__main__":

@@ -51,18 +51,31 @@ def pending_output():
         session.close_warp_segment(requester=session.owner_token)
 
 
-@pytest.mark.parametrize("consume", [
-    lambda x: x.reshape(3, 2),
-    lambda x: x.view(3, 2),
-    lambda x: x.transpose(0, 1),
-    lambda x: x[:, 1:],
-    lambda x: x + 2,
-    lambda x: torch.cat([x, x], dim=0),
-    lambda x: x.detach(),
-    lambda x: x[:],
-    lambda x: x.contiguous(),
-], ids=["reshape", "view", "transpose", "slice", "add", "nested_args",
-        "detach", "full_slice", "contiguous"])
+@pytest.mark.parametrize(
+    "consume",
+    [
+        lambda x: x.reshape(3, 2),
+        lambda x: x.view(3, 2),
+        lambda x: x.transpose(0, 1),
+        lambda x: x[:, 1:],
+        lambda x: x + 2,
+        lambda x: torch.cat([x, x], dim=0),
+        lambda x: x.detach(),
+        lambda x: x[:],
+        lambda x: x.contiguous(),
+    ],
+    ids=[
+        "reshape",
+        "view",
+        "transpose",
+        "slice",
+        "add",
+        "nested_args",
+        "detach",
+        "full_slice",
+        "contiguous",
+    ],
+)
 def test_torch_consumer_uses_finalized_warp_output(pending_output, consume):
     node, tensor, segment, session = pending_output
     result = consume(tensor)
@@ -76,22 +89,26 @@ def test_torch_consumer_uses_finalized_warp_output(pending_output, consume):
     node.graph.lint()
 
 
-@pytest.mark.parametrize("mutate", [
-    lambda x: x.copy_(torch.zeros(2, 3)),
-    lambda x: x.__setitem__((slice(None), 0), 0.0),
-], ids=["copy", "setitem"])
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda x: x.copy_(torch.zeros(2, 3)),
+        lambda x: x.__setitem__((slice(None), 0), 0.0),
+    ],
+    ids=["copy", "setitem"],
+)
 def test_torch_write_closes_segment_before_mutating_storage(pending_output, mutate):
     _, tensor, _, session = pending_output
     operation = session.active_warp_op
     terminate = operation.terminate
 
     def check_before_close(*args, **kwargs):
-        torch.testing.assert_close(
-            tensor.tensor, torch.arange(6.0).reshape(2, 3) + 7
-        )
+        torch.testing.assert_close(tensor.tensor, torch.arange(6.0).reshape(2, 3) + 7)
         return terminate(*args, **kwargs)
 
-    with mock.patch.object(operation, "terminate", side_effect=check_before_close) as close:
+    with mock.patch.object(
+        operation, "terminate", side_effect=check_before_close
+    ) as close:
         mutate(tensor)
     close.assert_called_once()
 

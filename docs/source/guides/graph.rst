@@ -19,6 +19,12 @@ State capture has two complementary paths:
 LEAPP can also infer **feedback connections** when outputs from later nodes are
 fed back into earlier nodes across repeated graph execution.
 
+``compile_graph(validate=True)`` checks exported state updates alongside other
+outputs on every cached sample. Capture consecutive calls to validate stateful
+transitions across the original trajectory. Sequential runtime replay
+additionally checks accumulated numerical drift and feedback handling; see
+:ref:`stateful-validation`.
+
 Explicit state capture
 ======================
 

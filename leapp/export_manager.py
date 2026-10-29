@@ -31,19 +31,29 @@ from leapp.leapp_graph.datatypes import (
     is_traced_type,
     is_tracable_tensor_type,
 )
-from leapp.leapp_graph.datatypes.patching import TracingPatcher, warn_if_script_functions_in_scope
+from leapp.leapp_graph.datatypes.patching import (
+    TracingPatcher,
+    warn_if_script_functions_in_scope,
+)
 from leapp.utils.tensor_description import TensorSemantics
-from leapp.utils.tensor_description import (verify_data_exact_match,
-                                             flatten_io_structure,
-                                             unwrap_tensor_semantics)
-from leapp.utils.caller_identity import (get_caller_stack_identity,
-                                         caller_identity_has_same_anchor,
-                                         format_caller_identity)
-from leapp.utils.utils import (get_relative_path,
-                               mirror_all_traced_state,
-                               extract_return_names,
-                               frame_to_namespace)
+from leapp.utils.tensor_description import (
+    verify_data_exact_match,
+    flatten_io_structure,
+    unwrap_tensor_semantics,
+)
+from leapp.utils.caller_identity import (
+    get_caller_stack_identity,
+    caller_identity_has_same_anchor,
+    format_caller_identity,
+)
+from leapp.utils.utils import (
+    get_relative_path,
+    mirror_all_traced_state,
+    extract_return_names,
+    frame_to_namespace,
+)
 from contextlib import nullcontext
+
 
 class ExportManager:
     _instance = None
@@ -79,8 +89,6 @@ class ExportManager:
             self._next_completed_node_index = 0
 
             ExportManager._initialized = True
-
-
 
     #########################################################
     # state accessors (for runtime API)
@@ -139,12 +147,12 @@ class ExportManager:
 
     def restore_pending_buffer_trackers(self):
         for node in self.nodes.values():
-            if hasattr(node, '_buffer_tracker') and node._buffer_tracker is not None:
+            if hasattr(node, "_buffer_tracker") and node._buffer_tracker is not None:
                 node._buffer_tracker.restore()
 
     def set_detected_graph(self, models: dict, pipeline: dict):
-        self.detected_nodes = models['models']
-        self.detected_pipeline = pipeline['pipeline']
+        self.detected_nodes = models["models"]
+        self.detected_pipeline = pipeline["pipeline"]
 
     #########################################################
     # node setup
@@ -158,12 +166,12 @@ class ExportManager:
 
     def validate_nodes_ready_for_compile(self):
         incomplete_nodes = [
-            name for name, node in self.nodes.items()
+            name
+            for name, node in self.nodes.items()
             if node.node_index == LeappNode.UNSET_NODE_INDEX
         ]
         pending_warp_nodes = [
-            name for name, node in self.nodes.items()
-            if node.has_pending_warp_segments
+            name for name, node in self.nodes.items() if node.has_pending_warp_segments
         ]
         if incomplete_nodes:
             incomplete_nodes.sort()
@@ -172,7 +180,8 @@ class ExportManager:
                 "The following nodes were created but never completed: "
                 f"{formatted}. Did you forget to call output_tensors() "
                 "or finish the annotated function?",
-                error_type=Exception)
+                error_type=Exception,
+            )
         if pending_warp_nodes:
             pending_warp_nodes.sort()
             formatted = ", ".join(pending_warp_nodes)
@@ -188,23 +197,25 @@ class ExportManager:
             _get_logger().fatal(
                 f"Error: node '{name}' already exists. "
                 f"Cannot create a new node with the same name.",
-                error_type=Exception)
+                error_type=Exception,
+            )
 
         if self.is_dry_run(name):
-            kwargs['export_with'] = None
-            kwargs.setdefault('backend_params', {})
+            kwargs["export_with"] = None
+            kwargs.setdefault("backend_params", {})
 
         if node_class is FunctionDecoratorNode:
             # kept for backward compatibility we still suppport old style initialization
             # TODO: this needs to be removed in the future
-            node = node_class(name,
-                          backend=kwargs.get("export_with", None),
-                          backend_params=kwargs.get("backend_params", None),
-                          inputs=kwargs.get("inputs", None),
-                          outputs=kwargs.get("outputs", None),
-                          environment_constants=kwargs.get(
-                              "environment_constants", None),
-                          register_buffers=kwargs.get("register_buffers", None))
+            node = node_class(
+                name,
+                backend=kwargs.get("export_with", None),
+                backend_params=kwargs.get("backend_params", None),
+                inputs=kwargs.get("inputs", None),
+                outputs=kwargs.get("outputs", None),
+                environment_constants=kwargs.get("environment_constants", None),
+                register_buffers=kwargs.get("register_buffers", None),
+            )
         else:
             node = node_class(name, **kwargs)
 
@@ -222,8 +233,8 @@ class ExportManager:
     def _normalize_named_tensor_payload(api_name: str, node_name: str, tensors):
         metadata = {}
         if isinstance(tensors, (TensorSemantics, list, tuple)) and (
-            isinstance(tensors, TensorSemantics) or
-            any(isinstance(t, TensorSemantics) for t in tensors)
+            isinstance(tensors, TensorSemantics)
+            or any(isinstance(t, TensorSemantics) for t in tensors)
         ):
             tensors, metadata = unwrap_tensor_semantics(tensors)
 
@@ -231,7 +242,8 @@ class ExportManager:
             _get_logger().fatal(
                 f"{api_name}() for node '{node_name}' does not accept a bare tensor. "
                 "Pass a dict of named tensors or a TensorSemantics/list of TensorSemantics.",
-                error_type=TypeError)
+                error_type=TypeError,
+            )
 
         if isinstance(tensors, dict):
             return tensors, metadata
@@ -239,7 +251,8 @@ class ExportManager:
         _get_logger().fatal(
             f"{api_name}() for node '{node_name}' expects either a dict of named tensors "
             f"or a TensorSemantics/list of TensorSemantics. Received {type(tensors).__name__}.",
-            error_type=TypeError)
+            error_type=TypeError,
+        )
 
     #########################################################
     # annotation APIs
@@ -249,10 +262,12 @@ class ExportManager:
             _get_logger().fatal(
                 "Cannot call input_tensors() while a _method()-traced function "
                 "is executing. Mixing active contexts is not allowed.",
-                error_type=Exception)
+                error_type=Exception,
+            )
 
         tensors, metadata = self._normalize_named_tensor_payload(
-            "input_tensors", node_name, tensors)
+            "input_tensors", node_name, tensors
+        )
 
         if not ExportManager._interpret_graph:
             return self._passthrough_dict_values(tensors)
@@ -261,8 +276,7 @@ class ExportManager:
         if node_name in self.nodes:
             traced_tensors_node = self.nodes[node_name]
         else:
-            traced_tensors_node = self._setup_new_node(
-                node_name, TracedTensorNode)
+            traced_tensors_node = self._setup_new_node(node_name, TracedTensorNode)
 
         _caller_identity = get_caller_stack_identity()
 
@@ -275,7 +289,8 @@ class ExportManager:
         if not traced_tensors_node.is_tracing:
             matching_origin = next(
                 (
-                    identity for identity in traced_tensors_node._caller_identities
+                    identity
+                    for identity in traced_tensors_node._caller_identities
                     if caller_identity_has_same_anchor(identity, _caller_identity)
                 ),
                 None,
@@ -285,14 +300,16 @@ class ExportManager:
                     f"Error: node '{node_name}' is being called from a different annotation origin "
                     f"than the first trace. Cannot reuse a node name from a different call site.\n"
                     f"New call site:\n{format_caller_identity(_caller_identity)}",
-                    error_type=Exception)
+                    error_type=Exception,
+                )
             if _caller_identity not in traced_tensors_node._caller_identities:
                 _get_logger().warning(
                     f"Warning: node '{node_name}' is being re-entered from a new caller context, "
                     f"but the normalized annotation origin matches a previously seen site. "
                     f"Allowing re-entry.\n"
                     f"Original origin:\n{format_caller_identity(matching_origin)}\n"
-                    f"New call site:\n{format_caller_identity(_caller_identity)}")
+                    f"New call site:\n{format_caller_identity(_caller_identity)}"
+                )
                 traced_tensors_node._caller_identities.add(_caller_identity)
             traced_tensors_node.reentry_validate_inputs(tensors)
             rebound_tensors = {
@@ -318,7 +335,8 @@ class ExportManager:
         traced_tensors = []
         for tensor_name, tensor in tensors.items():
             traced_tensor = traced_tensors_node.create_input(
-                tensor, tensor_name, semantics=metadata.get(tensor_name))
+                tensor, tensor_name, semantics=metadata.get(tensor_name)
+            )
             traced_tensors.append(traced_tensor)
 
         # if node is tracing we return the traced tensors
@@ -326,11 +344,11 @@ class ExportManager:
 
     def output_tensors(self, node_name: str, tensors, static_outputs=None, **kwargs):
         tensors, metadata = self._normalize_named_tensor_payload(
-            "output_tensors", node_name, tensors)
+            "output_tensors", node_name, tensors
+        )
 
         if not ExportManager._interpret_graph:
             return self._passthrough_dict_values(tensors)
- 
 
         if node_name in self.nodes:
             traced_tensors_node = self.nodes[node_name]
@@ -338,46 +356,58 @@ class ExportManager:
             _get_logger().fatal(
                 f"output_tensors() called for node '{node_name}' but input_tensors() was never called for it. "
                 "Call annotate.input_tensors() before annotate.output_tensors() for the same node name.",
-                error_type=Exception)
+                error_type=Exception,
+            )
 
         # force the warp segment to close if any.
         if self.patcher.warp is not None:
             self.patcher.warp.close_warp_segment()
         # process outputs
-        flattened_tensors = flatten_io_structure(tensors, '')
+        flattened_tensors = flatten_io_structure(tensors, "")
 
         static_outputs_metadata = {}
         normalized_static_outputs = None
         if static_outputs is not None:
-            normalized_static_outputs, static_outputs_metadata = self._normalize_named_tensor_payload(
-                "output_tensors static_outputs", node_name, static_outputs)
+            normalized_static_outputs, static_outputs_metadata = (
+                self._normalize_named_tensor_payload(
+                    "output_tensors static_outputs", node_name, static_outputs
+                )
+            )
 
         if not traced_tensors_node.is_tracing:
             flattened_static = {}
             if normalized_static_outputs is not None:
-                flattened_static = flatten_io_structure(normalized_static_outputs, '')
+                flattened_static = flatten_io_structure(normalized_static_outputs, "")
             traced_tensors_node.reentry_validate_outputs(
-                flattened_tensors, flattened_static)
+                flattened_tensors, flattened_static
+            )
             return self._passthrough_dict_values(tensors)
 
         # Warn if pre-compiled ScriptFunctions are visible in the caller's scope
         warn_if_script_functions_in_scope()
 
         self._validate_initial_traced_payload(
-            "output_tensors", node_name, traced_tensors_node, flattened_tensors)
+            "output_tensors", node_name, traced_tensors_node, flattened_tensors
+        )
 
         # process static outputs (constant tensors that should be returned but aren't derived from inputs)
         flattened_static_outputs = None
         if normalized_static_outputs is not None:
-            flattened_static_outputs = flatten_io_structure(normalized_static_outputs, '')
+            flattened_static_outputs = flatten_io_structure(
+                normalized_static_outputs, ""
+            )
 
-        export_with = None if self.is_dry_run(node_name) else kwargs.get("export_with", None)
-        traced_tensors_node.compile_trace(flattened_tensors,
-                                          backend=export_with,
-                                          backend_params=kwargs.get("backend_params", {}),
-                                          static_tensors=flattened_static_outputs,
-                                          semantics_map=metadata,
-                                          static_semantics_map=static_outputs_metadata)
+        export_with = (
+            None if self.is_dry_run(node_name) else kwargs.get("export_with", None)
+        )
+        traced_tensors_node.compile_trace(
+            flattened_tensors,
+            backend=export_with,
+            backend_params=kwargs.get("backend_params", {}),
+            static_tensors=flattened_static_outputs,
+            semantics_map=metadata,
+            static_semantics_map=static_outputs_metadata,
+        )
         self._assign_completion_index(traced_tensors_node)
 
         return self._passthrough_dict_values(tensors)
@@ -425,7 +455,8 @@ class ExportManager:
         if node_name not in self.nodes:
             msg = (
                 f"register_buffer() called for node '{node_name}' but node not found. "
-                "Call annotate.input_tensors() first to create the node.")
+                "Call annotate.input_tensors() first to create the node."
+            )
             _get_logger().fatal(msg, error_type=Exception)
 
         # Normalize input to a dict with auto-generated names if needed
@@ -436,7 +467,8 @@ class ExportManager:
         if not isinstance(traced_node, TracedTensorNode):
             msg = (
                 f"register_buffer() is not supported for node '{node_name}' — "
-                "it was created with the legacy method annotation.")
+                "it was created with the legacy method annotation."
+            )
             _get_logger().fatal(msg, error_type=Exception)
 
         if not traced_node.is_tracing:
@@ -479,12 +511,16 @@ class ExportManager:
                     f"State '{state_name}' has unsupported top-level type {type(value).__name__}. "
                     "Please either explicitly list out each state as its own named tensor "
                     "or use input_tensors() and rely on LEAPP feedback detection.",
-                    error_type=TypeError)
+                    error_type=TypeError,
+                )
 
     @staticmethod
-    def _validate_initial_traced_payload(api_name: str, node_name: str,
-                                         traced_tensors_node: TracedTensorNode,
-                                         flattened_tensors: dict) -> None:
+    def _validate_initial_traced_payload(
+        api_name: str,
+        node_name: str,
+        traced_tensors_node: TracedTensorNode,
+        flattened_tensors: dict,
+    ) -> None:
         """Validate first-trace payloads for APIs that require active TracedTensors.
 
         This helper is only for the initial tracing path, before a node has been
@@ -497,32 +533,35 @@ class ExportManager:
         ``output_tensors()`` and ``update_state()`` and avoids later internal FX
         failures when raw tensors slip into graph outputs/state updates.
         """
-        instances = set(is_traced_type(tensor)
-                        for tensor in flattened_tensors.values())
+        instances = set(is_traced_type(tensor) for tensor in flattened_tensors.values())
 
         if not all(instances):
-            types = set(type(tensor).__name__
-                        for tensor in flattened_tensors.values())
+            types = set(type(tensor).__name__ for tensor in flattened_tensors.values())
             msg = (
                 f"{api_name}() for node '{node_name}' received non-traced tensors: {types}\n"
                 "Possible causes:\n"
                 "1. You did not use the traced tensors returned by leapp functions — "
                 "make sure to replace your original tensors with the return value of annotation functions.\n"
                 "2. An operation in your computation broke tracing (e.g. converting to numpy and back).\n"
-                f"3. You passed raw tensors instead of the traced ones to {api_name}().")
+                f"3. You passed raw tensors instead of the traced ones to {api_name}()."
+            )
             _get_logger().fatal(msg, error_type=Exception)
 
-        context_names = {
-            tensor.context for tensor in flattened_tensors.values()
-        }
-        if not (len(context_names) == 1 and next(iter(context_names)) == traced_tensors_node.name):
+        context_names = {tensor.context for tensor in flattened_tensors.values()}
+        if not (
+            len(context_names) == 1
+            and next(iter(context_names)) == traced_tensors_node.name
+        ):
             msg = (
                 f"{api_name}() for node '{node_name}' received tensors that belong to a different node: "
                 f"{context_names}.\n Make sure you are passing tensors derived from "
-                f"annotate.input_tensors('{node_name}', ...) to annotate.{api_name}('{node_name}', ...).")
+                f"annotate.input_tensors('{node_name}', ...) to annotate.{api_name}('{node_name}', ...)."
+            )
             _get_logger().fatal(msg, error_type=Exception)
 
-    def state_tensors(self, node_name: str, tensors: dict[str, torch.Tensor]) -> TracedTensor | tuple[TracedTensor, ...]:
+    def state_tensors(
+        self, node_name: str, tensors: dict[str, torch.Tensor]
+    ) -> TracedTensor | tuple[TracedTensor, ...]:
         """Register state tensors (both inputs AND outputs) for a traced node.
 
         Call input_tensors() first to create the node. Use update_state() to set output values.
@@ -531,12 +570,11 @@ class ExportManager:
             self._validate_flat_state_payload("state_tensors", node_name, tensors)
             return self._passthrough_dict_values(tensors)
 
- 
-
         if node_name not in self.nodes:
             msg = (
                 f"state_tensors() called for node '{node_name}' but node not found. "
-                "Call annotate.input_tensors() first to create the node.")
+                "Call annotate.input_tensors() first to create the node."
+            )
             _get_logger().fatal(msg, error_type=Exception)
 
         traced_node = self.nodes[node_name]
@@ -544,7 +582,8 @@ class ExportManager:
         if not isinstance(traced_node, TracedTensorNode):
             msg = (
                 f"state_tensors() is not supported for node '{node_name}' — "
-                "it was created with the legacy method annotation.")
+                "it was created with the legacy method annotation."
+            )
             _get_logger().fatal(msg, error_type=Exception)
 
         self._validate_flat_state_payload("state_tensors", node_name, tensors)
@@ -558,7 +597,9 @@ class ExportManager:
         values = list(state_dict.values())
         return values[0] if len(values) == 1 else tuple(values)
 
-    def update_state(self, node_name: str, tensors: dict[str, TracedTensor]) -> TracedTensor | tuple[TracedTensor, ...]:
+    def update_state(
+        self, node_name: str, tensors: dict[str, TracedTensor]
+    ) -> TracedTensor | tuple[TracedTensor, ...]:
         """Set output values for state tensors and return passthrough values."""
         if not ExportManager._interpret_graph:
             self._validate_flat_state_payload("update_state", node_name, tensors)
@@ -567,7 +608,8 @@ class ExportManager:
         if node_name not in self.nodes:
             msg = (
                 f"update_state() called for node '{node_name}' but node not found. "
-                "Call annotate.input_tensors() first to create the node.")
+                "Call annotate.input_tensors() first to create the node."
+            )
             _get_logger().fatal(msg, error_type=Exception)
 
         traced_node = self.nodes[node_name]
@@ -575,7 +617,8 @@ class ExportManager:
         if not isinstance(traced_node, TracedTensorNode):
             msg = (
                 f"update_state() is not supported for node '{node_name}' — "
-                "it was created with the legacy method annotation.")
+                "it was created with the legacy method annotation."
+            )
             _get_logger().fatal(msg, error_type=Exception)
 
         self._validate_flat_state_payload("update_state", node_name, tensors)
@@ -585,12 +628,17 @@ class ExportManager:
             return self._passthrough_dict_values(tensors)
 
         self._validate_initial_traced_payload(
-            "update_state", node_name, traced_node, tensors)
+            "update_state", node_name, traced_node, tensors
+        )
         traced_node.update_state_tensors(tensors)
         return self._passthrough_dict_values(tensors)
 
-    def module(self, node_name: str, model: torch.nn.Module,
-               buffer_names: list[str] | None = None) -> None:
+    def module(
+        self,
+        node_name: str,
+        model: torch.nn.Module,
+        buffer_names: list[str] | None = None,
+    ) -> None:
         """Register a module for automatic stateful buffer tracking.
 
         Replaces registered buffers with TracedTensor inputs so the forward
@@ -635,11 +683,11 @@ class ExportManager:
             _get_logger().fatal(msg, error_type=Exception)
 
         from leapp.buffer_tracker import BufferTracker
+
         tracker = BufferTracker(model, node_name, self, buffer_names=buffer_names)
         tracker.inject()
 
         self.nodes[node_name]._buffer_tracker = tracker
-
 
     def method(self, **params):
         def decorator(func):
@@ -647,28 +695,28 @@ class ExportManager:
             name = params.get("node_name", func.__name__)
             export_with = params.get("export_with", None)
             backend_params = params.get("backend_params", {})
-            
+
             @functools.wraps(func)
             def wrapper(*args, **kwargs):
                 if not ExportManager._interpret_graph:
                     return func(*args, **kwargs)
-                
+
                 # ~~~~~~~~~~~~~~~~~~~ ensure node exists ~~~~~~~~~~~~~~~~~~~~~~~~ #
                 if name not in self.nodes:
                     self._setup_new_node(name, TracedTensorNode)
-                
+
                 # ~~~~~~~~~~~~~~~~~~~ set up inputs ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
 
                 sig = inspect.signature(func)
                 bound_args = sig.bind(*args, **kwargs)
                 bound_args.apply_defaults()
-                
+
                 params_list = list(sig.parameters.items())
                 new_args = []
                 new_kwargs = {}
                 for i, arg in enumerate(args):
                     param_name, param = params_list[i]
-                    if i == 0 and param_name in ('self', 'cls'):
+                    if i == 0 and param_name in ("self", "cls"):
                         new_args.append(arg)
                         continue
                     if param.kind == inspect.Parameter.VAR_POSITIONAL:
@@ -676,24 +724,23 @@ class ExportManager:
                             new_args.append(self.input_tensors(name, {f"arg_{j}": a}))
                         break
                     new_args.append(self.input_tensors(name, {param_name: arg}))
-                
+
                 for key, value in kwargs.items():
                     new_kwargs[key] = self.input_tensors(name, {key: value})
-                
+
                 # ~~~~~~~~~~~~~~~~~~~ register default kwargs as buffers ~~~~~~~~ #
                 for param_name, param_value in bound_args.arguments.items():
-                    if param_name in ('self', 'cls'):
+                    if param_name in ("self", "cls"):
                         continue
                     param = sig.parameters[param_name]
-                    was_provided = (
-                        param_name in kwargs or
-                        (param.kind != inspect.Parameter.VAR_POSITIONAL and
-                        list(sig.parameters.keys()).index(param_name) < len(args))
+                    was_provided = param_name in kwargs or (
+                        param.kind != inspect.Parameter.VAR_POSITIONAL
+                        and list(sig.parameters.keys()).index(param_name) < len(args)
                     )
                     if not was_provided and is_tracable_tensor_type(param_value):
                         traced = self.register_buffer(name, {param_name: param_value})
                         new_kwargs[param_name] = traced
-                
+
                 # ~~~~~~~~~~~~~~~~~~~ run the function ~~~~~~~~~~~~~~~~~~~~~~~~~ #
                 result = func(*new_args, **new_kwargs)
                 # ~~~~~~~~~~~~~~~~~~~ set up outputs ~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
@@ -702,14 +749,18 @@ class ExportManager:
                 if result is None:
                     _get_logger().fatal(
                         f"Error: annotated method {name} returned None, but LEAPP expects a return value",
-                        error_type=Exception)
+                        error_type=Exception,
+                    )
                 elif isinstance(result, tuple):
                     if len(return_names) != len(result):
                         _get_logger().fatal(
                             f"Error: annotated method {name} returned {len(result)} values, "
                             f"but LEAPP detected the following return names {return_names} from source",
-                            error_type=Exception)
-                    output_dict = {return_names[i]: result[i] for i in range(len(result))}
+                            error_type=Exception,
+                        )
+                    output_dict = {
+                        return_names[i]: result[i] for i in range(len(result))
+                    }
                     self.output_tensors(
                         name,
                         output_dict,
@@ -725,10 +776,18 @@ class ExportManager:
                     )
                 # ~~~~~~~~~~~~~~~~~~~ set up outputs ~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
                 return result
+
             return wrapper
+
         return decorator
 
-    def warp_op(self, node_name: str, inputs: list[str] = None, outputs: list[str] = None, **params):
+    def warp_op(
+        self,
+        node_name: str,
+        inputs: list[str] = None,
+        outputs: list[str] = None,
+        **params,
+    ):
         if not ExportManager._interpret_graph:
             return nullcontext()
         warp_backend = self.patcher.warp
@@ -761,6 +820,7 @@ class ExportManager:
         and is kept for use cases where the newer TracedTensorNode-based method()
         does not cover all patterns. Not advertised in the public API.
         """
+
         def decorator(func):
 
             if "node_name" in params:
@@ -779,7 +839,8 @@ class ExportManager:
                 else:
                     new_node = True
                     node_context = self._setup_new_node(
-                        name, FunctionDecoratorNode, **params)
+                        name, FunctionDecoratorNode, **params
+                    )
 
                 caller_namespace = frame_to_namespace(sys._getframe(1))
 
@@ -790,21 +851,22 @@ class ExportManager:
                     bound_args.apply_defaults()
 
                     node_context.inspect_function_inputs(func, args, kwargs)
-                    input_namespace = {
-                        **caller_namespace, **bound_args.arguments}
-                    if hasattr(func, '__self__'):
-                        input_namespace['self'] = func.__self__
+                    input_namespace = {**caller_namespace, **bound_args.arguments}
+                    if hasattr(func, "__self__"):
+                        input_namespace["self"] = func.__self__
                     node_context.capture_inputs_from_namespace(input_namespace)
                     node_context.compile_trace(func)
                     node_context.snapshot_buffer_values(input_namespace)
 
                     trace_fn = node_context.create_trace_function(
-                        os.path.basename(__file__), entry_hook=None)
+                        os.path.basename(__file__), entry_hook=None
+                    )
                 else:
                     node_context.validate_function_boundaries(func)
                     node_context.validate_function_inputs(func, args, kwargs)
                     trace_fn = node_context.create_trace_function(
-                        os.path.basename(__file__), entry_hook=None)
+                        os.path.basename(__file__), entry_hook=None
+                    )
 
                 sys._getframe(1).f_trace = trace_fn
 
@@ -819,21 +881,26 @@ class ExportManager:
 
                 if new_node:
                     _get_logger().info(
-                        f"****Tracing stopped for {node_context.name}****\n\n")
+                        f"****Tracing stopped for {node_context.name}****\n\n"
+                    )
                     node_context.inspect_function_outputs(func, result)
                     if node_context.output_namespace is not None:
                         node_context.capture_outputs_from_namespace(
-                            node_context.output_namespace)
+                            node_context.output_namespace
+                        )
                     self._assign_completion_index(node_context)
                 else:
                     node_context.validate_function_outputs(func, result)
                     if node_context.output_namespace is not None:
                         node_context.validate_outputs_from_namespace(
-                            node_context.output_namespace)
+                            node_context.output_namespace
+                        )
                     node_context.increment_cache_idx()
 
                 return result
+
             return wrapper
+
         return decorator
 
     #########################################################
@@ -851,20 +918,22 @@ class ExportManager:
         return mirror_all_traced_state(source, target)
 
     def get_io_descriptions(self):
-        _get_logger().section(
-            f"Compiling graph parameters for {len(self.nodes)} nodes")
+        _get_logger().section(f"Compiling graph parameters for {len(self.nodes)} nodes")
         models = {"models": {}}
-        nodes_to_describe = sorted(
-            self.nodes.values(), key=lambda x: x.node_index)
+        nodes_to_describe = sorted(self.nodes.values(), key=lambda x: x.node_index)
         for node in nodes_to_describe:
             _get_logger().info(f"Compiling parameters for {node.name}")
             description = node.get_description()
-            if 'parameters' in description and 'model_path' in description['parameters']:
+            if (
+                "parameters" in description
+                and "model_path" in description["parameters"]
+            ):
                 # Convert model path to be relative to YAML file location
-                model_path = description['parameters']['model_path']
+                model_path = description["parameters"]["model_path"]
                 if model_path:
-                    description['parameters']['model_path'] = get_relative_path(
-                        model_path, self.SAVE_PATH)
+                    description["parameters"]["model_path"] = get_relative_path(
+                        model_path, self.SAVE_PATH
+                    )
             models["models"][node.name] = description
         return models
 
@@ -879,18 +948,19 @@ class ExportManager:
         if self.SAVE_PATH is None:
             _get_logger().fatal(
                 "Error: No save path provided, please provide a save path to export the graph",
-                error_type=Exception)
-        _get_logger().section(
-            f"Saving {len(self.nodes)} models to {self.SAVE_PATH}")
+                error_type=Exception,
+            )
+        _get_logger().section(f"Saving {len(self.nodes)} models to {self.SAVE_PATH}")
         if not os.path.exists(self.SAVE_PATH):
             os.makedirs(self.SAVE_PATH)
         for node_context in self.nodes.values():
-            _get_logger().info(
-                f"Saving {node_context.name}")
+            _get_logger().info(f"Saving {node_context.name}")
             node_context.save_model(self.SAVE_PATH)
             _get_logger().info("Success\n")
 
-    def validate_all_models(self, rtol: float = 1e-3, atol: float = 1e-5, strict: bool = True):
+    def validate_all_models(
+        self, rtol: float = 1e-3, atol: float = 1e-5, strict: bool = True
+    ):
         """Validate all exported models by comparing computed outputs against captured outputs.
 
         This method runs each compiled model with its captured input values and verifies
@@ -928,19 +998,18 @@ class ExportManager:
         _get_logger().section(f"Validating {len(self.nodes)} models")
 
         for node_name, node in self.nodes.items():
-
             _get_logger().info(f"Validating {node_name}...")
 
             try:
-                passed, error_hint = node.validate_compiled_model(
-                    rtol=rtol, atol=atol)
+                passed, error_hint = node.validate_compiled_model(rtol=rtol, atol=atol)
                 results[node_name] = passed
                 if error_hint is not None:
                     error_hints.append(f"{node_name}: {error_hint}")
 
             except Exception as e:
                 _get_logger().error(
-                    f"{node_name}: Validation failed with exception: {e}")
+                    f"{node_name}: Validation failed with exception: {e}"
+                )
                 results[node_name] = e
 
             finally:
@@ -964,11 +1033,8 @@ class ExportManager:
             _get_logger().error(f"  Errors: {errors}/{len(results)}")
 
         if strict and (failed > 0 or errors > 0):
-            failed_nodes = [name for name,
-                            v in results.items() if v is not True]
-            message = (
-                f"Model validation failed for {len(failed_nodes)} node(s): {failed_nodes}"
-            )
+            failed_nodes = [name for name, v in results.items() if v is not True]
+            message = f"Model validation failed for {len(failed_nodes)} node(s): {failed_nodes}"
             if error_hints:
                 message += "\n\n" + "\n".join(error_hints)
             _get_logger().fatal(message, error_type=Exception)

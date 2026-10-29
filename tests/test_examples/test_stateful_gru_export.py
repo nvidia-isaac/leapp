@@ -61,7 +61,9 @@ class TestStatefulGRUExport(BaseExampleTest):
         obs_traced = annotate.input_tensors("policy", {"obs": obs})
         annotate.module("policy", model)
         action = model(obs_traced)
-        annotate.output_tensors("policy", {"action": action}, export_with="onnx-torchscript")
+        annotate.output_tensors(
+            "policy", {"action": action}, export_with="onnx-torchscript"
+        )
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
@@ -99,21 +101,24 @@ class TestStatefulGRUExport(BaseExampleTest):
         h_initial = manager.value_dict["policy"]["h_state_in"].clone()
         self.assertTrue(
             torch.allclose(h_initial, torch.zeros_like(h_initial)),
-            "Expected h_state to start as zeros")
+            "Expected h_state to start as zeros",
+        )
 
         # First call — h_state should change from zeros
         manager.run_policy(inputs)
         h_after_first = manager.value_dict["policy"]["h_state_in"].clone()
         self.assertFalse(
             torch.allclose(h_after_first, h_initial),
-            "h_state was not updated after the first call")
+            "h_state was not updated after the first call",
+        )
 
         # Second call — h_state should change again (different from after first call)
         manager.run_policy(inputs)
         h_after_second = manager.value_dict["policy"]["h_state_in"].clone()
         self.assertFalse(
             torch.allclose(h_after_second, h_after_first),
-            "h_state was not updated between the first and second calls")
+            "h_state was not updated between the first and second calls",
+        )
 
 
 if __name__ == "__main__":

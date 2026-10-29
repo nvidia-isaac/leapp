@@ -74,22 +74,22 @@ class ConnectivityTestBase(LEAPPFunctionalTestBase):
 
 
 class TestConnectionCase(ConnectivityTestBase):
-
     def test_multiple_runs_of_same_graph(self):
         """tests the situation where the same graph is run multiple times"""
+
         @annotate.method(export_with="jit")
         def funcA(inputA: torch.Tensor):
             return inputA
 
         @annotate.method(export_with="jit")
         def funcC(inputB: torch.Tensor):
-            return inputB+5.0
+            return inputB + 5.0
 
         leapp.start(name=self.TEST_GRAPH_NAME)
         for _ in range(10):
             outputA = funcA(torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32))
             outputA = annotate.input_tensors("blockA", {"outputA": outputA})
-            outputB = outputA*2.
+            outputB = outputA * 2.0
             annotate.output_tensors("blockA", {"outputB": outputB}, export_with="jit")
             funcC(outputB)
         leapp.stop()
@@ -98,6 +98,7 @@ class TestConnectionCase(ConnectivityTestBase):
 
     def test_feedback_connections(self):
         """tests the situation where the graph has feedback connections"""
+
         @annotate.method()
         def funcA(inputA: torch.Tensor, loop_back: torch.Tensor):
             return inputA + loop_back
@@ -127,7 +128,8 @@ class TestConnectionCase(ConnectivityTestBase):
         leapp.stop()
         leapp.compile_graph(visualize=False)
         self.verify_connectivity(
-            nodes=4, internal_connections=3, feedback_connections=1)
+            nodes=4, internal_connections=3, feedback_connections=1
+        )
 
     def test_interleaved_traced_nodes_keep_forward_execution_order(self):
         """Interleaved traced nodes should classify completed dependencies as forward flow."""
@@ -181,6 +183,7 @@ class TestConnectionCase(ConnectivityTestBase):
 
     def test_mirror_leapp_tags_with_inplace_assignment(self):
         """mirror_leapp_tags with a single in-place buffer between nodes."""
+
         @annotate.method(export_with="jit")
         def funcA(inputA: torch.Tensor):
             return inputA * 2.0
@@ -206,6 +209,7 @@ class TestConnectionCase(ConnectivityTestBase):
 
     def test_mirror_leapp_tags_multiple_buffers(self):
         """Test mirror_leapp_tags with multiple buffers between nodes"""
+
         @annotate.method(export_with="jit")
         def funcA(inputA: torch.Tensor):
             return inputA, inputA + 1.0
@@ -221,19 +225,19 @@ class TestConnectionCase(ConnectivityTestBase):
 
         leapp.start(name=self.TEST_GRAPH_NAME)
         out_A1, out_A2 = funcA(torch.tensor([1.0, 2.0, 3.0]))
-        
+
         # Create two separate buffers BETWEEN nodes
         buffer1 = torch.zeros_like(out_A1)
         buffer2 = torch.zeros_like(out_A2)
-        
+
         # In-place copy
         buffer1[:] = out_A1
         buffer2[:] = out_A2
-        
+
         # Transfer traced state for both
         annotate.mirror_leapp_tags(out_A1, buffer1)
         annotate.mirror_leapp_tags(out_A2, buffer2)
-        
+
         out_B1, out_B2 = funcB(buffer1, buffer2)
         funcC(out_B1, out_B2)
         leapp.stop()
@@ -244,6 +248,7 @@ class TestConnectionCase(ConnectivityTestBase):
 
     def test_mirror_leapp_tags_preserves_output_port_through_chain(self):
         """Test that mirror_leapp_tags preserves output ports through a long chain of buffer operations"""
+
         @annotate.method(export_with="jit")
         def source_node(inputA: torch.Tensor):
             return inputA * 2.0
@@ -262,19 +267,19 @@ class TestConnectionCase(ConnectivityTestBase):
 
         leapp.start(name=self.TEST_GRAPH_NAME)
         out1 = source_node(torch.tensor([1.0, 2.0, 3.0]))
-        
+
         # Buffer between nodes 1 and 2
         buffer1 = torch.empty_like(out1)
         buffer1[:] = out1
         annotate.mirror_leapp_tags(out1, buffer1)
-        
+
         out2 = process_node1(buffer1)
-        
+
         # Buffer between nodes 2 and 3
         buffer2 = torch.empty_like(out2)
         buffer2[:] = out2
         annotate.mirror_leapp_tags(out2, buffer2)
-        
+
         out3 = process_node2(buffer2)
         sink_node(out3)
         leapp.stop()
@@ -297,12 +302,10 @@ class TestConnectionCase(ConnectivityTestBase):
 
         leapp.start(name=self.TEST_GRAPH_NAME)
         first = annotate.input_tensors("node_a", {"obs": shared})
-        annotate.output_tensors(
-            "node_a", {"out_a": first * 2.0}, export_with="jit")
+        annotate.output_tensors("node_a", {"out_a": first * 2.0}, export_with="jit")
         with self.assertNoLogs("leapp", level="ERROR"):
             second = annotate.input_tensors("node_b", {"obs": shared})
-        annotate.output_tensors(
-            "node_b", {"out_b": second * 3.0}, export_with="jit")
+        annotate.output_tensors("node_b", {"out_b": second * 3.0}, export_with="jit")
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
@@ -313,10 +316,10 @@ class TestConnectionCase(ConnectivityTestBase):
         source = torch.tensor([1.0, 2.0, 3.0])
         target = torch.zeros(3)
         target[:] = source
-        
+
         # Should not raise an error when called outside tracing
         annotate.mirror_leapp_tags(source, target)
-        
+
         # Verify data is still correct
         self.assertTrue(torch.allclose(source, target))
 
@@ -383,9 +386,11 @@ class TestEquivalentCopyKeepsOutputPort(LEAPPFunctionalTestBase):
     def test_numpy_traced_buffer_assignment_adopts_new_source(self):
         """A traced numpy buffer takes over the identity it was overwritten with."""
         out_a = self._finished_output(
-            np.array([1.0, 2.0, 3.0], dtype=np.float32), "node_a", "out_a")
+            np.array([1.0, 2.0, 3.0], dtype=np.float32), "node_a", "out_a"
+        )
         out_b = self._finished_output(
-            np.array([4.0, 5.0, 6.0], dtype=np.float32), "node_b", "out_b")
+            np.array([4.0, 5.0, 6.0], dtype=np.float32), "node_b", "out_b"
+        )
 
         buffer = np.copy(out_a)
         self.assertEqual("out_a", buffer.output_port)
@@ -411,11 +416,13 @@ class TestEquivalentCopyKeepsOutputPort(LEAPPFunctionalTestBase):
     def test_cross_backend_copy_keeps_output_port(self):
         """A finished output handed to the other backend without changing values."""
         np_output = self._finished_output(
-            np.array([1.0, 2.0, 3.0], dtype=np.float32), "np_node", "y")
+            np.array([1.0, 2.0, 3.0], dtype=np.float32), "np_node", "y"
+        )
         self.assertEqual("y", torch.as_tensor(np.asarray(np_output)).output_port)
 
         torch_output = self._finished_output(
-            torch.tensor([1.0, 2.0, 3.0]), "torch_node", "z")
+            torch.tensor([1.0, 2.0, 3.0]), "torch_node", "z"
+        )
         self.assertEqual("z", torch_output.numpy().output_port)
 
     def test_transformed_copy_reports_no_output_port(self):
@@ -441,6 +448,7 @@ class TestAutomaticCopyConnectivity(ConnectivityTestBase):
 
     def test_buffer_chain_connects_without_mirroring(self):
         """Preallocated buffers between four nodes carry the edges themselves."""
+
         @annotate.method(export_with="jit")
         def source_node(value: torch.Tensor):
             return value * 2.0
@@ -475,6 +483,7 @@ class TestAutomaticCopyConnectivity(ConnectivityTestBase):
 
     def test_clone_fans_out_to_multiple_consumers(self):
         """One output cloned separately for two consumers keeps both edges."""
+
         @annotate.method(export_with="jit")
         def source_node(value: torch.Tensor):
             return value * 2.0
@@ -493,11 +502,11 @@ class TestAutomaticCopyConnectivity(ConnectivityTestBase):
         consumer_b(out.detach())
         leapp.stop()
         leapp.compile_graph(visualize=False)
-        self.verify_connectivity(
-            nodes=3, internal_connections=2, outputs=2)
+        self.verify_connectivity(nodes=3, internal_connections=2, outputs=2)
 
     def test_clone_carries_a_feedback_edge(self):
         """A cloned output closes a feedback loop across iterations."""
+
         @annotate.method()
         def funcA(inputA: torch.Tensor, loop_back: torch.Tensor):
             return inputA + loop_back
@@ -516,10 +525,12 @@ class TestAutomaticCopyConnectivity(ConnectivityTestBase):
         leapp.stop()
         leapp.compile_graph(visualize=False)
         self.verify_connectivity(
-            nodes=2, internal_connections=1, feedback_connections=1, outputs=0)
+            nodes=2, internal_connections=1, feedback_connections=1, outputs=0
+        )
 
     def test_repeated_reentry_through_buffers(self):
         """Re-tracing the same buffered graph does not accumulate edges."""
+
         @annotate.method(export_with="jit")
         def source_node(value: torch.Tensor):
             return value * 2.0
@@ -540,6 +551,7 @@ class TestAutomaticCopyConnectivity(ConnectivityTestBase):
 
     def test_transformed_copy_does_not_create_a_connection(self):
         """A value-changing copy leaves the consumer dangling, not falsely wired."""
+
         @annotate.method(export_with="jit")
         def source_node(value: torch.Tensor):
             return value * 2.0
@@ -553,8 +565,7 @@ class TestAutomaticCopyConnectivity(ConnectivityTestBase):
         sink_node(out + 1.0)
         leapp.stop()
         leapp.compile_graph(visualize=False)
-        self.verify_connectivity(
-            nodes=2, internal_connections=0, inputs=2, outputs=2)
+        self.verify_connectivity(nodes=2, internal_connections=0, inputs=2, outputs=2)
 
 
 class TestNumpyConnectionCase(ConnectivityTestBase):
@@ -568,12 +579,14 @@ class TestNumpyConnectionCase(ConnectivityTestBase):
     def _run_scale_node(self, node_name, input_name, output_name, src, scale):
         traced = annotate.input_tensors(node_name, {input_name: src})
         return annotate.output_tensors(
-            node_name, {output_name: traced * scale}, export_with=None)
+            node_name, {output_name: traced * scale}, export_with=None
+        )
 
     def _run_add_node(self, node_name, input_name, output_name, src, value):
         traced = annotate.input_tensors(node_name, {input_name: src})
         return annotate.output_tensors(
-            node_name, {output_name: traced + value}, export_with=None)
+            node_name, {output_name: traced + value}, export_with=None
+        )
 
     def test_numpy_nodes_chain_via_output_ports(self):
         """Two numpy nodes connected by a published ndarray output -> input edge."""
@@ -600,8 +613,12 @@ class TestNumpyConnectionCase(ConnectivityTestBase):
         leapp.start(name=self.TEST_GRAPH_NAME)
         for _ in range(10):
             arr = self._run_scale_node(
-                "numpy_a", "arr", "out",
-                np.array([1.0, 2.0, 3.0], dtype=np.float32), 2.0)
+                "numpy_a",
+                "arr",
+                "out",
+                np.array([1.0, 2.0, 3.0], dtype=np.float32),
+                2.0,
+            )
             arr = self._run_add_node("numpy_b", "arr", "out", arr, 1.0)
             arr = self._run_scale_node("numpy_c", "arr", "out", arr, 3.0)
         leapp.stop()
@@ -615,16 +632,20 @@ class TestNumpyConnectionCase(ConnectivityTestBase):
         external = np.array([1.0, 2.0, 3.0], dtype=np.float32)
         for _ in range(2):
             in_a, loop = annotate.input_tensors(
-                "node_a", {"inputA": external, "loop_back": loop_back})
+                "node_a", {"inputA": external, "loop_back": loop_back}
+            )
             out_a = annotate.output_tensors(
-                "node_a", {"out_a": in_a + loop}, export_with=None)
+                "node_a", {"out_a": in_a + loop}, export_with=None
+            )
 
             out_b = self._run_scale_node("node_b", "in_b", "out_b", out_a, 1.0)
 
             in_c, loop = annotate.input_tensors(
-                "node_c", {"inputC": out_b, "loop_back": loop_back})
+                "node_c", {"inputC": out_b, "loop_back": loop_back}
+            )
             out_c = annotate.output_tensors(
-                "node_c", {"out_c": in_c + loop}, export_with=None)
+                "node_c", {"out_c": in_c + loop}, export_with=None
+            )
 
             self._run_scale_node("node_d", "in_d", "out_d", out_c, 1.0)
             loop_back = out_c
@@ -632,15 +653,16 @@ class TestNumpyConnectionCase(ConnectivityTestBase):
         leapp.stop()
         leapp.compile_graph(visualize=False)
         self.verify_connectivity(
-            nodes=4, internal_connections=3, feedback_connections=1)
+            nodes=4, internal_connections=3, feedback_connections=1
+        )
 
     def test_mirror_leapp_tags_with_inplace_assignment(self):
         """mirror_leapp_tags with a single in-place buffer between numpy nodes."""
         leapp.start(name=self.TEST_GRAPH_NAME)
 
         out_a = self._run_scale_node(
-            "node_a", "in_a", "out_a",
-            np.array([1.0, 2.0, 3.0], dtype=np.float32), 2.0)
+            "node_a", "in_a", "out_a", np.array([1.0, 2.0, 3.0], dtype=np.float32), 2.0
+        )
 
         buffer = np.zeros_like(np.asarray(out_a))
         buffer[:] = out_a
@@ -658,8 +680,8 @@ class TestNumpyConnectionCase(ConnectivityTestBase):
         leapp.start(name=self.TEST_GRAPH_NAME)
 
         out1 = self._run_scale_node(
-            "source", "in_a", "out_a",
-            np.array([1.0, 2.0, 3.0], dtype=np.float32), 2.0)
+            "source", "in_a", "out_a", np.array([1.0, 2.0, 3.0], dtype=np.float32), 2.0
+        )
 
         buffer1 = np.empty_like(np.asarray(out1))
         buffer1[:] = out1
@@ -676,6 +698,7 @@ class TestNumpyConnectionCase(ConnectivityTestBase):
         leapp.stop()
         leapp.compile_graph(visualize=False)
         self.verify_connectivity(nodes=4, internal_connections=3)
+
 
 class TestWarpConnectionCase(WarpTestCase, ConnectivityTestBase):
     """Warp equivalents of the torch connection/traced-state tests in TestConnectionCase."""
@@ -802,7 +825,10 @@ class TestWarpConnectionCase(WarpTestCase, ConnectivityTestBase):
         leapp.start(name=self.TEST_GRAPH_NAME)
         for _ in range(10):
             arr = self._run_copy_node(
-                "warp_a", "arr", "out", wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)
+                "warp_a",
+                "arr",
+                "out",
+                wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE),
             )
             arr = self._run_copy_node("warp_b", "arr", "out", arr)
             arr = self._run_copy_node("warp_c", "arr", "out", arr)
@@ -821,7 +847,9 @@ class TestWarpConnectionCase(WarpTestCase, ConnectivityTestBase):
             )
             with annotate.warp_op("node_a"):
                 out_a = self._warp_add_arrays(in_a, loop)
-            out_a = annotate.output_tensors("node_a", {"out_a": out_a}, export_with="onnx")
+            out_a = annotate.output_tensors(
+                "node_a", {"out_a": out_a}, export_with="onnx"
+            )
 
             out_b = self._run_copy_node("node_b", "in_b", "out_b", out_a)
 
@@ -830,7 +858,9 @@ class TestWarpConnectionCase(WarpTestCase, ConnectivityTestBase):
             )
             with annotate.warp_op("node_c"):
                 out_c = self._warp_add_arrays(in_c, loop)
-            out_c = annotate.output_tensors("node_c", {"out_c": out_c}, export_with="onnx")
+            out_c = annotate.output_tensors(
+                "node_c", {"out_c": out_c}, export_with="onnx"
+            )
 
             self._run_copy_node("node_d", "in_d", "out_d", out_c)
             loop_back = out_c
@@ -838,7 +868,8 @@ class TestWarpConnectionCase(WarpTestCase, ConnectivityTestBase):
         leapp.stop()
         leapp.compile_graph(visualize=False)
         self.verify_connectivity(
-            nodes=4, internal_connections=3, feedback_connections=1)
+            nodes=4, internal_connections=3, feedback_connections=1
+        )
 
     def test_interleaved_traced_nodes_keep_forward_execution_order(self):
         """Completed warp node output consumed by a later node is forward flow."""
@@ -924,15 +955,16 @@ class TestWarpConnectionCase(WarpTestCase, ConnectivityTestBase):
 
         leapp.stop()
         leapp.compile_graph(visualize=False)
-        self.verify_connectivity(
-            nodes=5, outputs=2, internal_connections=4)
+        self.verify_connectivity(nodes=5, outputs=2, internal_connections=4)
 
     def test_mirror_leapp_tags_with_inplace_assignment(self):
         """mirror_leapp_tags with a single in-place wp.copy between warp nodes."""
         leapp.start(name=self.TEST_GRAPH_NAME)
 
         out_a = self._run_copy_node(
-            "node_a", "in_a", "out_a",
+            "node_a",
+            "in_a",
+            "out_a",
             wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE),
         )
         buffer = wp.empty_like(out_a)
@@ -947,5 +979,5 @@ class TestWarpConnectionCase(WarpTestCase, ConnectivityTestBase):
         self.verify_connectivity(nodes=3, internal_connections=2)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -1,0 +1,18 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "leapp-runtime"
+version = "0.1.0"
+requires-python = ">=3.10"
+description = "Backend-independent LEAPP bundle loading and inspection"
+license = "Apache-2.0"
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[tool.maturin]
+python-source = "python"
+module-name = "lrt._native"

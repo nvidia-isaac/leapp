@@ -91,9 +91,7 @@ def bind_shared_view(carrier: Any, name: str, context, view: ProxyView) -> None:
     carrier._output_port = None
 
 
-def update_view_proxy(
-    carrier: Any, name: str, context, proxy: Optional[Proxy]
-) -> None:
+def update_view_proxy(carrier: Any, name: str, context, proxy: Optional[Proxy]) -> None:
     """Write a new proxy into ``carrier``'s existing view after an in-place change."""
     carrier._name = name
     carrier._context = context
@@ -134,9 +132,7 @@ def layout_key(value):
         try:
             pointer = native.data_ptr()
             element_size = native.element_size()
-            byte_strides = tuple(
-                stride * element_size for stride in native.stride()
-            )
+            byte_strides = tuple(stride * element_size for stride in native.stride())
             contiguous = native.is_contiguous()
         except RuntimeError:
             # Layouts without strides or an addressable buffer, e.g. sparse.
