@@ -69,6 +69,10 @@ pub struct SessionOptions {
     /// Select the engine once at initialization; new sessions inherit that selection.
     /// Defaults to native.
     pub engine: EngineKind,
+    /// Caller-owned streams by CUDA device ID, used by native GPU execution and
+    /// transfers. Missing devices use internal streams. Triton ignores this map.
+    /// Peers inherit the same handles; keep them alive through every peer's close.
+    pub cuda_streams: HashMap<u32, crate::CudaStream>,
 }
 
 /// Managed DLPack public outputs in bundle declaration order, independent of the session.

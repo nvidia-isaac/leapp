@@ -70,7 +70,11 @@ struct Loaded {
 }
 
 impl Model {
-    pub fn load(model: &NodeSpec, location: MemoryLocation) -> Result<Self> {
+    pub fn load(
+        model: &NodeSpec,
+        location: MemoryLocation,
+        stream: Option<crate::CudaStream>,
+    ) -> Result<Self> {
         let directory = std::env::var_os("LEAPP_NATIVE_BACKENDS")
             .map(PathBuf::from)
             .unwrap_or_else(|| "/opt/leapp/backends".into());
@@ -87,12 +91,16 @@ impl Model {
             .with_independent_thread_pool()
             .map_err(ort::Error::<()>::from)?;
         if let MemoryLocation::Cuda { device_id } = location {
+            let mut provider = ort::ep::CUDA::default()
+                .with_device_id(i32::try_from(device_id)?)
+                .with_tf32(false);
+            if let Some(stream) = stream {
+                // SAFETY: initialization validated this stream. CudaStream's
+                // caller retains it through every peer sharing the ORT session.
+                provider = unsafe { provider.with_compute_stream(stream.as_raw().cast()) };
+            }
             builder = builder
-                .with_execution_providers([ort::ep::CUDA::default()
-                    .with_device_id(i32::try_from(device_id)?)
-                    .with_tf32(false)
-                    .build()
-                    .error_on_failure()])
+                .with_execution_providers([provider.build().error_on_failure()])
                 .map_err(ort::Error::<()>::from)?;
         }
         // Reuse the optional Warp custom-op adapter installed for ONNX Runtime.

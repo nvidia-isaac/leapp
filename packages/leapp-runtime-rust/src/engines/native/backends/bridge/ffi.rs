@@ -33,6 +33,7 @@ pub(super) struct Api {
     pub load_model: unsafe extern "C" fn(
         *const c_char,
         i32,
+        *mut c_void,
         *const Port,
         usize,
         *const Port,

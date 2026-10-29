@@ -70,6 +70,7 @@ fn dynamic_only_trait_defaults_and_peers_preserve_output_ownership() {
         vec![model],
         MemoryLocation::Cpu,
         Some(Arc::new(Mutex::new(()))),
+        Default::default(),
     )
     .unwrap();
     let peer = parent.peer().unwrap();
@@ -188,7 +189,13 @@ fn failed_preparation_drops_all_trait_objects_before_workspace_slots() {
             }) as Box<dyn BackendPlugin>
         })
         .collect();
-    let result = NativeEngine::with_models(plan.clone(), models, MemoryLocation::Cpu, None);
+    let result = NativeEngine::with_models(
+        plan.clone(),
+        models,
+        MemoryLocation::Cpu,
+        None,
+        Default::default(),
+    );
     let error = result.err().expect("second preparation must fail");
     assert_eq!(error.phase(), "prepare");
     assert!(error.to_string().contains("injected preparation failure"));

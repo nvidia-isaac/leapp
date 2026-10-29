@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Private synchronous copies using reusable per-device transfer streams.
+//! Synchronous copies using reusable per-device transfer streams.
 
 use crate::{
     dlpack::{BorrowedTensor, SharedTensor},
@@ -17,12 +17,21 @@ pub(super) struct Transfers {
 }
 
 impl Transfers {
-    pub fn new(location: MemoryLocation) -> Result<Self> {
-        let mut value = Self::default();
+    pub fn new(
+        location: MemoryLocation,
+        streams: &HashMap<u32, crate::CudaStream>,
+    ) -> Result<Self> {
+        let mut value = Self {
+            streams: streams
+                .iter()
+                .map(|(&device, &stream)| (device, HandoffStream::borrowed(device, stream)))
+                .collect(),
+        };
         if let MemoryLocation::Cuda { device_id } = location {
-            value
-                .streams
-                .insert(device_id, HandoffStream::new(device_id)?);
+            if let std::collections::hash_map::Entry::Vacant(entry) = value.streams.entry(device_id)
+            {
+                entry.insert(HandoffStream::new(device_id)?);
+            }
         }
         Ok(value)
     }

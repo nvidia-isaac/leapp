@@ -41,13 +41,19 @@ class DeviceScope {
 };
 
 struct Stream {
-  explicit Stream(int id) : device(id) {
+  explicit Stream(int id, cudaStream_t external = nullptr)
+      : device(id), value(external), owned(external == nullptr) {
     DeviceScope scope(device);
     scope.check();
-    check(cudaStreamCreateWithFlags(&value, cudaStreamNonBlocking));
+    if (owned) {
+      check(cudaStreamCreateWithFlags(&value, cudaStreamNonBlocking));
+    }
   }
 
   ~Stream() {
+    if (!owned) {
+      return;
+    }
     DeviceScope scope(device);
     cudaStreamSynchronize(value);
     cudaStreamDestroy(value);
@@ -55,6 +61,7 @@ struct Stream {
 
   int device;
   cudaStream_t value = nullptr;
+  bool owned;
 };
 
 // Declare after owners of borrowed buffers so exceptions drain work first.

@@ -3,7 +3,7 @@
 
 use super::*;
 
-fn bundle(backend: &str, name: &str, device: ExecutionDevice) -> Bundle {
+pub(super) fn bundle(backend: &str, name: &str, device: ExecutionDevice) -> Bundle {
     let (variable, directory, name) = if backend == "jit" {
         (
             "LEAPP_TORCHSCRIPT_FIXTURES",

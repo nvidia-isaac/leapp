@@ -55,6 +55,9 @@ All implementations must honor these guarantees:
   dtype, shape, and device. Inputs are read-only.
 - **Completion:** finish all work accessing borrowed storage before returning,
   including on errors or unwinding. Results must be ready for the engine to use.
+- **Streams:** use a supplied CUDA stream for primary GPU execution and inherit
+  it in peers. The caller owns it; plugins must not destroy it. Auxiliary work
+  must complete before borrowed storage is released, including on failures.
 - **Buffer lifetime:** prepared buffers remain at fixed addresses until the
   plugin instance is destroyed. Retained metadata must be owned or copied, and
   partially prepared instances must be safe to destroy. Preparation failure

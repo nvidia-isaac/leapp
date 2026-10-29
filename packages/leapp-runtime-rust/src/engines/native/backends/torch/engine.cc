@@ -83,6 +83,7 @@ struct Context {
 
   at::Device target;
 
+  cudaStream_t external_stream = nullptr;
   std::unique_ptr<cuda::Stream> stream;
   std::shared_ptr<Model> model;
   InputPlan plan;
@@ -115,13 +116,15 @@ struct Context {
     }
   };
 
-  Context(const std::string& path, int32_t id, std::span<const Port> in,
+  Context(const std::string& path, int32_t id, cudaStream_t external,
+          std::span<const Port> in,
           std::span<const Port> out)
       : target(device(id)),
+        external_stream(external),
         inputs(in.begin(), in.end()),
         outputs(out.begin(), out.end()) {
     if (id >= 0) {
-      stream = std::make_unique<cuda::Stream>(id);
+      stream = std::make_unique<cuda::Stream>(id, external_stream);
     }
     Execution execution(*this);
     model = load_model(path, target, in, out);
@@ -132,10 +135,11 @@ struct Context {
   }
 
   explicit Context(const Context& source)
-      : target(source.target), model(source.model), plan(source.plan),
+      : target(source.target), external_stream(source.external_stream),
+        model(source.model), plan(source.plan),
         inputs(source.inputs), outputs(source.outputs) {
     if (target.is_cuda()) {
-      stream = std::make_unique<cuda::Stream>(target.index());
+      stream = std::make_unique<cuda::Stream>(target.index(), external_stream);
     }
   }
 
@@ -331,10 +335,10 @@ std::vector<Port> ports(std::span<const adapter::Port> values) {
 // Load once. Peers share the model/weights and own their invocation resources.
 // Rust holds a graph-wide guard through execution and output isolation.
 struct Factory {
-  Factory(const std::string& path, int32_t device,
+  Factory(const std::string& path, int32_t device, cudaStream_t stream,
           std::span<const adapter::Port> inputs,
           std::span<const adapter::Port> outputs)
-      : context(std::make_unique<Context>(path, device, ports(inputs),
+      : context(std::make_unique<Context>(path, device, stream, ports(inputs),
                                           ports(outputs))) {}
 
   bool requires_dynamic() const { return false; }
@@ -367,12 +371,12 @@ char* invoke(F&& function) noexcept {
 }
 
 const adapter::Api api{
-    [](const char* path, int32_t device, const adapter::Port* inputs,
+    [](const char* path, int32_t device, void* stream, const adapter::Port* inputs,
        size_t input_count, const adapter::Port* outputs, size_t output_count,
        void** value) noexcept {
       return invoke([&] {
-        *value = new Factory(path, device, {inputs, input_count},
-                             {outputs, output_count});
+        *value = new Factory(path, device, static_cast<cudaStream_t>(stream),
+                             {inputs, input_count}, {outputs, output_count});
       });
     },
     [](void* value) noexcept { delete static_cast<Factory*>(value); },
