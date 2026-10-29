@@ -21,14 +21,11 @@ from leapp.utils.logging import _get_logger
 from .traced_data import TracedData
 from .torch.traced_tensor import TracedTensor
 from .numpy.traced_np_array import TracedNpArray
-from .proxy_view import (
-    ProxyView,
-    bind_new_view,
-    bind_shared_view,
+from .proxy import (
+    bind_proxy,
     layout_key,
-    may_adopt_view,
-    share_view,
-    update_view_proxy,
+    is_same_value,
+    update_proxy,
 )
 from .warp import TracedWpArray, WarpPatchBackend, wp
 
@@ -132,35 +129,11 @@ def as_traced(
     name: str,
     context,
     proxy=None,
-    *,
-    view: Optional[ProxyView] = None,
 ) -> TracedData:
     """Create a TracedData instance from a tensor or array.
 
-    Pass exactly one of ``proxy`` or ``view``:
-
-    - ``proxy``: bind a **new** ``ProxyView`` around that FX value (private cell).
-    - ``view``: attach that **existing** ``ProxyView`` (shared cell / zero-copy alias).
-
-    Args:
-        data: The tensor/array to wrap (torch.Tensor or np.ndarray)
-        name: Name for the traced data (used in export and graph)
-        context: The TraceContext that owns this data
-        proxy: FX proxy for a private root (mutually exclusive with ``view``)
-        view: Existing view to share (mutually exclusive with ``proxy``)
-
-    Returns:
-        A TracedData instance (TracedTensor or TracedNpArray)
-
-    Raises:
-        TypeError: If data is not a supported type
+    The proxy is an FX tensor handle; aliases may hold the same handle directly.
     """
-    if view is not None and proxy is not None:
-        _get_logger().fatal(
-            "as_traced accepts proxy= or view=, not both",
-            error_type=ValueError,
-        )
-
     # Rewrapping an existing traced value must not rebind the producer object.
     # Consumers receive a fresh traced carrier for their own node context so the
     # original value can still fan out to other nodes.
@@ -172,8 +145,8 @@ def as_traced(
     # were unwrapped above and must instead get a fresh non-owning traced alias.
     if wp is not None and TracedWpArray is not None and isinstance(data, wp.array):
         if was_traced:
-            return TracedWpArray(data, name, context, proxy, view=view)
-        return TracedWpArray.make_traced_in_place(data, name, context, proxy, view=view)
+            return TracedWpArray(data, name, context, proxy)
+        return TracedWpArray.make_traced_in_place(data, name, context, proxy)
 
     # Find the appropriate traced class
     traced_class = get_traced_class_for(data)
@@ -185,13 +158,7 @@ def as_traced(
             error_type=TypeError,
         )
 
-    # Constructors always bind a private root; overwrite with the shared view
-    # when the caller asked to alias an existing cell.
-    seed_proxy = proxy if view is None else view.proxy
-    result = traced_class(data, name, context, seed_proxy)
-    if view is not None:
-        bind_shared_view(result, name, context, view)
-    return result
+    return traced_class(data, name, context, proxy)
 
 
 def promote_in_place(data, name: str, context, proxy) -> TracedData:
@@ -206,13 +173,10 @@ def promote_in_place(data, name: str, context, proxy) -> TracedData:
     without reassigning. A raw ``np.ndarray`` cannot be class-swapped, so NumPy
     returns a zero-copy view and callers must use the return value.
 
-    A carrier that already holds tracing state keeps its own view and only has
-    the proxy inside it replaced. Rebinding the object is the point of this
-    function, so discarding its view would orphan every alias of the same buffer
-    while leaving the object itself looking correct.
+    Existing carriers are rebound at this declaration without recording a write.
     """
     if isinstance(data, TracedData):
-        update_view_proxy(data, name, context, proxy, rebind=True)
+        bind_proxy(data, name, context, proxy)
         return data
 
     if wp is not None and TracedWpArray is not None and isinstance(data, wp.array):
@@ -251,13 +215,10 @@ __all__ = [
     "TracedNpArray",
     "TracedWpArray",
     "WarpPatchBackend",
-    "ProxyView",
-    # View binding / alias classification
-    "bind_new_view",
-    "bind_shared_view",
-    "update_view_proxy",
-    "share_view",
-    "may_adopt_view",
+    # Proxy binding / alias classification
+    "bind_proxy",
+    "update_proxy",
+    "is_same_value",
     "layout_key",
     # Type registry
     "TRACED_TYPE_REGISTRY",

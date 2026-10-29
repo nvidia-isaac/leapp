@@ -7,12 +7,12 @@ from torch.fx.proxy import Proxy
 
 import warp as wp
 
-from ..proxy_view import (
-    bind_new_view,
-    bind_shared_view,
+from ..proxy import (
+    STORAGE_LAYOUT_META_KEY,
+    bind_proxy,
     layout_key,
-    may_adopt_view,
-    update_view_proxy,
+    is_same_value,
+    update_proxy,
     conversion_proxy,
 )
 from ..traced_data import TracedData
@@ -57,12 +57,7 @@ class TracedWpArray(wp.array, TracedData):
     ``arr.__class__ = TracedWpArray``.
     """
 
-    def __new__(cls, array, name, context, proxy=None, *, view=None):
-        if view is not None and proxy is not None:
-            _get_logger().fatal(
-                "TracedWpArray accepts proxy= or view=, not both",
-                error_type=ValueError,
-            )
+    def __new__(cls, array, name, context, proxy=None):
         obj = wp.array.__new__(cls)
         wp.array.__init__(
             obj,
@@ -74,34 +69,20 @@ class TracedWpArray(wp.array, TracedData):
         )
         # Keep the source allocation alive for non-owning consumer aliases.
         obj._ref = array
-        if view is not None:
-            bind_shared_view(obj, name, context, view)
-        else:
-            bind_new_view(obj, name, context, proxy)
+        bind_proxy(obj, name, context, proxy)
         return obj
 
-    def __init__(self, array: wp.array, name: str, context, proxy=None, *, view=None):
+    def __init__(self, array: wp.array, name: str, context, proxy=None):
         # ``__new__`` initializes Warp storage and tracing metadata.
         pass
 
     @classmethod
     def make_traced_in_place(
-        cls, array: wp.array, name: str, context, proxy=None, *, view=None
+        cls, array: wp.array, name: str, context, proxy=None
     ) -> "TracedWpArray":
-        """Turn an existing raw ``wp.array`` into a traced array in place.
-
-        Pass ``proxy`` for a private root, or ``view`` to share an existing cell.
-        """
-        if view is not None and proxy is not None:
-            _get_logger().fatal(
-                "make_traced_in_place accepts proxy= or view=, not both",
-                error_type=ValueError,
-            )
+        """Turn an existing raw ``wp.array`` into a traced array in place."""
         if type(array) is cls:
-            if view is not None:
-                bind_shared_view(array, name, context, view)
-            else:
-                bind_new_view(array, name, context, proxy)
+            bind_proxy(array, name, context, proxy)
             return array
         if type(array) is not wp.array:
             _get_logger().fatal(
@@ -110,24 +91,21 @@ class TracedWpArray(wp.array, TracedData):
                 error_type=TypeError,
             )
         array.__class__ = cls
-        if view is not None:
-            bind_shared_view(array, name, context, view)
-        else:
-            bind_new_view(array, name, context, proxy)
+        bind_proxy(array, name, context, proxy)
         return array
 
     @classmethod
     def clear_tracing_state(cls, array: "TracedWpArray") -> wp.array:
         """Undo :meth:`make_traced_in_place`, returning a raw ``wp.array``.
 
-        The view a carrier holds points at one graph, so a buffer that outlives
+        The proxy points at one graph, so a buffer that outlives
         the pass that promoted it has to shed that provenance before the next
         pass can describe it.
         """
         for attribute in (
             "_name",
             "_context",
-            "_proxy_view",
+            "_proxy",
             "_output_port",
             "_leapp_warp_segment",
         ):
@@ -136,15 +114,21 @@ class TracedWpArray(wp.array, TracedData):
         return array
 
     def rebind_tracing_proxy(self, name: str, context, proxy: Proxy) -> None:
-        """Rebind this traced array to the canonical FX proxy for its value.
-
-        This updates the shared view's proxy rather than binding a new view: the
-        array still describes the same buffer, so every Torch or NumPy alias
-        sharing its view has to follow the segment output too. Binding a new
-        view here would leave those aliases on the pre-segment proxy while eager
-        Warp had already overwritten the memory they read.
-        """
-        update_view_proxy(self, name, context, proxy)
+        """Publish a new allocation, or record a write to existing storage."""
+        previous = self.proxy
+        if previous is not None and previous.__dict__.pop(
+            "_leapp_pending_warp_output", False
+        ):
+            # Aliases hold this same FX Proxy directly. Resolve its producer
+            # once the runner exists; publication is not a tensor data write.
+            previous.node = proxy.node
+            previous.tracer = proxy.tracer
+            layout = previous.__dict__.pop(STORAGE_LAYOUT_META_KEY, None)
+            if layout is not None:
+                previous.node.meta.setdefault(STORAGE_LAYOUT_META_KEY, layout)
+            bind_proxy(self, name, context, previous)
+        else:
+            update_proxy(self, name, context, proxy)
 
     @classmethod
     def __warp_function__(
@@ -220,11 +204,9 @@ class TracedWpArray(wp.array, TracedData):
                 and layout_key(alias) == layout_key(src)
             ):
                 raw._tensor = src
-            if may_adopt_view(src, raw):
-                view, proxy = src.proxy_view, None
-            else:
-                view, proxy = None, conversion_proxy(src, raw)
-            return True, as_traced(raw, src.name, src.context_obj, proxy, view=view)
+            return True, as_traced(
+                raw, src.name, src.context_obj, conversion_proxy(src, raw)
+            )
         return True, raw
 
     @staticmethod
@@ -366,29 +348,21 @@ class TracedWpArray(wp.array, TracedData):
             if trace_source is not None and isinstance(obj, wp.array):
                 owner = getattr(obj, "context_obj", None)
                 published = getattr(obj, "output_port", None) is not None
-                if published or (
-                    owner is not None and owner is not trace_source.context_obj
-                ):
-                    traced_array = as_traced(
-                        obj,
-                        trace_source.name,
-                        trace_source.context_obj,
-                        trace_source.proxy,
-                    )
-                    traced_array.proxy_view.pending = True
-                elif owner is not None:
+                if owner is trace_source.context_obj and not published:
                     traced_array = obj
                 else:
-                    traced_array = promote_in_place(
-                        obj,
-                        trace_source.name,
-                        trace_source.context_obj,
-                        trace_source.proxy,
-                    )
-                    traced_array.proxy_view.pending = True
+                    proxy = cls._pending_output_proxy(obj, trace_source)
+                    if published or owner is not None:
+                        traced_array = as_traced(
+                            obj, trace_source.name, trace_source.context_obj, proxy
+                        )
+                    else:
+                        traced_array = promote_in_place(
+                            obj, trace_source.name, trace_source.context_obj, proxy
+                        )
                 torch_owner = getattr(obj, "_tensor", None)
                 if isinstance(torch_owner, torch.Tensor) and obj_id in writable_ids:
-                    if not may_adopt_view(traced_array, torch_owner):
+                    if not is_same_value(traced_array, torch_owner):
                         _get_logger().fatal(
                             "Warp output aliases a Torch tensor with an incompatible layout; "
                             "cannot trace reads through the Torch alias.",
@@ -401,11 +375,11 @@ class TracedWpArray(wp.array, TracedData):
                             traced_array.context_obj,
                             None,
                         )
-                    bind_shared_view(
+                    bind_proxy(
                         torch_owner,
                         traced_array.name,
                         traced_array.context_obj,
-                        traced_array.proxy_view,
+                        traced_array.proxy,
                     )
                 if segment is not None:
                     segment.add_output_ref(traced_array)
@@ -427,6 +401,21 @@ class TracedWpArray(wp.array, TracedData):
                 writable_ids,
                 depth=depth + 1,
             )
+
+    @staticmethod
+    def _pending_output_proxy(array, source):
+        """Borrow provenance until this new allocation's runner is recorded.
+
+        A separate FX Proxy keeps the producer distinct from the source. Its
+        aliases hold that proxy directly and follow its one-time publication.
+        No allocation or copy is added to the graph for this bookkeeping.
+        """
+        proxy = source.proxy
+        if proxy is None or not source.is_tracing or is_same_value(source, array):
+            return proxy
+        pending = Proxy(proxy.node, proxy.tracer)
+        pending._leapp_pending_warp_output = True
+        return pending
 
     @staticmethod
     def _carry_full_copy_port(

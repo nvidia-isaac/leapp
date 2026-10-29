@@ -32,9 +32,7 @@ def pending_output():
     wp.init()
     node = TracedTensorNode("boundary")
     tensor = node.create_input(torch.arange(6.0).reshape(2, 3), "values")
-    array = as_traced(
-        wp.from_torch(tensor.tensor), "values", node, view=tensor.proxy_view
-    )
+    array = as_traced(wp.from_torch(tensor.tensor), "values", node, proxy=tensor.proxy)
     backend = WarpPatchBackend()
     session = backend._session = WarpTraceSession()
     with mock.patch.object(ExportManager().patcher, "warp", backend):

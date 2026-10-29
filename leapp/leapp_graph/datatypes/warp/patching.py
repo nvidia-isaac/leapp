@@ -18,36 +18,15 @@ they first touch actively traced Warp data.
 
 ``wp.to_torch`` inside an open segment
 ---------------------------------------
-A zero-copy conversion does not copy a proxy, it shares the source's
-``ProxyView``, which is what lets a Torch alias of a Warp buffer stay correct
-across a segment it was created inside:
+A zero-copy conversion directly keeps the source's FX tensor handle.
+New Warp outputs temporarily borrow provenance through their own FX Proxy.
+At segment close, publication resolves that proxy to the runner output, so
+aliases created before close follow it without a graph allocation or copy.
+Writes to existing buffers still use stable handles and PyTorch functionalization.
+Copying conversions continue to record independent graph storage.
 
-1. A traced Torch input is converted to Warp and gives the segment trace state.
-2. A kernel writes a preallocated Warp output.  Until segment close, that
-   output temporarily carries the donor's proxy.
-3. ``wp.to_torch(output_wp)`` runs inside ``forward``.  The layouts match, so
-   the resulting ``TracedTensor`` adopts ``output_wp``'s view rather than
-   snapshotting its temporary proxy.
-4. Segment close replaces the proxy inside that one view, so the Warp array and
-   the Torch alias both move to the runner output together.
-5. ``annotate.output_tensors`` sees the runner output, which keeps it alive
-   through pruning.
-
-Before view sharing, step 3 copied the temporary proxy and step 4 rebound only
-the Warp array, so the declared output still resolved to the pre-segment input
-and the runner was pruned for having no consumers.  The eager numbers were
-right either way, which is what made it a silent tracing failure.  Conversions
-that genuinely copy -- a CUDA readback, a device move -- still get an
-independent root, so the same hazard would return for them.
-
-Standalone regression reproducer
----------------------------------
-From ``leapp_repo`` run:
-
-``.venv/bin/python reproduce_autograd_warp_segment.py all``
-
-It covers conversion inside an open segment and after it closes. Keep those
-cases when changing boundary propagation or segment finalization.
+Regression coverage lives in ``tests/functional_tests/test_shared_memory_arrays.py``
+and ``tests/unit_tests/test_warp_torch_boundaries.py``.
 """
 
 from typing import Any, Callable
@@ -70,7 +49,7 @@ from leapp.utils.caller_identity import (
 from leapp.utils.logging import _get_logger
 
 from .._attribute_patching import AttributePatchRegistry
-from ..proxy_view import STORAGE_LAYOUT_META_KEY, may_adopt_view, conversion_proxy
+from ..proxy import STORAGE_LAYOUT_META_KEY, conversion_proxy
 from .cupti_oracle import WarpCudaOracle
 from .session import WarpTraceSession
 from .traced_wp_array import TracedWpArray
@@ -507,12 +486,8 @@ class WarpPatchBackend:
         with self.pause_context():
             original(*call_args, **call_kwargs)
 
-        if may_adopt_view(src, args[0]):
-            view, proxy = src.proxy_view, None
-        else:
-            view, proxy = None, conversion_proxy(src, args[0])
         TracedWpArray.make_traced_in_place(
-            args[0], src.name, src.context_obj, proxy, view=view
+            args[0], src.name, src.context_obj, conversion_proxy(src, args[0])
         )
         return True, None
 

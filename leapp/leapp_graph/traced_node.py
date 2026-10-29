@@ -18,16 +18,16 @@ from leapp.leapp_graph.datatypes import (
     TracedData,
     TracedTensor,
     as_traced,
-    bind_shared_view,
+    bind_proxy,
     is_tracable_tensor_type,
     promote_in_place,
     is_traced_type,
     layout_key,
-    may_adopt_view,
+    is_same_value,
     to_export_torch_tensor,
 )
 from leapp.leapp_graph.datatypes.patching import get_warp_backend
-from leapp.leapp_graph.datatypes.proxy_view import STORAGE_LAYOUT_META_KEY
+from leapp.leapp_graph.datatypes.proxy import STORAGE_LAYOUT_META_KEY
 from leapp.leapp_graph.aten_rewrites import functionalize_graph, rewrite_aten_ops
 from leapp.utils.tensor_description import (
     resolve_tensor_descriptions_to_names,
@@ -78,9 +78,11 @@ class TracedTensorNode(LeappNode):
         self._is_warp_capture_active = False
 
         # Carriers declared on this pass, keyed on the bytes they cover, so a
-        # value aliasing one of them can find it. A ProxyView holds a proxy
-        # belonging to one graph, so this is rebuilt per pass.
+        # pre-trace alias can attach to its FX handle. Rebuilt per capture pass.
         self._layout_index: dict[tuple, TracedData] = {}
+        # Only explicit input redeclarations redirect handles. Numerical writes
+        # always keep their handle and are normalized by PyTorch.
+        self._input_rebindings: dict[fx.Node, Proxy] = {}
 
         self.m = None
 
@@ -157,16 +159,29 @@ class TracedTensorNode(LeappNode):
         self.m = None
         self._model_captured = False
         self._layout_index.clear()
+        self._input_rebindings.clear()
         # State placeholders belong to the graph being replaced, so a second
         # pass has to re-declare them rather than reuse the old carriers.
         self._state_tensors.clear()
+
+    def _rebind_input(self, data, name, proxy):
+        previous = data.proxy
+        if (
+            previous is not None
+            and proxy is not None
+            and previous.node is not proxy.node
+            and previous.node.graph is self.graph
+        ):
+            self._input_rebindings[previous.node] = proxy
+        bind_proxy(data, name, self, proxy)
+        return data
 
     def find_declared_alias(self, value):
         """Carrier declared on this node that ``value`` may share a root with.
 
         This is how an alias created before any tracing session began attaches:
         the pair is invisible to the interception Phase 1 relies on, so the
-        buffer is matched by layout instead. ``may_adopt_view`` re-checks the
+        buffer is matched by layout instead. ``is_same_value`` re-checks the
         match and the sharing policy, so a stale index entry cannot promote an
         unrelated value into a shared root.
         """
@@ -176,7 +191,7 @@ class TracedTensorNode(LeappNode):
         candidate = self._layout_index.get(key)
         if candidate is None or candidate is value:
             return None
-        return candidate if may_adopt_view(candidate, value) else None
+        return candidate if is_same_value(candidate, value) else None
 
     def _validate_declared_input_aliases(self, outputs: dict) -> None:
         """Reject an output whose bytes a surviving declared input represents differently.
@@ -196,9 +211,8 @@ class TracedTensorNode(LeappNode):
             declared = self._layout_index.get(layout_key(value))
             if (
                 declared is None
-                or declared.proxy_view is value.proxy_view
-                or (declared.proxy_view, value.proxy_view)
-                in self._captured_view_aliases
+                or declared.proxy.node is value.proxy.node
+                or (declared.proxy.node, value.proxy.node) in self._captured_aliases
             ):
                 continue
             if self.get_io_description_by_name(declared.name, self.inputs) is None:
@@ -468,7 +482,11 @@ class TracedTensorNode(LeappNode):
                     # promoted in place, and a live carrier of this node is
                     # rebound onto the new placeholder so it cannot keep
                     # pointing at a graph this declaration just replaced.
-                    traced = promote_in_place(data, name, self, proxy)
+                    traced = (
+                        self._rebind_input(data, name, proxy)
+                        if is_active_traced
+                        else promote_in_place(data, name, self, proxy)
+                    )
                 else:
                     traced = as_traced(data, name, self, proxy)
                 if self.is_tracing:
@@ -553,9 +571,8 @@ class TracedTensorNode(LeappNode):
                 # carrier. A buffer promoted in place stays the same object on
                 # every pass, so handing back a fresh carrier would leave the
                 # caller's own value on the previous pass's discarded graph.
-                bind_shared_view(data, declared.name, self, declared.proxy_view)
-                return data
-            return as_traced(data, declared.name, self, view=declared.proxy_view)
+                return self._rebind_input(data, declared.name, declared.proxy)
+            return as_traced(data, declared.name, self, proxy=declared.proxy)
 
         existing = self.get_io_description_by_name(name, self.inputs)
         has_placeholder = any(
@@ -634,7 +651,7 @@ class TracedTensorNode(LeappNode):
         """
         # Find all nodes that are actually used by traversing backwards from outputs
         output_nodes = [output.proxy.node for output in outputs]
-        self._captured_view_aliases = set()
+        self._captured_aliases = set()
         for output in outputs:
             declared = self._layout_index.get(layout_key(output))
             if declared is None:
@@ -643,9 +660,7 @@ class TracedTensorNode(LeappNode):
             while pending:
                 node = pending.pop()
                 if node is declared.proxy.node:
-                    self._captured_view_aliases.add(
-                        (declared.proxy_view, output.proxy_view)
-                    )
+                    self._captured_aliases.add((declared.proxy.node, output.proxy.node))
                     break
                 if node not in seen:
                     seen.add(node)
