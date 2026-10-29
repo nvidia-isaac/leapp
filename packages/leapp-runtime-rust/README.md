@@ -205,6 +205,23 @@ A runnable example uses the generated policy fixture:
 cargo run --locked --example run -- target/triton-fixtures/policy.yaml
 ```
 
+### Caller-owned CUDA streams
+
+Rust callers can set `SessionOptions.cuda_streams` to a map from CUDA device ID
+to `CudaStream`. Construct each borrowed handle with
+`unsafe { CudaStream::from_raw(raw_stream) }` from a `cudaStream_t` or `CUstream`.
+Native execution and transfers use these streams; missing entries use internal
+streams. Triton ignores the option. Python and C++ do not yet expose it.
+
+Keep each stream and its primary context alive until the session and all peers
+are closed or destroyed. Initialization validates stream/device compatibility.
+Null and `cudaStreamLegacy` select the legacy default stream;
+`cudaStreamPerThread` is unsupported because sessions may move between threads.
+Inputs must already be ready, and `run()` completes before returning.
+
+Peers inherit supplied streams. ONNX peers share their configured compute stream
+and its ordering. Backends may use auxiliary streams with synchronization.
+
 ## Model support
 
 Both engines support ONNX, TorchScript, and PT2 on CPU or CUDA, and TensorRT

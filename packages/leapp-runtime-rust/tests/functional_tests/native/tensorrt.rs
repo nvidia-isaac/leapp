@@ -13,7 +13,7 @@ fn fixture(name: &str) -> PathBuf {
         .join(format!("{name}.yaml"))
 }
 
-fn bundle(name: &str) -> Bundle {
+pub(super) fn bundle(name: &str) -> Bundle {
     Bundle::open(fixture(name)).expect("generate TensorRT fixtures first")
 }
 

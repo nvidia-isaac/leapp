@@ -5,10 +5,15 @@ use super::bridge;
 use crate::{bundle::schema::NodeSpec, MemoryLocation};
 use anyhow::Result;
 
-pub(super) fn load(spec: &NodeSpec, location: MemoryLocation) -> Result<bridge::Model> {
+pub(super) fn load(
+    spec: &NodeSpec,
+    location: MemoryLocation,
+    stream: Option<crate::CudaStream>,
+) -> Result<bridge::Model> {
     bridge::Model::load(
         spec,
         location,
+        stream,
         "tensorrt",
         "libleapp_tensorrt.so",
         false,

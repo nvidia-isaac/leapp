@@ -115,10 +115,13 @@ pub(super) trait BackendPlugin: Send {
     }
 }
 
+type LoadBackend =
+    fn(&NodeSpec, MemoryLocation, Option<crate::CudaStream>) -> Result<Box<dyn BackendPlugin>>;
+
 struct Backend {
     name: &'static str,
     validate: fn(&NodeSpec, MemoryLocation) -> Result<()>,
-    load: fn(&NodeSpec, MemoryLocation) -> Result<Box<dyn BackendPlugin>>,
+    load: LoadBackend,
 }
 
 // One registration entry per canonical bundle backend. Lookup is load-time only.
@@ -126,22 +129,22 @@ const BACKENDS: &[Backend] = &[
     Backend {
         name: "onnx",
         validate: |_, _| Ok(()),
-        load: |spec, location| Ok(Box::new(onnx::Model::load(spec, location)?)),
+        load: |spec, location, stream| Ok(Box::new(onnx::Model::load(spec, location, stream)?)),
     },
     Backend {
         name: "trt",
         validate: tensorrt::validate,
-        load: |spec, location| Ok(Box::new(tensorrt::load(spec, location)?)),
+        load: |spec, location, stream| Ok(Box::new(tensorrt::load(spec, location, stream)?)),
     },
     Backend {
         name: "jit",
         validate: |_, _| Ok(()),
-        load: |spec, location| Ok(Box::new(torchscript::load(spec, location)?)),
+        load: |spec, location, stream| Ok(Box::new(torchscript::load(spec, location, stream)?)),
     },
     Backend {
         name: "pt2",
         validate: |_, _| Ok(()),
-        load: |spec, location| Ok(Box::new(nativert::load(spec, location)?)),
+        load: |spec, location, stream| Ok(Box::new(nativert::load(spec, location, stream)?)),
     },
 ];
 
@@ -167,10 +170,14 @@ pub(super) fn validate(spec: &NodeSpec, location: MemoryLocation) -> Result<()> 
     (backend(spec)?.validate)(spec, location)
 }
 
-pub(super) fn load(spec: &NodeSpec, location: MemoryLocation) -> Result<Box<dyn BackendPlugin>> {
+pub(super) fn load(
+    spec: &NodeSpec,
+    location: MemoryLocation,
+    stream: Option<crate::CudaStream>,
+) -> Result<Box<dyn BackendPlugin>> {
     let backend = backend(spec)?;
     (backend.validate)(spec, location)?;
-    (backend.load)(spec, location)
+    (backend.load)(spec, location, stream)
 }
 
 pub(super) fn error(phase: &'static str, source: anyhow::Error) -> RuntimeError {

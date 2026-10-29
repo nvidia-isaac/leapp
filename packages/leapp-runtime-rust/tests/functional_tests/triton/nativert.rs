@@ -73,6 +73,7 @@ fn session_pool_limits_preserve_peer_and_retained_outputs() {
                 &bundle,
                 SessionOptions {
                     engine: crate::EngineKind::Triton,
+                    cuda_streams: Default::default(),
                     device,
                     output_placement: OutputPlacement {
                         default_location: match device {

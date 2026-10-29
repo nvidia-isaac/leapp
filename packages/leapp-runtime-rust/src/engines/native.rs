@@ -17,7 +17,10 @@ use anyhow::{ensure, Context};
 use backends::BackendPlugin;
 use indexmap::IndexMap;
 use plan::Plan;
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 use transfers::Transfers;
 
 pub(super) fn open(
@@ -45,19 +48,26 @@ impl NativeEngine {
         }
 
         location.validate()?;
+        for (&device, &stream) in &options.cuda_streams {
+            stream.validate(device)?;
+        }
         options.output_placement.default_location.validate()?;
         for target in options.output_placement.overrides.values() {
             target.validate()?;
         }
 
         let plan = Plan::new(bundle, graph).map_err(|e| RuntimeError::new("convert", e))?;
+        let compute_stream = match location {
+            MemoryLocation::Cuda { device_id } => options.cuda_streams.get(&device_id).copied(),
+            _ => None,
+        };
         let models = bundle
             .0
             .description
             .models
             .iter()
             .map(|(name, spec)| {
-                backends::load(spec, location)
+                backends::load(spec, location, compute_stream)
                     .map_err(|e| backends::error("load", e.context(format!("load node {name}"))))
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -68,6 +78,7 @@ impl NativeEngine {
             models,
             location,
             guarded.then(|| Arc::new(Mutex::new(()))),
+            options.cuda_streams.clone(),
         )
     }
 
@@ -76,6 +87,7 @@ impl NativeEngine {
         models: Vec<Box<dyn BackendPlugin>>,
         location: MemoryLocation,
         execution_guard: Option<Arc<Mutex<()>>>,
+        cuda_streams: HashMap<u32, crate::CudaStream>,
     ) -> Result<Self, RuntimeError> {
         let slots = plan
             .slots
@@ -89,7 +101,8 @@ impl NativeEngine {
             slots,
             plan,
             input_order,
-            transfers: Transfers::new(location).map_err(|e| backends::error("prepare", e))?,
+            transfers: Transfers::new(location, &cuda_streams)
+                .map_err(|e| backends::error("prepare", e))?,
         };
         // Workspace's field order also protects buffers on failed preparation.
         for call in &workspace.plan.calls {
@@ -126,6 +139,7 @@ impl NativeEngine {
             workspace: Mutex::new(workspace),
             location,
             execution_guard,
+            cuda_streams,
         })
     }
 
@@ -144,6 +158,7 @@ impl NativeEngine {
             models,
             self.location,
             self.execution_guard.clone(),
+            self.cuda_streams.clone(),
         )
     }
 }
@@ -152,6 +167,7 @@ struct NativeEngine {
     workspace: Mutex<Workspace>,
     location: MemoryLocation,
     execution_guard: Option<Arc<Mutex<()>>>,
+    cuda_streams: HashMap<u32, crate::CudaStream>,
 }
 
 struct Workspace {

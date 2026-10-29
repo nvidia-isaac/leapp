@@ -33,7 +33,9 @@ struct View {
 // exclusive per session/call. Loaded models may have multiple sessions. TensorRT
 // engines are shared read-only; Torch runners require the Rust graph guard.
 struct Api {
-  char* (*load_model)(const char*, int32_t, const Port*, size_t, const Port*,
+  // Optional caller-owned CUDA stream; null requests internal streams. Retain
+  // it through model/session destruction. Peers inherit the same selection.
+  char* (*load_model)(const char*, int32_t, void*, const Port*, size_t, const Port*,
                       size_t, void**) noexcept;
   void (*destroy_model)(void*) noexcept;
   bool (*requires_dynamic)(const void*) noexcept;

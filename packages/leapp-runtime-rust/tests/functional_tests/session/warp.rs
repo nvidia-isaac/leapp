@@ -37,6 +37,7 @@ fn warp_plugins_execute_through_sessions() {
                         &bundle,
                         SessionOptions {
                             engine: engine(),
+                            cuda_streams: Default::default(),
                             output_pool: OutputPoolOptions { max_entries },
                             device,
                             output_placement: OutputPlacement {

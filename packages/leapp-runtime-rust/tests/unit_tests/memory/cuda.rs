@@ -5,6 +5,29 @@ use super::*;
 use crate::engines::memory::Buffer;
 
 #[test]
+fn borrowed_stream_validation_and_lifetime() {
+    let owner = HandoffStream::new(0).unwrap();
+    // SAFETY: owner retains this primary-context stream through all borrowed uses.
+    let stream = unsafe { CudaStream::from_raw(owner.stream) };
+    stream.validate(0).unwrap();
+    let borrowed = HandoffStream::borrowed(0, stream);
+    borrowed.synchronize().unwrap();
+    drop(borrowed);
+    owner.synchronize().unwrap();
+    let mut count = 0;
+    unsafe { check(cudaGetDeviceCount(&mut count)).unwrap() };
+    if count > 1 {
+        assert_eq!(
+            stream.validate(1).unwrap_err().kind(),
+            ErrorKind::InvalidArgument
+        );
+        owner.synchronize().unwrap();
+    }
+    assert!(stream.validate(count as u32).is_err());
+    owner.synchronize().unwrap();
+}
+
+#[test]
 fn handoff_producer_restores_device_on_return_error_and_panic() {
     let (mut original, mut count) = (0, 0);
     // SAFETY: both arguments are live output parameters.

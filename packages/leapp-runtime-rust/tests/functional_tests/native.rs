@@ -153,9 +153,14 @@ fn onnx_peers_share_models_and_run_with_independent_workspaces() {
             .collect::<anyhow::Result<Vec<_>>>()
             .unwrap();
         drop(workspace);
-        assert!(
-            NativeEngine::with_models(Arc::new(invalid), models, engine.location, None).is_err()
-        );
+        assert!(NativeEngine::with_models(
+            Arc::new(invalid),
+            models,
+            engine.location,
+            None,
+            Default::default()
+        )
+        .is_err());
 
         let start = std::sync::Barrier::new(2);
         std::thread::scope(|scope| {
@@ -548,3 +553,6 @@ mod tensorrt;
 
 #[path = "native/torch.rs"]
 mod torch;
+
+#[path = "native/streams.rs"]
+mod streams;

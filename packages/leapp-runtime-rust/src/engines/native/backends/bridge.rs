@@ -57,6 +57,7 @@ impl Model {
     pub fn load(
         spec: &NodeSpec,
         location: MemoryLocation,
+        stream: Option<crate::CudaStream>,
         backend: &str,
         library: &str,
         guarded: bool,
@@ -86,6 +87,7 @@ impl Model {
             api.check((api.load_model)(
                 path.as_ptr(),
                 device,
+                stream.map_or(ptr::null_mut(), crate::CudaStream::as_raw),
                 inputs.as_ptr(),
                 inputs.len(),
                 outputs.as_ptr(),

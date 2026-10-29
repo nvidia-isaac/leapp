@@ -256,9 +256,11 @@ struct Session;
 struct Call;
 
 struct Model {
-  explicit Model(const char* path, int id, std::span<const adapter::Port> in,
+  explicit Model(const char* path, int id, cudaStream_t stream,
+                 std::span<const adapter::Port> in,
                  std::span<const adapter::Port> out)
-      : device(id), runtime(nullptr, {id}), engine(nullptr, {id}) {
+      : device(id), external_stream(stream),
+        runtime(nullptr, {id}), engine(nullptr, {id}) {
     supported(id >= 0, "requires CUDA execution");
     DeviceScope scope(device);
     scope.check();
@@ -402,6 +404,7 @@ struct Model {
   std::unique_ptr<Session> create_session();
 
   int device;
+  cudaStream_t external_stream;
   Owned<trt::IRuntime> runtime;
   Owned<trt::ICudaEngine> engine;
   std::vector<Port> inputs, outputs;
@@ -515,7 +518,7 @@ void Model::inspect_fixed_shapes() {
   // A bundle may pin a dynamic engine to concrete inputs. Probe only shape
   // inference, without activation buffers or inference, to distinguish fixed
   // bindings from data-dependent outputs that still need an allocator.
-  Stream stream(device);
+  Stream stream(device, external_stream);
   Execution execution(*this, stream,
                       trt::ExecutionContextAllocationStrategy::kUSER_MANAGED);
   Work work(stream);
@@ -605,7 +608,8 @@ struct OutputBindings {
 };
 
 struct Session {
-  explicit Session(Model& owner) : model(owner), stream(owner.device) {}
+  explicit Session(Model& owner)
+      : model(owner), stream(owner.device, owner.external_stream) {}
 
   std::unique_ptr<Call> prepare(std::span<const adapter::View> inputs,
                                 std::span<const adapter::View> outputs);
@@ -742,12 +746,12 @@ char* invoke(F&& function) noexcept {
 }
 
 const adapter::Api api{
-    [](const char* path, int32_t device, const adapter::Port* inputs,
+    [](const char* path, int32_t device, void* stream, const adapter::Port* inputs,
        size_t input_count, const adapter::Port* outputs, size_t output_count,
        void** value) noexcept {
       return invoke([&] {
-        *value = new Model(path, device, {inputs, input_count},
-                           {outputs, output_count});
+        *value = new Model(path, device, static_cast<cudaStream_t>(stream),
+                           {inputs, input_count}, {outputs, output_count});
       });
     },
     [](void* value) noexcept { delete static_cast<Model*>(value); },

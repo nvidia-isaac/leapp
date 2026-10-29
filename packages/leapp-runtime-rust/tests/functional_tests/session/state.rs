@@ -28,6 +28,7 @@ fn native_output_snapshots_use_the_session_pool() {
                         &bundle,
                         SessionOptions {
                             engine: crate::EngineKind::Native,
+                            cuda_streams: Default::default(),
                             device,
                             output_pool: OutputPoolOptions { max_entries },
                             output_placement: OutputPlacement {
@@ -144,6 +145,7 @@ fn feedback_with_host_and_device_memory_placement() {
                 let options = SessionOptions {
                     device,
                     engine: crate::engines::tests::support::engine(),
+                    cuda_streams: Default::default(),
                     output_pool: Default::default(),
                     output_placement: OutputPlacement {
                         overrides: [("accumulator/next".into(), output_location)].into(),
