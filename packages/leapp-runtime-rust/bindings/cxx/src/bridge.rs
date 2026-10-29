@@ -3,16 +3,12 @@
 
 use crate::{bundle::*, session::*};
 
-#[cxx::bridge(namespace = "leapp::detail")]
+#[cxx::bridge(namespace = "lrt::detail")]
 pub mod ffi {
     struct StatusData {
         code: i32,
         phase: String,
         message: String,
-    }
-
-    enum EngineKind {
-        Triton,
     }
 
     enum Dtype {
@@ -124,7 +120,12 @@ pub mod ffi {
 
         fn bundle_ports(bundle: &BundleHandle, inputs: bool) -> Vec<PortName>;
 
-        fn bundle_port(bundle: &BundleHandle, node: &[u8], port: &[u8], input: bool) -> PortData;
+        fn bundle_port(
+            bundle: &BundleHandle,
+            node: &[u8],
+            port: &[u8],
+            input: bool,
+        ) -> PortData;
 
         fn bundle_metadata(
             bundle: &BundleHandle,
@@ -136,14 +137,17 @@ pub mod ffi {
         fn session_new() -> Box<SessionHandle>;
         fn session_open(
             bundle: &BundleHandle,
-            engine: EngineKind,
+            max_entries: usize,
             location: Location,
             output_location: Location,
             overrides: &[Placement],
             output: &mut SessionHandle,
         ) -> StatusData;
         fn session_close(session: &SessionHandle) -> StatusData;
-        fn session_duplicate(session: &SessionHandle, output: &mut SessionHandle) -> StatusData;
+        fn session_duplicate(
+            session: &SessionHandle,
+            output: &mut SessionHandle,
+        ) -> StatusData;
 
         fn session_reset(session: &SessionHandle) -> StatusData;
 
@@ -160,7 +164,8 @@ pub mod ffi {
 
         fn result_names(result: &ResultHandle) -> Vec<String>;
 
-        fn result_tensor(result: &ResultHandle, name: &[u8], output: &mut usize) -> StatusData;
+        fn result_tensor(result: &ResultHandle, name: &[u8], output: &mut usize)
+            -> StatusData;
 
     }
 }

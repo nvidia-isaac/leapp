@@ -16,7 +16,7 @@
 #include "leapp/metadata.h"
 #include "leapp/status.h"
 
-namespace leapp {
+namespace lrt {
 
 struct PortRef {
   std::string node;
@@ -87,6 +87,6 @@ class Bundle {
   std::shared_ptr<Data> data_;
 };
 
-}  // namespace leapp
+}  // namespace lrt
 
 #endif  // LEAPP_BUNDLE_H_

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use leapp_runtime::{Bundle, DataType, ErrorCode, MetadataValue as Value, PortRef};
+use lrt::{Bundle, DataType, ErrorCode, MetadataValue as Value, PortRef};
 use safetensors::{tensor::TensorView, Dtype};
 use std::{fs, path::PathBuf};
 use tempfile::TempDir;
@@ -229,7 +229,8 @@ fn collections_cannot_be_null_or_scalar() {
 #[test]
 fn accepts_empty_graph_and_unspecified_version() {
     let mut f = Fixture::new();
-    f.value = value("models: {}\npipeline: {inputs: {}, outputs: {}}\nsystem information: {}\n");
+    f.value =
+        value("models: {}\npipeline: {inputs: {}, outputs: {}}\nsystem information: {}\n");
     let b = f.open();
     assert!(b.model_names().is_empty());
     assert!(b.pipeline_inputs().is_empty());
@@ -617,7 +618,8 @@ fn artifacts_fall_back_to_the_working_directory() {
     let relative_path = artifact_path.strip_prefix(&working_directory).unwrap();
     let mut f = Fixture::new();
     for model in f.value["models"].as_mapping_mut().unwrap().values_mut() {
-        model["parameters"]["model_path"] = Value::String(relative_path.to_str().unwrap().into());
+        model["parameters"]["model_path"] =
+            Value::String(relative_path.to_str().unwrap().into());
     }
     f.open();
 

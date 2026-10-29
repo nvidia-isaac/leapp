@@ -11,8 +11,8 @@ int main(int argc, char** argv) {
   if (argc != 2) {
     return 2;
   }
-  leapp::Bundle bundle;
-  auto status = leapp::Bundle::Open(argv[1], &bundle);
+  lrt::Bundle bundle;
+  auto status = lrt::Bundle::Open(argv[1], &bundle);
   if (!status.ok()) {
     std::cerr << status.message() << "\n";
     return 1;
@@ -21,10 +21,9 @@ int main(int argc, char** argv) {
   if (ports == nullptr || ports->inputs.empty() || ports->outputs.empty()) {
     return 1;
   }
-  leapp::SessionOptions options;
-  options.engine = leapp::EngineKind::kTriton;
-  leapp::Session session;
-  status = leapp::Session::Open(bundle, options, &session);
+  lrt::SessionOptions options;
+  lrt::Session session;
+  status = lrt::Session::Open(bundle, options, &session);
   if (!status.ok()) {
     return 1;
   }
@@ -32,14 +31,14 @@ int main(int argc, char** argv) {
   int64_t shape = 4;
   DLTensor descriptor{const_cast<float*>(input.data()), {kDLCPU, 0}, 1,
                       {kDLFloat, 32, 1}, &shape, nullptr, 0};
-  leapp::RunResult result;
+  lrt::RunResult result;
   status = session.Run(
       {{"accumulator/observation", &descriptor}},
       &result);
   if (!status.ok()) {
     return 1;
   }
-  leapp::ManagedTensor output;
+  lrt::ManagedTensor output;
   status = result.GetTensor("accumulator/next", &output);
   if (!status.ok()) {
     return 1;

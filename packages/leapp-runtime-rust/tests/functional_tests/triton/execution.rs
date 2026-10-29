@@ -2,10 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::support;
-use leapp_runtime::dlpack::BorrowedTensor;
-use leapp_runtime::{
-    Bundle, EngineKind, ErrorCode, ExecutionDevice, MemoryLocation, RunResult, Session,
-    SessionOptions,
+use lrt::dlpack::BorrowedTensor;
+use lrt::{
+    Bundle, ErrorCode, ExecutionDevice, MemoryLocation, RunResult, Session, SessionOptions,
 };
 use serde_json::{json, Value};
 use std::{env, fs, path::PathBuf, thread};
@@ -22,7 +21,6 @@ fn fixtures(kind: &str) -> PathBuf {
 fn options(device: ExecutionDevice) -> SessionOptions {
     SessionOptions {
         device,
-        engine: EngineKind::Triton,
         ..Default::default()
     }
 }
@@ -47,10 +45,10 @@ fn values(result: &RunResult, name: &str) -> Vec<f32> {
 
 fn step(session: &mut Session, value: f32) -> RunResult {
     session
-        .run(&[(
+        .run(&std::collections::HashMap::from([(
             "accumulator/observation",
             BorrowedTensor::cpu(&[value; 4], &[4]).unwrap(),
-        )])
+        )]))
         .unwrap()
 }
 
@@ -74,9 +72,12 @@ fn bundle(value: &Value, directory: &tempfile::TempDir) -> Bundle {
 
 fn initial(value: &mut Value, directory: &tempfile::TempDir, port: &str, data: &[f32]) {
     let bytes: Vec<_> = data.iter().flat_map(|v| v.to_le_bytes()).collect();
-    let tensor =
-        safetensors::tensor::TensorView::new(safetensors::Dtype::F32, vec![data.len()], &bytes)
-            .unwrap();
+    let tensor = safetensors::tensor::TensorView::new(
+        safetensors::Dtype::F32,
+        vec![data.len()],
+        &bytes,
+    )
+    .unwrap();
     let path = directory.path().join("initial.safetensors");
     safetensors::serialize_to_file([(port, tensor)], None, &path).unwrap();
     value["pipeline"]["initial_values"] = json!(path);
@@ -90,7 +91,7 @@ fn public_names_results_and_lifetimes() {
         let mut session = runtime.new_session().unwrap();
         drop(runtime);
         let result = session
-            .run(&[
+            .run(&std::collections::HashMap::from([
                 (
                     "policy/bias",
                     BorrowedTensor::cpu(&[10f32, 20., 30., 40.], &[4]).unwrap(),
@@ -99,7 +100,7 @@ fn public_names_results_and_lifetimes() {
                     "preprocess/observation",
                     BorrowedTensor::cpu(&[1f32, 2., 3., 4.], &[4]).unwrap(),
                 ),
-            ])
+            ]))
             .unwrap();
         assert_eq!(
             result.iter().map(|(name, _)| name).collect::<Vec<_>>(),
@@ -117,11 +118,8 @@ fn public_names_results_and_lifetimes() {
 fn validation_failures_leave_session_usable() {
     let mut session = open("dynamic", ExecutionDevice::Cpu).new_session().unwrap();
     let view = BorrowedTensor::cpu(&[1f32], &[1]).unwrap();
-    for inputs in [
-        vec![],
-        vec![("bad", view)],
-        vec![("dynamic/input", view), ("dynamic/input", view)],
-    ] {
+    for inputs in [vec![], vec![("bad", view)]] {
+        let inputs = inputs.into_iter().collect();
         let error = session.run(&inputs).err().unwrap();
         assert_eq!(error.code(), ErrorCode::InvalidArgument);
         assert_eq!(error.phase(), "execute");
@@ -133,21 +131,26 @@ fn validation_failures_leave_session_usable() {
         .insert("bad".into(), MemoryLocation::Cpu);
     assert!(Session::open(session.info(), options).is_err());
     assert!(session
-        .run(&[("dynamic/input", BorrowedTensor::cpu(&[1i32], &[1]).unwrap())])
+        .run(&std::collections::HashMap::from([(
+            "dynamic/input",
+            BorrowedTensor::cpu(&[1i32], &[1]).unwrap()
+        )]))
         .is_err());
-    let result = session.run(&[("dynamic/input", view)]).unwrap();
+    let result = session
+        .run(&std::collections::HashMap::from([("dynamic/input", view)]))
+        .unwrap();
     let reused = session
-        .run(&[(
+        .run(&std::collections::HashMap::from([(
             "dynamic/input",
             result.get("dynamic/output").unwrap().view(),
-        )])
+        )]))
         .unwrap();
     assert_eq!(values(&reused, "dynamic/output"), [1.]);
     let empty = session
-        .run(&[(
+        .run(&std::collections::HashMap::from([(
             "dynamic/input",
             BorrowedTensor::cpu::<f32>(&[], &[0]).unwrap(),
-        )])
+        )]))
         .unwrap();
     assert_eq!(empty.get("dynamic/output").unwrap().shape(), [0]);
 }
@@ -163,7 +166,7 @@ fn output_order_duplicates_and_input_output_name_collision() {
         .new_session()
         .unwrap();
     let result = session
-        .run(&[
+        .run(&std::collections::HashMap::from([
             (
                 "policy/bias",
                 BorrowedTensor::cpu(&[0f32; 4], &[4]).unwrap(),
@@ -172,7 +175,7 @@ fn output_order_duplicates_and_input_output_name_collision() {
                 "preprocess/observation",
                 BorrowedTensor::cpu(&[1f32; 4], &[4]).unwrap(),
             ),
-        ])
+        ]))
         .unwrap();
     assert_eq!(
         result.iter().map(|(name, _)| name).collect::<Vec<_>>(),
@@ -192,7 +195,10 @@ fn output_order_duplicates_and_input_output_name_collision() {
     assert_eq!(
         values(
             &session
-                .run(&[("dynamic/input", BorrowedTensor::cpu(&[5f32], &[1]).unwrap())])
+                .run(&std::collections::HashMap::from([(
+                    "dynamic/input",
+                    BorrowedTensor::cpu(&[5f32], &[1]).unwrap()
+                )]))
                 .unwrap(),
             "dynamic/input"
         ),
@@ -215,7 +221,7 @@ fn feedback_advances_per_session_reset_and_failures_are_atomic() {
         fs::remove_file(directory.path().join("initial.safetensors")).unwrap();
         let mut session = runtime.new_session().unwrap();
         let run = |session: &mut Session, reshape: &[f32]| {
-            session.run(&[
+            session.run(&std::collections::HashMap::from([
                 (
                     "accumulator/observation",
                     BorrowedTensor::cpu(&[1f32; 4], &[4]).unwrap(),
@@ -224,7 +230,7 @@ fn feedback_advances_per_session_reset_and_failures_are_atomic() {
                     "reshape/input",
                     BorrowedTensor::cpu(reshape, &[reshape.len() as i64]).unwrap(),
                 ),
-            ])
+            ]))
         };
         let first = run(&mut session, &[1., 2.]).unwrap();
         assert_eq!(values(&first, "accumulator/next"), [11.; 4]);
@@ -292,7 +298,7 @@ fn hidden_feedback_fanout_and_default_inputs() {
             .unwrap();
         for expected in [10., 11., 12.] {
             let result = session
-                .run(&[
+                .run(&std::collections::HashMap::from([
                     (
                         "accumulator/observation",
                         BorrowedTensor::cpu(&[1f32; 4], &[4]).unwrap(),
@@ -301,7 +307,7 @@ fn hidden_feedback_fanout_and_default_inputs() {
                         "follower/observation",
                         BorrowedTensor::cpu(&[10f32; 4], &[4]).unwrap(),
                     ),
-                ])
+                ]))
                 .unwrap();
             assert_eq!(result.iter().count(), 1);
             assert_eq!(values(&result, "follower/next"), [expected; 4]);
@@ -316,10 +322,10 @@ fn hidden_feedback_fanout_and_default_inputs() {
                 .new_session()
                 .unwrap();
             let result = session
-                .run(&[(
+                .run(&std::collections::HashMap::from([(
                     "preprocess/observation",
                     BorrowedTensor::cpu(&[1f32; 4], &[4]).unwrap(),
-                )])
+                )]))
                 .unwrap();
             let bias = if seeded { 10. } else { 0. };
             assert_eq!(
@@ -399,15 +405,16 @@ fn public_pt2_execution() {
             ExecutionDevice::Cpu => "cpu",
             _ => "cuda",
         };
-        let bundle = Bundle::open(fixtures("pt2").join(format!("weighted_{suffix}.yaml"))).unwrap();
+        let bundle =
+            Bundle::open(fixtures("pt2").join(format!("weighted_{suffix}.yaml"))).unwrap();
         let runtime = Session::open(&bundle, options(device)).unwrap();
         let mut session = runtime.new_session().unwrap();
         let name = bundle.pipeline_inputs()[0].name();
         let result = session
-            .run(&[(
-                &name,
+            .run(&std::collections::HashMap::from([(
+                name.as_str(),
                 BorrowedTensor::cpu(&[1f32, 2., 3., 4.], &[4]).unwrap(),
-            )])
+            )]))
             .unwrap();
         assert_eq!(values(&result, "model/output_0"), [12., 26., 42., 60.]);
     }

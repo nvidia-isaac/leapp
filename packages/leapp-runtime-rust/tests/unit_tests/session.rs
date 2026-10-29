@@ -43,6 +43,7 @@ impl Engine for CpuEngine {
         &self,
         inputs: &[(&str, BorrowedTensor<'_>)],
         _: &OutputPlacement,
+        _: &Arc<OutputPool>,
     ) -> Result<IndexMap<String, SharedTensor>, RuntimeError> {
         let get = |name| {
             inputs
@@ -72,6 +73,7 @@ impl Engine for CpuEngine {
         &self,
         input: BorrowedTensor<'_>,
         target: MemoryLocation,
+        _: Option<&OutputPool>,
     ) -> Result<SharedTensor, RuntimeError> {
         assert_eq!(target, MemoryLocation::Cpu);
         if self.fail_copy.load(Ordering::SeqCst) {
@@ -94,13 +96,14 @@ fn copy_failure_preserves_feedback() {
     let graph = graph::Graph::new(&bundle).unwrap();
     let engine = Arc::new(CpuEngine::default());
     let mut session =
-        Session::initialize(&bundle, SessionOptions::default(), &graph, engine.clone()).unwrap();
+        Session::initialize(&bundle, SessionOptions::default(), &graph, engine.clone())
+            .unwrap();
     let step = |session: &mut Session| {
         session
-            .run(&[(
+            .run(&std::collections::HashMap::from([(
                 "z_observation/joint_pos",
                 BorrowedTensor::cpu(&[1_f32; 3], &[3]).unwrap(),
-            )])
+            )]))
             .map(|result| {
                 result
                     .get("a_policy/next_state")
@@ -118,4 +121,38 @@ fn copy_failure_preserves_feedback() {
     engine.fail_copy.store(false, Ordering::SeqCst);
     // The failed run must not advance feedback: the next result is 2, not 3.
     assert_eq!(step(&mut session).unwrap(), [2.; 3]);
+}
+
+#[test]
+fn peer_caches_inherit_policy_and_close_independently() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(directory.path().join("model.bin"), b"abc").unwrap();
+    let path = directory.path().join("pipeline.yaml");
+    std::fs::write(&path, include_str!("../fixtures/pipeline.yaml")).unwrap();
+    let bundle = Bundle::open(path).unwrap();
+    let graph = graph::Graph::new(&bundle).unwrap();
+    for max_entries in [0, 1] {
+        let options = SessionOptions {
+            output_pool: OutputPoolOptions { max_entries },
+            ..Default::default()
+        };
+        let mut session =
+            Session::initialize(&bundle, options, &graph, Arc::new(CpuEngine::default()))
+                .unwrap();
+        let source = session
+            .output_pool
+            .allocate(12, MemoryLocation::Cpu)
+            .unwrap();
+        assert_eq!(Arc::strong_count(&source), 1 + max_entries);
+        let mut peer = session.new_session().unwrap();
+        let retained = peer.output_pool.allocate(12, MemoryLocation::Cpu).unwrap();
+        assert_eq!(Arc::strong_count(&retained), 1 + max_entries);
+        assert_ne!(source.ptr, retained.ptr);
+        session.close();
+        assert_eq!(Arc::strong_count(&source), 1);
+        assert_eq!(Arc::strong_count(&retained), 1 + max_entries);
+        assert!(peer.is_open());
+        peer.close();
+        assert_eq!(Arc::strong_count(&retained), 1);
+    }
 }

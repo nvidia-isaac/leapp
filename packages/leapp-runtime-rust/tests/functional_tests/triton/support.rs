@@ -3,14 +3,14 @@
 
 #![allow(dead_code)]
 
-use leapp_runtime::{dlpack::*, MemoryLocation};
+use lrt::{dlpack::*, MemoryLocation};
 
 pub fn placed<T: CpuElement>(
     values: &[T],
     shape: &[i64],
     location: MemoryLocation,
 ) -> crate::engines::triton::Result<SharedTensor> {
-    crate::engines::triton::memory::dlpack::copy(
+    crate::engines::memory::dlpack::copy(
         BorrowedTensor::cpu(values, shape).unwrap(),
         Some(location),
     )
@@ -38,6 +38,6 @@ impl TestTensor for SharedTensor {
     }
 
     fn location(&self) -> MemoryLocation {
-        crate::engines::triton::memory::dlpack::location(self.view().descriptor().device).unwrap()
+        crate::engines::memory::dlpack::location(self.view().descriptor().device).unwrap()
     }
 }

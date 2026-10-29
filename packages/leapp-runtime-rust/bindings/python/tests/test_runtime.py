@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from pathlib import Path
 
-import leapp_runtime as lr
+import lrt as lr
 import numpy as np
 import pytest
 
@@ -32,7 +32,13 @@ def step(session, value=1):
 
 
 @pytest.mark.parametrize(
-    "options", [{}, {"engine": "triton"}], ids=["default", "triton"]
+    "options",
+    [
+        {},
+        {"output_pool": lr.OutputPoolOptions(0)},
+        {"output_pool": lr.OutputPoolOptions(1)},
+    ],
+    ids=["default", "no-cache", "one-entry"],
 )
 def test_read_only_lifetime_feedback_and_close(options):
     with open_session(**options) as rt:
@@ -74,9 +80,9 @@ def test_read_only_lifetime_feedback_and_close(options):
     np.testing.assert_array_equal(view, [1] * 4)
 
 
-def test_unknown_engine_is_rejected():
-    with pytest.raises(ValueError, match="unknown engine 'unknown'; expected 'triton'"):
-        open_session(engine="unknown")
+def test_negative_cache_limit_is_rejected():
+    with pytest.raises(OverflowError):
+        open_session(output_pool=lr.OutputPoolOptions(-1))
 
 
 def test_dlpack_exports_alias_and_retain_storage():
@@ -118,6 +124,13 @@ def test_dlpack_inputs_and_validation():
         assert error.value.code == lr.ErrorCode.INVALID_ARGUMENT
         with pytest.raises(KeyError):
             session.run({"dynamic/input": source})["missing"]
+
+        class DuplicateInputs:
+            def items(self):
+                return [("dynamic/input", source)] * 2
+
+        with pytest.raises(ValueError, match="duplicate input"):
+            session.run(DuplicateInputs())
         assert len(session.run({"dynamic/input": source})) == 1
         for shape in (0, 1, 9):
             result = session.run({"dynamic/input": np.ones(shape, dtype=np.float32)})

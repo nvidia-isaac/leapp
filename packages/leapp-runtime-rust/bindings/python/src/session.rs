@@ -5,9 +5,9 @@ use crate::{
     bundle::PyBundle,
     dlpack::{import_items, Output},
 };
-use leapp_runtime::dlpack::BorrowedTensor;
-use leapp_runtime::{EngineKind, ExecutionDevice, RunResult, SessionOptions};
 use leapp_runtime_bindings::{Error, SessionHandle};
+use lrt::dlpack::BorrowedTensor;
+use lrt::{ExecutionDevice, RunResult, SessionOptions};
 use pyo3::{
     exceptions::{PyKeyError, PyTypeError, PyValueError},
     prelude::*,
@@ -24,7 +24,7 @@ fn binding_error(py: Python<'_>, error: Error) -> PyErr {
     )
 }
 
-#[pyclass(name = "Session", frozen, module = "leapp_runtime")]
+#[pyclass(name = "Session", frozen, module = "lrt")]
 pub struct PySession {
     inner: SessionHandle,
 }
@@ -41,21 +41,14 @@ impl PySession {
     ) -> PyResult<Self> {
         let mut opts = SessionOptions::default();
         if let Some(options) = options {
-            let engine: String = options.getattr("engine")?.extract()?;
-            opts.engine = match engine.as_str() {
-                "triton" => EngineKind::Triton,
-                _ => {
-                    return Err(PyValueError::new_err(format!(
-                        "unknown engine '{engine}'; expected 'triton'"
-                    )))
-                }
-            };
+            opts.output_pool.max_entries = options
+                .getattr("output_pool")?
+                .getattr("max_entries")?
+                .extract()?;
             let device: String = options.getattr("device")?.extract()?;
             opts.device = match crate::location(&device)? {
-                leapp_runtime::MemoryLocation::Cpu => ExecutionDevice::Cpu,
-                leapp_runtime::MemoryLocation::Cuda { device_id } => {
-                    ExecutionDevice::Cuda { device_id }
-                }
+                lrt::MemoryLocation::Cpu => ExecutionDevice::Cpu,
+                lrt::MemoryLocation::Cuda { device_id } => ExecutionDevice::Cuda { device_id },
                 _ => {
                     return Err(PyTypeError::new_err(
                         "pinned is a buffer location, not an execution device",
@@ -129,7 +122,7 @@ impl PySession {
         let owned = import_items(py, &items)?;
         let views = owned
             .iter()
-            .map(|(name, value)| {
+            .map(|(name, value)| -> PyResult<_> {
                 let descriptor = value
                     .descriptor()
                     .map_err(pyo3::exceptions::PyBufferError::new_err)?;
@@ -137,7 +130,13 @@ impl PySession {
                 // The caller must not mutate inputs until run returns.
                 Ok((name.as_str(), unsafe { BorrowedTensor::new(descriptor) }))
             })
-            .collect::<PyResult<Vec<_>>>()?;
+            .try_fold(HashMap::with_capacity(owned.len()), |mut views, item| {
+                let (name, tensor) = item?;
+                if views.insert(name, tensor).is_some() {
+                    return Err(PyValueError::new_err("duplicate input name"));
+                }
+                Ok(views)
+            })?;
         // Owners stay on this attached stack until inference releases every input.
         let result = py
             .detach(|| self.inner.run(&views))
@@ -152,7 +151,7 @@ impl PySession {
     }
 }
 
-#[pyclass(name = "RunResult", frozen, module = "leapp_runtime")]
+#[pyclass(name = "RunResult", frozen, module = "lrt")]
 pub struct PyRunResult {
     inner: RunResult,
 }

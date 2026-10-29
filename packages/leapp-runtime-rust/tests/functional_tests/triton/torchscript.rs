@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::support;
-use leapp_runtime::{Bundle, ExecutionDevice, MemoryLocation, Session, SessionOptions};
+use lrt::{Bundle, ExecutionDevice, MemoryLocation, Session, SessionOptions};
 use std::{env, fs, path::PathBuf};
 use support::{placed, TestTensor};
 
@@ -62,7 +62,10 @@ fn scripted_traced_and_mixed_match_pytorch_with_positional_ports() {
                 let mut session = Session::open(runtime.info(), options).unwrap();
                 // Request order differs from the exported argument order.
                 let result = session
-                    .run(&[("model/INPUT__9", bias.view()), (input, values.view())])
+                    .run(&std::collections::HashMap::from([
+                        ("model/INPUT__9", bias.view()),
+                        (input, values.view()),
+                    ]))
                     .unwrap();
                 assert_eq!(
                     result.iter().map(|(name, _)| name).collect::<Vec<_>>(),

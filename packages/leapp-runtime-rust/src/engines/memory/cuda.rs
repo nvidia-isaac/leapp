@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::engines::triton::{Error, ErrorKind, MemoryLocation, Result};
+use crate::engines::error::{Error, ErrorKind, Result};
+use crate::MemoryLocation;
 use std::{
     ffi::{c_char, c_int, c_void, CStr},
     ptr::{self, NonNull},
@@ -122,7 +123,11 @@ impl Drop for Device {
     }
 }
 
-pub(crate) fn allocate(len: usize, location: MemoryLocation, zeroed: bool) -> Result<NonNull<u8>> {
+pub(crate) fn allocate(
+    len: usize,
+    location: MemoryLocation,
+    zeroed: bool,
+) -> Result<NonNull<u8>> {
     let mut raw = ptr::null_mut();
     // SAFETY: raw is writable and the caller validated location and allocation size.
     unsafe {
@@ -137,8 +142,8 @@ pub(crate) fn allocate(len: usize, location: MemoryLocation, zeroed: bool) -> Re
                 let _device = Device::select(device_id)?;
                 check(cudaMalloc(&mut raw, len))?;
                 if zeroed {
-                    if let Err(error) =
-                        check(cudaMemset(raw, 0, len)).and_then(|_| check(cudaDeviceSynchronize()))
+                    if let Err(error) = check(cudaMemset(raw, 0, len))
+                        .and_then(|_| check(cudaDeviceSynchronize()))
                     {
                         cudaFree(raw);
                         return Err(error);
@@ -279,5 +284,5 @@ pub(crate) unsafe fn copy_device(
 }
 
 #[cfg(test)]
-#[path = "../../../../tests/unit_tests/triton/cuda.rs"]
+#[path = "../../../tests/unit_tests/memory/cuda.rs"]
 mod tests;

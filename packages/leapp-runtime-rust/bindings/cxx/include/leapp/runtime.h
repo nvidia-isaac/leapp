@@ -4,6 +4,7 @@
 #ifndef LEAPP_RUNTIME_H_
 #define LEAPP_RUNTIME_H_
 
+#include <cstddef>
 #include <initializer_list>
 #include <memory>
 #include <span>
@@ -16,9 +17,7 @@
 #include "leapp/status.h"
 #include "leapp/dlpack.h"
 
-namespace leapp {
-
-enum class EngineKind { kTriton };
+namespace lrt {
 
 enum class ExecutionDevice { kCpu, kCuda };
 
@@ -29,12 +28,17 @@ struct MemoryLocation {
   bool operator==(const MemoryLocation&) const = default;
 };
 
+struct OutputPoolOptions {
+  // Zero disables caching. The byte budget follows bundle and dynamic sizes.
+  std::size_t max_entries = 64;
+};
+
 struct SessionOptions {
   ExecutionDevice device = ExecutionDevice::kCpu;
   uint32_t device_id = 0;
   MemoryLocation output_location;
   std::unordered_map<std::string, MemoryLocation> output_overrides;
-  EngineKind engine = EngineKind::kTriton;
+  OutputPoolOptions output_pool;
 };
 
 /// @brief Retained outputs; copies share allocations.
@@ -104,6 +108,6 @@ class Session {
   std::unique_ptr<Data> data_;
 };
 
-}  // namespace leapp
+}  // namespace lrt
 
 #endif  // LEAPP_RUNTIME_H_

@@ -157,10 +157,10 @@ fn copy_initial(
         byte_offset: 0,
     };
     // SAFETY: bytes and shape remain borrowed until the synchronous engine copy completes.
-    Ok(engine.copy(unsafe { BorrowedTensor::new(&descriptor) }, location)?)
+    Ok(engine.copy(unsafe { BorrowedTensor::new(&descriptor) }, location, None)?)
 }
 
-fn dl_dtype(dtype: DataType) -> DLDataType {
+pub(super) fn dl_dtype(dtype: DataType) -> DLDataType {
     let (code, bits) = match dtype {
         DataType::Bool => (6, 8),
         DataType::Uint8 => (1, 8),

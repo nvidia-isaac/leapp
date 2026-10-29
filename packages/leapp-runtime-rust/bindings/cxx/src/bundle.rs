@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{dtype::wire_dtype, ffi};
-use leapp_runtime::{Bundle, Metadata, MetadataValue};
+use lrt::{Bundle, Metadata, MetadataValue};
 use std::{ffi::OsStr, os::unix::ffi::OsStrExt, path::Path};
 
 pub struct BundleHandle(pub Option<Bundle>);

@@ -6,7 +6,7 @@
 #include <memory>
 #include <string_view>
 
-namespace leapp {
+namespace lrt {
 /// Borrowed descriptor, metadata, and storage must stay valid and unmodified,
 /// with producer work complete on every execution stream, until Run returns.
 struct NamedTensor {
@@ -22,5 +22,5 @@ struct DLPackDeleter {
 };
 /// Standard DLPack lease with RAII cleanup. release() transfers it to a consumer.
 using ManagedTensor = std::unique_ptr<DLManagedTensorVersioned, DLPackDeleter>;
-}  // namespace leapp
+}  // namespace lrt
 #endif  // LEAPP_DLPACK_H_
