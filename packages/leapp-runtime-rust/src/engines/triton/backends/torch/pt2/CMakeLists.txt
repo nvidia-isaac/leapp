@@ -43,7 +43,7 @@ add_library(triton_leapp_pt2 SHARED
 target_include_directories(triton_leapp_pt2 PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(triton_leapp_pt2 PRIVATE
-  leapp_backend_common "${NATIVERT_LIBRARY}")
+  leapp_backend_common "${NATIVERT_LIBRARY}" ${CMAKE_DL_LIBS})
 target_compile_options(triton_leapp_pt2 PRIVATE -Wall -Wextra -Wpedantic)
 target_link_options(triton_leapp_pt2 PRIVATE "LINKER:--no-undefined")
 set_target_properties(triton_leapp_pt2 PROPERTIES

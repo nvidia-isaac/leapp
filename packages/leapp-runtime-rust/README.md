@@ -21,6 +21,10 @@ See the [Python bindings](bindings/python/README.md) for `import lrt` and the
 [C++ bindings](bindings/cxx/README.md) for the `lrt` namespace and `lrt::runtime`
 CMake target. CPU execution still requires the CUDA runtime SDK.
 
+Embedded Warp operators in ONNX/PT2 bundles use optional native adapters installed
+beside their Triton backends. See [Warp operators](src/engines/triton/backends/README.md#warp-operators)
+for SDK requirements, installation, and integration tests.
+
 ## Rust
 
 ```rust
