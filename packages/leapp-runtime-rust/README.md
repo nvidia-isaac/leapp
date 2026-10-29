@@ -3,41 +3,23 @@ SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All 
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# LEAPP Rust bundle and Session API
+# LEAPP Rust runtime
 
-This package loads and validates exported LEAPP bundles and exposes their public
-inspection API in Rust, Python, and C++. It also exports the core Rust Session API and compiles its shared binding
-wrapper. This revision defines the execution contract: `Session::open()` returns
-`ErrorCode::Unsupported` until the runtime integration supplies execution.
-Bundle loading does not initialize an inference backend.
+This package targets Linux and executes exported LEAPP bundles through embedded
+Triton 2.69.0. All builds require the Triton and CUDA runtime SDKs. Rust, Python,
+and C++ expose bundle inspection and synchronous execution.
 
-The public API uses `lrt` in all three languages: the Rust crate, Python import,
-and C++ namespace. Cargo and Python distribution names remain `leapp-runtime`.
-The inspection and full-runtime Python distributions should be installed in
-separate environments.
+## Installation
 
-## Included code
+Build on Linux with Rust 1.88 or newer, the Triton 2.69.0 SDK, and the CUDA
+runtime SDK. Set `TRITON_ROOT` and `CUDA_ROOT` if they are not installed under
+`/opt/tritonserver` and `/usr/local/cuda`. Make their shared libraries and the
+selected model backends available through `LD_LIBRARY_PATH`.
 
-| Layer | Contents |
-| --- | --- |
-| Rust core | `Bundle`, YAML schema parsing, graph and artifact validation, SHA-256 checks, safetensors initial-state validation |
-| Public inspection types | `PortRef`, `PortSpec`, `DataType`, `Metadata`, `MetadataValue`, `BundleError`, `ErrorCode` |
-| Core Session API | `Session`, `SessionOptions`, `OutputPoolOptions`, `OutputPlacement`, `RunResult`, device/memory types, and `RuntimeError` |
-| Tensor API | Backend-independent DLPack descriptors and ownership types used by Session inputs and results |
-| Common lifecycle crate | `SessionHandle`, independent closure, error-source preservation, and cleanup after poisoned locks; three focused regression tests |
-| Python | PyO3 bundle bindings, detached metadata and port descriptors, typed stubs and structured exceptions |
-| C++ | C++20 bundle facade, typed metadata, status and data-type headers, private cxx transport, installable CMake target |
-| Tests | Rust bundle regression suite and independent Python/C++ inspection and lifetime tests |
-
-Execution, feedback state, graph planning, native storage, and backend adapters
-are supplied by the runtime integration. The Rust Session contract and the
-`bindings/common` crate compile here against the same exported API types.
-Python and C++ currently expose bundle inspection; their executable Session
-bindings arrive with runtime integration. See the
-[common lifecycle crate](bindings/common/README.md) for integration and testing.
-This package has no Triton, CUDA, ONNX Runtime, PyTorch, or NumPy dependency.
-The C++ binding currently supports Unix platforms (Linux and macOS), using native
-path bytes.
+The Cargo package is `leapp-runtime`; its Rust import name is `lrt`.
+See the [Python bindings](bindings/python/README.md) for `import lrt` and the
+[C++ bindings](bindings/cxx/README.md) for the `lrt` namespace and `lrt::runtime`
+CMake target. CPU execution still requires the CUDA runtime SDK.
 
 ## Rust
 
@@ -56,7 +38,8 @@ for output in bundle.pipeline_outputs() {
 by output names, including internal ports. Names are unqualified and borrowed
 from the bundle, with declaration order and duplicates preserved. An absent
 model returns `None`; a model with no ports returns two empty lists. Use these
-names with `input_info(node, port)` and `output_info(node, port)` for descriptors.
+names with `input_info(node, port)` and `output_info(node, port)` for
+descriptors.
 
 `Bundle` is an immutable, reference-counted snapshot. Clones share the snapshot;
 inspection is safe across threads. Getters preserve declaration order and
@@ -72,99 +55,191 @@ the graph. Declared external inputs can remain unresolved. Python and C++
 represent missing input descriptors as `None` and `std::nullopt`, respectively.
 
 The loader normalizes known backend aliases, accepts custom nonempty backend
-names, and leaves adapter availability to execution.
+names, and leaves engine availability to execution.
 
 The loader preserves ordinary YAML metadata, duplicate-key handling, and YAML
 merges. Custom YAML tags are unsupported and fail during parsing; LEAPP exports
 do not generate them.
 
-## Build and test
+## Synchronous execution
 
-Run from this directory with a Rust toolchain:
-
-```sh
-cargo test --locked
-cargo check --locked --workspace
-cargo clippy --locked --workspace --all-targets -- -D warnings
-cargo fmt --all --check
-```
-
-The default workspace member is the core crate, including the three common
-lifecycle tests. These tests require no engine or language-binding SDK. Building
-the complete workspace
-also requires a C++20 compiler and Python 3.10 or newer. See
-[Python bindings](bindings/python/README.md) and
-[C++ bindings](bindings/cxx/README.md) for installation and binding tests.
-Core bundle tests live in `tests/unit_tests/`, with shared fixtures in
-`tests/fixtures/`. Language-binding tests stay under their respective bindings.
-All inspection tests create opaque artifact bytes; no model generation is needed.
-
-## Core Session contract
-
-`Session::open(&bundle, options)` accepts immutable construction options:
+Rust callers can borrow numeric CPU slices directly, without allocation or unsafe
+code. The constructor infers the dtype and checks the shape:
 
 ```rust
-use lrt::{ExecutionDevice, Session, SessionOptions};
-
-let options = SessionOptions {
-    device: ExecutionDevice::Cpu,
-    ..Default::default()
-};
-# let bundle = lrt::Bundle::open("export/policy.yaml")?;
-let session = Session::open(&bundle, options);
-// This API revision returns a RuntimeError with ErrorCode::Unsupported.
-# Ok::<(), lrt::BundleError>(())
-```
-
-The public lifecycle is `open`, `info`, `is_open`, `new_session`, `run`, `reset`,
-and `close`. `run` borrows a `HashMap<&str, dlpack::BorrowedTensor<'_>>` and returns
-a `RunResult` retaining `SharedTensor` outputs:
-
-```rust
-use lrt::{dlpack::BorrowedTensor, RunResult, RuntimeError, Session};
+use lrt::dlpack::BorrowedTensor;
 use std::collections::HashMap;
 
-fn step(session: &mut Session) -> Result<RunResult, RuntimeError> {
-    let values = [1_f32, 2., 3.];
-    let inputs = HashMap::from([
-        ("model/input", BorrowedTensor::cpu(&values, &[3]).unwrap()),
-    ]);
-    session.run(&inputs)
-}
+let values = [1.0_f32, 2.0, 3.0, 4.0];
+let input = BorrowedTensor::cpu(&values, &[4])?;
+let result = session.run(&HashMap::from([("preprocess/observation", input)]))?;
+let action = result.get("policy/action").unwrap();
+let values = action.to_cpu_vec::<f32>()?;
 ```
 
-Input names and tensors are borrowed. Matching is by name, independent of map
-iteration order; missing and unknown inputs are rejected by execution. Inserting
-a duplicate key replaces the previous value before the runtime sees the map.
-Results preserve the bundle's output declaration order.
+`BorrowedTensor::cpu` retains immutable borrows of the values and shape. It accepts
+fixed-width Rust integers and `f32`/`f64`; booleans and half floats use raw descriptors.
+`to_cpu_vec` accepts CPU, pinned CPU, and CUDA outputs, validates dtype and layout,
+and returns an independent Rust vector. CUDA transfers select the source device,
+finish before returning, and restore the caller's device. It rejects outputs already exposed through
+`descriptor()` or `export()` on any clone, since foreign consumers may still write
+them. Copying and first exposure are synchronized. CPU copies do not exclude the
+original storage from pool reuse. An existing `BorrowedTensor` can also be read
+without copying through its safe `as_cpu_slice` method when its storage is on the host.
+CPU-slice inputs work with both CPU and GPU execution; output placement does not
+change the safe input or output-copy APIs.
 
-There is no separate public Runtime owner, no per-call RunOptions, and no engine
-field in SessionOptions. Output placement is configured at construction and
-inherited by every new session.
+Array libraries and CUDA callers can use standard DLPack descriptors through
+`unsafe { BorrowedTensor::new(&descriptor) }`. They must retain the descriptor,
+shape/strides, and ready, immutable storage through the synchronous call. CUDA
+producer work must already be complete. Outputs expose their descriptor through
+`descriptor()` or transfer a fresh managed lease with `export(true).into_raw()`;
+the receiving consumer must invoke that lease's deleter exactly once.
 
-The execution contract requires `new_session()` to share loaded models and
-immutable options while starting from captured initial state, not current
-feedback. Each session owns its output cache; peers start with an empty cache
-and inherit the retention policy. `reset()` restores initial state. Closing one
-session preserves its peers and retained results. Execution is unavailable in this
-revision; the runtime integration implements these operations without changing
-the public signatures. There is no runtime selector or optional backend feature.
+See `examples/run.rs` for a complete CPU example.
 
-`SessionOptions::output_pool` contains `OutputPoolOptions { max_entries }`,
-defaulting to 64 cached buffers per session. Zero disables caching without
-preventing allocations. The execution implementation derives the byte budget
-from the bundle's tensor shapes, dtypes, and placement, growing it for actual
-dynamic output sizes. There is no fixed byte cap or public `max_bytes` option;
-large tensors remain eligible for reuse. This policy does not cap model memory,
-fixed workspaces, or retained results. Retained or externally exposed outputs
-must not be reused, and result pooling must preserve native workspace addresses
-and cached metadata. Pool allocation and sizing arrive with runtime integration.
+`SessionOptions` configures execution and output placement. Defaults use CPU
+execution and CPU outputs. Triton is selected automatically:
 
-## Shared lifecycle
+```rust
+use lrt::{Session, SessionOptions};
 
-`bindings/common` compiles its `SessionHandle` wrapper against the exported core
-Session API. It provides serialization, error-source preservation, and independent
-closure. Its existing three lifecycle tests use a small test-only session to
-exercise waiting and poisoned-lock cleanup before native execution is available.
-The wrapper itself is built against the real core crate by workspace checks.
-See the [session reset contract](bindings/common/README.md#session-reset).
+let mut session = Session::open(&bundle, SessionOptions::default())?;
+```
+
+Set `device` to `ExecutionDevice::Cuda { device_id: 0 }` for GPU execution.
+`LEAPP_TRITON_BACKENDS` selects the backend directory when opening a session,
+falling back to `$TRITON_ROOT/backends` or `/opt/tritonserver/backends`.
+Set installation variables before starting the process. `new_session()` shares
+the already-loaded models without rediscovering them.
+`session.info()` borrows the retained bundle snapshot. Every public input must be supplied
+in a `HashMap<&str, BorrowedTensor<'_>>`, using its LEAPP name. Names and
+tensors are borrowed for the call; input map iteration order has no effect on routing. Generated Triton names and internal ports
+are hidden. Results contain only declared public outputs, in declaration order;
+repeated declarations share one named entry. `get` returns `None` for absent
+names and `iter` traverses names and tensors without copying data.
+
+Each session owns its delayed feedback: call N consumes the outputs from call
+N-1. Feedback and unconnected inputs start from exported safetensors values, or
+zeros when no value is exported. Dynamic state requires a concrete initial
+value. Initial values for public or forward-connected inputs are superseded by
+supplied inputs or graph routing. A successful call publishes all next-state
+tensors together; validation and inference failures leave the session's feedback
+unchanged. `reset()` restores the values captured when the session was opened, without
+rereading files or changing retained results. It does not reset model-internal
+state.
+
+`Session::open(&bundle, options)` loads models and captures initial state.
+`session.new_session()` shares the loaded engine and construction options while
+starting from captured initial state. It does not copy current feedback or reread
+files. Separate sessions can run concurrently with independent feedback; `run`
+borrows one session mutably. `close()` releases only that session's state and
+engine reference. Peers and retained results remain usable. The last engine
+owner stops Triton and removes its temporary repository. Model-internal mutable
+state remains shared, and `reset()` affects only explicit session state.
+
+Tensor exchange uses DLPack 1.0 descriptors directly. The small `dlpack` module
+contains generated ABI definitions and lifetime guards; it has no tensor operations.
+Inputs must use supported numeric dtypes and contiguous layouts. The Triton engine
+honors byte offsets and rejects unsupported layouts before inference. Frameworks
+or callers perform explicit contiguous copies, dtype conversion, and transfers.
+
+Outputs retain their allocation and metadata independently of the runtime. Exports
+may alias other exports of the same result and may be writable. Outputs that also
+feed back are copied to the requested public location before publication, protecting
+private feedback and reset snapshots. Do not mutate an allocation while inference
+or another consumer reads it.
+
+Each session owns its output cache. `SessionOptions::output_pool.max_entries`
+limits cached allocations (default 64); zero disables caching while inference
+continues to allocate normally. The byte budget is the bundle's largest static
+output size multiplied by this entry limit, and grows when execution produces a
+larger dynamic output. There is no fixed byte cap or eager allocation. This policy
+limits cache retention, not memory held by models, live outputs, or feedback.
+`new_session()` inherits the policy with an empty cache; close releases cached
+references while retained outputs stay valid.
+
+Reuse matches byte size and memory location and requires exclusive ownership,
+including no weak owners. Descriptor access or DLPack export permanently excludes
+an allocation from reuse because foreign GPU work may outlive its lease. Safe
+`to_cpu_vec` copies preserve reuse eligibility. Public feedback copies use the
+same cache; retained results and feedback always prevent reuse.
+
+`SessionOptions::output_placement` sets a default location and per-output
+overrides keyed by public LEAPP names at construction. `run` accepts only inputs.
+New sessions inherit this placement, and every output uses its exact requested location.
+Initial state, default inputs, and private feedback stay on the execution device.
+Public outputs retain their requested location, including outputs also used as
+feedback.
+Execution errors expose `code()`, `phase()`, and their source chain.
+
+A runnable example uses the generated policy fixture:
+
+```sh
+cargo run --locked --example run -- target/triton-fixtures/policy.yaml
+```
+
+## Model support
+
+Session setup validates graph routing and converts the bundle to a temporary
+Triton model repository. The loaded Triton version must be 2.69.0. ONNX models
+use Triton's ONNX Runtime backend. Unsupported backends fail when opening a
+session; bundle inspection still accepts custom backend names.
+
+## PT2 execution
+
+The runtime configures PT2 artifacts for an externally installed `leapp_pt2`
+Triton backend. Set `LEAPP_TRITON_BACKENDS` to a directory containing
+`leapp_pt2/libtriton_leapp_pt2.so` and any other backends used by the bundle.
+Backend implementations and their dependencies are installed separately.
+
+PT2 inputs and outputs follow exported-program order. Archive devices must match
+the selected model instance. The runtime supplies feedback, default inputs, and
+output placement through the same session API used for ONNX models.
+
+## TorchScript execution
+
+The runtime configures scripted and traced artifacts for an externally installed
+`leapp_torchscript` Triton backend. Install
+`leapp_torchscript/libtriton_leapp_torchscript.so` beneath the runtime's backend
+directory, with its dependencies discoverable by the dynamic loader.
+
+Models accept positional tensor arguments and return a tensor or a flat tuple
+of tensors. Conversion maps YAML port order to `INPUT__0`, `INPUT__1`, and
+`OUTPUT__0`, `OUTPUT__1`; public LEAPP names remain unchanged. Session reset
+restores explicit feedback and default inputs, without resetting model-internal
+mutable state.
+
+## TensorRT engines
+
+Bundles can reference prebuilt serialized TensorRT engines with `backend: trt`
+or its `tensorrt` alias:
+
+```yaml
+parameters:
+  backend: trt
+  model_path: policy.engine
+```
+
+The artifact filename is preserved through `default_model_filename`, so `.plan`
+and `.engine` files work without renaming. The converter emits `backend:
+tensorrt`, `platform: tensorrt_plan`, `max_batch_size: 0`, and a GPU instance
+for the selected `ExecutionDevice::Cuda`. Port names, dtypes, and shapes must
+describe the engine's I/O. Triton validates engine compatibility and input
+shapes; the Rust runtime neither builds engines nor inspects their payloads.
+
+Install the supplied plugin at
+`<backend_directory>/tensorrt/libtriton_tensorrt.so`, with its TensorRT and CUDA
+dependencies available to the loader. Execution uses `SessionOptions`,
+`Session`, output placement, feedback, and reset APIs. CPU, pinned-host, and
+CUDA input/output buffers are supported by the Triton engine. TensorRT
+model execution always requires a GPU.
+
+Dynamic dimensions use the engine's first optimization profile (profile 0). This
+integration targets ordinary tensor I/O. Shape-tensor configuration, selection
+of additional profiles, custom TensorRT plugins, and automatic engine
+compilation are not exposed.
+
+Engines must match the deployed TensorRT version and GPU. The runtime does not
+compile models. See [AGENTS.md](AGENTS.md) for contributor layout and validation
+commands.

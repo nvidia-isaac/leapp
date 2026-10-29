@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: Apache-2.0
-
 [package]
 name = "leapp-runtime-python"
 version = "0.1.0"
@@ -12,5 +11,6 @@ name = "_native"
 crate-type = ["cdylib"]
 
 [dependencies]
+leapp-runtime-bindings = { path = "../common" }
 leapp-runtime = { path = "../.." }
 pyo3 = { version = "=0.27.2", features = ["extension-module"] }

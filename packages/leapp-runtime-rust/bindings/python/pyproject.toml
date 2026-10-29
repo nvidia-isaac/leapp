@@ -6,9 +6,9 @@ build-backend = "maturin"
 name = "leapp-runtime"
 version = "0.1.0"
 requires-python = ">=3.10"
-description = "Backend-independent LEAPP bundle loading and inspection"
+description = "Synchronous LEAPP inference through Triton"
 license = "Apache-2.0"
-dependencies = []
+dependencies = ["numpy>=1.26"]
 
 [project.optional-dependencies]
 test = ["pytest>=8"]

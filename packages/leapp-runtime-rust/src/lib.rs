@@ -1,10 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Bundle inspection and the public Session API.
-//!
-//! Session execution is supplied by the runtime integration; in this API revision,
-//! [`Session::open`] returns [`ErrorCode::Unsupported`].
+//! Load and inspect an immutable LEAPP bundle without initializing a backend.
 //!
 //! Implementation schema types are intentionally private:
 //!
@@ -12,7 +9,7 @@
 //! use lrt::{BundleDescription, NodeSpec, Pipeline};
 //! ```
 //!
-//! Engine implementations are an internal compile-time choice:
+//! Execution uses embedded Triton; engine implementations remain private:
 //!
 //! ```compile_fail
 //! use lrt::engines;
@@ -29,3 +26,6 @@ pub use bundle::{Bundle, DataType, Metadata, MetadataValue, PortRef, PortSpec};
 pub use engines::{ExecutionDevice, MemoryLocation};
 pub use error::{BundleError, ErrorCode, RuntimeError};
 pub use session::{OutputPlacement, OutputPoolOptions, RunResult, Session, SessionOptions};
+
+#[cfg(test)]
+extern crate self as lrt;
