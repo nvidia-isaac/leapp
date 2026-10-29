@@ -12,9 +12,9 @@ python -m pytest bindings/python/tests
 ```
 
 ```python
-from leapp_runtime import Bundle, BundleError
+import lrt
 
-bundle = Bundle.open("export/policy.yaml")
+bundle = lrt.Bundle.open("export/policy.yaml")
 for name, spec in bundle.pipeline_outputs().items():
     print(name, spec.dtype, spec.shape)
 for model in bundle.model_names():
@@ -34,6 +34,7 @@ with unhashable or colliding Python keys become `MetadataMapping` so no entries
 are lost. Custom YAML tags are unsupported and raise `BundleError` during parsing.
 
 `BundleError` exposes `code` (an `ErrorCode`), `phase`, `path`, and `message`.
-Only bundle inspection is exported. This distribution uses the same
-`leapp_runtime` package name as the full runtimes, so use a separate environment.
+Only bundle inspection is exported. Install the `leapp-runtime` distribution
+and import `lrt`. The full runtimes use the same import name, so use a separate
+environment.
 No inference SDK or NumPy is required.

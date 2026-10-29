@@ -9,7 +9,7 @@ mod bundle;
 mod dtype;
 
 use bridge::ffi;
-use leapp_runtime::ErrorCode;
+use lrt::ErrorCode;
 
 fn success() -> ffi::StatusData {
     ffi::StatusData {

@@ -3,7 +3,7 @@
 
 use crate::bundle::*;
 
-#[cxx::bridge(namespace = "leapp::detail")]
+#[cxx::bridge(namespace = "lrt::detail")]
 pub mod ffi {
     struct StatusData {
         code: i32,
@@ -85,13 +85,26 @@ pub mod ffi {
 
     extern "Rust" {
         type BundleHandle;
+
         fn bundle_new() -> Box<BundleHandle>;
+
         fn bundle_open(path: &[u8], output: &mut BundleHandle) -> StatusData;
+
         fn bundle_path(bundle: &BundleHandle) -> Vec<u8>;
+
         fn bundle_models(bundle: &BundleHandle) -> Vec<String>;
+
         fn bundle_model_io(bundle: &BundleHandle, node: &[u8]) -> ModelIoData;
+
         fn bundle_ports(bundle: &BundleHandle, inputs: bool) -> Vec<PortName>;
-        fn bundle_port(bundle: &BundleHandle, node: &[u8], port: &[u8], input: bool) -> PortData;
+
+        fn bundle_port(
+            bundle: &BundleHandle,
+            node: &[u8],
+            port: &[u8],
+            input: bool,
+        ) -> PortData;
+
         fn bundle_metadata(
             bundle: &BundleHandle,
             field: MetadataField,

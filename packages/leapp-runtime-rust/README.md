@@ -11,8 +11,10 @@ wrapper. This revision defines the execution contract: `Session::open()` returns
 `ErrorCode::Unsupported` until the runtime integration supplies execution.
 Bundle loading does not initialize an inference backend.
 
-The inspection and full-runtime Python distributions share the `leapp_runtime`
-import name and should be installed in separate environments.
+The public API uses `lrt` in all three languages: the Rust crate, Python import,
+and C++ namespace. Cargo and Python distribution names remain `leapp-runtime`.
+The inspection and full-runtime Python distributions should be installed in
+separate environments.
 
 ## Included code
 
@@ -20,7 +22,7 @@ import name and should be installed in separate environments.
 | --- | --- |
 | Rust core | `Bundle`, YAML schema parsing, graph and artifact validation, SHA-256 checks, safetensors initial-state validation |
 | Public inspection types | `PortRef`, `PortSpec`, `DataType`, `Metadata`, `MetadataValue`, `BundleError`, `ErrorCode` |
-| Core Session API | `Session`, `SessionOptions`, `OutputPlacement`, `RunResult`, device/memory types, and `RuntimeError` |
+| Core Session API | `Session`, `SessionOptions`, `OutputPoolOptions`, `OutputPlacement`, `RunResult`, device/memory types, and `RuntimeError` |
 | Tensor API | Backend-independent DLPack descriptors and ownership types used by Session inputs and results |
 | Common lifecycle crate | `SessionHandle`, independent closure, error-source preservation, and cleanup after poisoned locks; three focused regression tests |
 | Python | PyO3 bundle bindings, detached metadata and port descriptors, typed stubs and structured exceptions |
@@ -40,14 +42,14 @@ path bytes.
 ## Rust
 
 ```rust
-use leapp_runtime::Bundle;
+use lrt::Bundle;
 
 let bundle = Bundle::open("export/policy.yaml")?;
 for output in bundle.pipeline_outputs() {
     let spec = bundle.output_info(&output.node, &output.port).unwrap();
     println!("{}: {:?} {:?}", output.name(), spec.dtype, spec.shape);
 }
-# Ok::<(), leapp_runtime::BundleError>(())
+# Ok::<(), lrt::BundleError>(())
 ```
 
 `model_io(node)` returns `Option<(Vec<&str>, Vec<&str>)>`: input names followed
@@ -102,30 +104,61 @@ All inspection tests create opaque artifact bytes; no model generation is needed
 `Session::open(&bundle, options)` accepts immutable construction options:
 
 ```rust
-use leapp_runtime::{ExecutionDevice, OutputPlacement, Session, SessionOptions};
+use lrt::{ExecutionDevice, Session, SessionOptions};
 
 let options = SessionOptions {
     device: ExecutionDevice::Cpu,
-    output_placement: OutputPlacement::default(),
+    ..Default::default()
 };
-# let bundle = leapp_runtime::Bundle::open("export/policy.yaml")?;
+# let bundle = lrt::Bundle::open("export/policy.yaml")?;
 let session = Session::open(&bundle, options);
 // This API revision returns a RuntimeError with ErrorCode::Unsupported.
-# Ok::<(), leapp_runtime::BundleError>(())
+# Ok::<(), lrt::BundleError>(())
 ```
 
 The public lifecycle is `open`, `info`, `is_open`, `new_session`, `run`, `reset`,
-and `close`. `run` accepts named `dlpack::BorrowedTensor` inputs and returns a
-`RunResult` retaining `SharedTensor` outputs. There is no separate public Runtime
-owner, no per-call RunOptions, and no engine field in SessionOptions. Output
-placement is configured at construction and inherited by every new session.
+and `close`. `run` borrows a `HashMap<&str, dlpack::BorrowedTensor<'_>>` and returns
+a `RunResult` retaining `SharedTensor` outputs:
+
+```rust
+use lrt::{dlpack::BorrowedTensor, RunResult, RuntimeError, Session};
+use std::collections::HashMap;
+
+fn step(session: &mut Session) -> Result<RunResult, RuntimeError> {
+    let values = [1_f32, 2., 3.];
+    let inputs = HashMap::from([
+        ("model/input", BorrowedTensor::cpu(&values, &[3]).unwrap()),
+    ]);
+    session.run(&inputs)
+}
+```
+
+Input names and tensors are borrowed. Matching is by name, independent of map
+iteration order; missing and unknown inputs are rejected by execution. Inserting
+a duplicate key replaces the previous value before the runtime sees the map.
+Results preserve the bundle's output declaration order.
+
+There is no separate public Runtime owner, no per-call RunOptions, and no engine
+field in SessionOptions. Output placement is configured at construction and
+inherited by every new session.
 
 The execution contract requires `new_session()` to share loaded models and
 immutable options while starting from captured initial state, not current
-feedback. `reset()` restores that initial state. Closing one session preserves
-its peers and retained results. Execution is deliberately unavailable in this
+feedback. Each session owns its output cache; peers start with an empty cache
+and inherit the retention policy. `reset()` restores initial state. Closing one
+session preserves its peers and retained results. Execution is unavailable in this
 revision; the runtime integration implements these operations without changing
 the public signatures. There is no runtime selector or optional backend feature.
+
+`SessionOptions::output_pool` contains `OutputPoolOptions { max_entries }`,
+defaulting to 64 cached buffers per session. Zero disables caching without
+preventing allocations. The execution implementation derives the byte budget
+from the bundle's tensor shapes, dtypes, and placement, growing it for actual
+dynamic output sizes. There is no fixed byte cap or public `max_bytes` option;
+large tensors remain eligible for reuse. This policy does not cap model memory,
+fixed workspaces, or retained results. Retained or externally exposed outputs
+must not be reused, and result pooling must preserve native workspace addresses
+and cached metadata. Pool allocation and sizing arrive with runtime integration.
 
 ## Shared lifecycle
 

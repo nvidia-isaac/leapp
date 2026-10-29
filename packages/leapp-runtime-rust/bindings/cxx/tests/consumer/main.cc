@@ -4,11 +4,11 @@
 #include "leapp/bundle.h"
 
 int main() {
-  leapp::Bundle bundle;
-  const auto status = leapp::Bundle::Open("", &bundle);
+  lrt::Bundle bundle;
+  const auto status = lrt::Bundle::Open("", &bundle);
   return !status.ok() && !bundle.is_valid() &&
                  bundle.model_io("absent") == nullptr &&
-                 status.code() == leapp::ErrorCode::kInvalidArgument
+                 status.code() == lrt::ErrorCode::kInvalidArgument
              ? 0
              : 1;
 }

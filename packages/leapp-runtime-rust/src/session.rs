@@ -16,11 +16,41 @@ pub struct OutputPlacement {
     pub default_location: MemoryLocation,
     pub overrides: HashMap<String, MemoryLocation>,
 }
+
+/// Retention policy for each session's reusable output buffers.
+///
+/// The runtime derives the byte budget from bundle tensor shapes, dtypes, and
+/// placement, growing it for actual dynamic output sizes. There is no fixed
+/// byte limit that excludes large tensors from reuse. This policy does not cap
+/// memory held by models, fixed workspaces, or retained results.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutputPoolOptions {
+    /// Maximum number of cached buffers. Zero disables caching, not allocation.
+    pub max_entries: usize,
+}
+
+impl Default for OutputPoolOptions {
+    fn default() -> Self {
+        Self { max_entries: 64 }
+    }
+}
+
 /// Immutable construction options, inherited by every new session.
+///
+/// ```
+/// use lrt::{OutputPoolOptions, SessionOptions};
+///
+/// let options = SessionOptions {
+///     output_pool: OutputPoolOptions { max_entries: 0 },
+///     ..Default::default()
+/// };
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct SessionOptions {
     pub device: ExecutionDevice,
     pub output_placement: OutputPlacement,
+    /// Each session has its own cache; peers inherit this policy, not its buffers.
+    pub output_pool: OutputPoolOptions,
 }
 
 /// Managed DLPack public outputs in bundle declaration order, independent of the session.
@@ -73,6 +103,7 @@ impl Session {
 
     /// Create an independently initialized session without reloading models or files.
     /// Configuration and captured initial values are inherited; current feedback is not.
+    /// The peer starts with an empty output cache using the same retention policy.
     pub fn new_session(&self) -> Result<Self, RuntimeError> {
         Err(execution_unavailable("load"))
     }
@@ -86,10 +117,27 @@ impl Session {
     }
 
     /// Borrow every public input exactly once until synchronous execution completes.
+    /// Names and tensors are borrowed from the map; matching is by name, independent
+    /// of iteration order. Missing or unknown inputs are errors. Inserting a duplicate
+    /// key replaces its earlier value before the runtime receives the map.
     /// Feedback advances only after every output and isolation copy succeeds.
+    ///
+    /// ```
+    /// use lrt::{dlpack::BorrowedTensor, RunResult, RuntimeError, Session};
+    /// use std::collections::HashMap;
+    ///
+    /// fn step(session: &mut Session) -> Result<RunResult, RuntimeError> {
+    ///     let values = [1_f32, 2., 3.];
+    ///     let name = String::from("model/input");
+    ///     let inputs = HashMap::from([
+    ///         (name.as_str(), BorrowedTensor::cpu(&values, &[3]).unwrap()),
+    ///     ]);
+    ///     session.run(&inputs)
+    /// }
+    /// ```
     pub fn run(
         &mut self,
-        _inputs: &[(&str, BorrowedTensor<'_>)],
+        _inputs: &HashMap<&str, BorrowedTensor<'_>>,
     ) -> Result<RunResult, RuntimeError> {
         Err(execution_unavailable("execute"))
     }

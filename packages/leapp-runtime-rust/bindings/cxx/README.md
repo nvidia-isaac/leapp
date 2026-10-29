@@ -18,13 +18,15 @@ cmake --build target/consumer --parallel
 ```
 
 Consumers use `find_package(leapp_runtime CONFIG REQUIRED)` and link
-`leapp::runtime`. Include `leapp/bundle.h` for inspection or `leapp/data_type.h`
+`lrt::runtime`. Public types live in namespace `lrt`; the CMake package and
+installed header paths retain their LEAPP names.
+Include `leapp/bundle.h` for inspection or `leapp/data_type.h`
 for scalar type declarations. Custom YAML tags are unsupported; `Bundle::Open`
 returns an invalid-argument status in the `parse` phase.
 
 ```cpp
-leapp::Bundle bundle;
-auto status = leapp::Bundle::Open("export/policy.yaml", &bundle);
+lrt::Bundle bundle;
+auto status = lrt::Bundle::Open("export/policy.yaml", &bundle);
 if (!status.ok()) {
   // status.code(), status.phase(), and status.message() describe the failure.
   return 1;

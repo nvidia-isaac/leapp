@@ -13,14 +13,16 @@ Close reports the lock error after cleanup; subsequent close calls succeed.
 Normal run/reset operations still fail on poisoned locks.
 
 This crate compiles against the exported `Session`, `SessionOptions`, DLPack
-input/result types, and errors in `leapp_runtime`. Execution is not implemented
+input/result types, and errors in `lrt`. Execution is not implemented
 in this API revision: opening a SessionHandle preserves the core Unsupported
 error. The runtime integration supplies execution using these same signatures.
 The Python and C++ bindings currently expose bundle inspection only.
 
 `SessionHandle::open()` accepts construction-time `SessionOptions`. `run()`
-accepts named borrowed inputs without per-call options. `new_session()` creates
-an independent session sharing the loaded engine and immutable options.
+borrows a `HashMap<&str, BorrowedTensor<'_>>` without per-call options and passes
+it directly to the core. `new_session()` creates an independent session sharing
+the loaded engine and immutable options, with an empty private output cache
+using the inherited `OutputPoolOptions` retention policy.
 
 The root Cargo test target includes `session.rs` against a small session API
 defined only in the test binary. Three tests cover waiting for an active run,

@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-namespace leapp {
+namespace lrt {
 
 /// @brief Fixed-width scalar types; half and Boolean values use packed bytes.
 enum class DataType : uint8_t {
@@ -25,6 +25,6 @@ enum class DataType : uint8_t {
   kFloat64
 };
 
-}  // namespace leapp
+}  // namespace lrt
 
 #endif  // LEAPP_DATA_TYPE_H_

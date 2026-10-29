@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::ffi;
-use leapp_runtime::DataType;
+use lrt::DataType;
 
 pub fn wire_dtype(value: DataType) -> ffi::Dtype {
     use DataType as D;

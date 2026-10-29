@@ -16,7 +16,7 @@
 
 #include "leapp-runtime-cxx/src/bridge.rs.h"
 
-namespace leapp {
+namespace lrt {
 namespace {
 namespace wire = detail;
 
@@ -311,4 +311,4 @@ const PortSpec* Bundle::output_info(std::string_view node,
   return data_ ? data_->Port(node, port, false) : nullptr;
 }
 
-}  // namespace leapp
+}  // namespace lrt

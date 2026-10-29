@@ -7,7 +7,7 @@
 #include <string>
 #include <utility>
 
-namespace leapp {
+namespace lrt {
 
 /// @brief Failure categories shared with the Rust runtime.
 enum class ErrorCode {
@@ -41,6 +41,6 @@ class [[nodiscard]] Status {
   std::string message_;
 };
 
-}  // namespace leapp
+}  // namespace lrt
 
 #endif  // LEAPP_STATUS_H_

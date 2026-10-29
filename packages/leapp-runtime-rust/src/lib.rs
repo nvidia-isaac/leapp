@@ -9,13 +9,13 @@
 //! Implementation schema types are intentionally private:
 //!
 //! ```compile_fail
-//! use leapp_runtime::{BundleDescription, NodeSpec, Pipeline};
+//! use lrt::{BundleDescription, NodeSpec, Pipeline};
 //! ```
 //!
 //! Engine implementations are an internal compile-time choice:
 //!
 //! ```compile_fail
-//! use leapp_runtime::engines;
+//! use lrt::engines;
 //! ```
 #![deny(unsafe_op_in_unsafe_fn)]
 
@@ -28,4 +28,4 @@ mod session;
 pub use bundle::{Bundle, DataType, Metadata, MetadataValue, PortRef, PortSpec};
 pub use engines::{ExecutionDevice, MemoryLocation};
 pub use error::{BundleError, ErrorCode, RuntimeError};
-pub use session::{OutputPlacement, RunResult, Session, SessionOptions};
+pub use session::{OutputPlacement, OutputPoolOptions, RunResult, Session, SessionOptions};

@@ -15,4 +15,4 @@ test = ["pytest>=8"]
 
 [tool.maturin]
 python-source = "python"
-module-name = "leapp_runtime._native"
+module-name = "lrt._native"

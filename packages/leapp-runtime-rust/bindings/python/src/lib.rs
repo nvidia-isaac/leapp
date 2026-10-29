@@ -5,16 +5,16 @@
 
 mod bundle;
 
-use leapp_runtime::ErrorCode;
+use lrt::ErrorCode;
 use pyo3::{create_exception, exceptions::PyException, prelude::*};
 
-create_exception!(leapp_runtime, BundleError, PyException);
+create_exception!(lrt, BundleError, PyException);
 
 fn diagnostic(py: Python<'_>, error: PyErr, code: ErrorCode, phase: &str) -> PyErr {
     let value = error.value(py);
     let result = (|| -> PyResult<()> {
         let code = py
-            .import("leapp_runtime")?
+            .import("lrt")?
             .getattr("ErrorCode")?
             .call1((code as i32,))?;
         value.setattr("code", code)?;

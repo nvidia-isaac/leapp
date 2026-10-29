@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Compile the binding lifecycle against a test-only session.
-extern crate leapp_runtime as bundle_api;
-extern crate self as leapp_runtime;
+extern crate lrt as bundle_api;
+extern crate self as lrt;
 pub use bundle_api::{Bundle, ErrorCode};
 use std::{
+    collections::HashMap,
     fmt,
     sync::{mpsc, Arc, Weak},
     thread,
@@ -34,7 +35,7 @@ mod lifecycle {
         assert!(!session.is_open().unwrap());
         assert!(session.info().model_names().is_empty());
         session.close().unwrap();
-        peer.run(&[]).unwrap();
+        peer.run(&std::collections::HashMap::new()).unwrap();
         peer.close().unwrap();
         assert!(owner.upgrade().is_none());
     }
@@ -99,7 +100,10 @@ impl Session {
     pub fn reset(&mut self) -> Result<(), RuntimeError> {
         self.reset_check()
     }
-    pub fn run(&mut self, _: &[(&str, dlpack::BorrowedTensor<'_>)]) -> Result<(), RuntimeError> {
+    pub fn run(
+        &mut self,
+        _: &HashMap<&str, dlpack::BorrowedTensor<'_>>,
+    ) -> Result<(), RuntimeError> {
         self.reset_check()?;
         if let Some((entered, resume)) = &self.wait {
             entered.send(()).unwrap();
@@ -143,7 +147,7 @@ fn close_waits_until_this_sessions_run_finishes() {
     let session = Arc::new(session);
     let run = {
         let session = session.clone();
-        thread::spawn(move || session.run(&[]).unwrap())
+        thread::spawn(move || session.run(&HashMap::new()).unwrap())
     };
     running.recv_timeout(Duration::from_secs(5)).unwrap();
     let (started, closing) = mpsc::channel();

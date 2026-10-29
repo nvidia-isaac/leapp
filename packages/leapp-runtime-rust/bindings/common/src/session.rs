@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use leapp_runtime::dlpack::BorrowedTensor;
-use leapp_runtime::{Bundle, ErrorCode, RunResult, RuntimeError, Session, SessionOptions};
-use std::{fmt, sync::Mutex};
+use lrt::dlpack::BorrowedTensor;
+use lrt::{Bundle, ErrorCode, RunResult, RuntimeError, Session, SessionOptions};
+use std::{collections::HashMap, fmt, sync::Mutex};
 
 /// Binding lifecycle failures preserve native execution diagnostics.
 /// Wrapped runtime failures remain accessible through [`std::error::Error::source`].
@@ -95,7 +95,7 @@ impl SessionHandle {
             Ok(())
         }
     }
-    pub fn run(&self, inputs: &[(&str, BorrowedTensor<'_>)]) -> Result<RunResult, Error> {
+    pub fn run(&self, inputs: &HashMap<&str, BorrowedTensor<'_>>) -> Result<RunResult, Error> {
         self.session
             .lock()
             .map_err(|_| Error::Lock)?

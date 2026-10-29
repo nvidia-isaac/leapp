@@ -22,7 +22,7 @@ add_custom_target(leapp_runtime_rust
   VERBATIM)
 
 add_library(leapp_runtime SHARED src/bundle.cc)
-add_library(leapp::runtime ALIAS leapp_runtime)
+add_library(lrt::runtime ALIAS leapp_runtime)
 add_dependencies(leapp_runtime leapp_runtime_rust)
 set_target_properties(leapp_runtime PROPERTIES EXPORT_NAME runtime
   VERSION ${PROJECT_VERSION} SOVERSION 0)
@@ -46,7 +46,7 @@ target_compile_options(leapp_runtime PRIVATE -Wall -Wextra -Wpedantic -Werror -f
 install(TARGETS leapp_runtime EXPORT leapp_runtimeTargets
   LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
 install(DIRECTORY include/leapp DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
-install(EXPORT leapp_runtimeTargets NAMESPACE leapp::
+install(EXPORT leapp_runtimeTargets NAMESPACE lrt::
   DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/leapp_runtime")
 
 configure_package_config_file(cmake/leapp_runtimeConfig.cmake.in
@@ -62,7 +62,7 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/leapp_runtimeConfig.cmake"
 
 if(BUILD_TESTING)
   add_executable(leapp_bundle_test tests/bundle_test.cc)
-  target_link_libraries(leapp_bundle_test PRIVATE leapp::runtime Threads::Threads)
+  target_link_libraries(leapp_bundle_test PRIVATE lrt::runtime Threads::Threads)
   target_compile_options(leapp_bundle_test PRIVATE
     -Wall -Wextra -Wpedantic -Werror -fno-exceptions)
   add_test(NAME leapp_bundle COMMAND leapp_bundle_test

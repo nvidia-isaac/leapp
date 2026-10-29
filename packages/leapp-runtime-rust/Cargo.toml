@@ -14,6 +14,9 @@ license = "Apache-2.0"
 publish = false
 description = "LEAPP bundle inspection and core Session API"
 
+[lib]
+name = "lrt"
+
 [dependencies]
 anyhow = "1"
 indexmap = { version = "2", features = ["serde"] }
