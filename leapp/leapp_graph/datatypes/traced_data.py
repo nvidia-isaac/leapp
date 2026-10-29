@@ -712,18 +712,16 @@ class TracedData(ABC):
                 dtype=destination.dtype,
                 device=destination.device,
             )
-            if (
-                source_tensor.numel() != 1
-                and tuple(source_tensor.shape) != target_shape
-            ):
+            one_element = source_tensor.numel() == 1
+            if not one_element and tuple(source_tensor.shape) != target_shape:
                 source_tensor = torch.broadcast_to(source_tensor, target_shape).clone()
             source_proxy = self._register_setitem_tensor(
                 source_tensor, "_setitem_value"
             )
         else:
-            source_numel = getattr(real_value, "numel", lambda: 1)()
+            one_element = getattr(real_value, "numel", lambda: 1)() == 1
             if (
-                source_numel != 1
+                not one_element
                 and tuple(getattr(real_value, "shape", ())) != target_shape
             ):
                 source_proxy = self._context.tracer.create_proxy(
@@ -740,6 +738,14 @@ class TracedData(ABC):
         flat_source_proxy = self._context.tracer.create_proxy(
             "call_method", "reshape", (source_proxy, (-1,)), {}
         )
+        # Expand a one-element source to the indices so it matches the selection
+        # at run time, even when traced indices select a data-dependent number of
+        # positions. ONNX constant folding cannot fold an index_put that relies on
+        # broadcasting a one-element source.
+        if one_element:
+            flat_source_proxy = self._context.tracer.create_proxy(
+                "call_method", "expand_as", (flat_source_proxy, indices_proxy), {}
+            )
         flat_destination_proxy = self._context.tracer.create_proxy(
             "call_method", "reshape", (destination_proxy, (-1,)), {}
         )
