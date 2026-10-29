@@ -9,7 +9,7 @@ Run these commands from `packages/leapp-runtime-rust` on Linux. The
 [core runtime](../../../../README.md#installation) and backend plugins build
 separately. Builds use existing
 SDKs without installing them; the C++ plugins require CMake 3.24+ and a C++20
-compiler. Rebuild all native backend libraries for the private v2 bridge ABI.
+compiler. Build the runtime and LEAPP plugins from the same source revision.
 
 ```sh
 export LEAPP_NATIVE_BACKENDS="$PWD/target/native-backends"

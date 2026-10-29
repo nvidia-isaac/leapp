@@ -30,7 +30,6 @@ pub(super) struct View {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub(super) struct Api {
-    pub version: u32,
     pub load_model: unsafe extern "C" fn(
         *const c_char,
         i32,
@@ -73,13 +72,13 @@ impl Library {
             // Rust callbacks; the library is retained through every native handle.
             unsafe {
                 let library = libloading::Library::new(path)?;
-                let symbol = format!("leapp_native_{backend}_v2\0");
+                let symbol = format!("leapp_native_{backend}\0");
                 let entry =
                     library.get::<unsafe extern "C" fn() -> *const Api>(symbol.as_bytes())?;
                 let api = entry();
                 anyhow::ensure!(
-                    !api.is_null() && (*api).version == 2,
-                    "{backend} bridge ABI mismatch"
+                    !api.is_null(),
+                    "{backend} backend returned a null API"
                 );
 
                 Ok(Self {
