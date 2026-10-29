@@ -5,10 +5,8 @@ use super::{
     error::{check, Handle},
     sys,
 };
-use crate::engines::triton::{
-    memory::{Buffer, OutputPool},
-    Error, ErrorKind, OutputPlacement, Result, SharedTensor,
-};
+use crate::engines::memory::{Buffer, OutputPool};
+use crate::engines::triton::{Error, ErrorKind, OutputPlacement, Result, SharedTensor};
 use std::{
     ffi::{c_char, c_void, CStr, CString},
     panic::{catch_unwind, UnwindSafe},
@@ -83,7 +81,9 @@ fn internal(message: &str) -> Error {
 }
 
 // Convert callback failures to owned C errors; no Rust unwind crosses the ABI.
-fn callback(operation: impl FnOnce() -> Result<()> + UnwindSafe) -> *mut sys::TRITONSERVER_Error {
+fn callback(
+    operation: impl FnOnce() -> Result<()> + UnwindSafe,
+) -> *mut sys::TRITONSERVER_Error {
     let error = match catch_unwind(operation) {
         Ok(Ok(())) => return ptr::null_mut(),
         Ok(Err(error)) => error,
@@ -184,10 +184,13 @@ pub(crate) unsafe extern "C" fn release_request(
     // SAFETY: RELEASE_ALL transfers ownership and guarantees no more input access.
     // State remains alive until both completion flags have been observed.
     unsafe {
-        let result =
-            catch_unwind(|| check(sys::TRITONSERVER_InferenceRequestDelete(request), "release"));
+        let result = catch_unwind(|| {
+            check(sys::TRITONSERVER_InferenceRequestDelete(request), "release")
+        });
         let state = &*userp.cast::<State>();
-        state.released(result.unwrap_or_else(|_| Err(internal("panic releasing Triton request"))));
+        state.released(
+            result.unwrap_or_else(|_| Err(internal("panic releasing Triton request"))),
+        );
     }
 }
 
@@ -281,7 +284,7 @@ pub(crate) fn outputs(
             } else {
                 std::slice::from_raw_parts(shape, dimensions).to_vec()
             };
-            if crate::engines::triton::memory::dlpack::byte_size(dtype, &shape)? != len {
+            if crate::engines::memory::dlpack::byte_size(dtype, &shape)? != len {
                 return Err(internal("output byte count does not match dtype and shape"));
             }
             let buffer = if len == 0 {
@@ -301,7 +304,7 @@ pub(crate) fn outputs(
             };
             result.push((
                 name,
-                crate::engines::triton::memory::dlpack::from_buffer(dtype, shape, buffer)?,
+                crate::engines::memory::dlpack::from_buffer(dtype, shape, buffer)?,
             ));
         }
     }

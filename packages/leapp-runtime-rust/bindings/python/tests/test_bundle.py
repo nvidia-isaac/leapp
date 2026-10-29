@@ -6,10 +6,15 @@
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import leapp_runtime as lr
+import lrt
 import pytest
 
 YAML = (Path(__file__).parents[3] / "tests/fixtures/pipeline.yaml").read_text()
+
+
+def test_public_types_use_lrt_module():
+    for name in lrt.__all__:
+        assert getattr(lrt, name).__module__ == "lrt"
 
 
 @pytest.fixture
@@ -21,7 +26,7 @@ def bundle_path(tmp_path):
 
 
 def test_ordered_inspection_and_detached_values(bundle_path):
-    bundle = lr.Bundle.open(bundle_path)
+    bundle = lrt.Bundle.open(bundle_path)
     assert bundle.yaml_path() == bundle_path
     assert bundle.model_names() == ["z_observation", "a_policy"]
     assert list(bundle.pipeline_inputs()) == ["z_observation/joint_pos"]
@@ -58,7 +63,7 @@ def test_ordered_inspection_and_detached_values(bundle_path):
 
 
 def test_model_io_returns_detached_internal_port_names(bundle_path):
-    bundle = lr.Bundle.open(bundle_path)
+    bundle = lrt.Bundle.open(bundle_path)
     expected = (["features", "state"], ["actions", "next_state"])
     inputs, outputs = bundle.model_io(model_name="a_policy")
     assert (inputs, outputs) == expected
@@ -74,7 +79,7 @@ def test_custom_backend_and_unresolved_input(bundle_path):
             "inputs: {z_observation: [joint_pos]}", "inputs: {absent: [port]}"
         )
     )
-    bundle = lr.Bundle.open(bundle_path)
+    bundle = lrt.Bundle.open(bundle_path)
     assert bundle.model_parameters("a_policy")["backend"] == "custom"
     assert bundle.pipeline_inputs() == {"absent/port": None}
 
@@ -89,11 +94,11 @@ colliding_keys: {true: boolean, 1: integer}
 unsigned: 18446744073709551615
 """
     )
-    metadata = lr.Bundle.open(bundle_path).metadata()
+    metadata = lrt.Bundle.open(bundle_path).metadata()
     assert metadata["sensor"] == {"axes": ["x", "y"], "enabled": True}
-    assert isinstance(metadata["sequence_keys"], lr.MetadataMapping)
+    assert isinstance(metadata["sequence_keys"], lrt.MetadataMapping)
     assert metadata["sequence_keys"].entries == [(["x", "y"], "coordinates")]
-    assert isinstance(metadata["colliding_keys"], lr.MetadataMapping)
+    assert isinstance(metadata["colliding_keys"], lrt.MetadataMapping)
     assert metadata["colliding_keys"].entries == [(True, "boolean"), (1, "integer")]
     assert metadata["unsigned"] == 18446744073709551615
 
@@ -101,9 +106,9 @@ unsigned: 18446744073709551615
 @pytest.mark.parametrize(
     "failure,code,phase",
     [
-        ("missing", lr.ErrorCode.NOT_FOUND, "open"),
-        ("parse", lr.ErrorCode.INVALID_ARGUMENT, "parse"),
-        ("artifact", lr.ErrorCode.INVALID_ARGUMENT, "artifact"),
+        ("missing", lrt.ErrorCode.NOT_FOUND, "open"),
+        ("parse", lrt.ErrorCode.INVALID_ARGUMENT, "parse"),
+        ("artifact", lrt.ErrorCode.INVALID_ARGUMENT, "artifact"),
     ],
 )
 def test_diagnostics(bundle_path, failure, code, phase):
@@ -113,8 +118,8 @@ def test_diagnostics(bundle_path, failure, code, phase):
         bundle_path.write_text("models: [")
     else:
         (bundle_path.parent / "model.bin").write_bytes(b"wrong hash")
-    with pytest.raises(lr.BundleError) as caught:
-        lr.Bundle.open(bundle_path)
+    with pytest.raises(lrt.BundleError) as caught:
+        lrt.Bundle.open(bundle_path)
     assert caught.value.code is code
     assert caught.value.phase == phase
     assert caught.value.path == bundle_path
@@ -122,7 +127,7 @@ def test_diagnostics(bundle_path, failure, code, phase):
 
 
 def test_snapshot_and_concurrent_reads(bundle_path):
-    bundle = lr.Bundle.open(bundle_path)
+    bundle = lrt.Bundle.open(bundle_path)
     bundle_path.unlink()
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(

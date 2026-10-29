@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-use leapp_runtime::dlpack::*;
+use lrt::dlpack::*;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,

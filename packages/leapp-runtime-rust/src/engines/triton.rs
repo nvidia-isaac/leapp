@@ -7,11 +7,11 @@ mod memory;
 mod native;
 
 use crate::dlpack::{BorrowedTensor, SharedTensor};
-use crate::MemoryLocation;
+use crate::engines::memory::OutputPool;
 use crate::OutputPlacement;
-pub(crate) use memory::cuda::HandoffStream;
 use native::error::{Error, ErrorKind, Result};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Installation settings specific to Triton.
 #[derive(Debug, Clone)]
@@ -89,7 +89,9 @@ impl crate::engines::Engine for TritonEngine {
         &self,
         inputs: &[(&str, BorrowedTensor<'_>)],
         placement: &OutputPlacement,
-    ) -> std::result::Result<indexmap::IndexMap<String, SharedTensor>, crate::RuntimeError> {
+        pool: &Arc<OutputPool>,
+    ) -> std::result::Result<indexmap::IndexMap<String, SharedTensor>, crate::RuntimeError>
+    {
         let inputs = inputs
             .iter()
             .map(|(name, value)| {
@@ -107,16 +109,9 @@ impl crate::engines::Engine for TritonEngine {
         // Ensemble output names already use logical LEAPP names, including private terminals.
         Ok(self
             .native
-            .infer(&self.model, &inputs, placement)?
+            .infer(&self.model, &inputs, placement, pool)?
             .into_iter()
             .collect())
-    }
-    fn copy(
-        &self,
-        input: BorrowedTensor<'_>,
-        target: MemoryLocation,
-    ) -> std::result::Result<SharedTensor, crate::RuntimeError> {
-        self.native.copy_output(input, target).map_err(Into::into)
     }
 }
 

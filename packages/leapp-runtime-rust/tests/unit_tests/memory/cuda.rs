@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::engines::triton::memory::Buffer;
+use crate::engines::memory::Buffer;
 
 #[test]
 fn handoff_producer_restores_device_on_return_error_and_panic() {
@@ -63,7 +63,7 @@ fn allocation_transfer_and_release_restore_the_calling_device() {
         tensor.copy_to(output.as_mut_ptr().cast()).unwrap();
     }
     assert_eq!(output, values);
-    let tensor = crate::engines::triton::memory::dlpack::from_buffer(
+    let tensor = crate::engines::memory::dlpack::from_buffer(
         crate::dlpack::DLDataType {
             code: 2,
             bits: 32,
@@ -82,14 +82,12 @@ fn allocation_transfer_and_release_restore_the_calling_device() {
         },
     ] {
         // SAFETY: tensor owns ready storage and has no writable exports.
-        let copied = crate::engines::triton::memory::dlpack::copy(
-            unsafe { tensor.borrow() },
-            Some(location),
-        )
-        .unwrap();
+        let copied =
+            crate::engines::memory::dlpack::copy(unsafe { tensor.borrow() }, Some(location))
+                .unwrap();
         assert_eq!(copied.to_cpu_vec::<f32>().unwrap(), values);
         assert_eq!(
-            crate::engines::triton::memory::dlpack::location(copied.descriptor().device).unwrap(),
+            crate::engines::memory::dlpack::location(copied.descriptor().device).unwrap(),
             location
         );
     }

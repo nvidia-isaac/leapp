@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Python capsule protocol only. Tensor interpretation belongs to the selected engine.
-use leapp_runtime::dlpack::{ManagedTensor, SharedTensor};
+use lrt::dlpack::{ManagedTensor, SharedTensor};
 use pyo3::{
     exceptions::{PyBufferError, PyTypeError},
     ffi,
@@ -17,17 +17,15 @@ const USED_LEGACY: *const c_char = c"used_dltensor".as_ptr();
 const USED_VERSIONED: *const c_char = c"used_dltensor_versioned".as_ptr();
 
 thread_local! {
-    static STREAMS: RefCell<Vec<(u32, Arc<leapp_runtime::dlpack::HandoffStream>)>> = const { RefCell::new(Vec::new()) };
+    static STREAMS: RefCell<Vec<(u32, Arc<lrt::dlpack::HandoffStream>)>> = const { RefCell::new(Vec::new()) };
 }
-fn stream(
-    device: u32,
-) -> Result<Arc<leapp_runtime::dlpack::HandoffStream>, leapp_runtime::RuntimeError> {
+fn stream(device: u32) -> Result<Arc<lrt::dlpack::HandoffStream>, lrt::RuntimeError> {
     STREAMS.with(|streams| {
         let mut streams = streams.borrow_mut();
         if let Some((_, stream)) = streams.iter().find(|(id, _)| *id == device) {
             return Ok(stream.clone());
         }
-        let stream = Arc::new(leapp_runtime::dlpack::HandoffStream::new(device)?);
+        let stream = Arc::new(lrt::dlpack::HandoffStream::new(device)?);
         streams.push((device, stream.clone()));
         Ok(stream)
     })
@@ -46,7 +44,8 @@ pub fn import_items<'py>(
         for item in items.try_iter()? {
             let (name, producer): (String, Bound<'_, PyAny>) = item?.extract()?;
             retained.push(producer);
-            let (capsule, declared) = request_capsule(py, retained.last().unwrap(), &mut handoffs)?;
+            let (capsule, declared) =
+                request_capsule(py, retained.last().unwrap(), &mut handoffs)?;
             retained.push(capsule);
             owned.push((name, consume(retained.last().unwrap())?));
             let descriptor = owned
@@ -81,7 +80,7 @@ pub fn import_items<'py>(
 fn request_capsule<'py>(
     py: Python<'py>,
     producer: &Bound<'py, PyAny>,
-    handoffs: &mut Vec<Arc<leapp_runtime::dlpack::HandoffStream>>,
+    handoffs: &mut Vec<Arc<lrt::dlpack::HandoffStream>>,
 ) -> PyResult<(Bound<'py, PyAny>, (i32, i32))> {
     let declared: (i32, i32) = producer
         .getattr("__dlpack_device__")
@@ -127,15 +126,16 @@ fn request_capsule<'py>(
 fn consume(capsule: &Bound<'_, PyAny>) -> PyResult<ManagedTensor> {
     // SAFETY: validate capsule name before reading; rename before adopting the lease.
     unsafe {
-        let (name, used, versioned) = if ffi::PyCapsule_IsValid(capsule.as_ptr(), VERSIONED) != 0 {
-            (VERSIONED, USED_VERSIONED, true)
-        } else if ffi::PyCapsule_IsValid(capsule.as_ptr(), LEGACY) != 0 {
-            (LEGACY, USED_LEGACY, false)
-        } else {
-            return Err(PyBufferError::new_err(
-                "invalid or already consumed DLPack capsule",
-            ));
-        };
+        let (name, used, versioned) =
+            if ffi::PyCapsule_IsValid(capsule.as_ptr(), VERSIONED) != 0 {
+                (VERSIONED, USED_VERSIONED, true)
+            } else if ffi::PyCapsule_IsValid(capsule.as_ptr(), LEGACY) != 0 {
+                (LEGACY, USED_LEGACY, false)
+            } else {
+                return Err(PyBufferError::new_err(
+                    "invalid or already consumed DLPack capsule",
+                ));
+            };
         let ptr = ffi::PyCapsule_GetPointer(capsule.as_ptr(), name);
         if ptr.is_null() || ffi::PyCapsule_SetName(capsule.as_ptr(), used) != 0 {
             return Err(PyErr::fetch(capsule.py()));
@@ -164,7 +164,7 @@ unsafe extern "C" fn capsule_destructor(capsule: *mut ffi::PyObject) {
 }
 
 /// Protocol exporter, deliberately without a tensor convenience API.
-#[pyclass(name = "DLPackOutput", frozen, module = "leapp_runtime")]
+#[pyclass(name = "DLPackOutput", frozen, module = "lrt")]
 pub struct Output {
     pub inner: SharedTensor,
 }

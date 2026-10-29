@@ -38,19 +38,19 @@ int main(int argc, char** argv) {
          "sequence_keys: {[x, y]: coordinates}\n"
          "unsigned: 18446744073709551615\n";
 
-  leapp::Bundle empty;
+  lrt::Bundle empty;
   Check(!empty.is_valid() && empty.model_names().empty(), "empty handle");
   Check(empty.input_info("missing", "port") == nullptr, "empty descriptor");
   Check(empty.model_io("missing") == nullptr, "empty model I/O");
-  Check(!leapp::Bundle::Open(path, nullptr).ok(), "null destination");
-  auto status = leapp::Bundle::Open(directory / "absent.yaml", &empty);
-  Check(status.code() == leapp::ErrorCode::kNotFound, "missing YAML category");
+  Check(!lrt::Bundle::Open(path, nullptr).ok(), "null destination");
+  auto status = lrt::Bundle::Open(directory / "absent.yaml", &empty);
+  Check(status.code() == lrt::ErrorCode::kNotFound, "missing YAML category");
   Check(status.phase() == "open" && !status.message().empty(),
         "error diagnostics");
   Check(!empty.is_valid(), "failure preserves empty destination");
 
-  leapp::Bundle bundle;
-  Check(leapp::Bundle::Open(path, &bundle).ok(), "load opaque artifacts");
+  lrt::Bundle bundle;
+  Check(lrt::Bundle::Open(path, &bundle).ok(), "load opaque artifacts");
   Check(bundle.yaml_path() == path, "absolute path");
   Check(bundle.model_names() ==
             std::vector<std::string>({"z_observation", "a_policy"}),
@@ -65,7 +65,7 @@ int main(int argc, char** argv) {
   Check(bundle.pipeline_outputs()[0].first == "a_policy/next_state",
         "output order");
   const auto* port = bundle.output_info("a_policy", "actions");
-  Check(port != nullptr && port->dtype == leapp::DataType::kFloat32,
+  Check(port != nullptr && port->dtype == lrt::DataType::kFloat32,
         "output dtype");
   Check(port->shape == std::vector<int64_t>({3}), "output shape");
   Check(bundle.input_info("absent", "port") == nullptr, "absent descriptor");
@@ -76,15 +76,15 @@ int main(int argc, char** argv) {
   Check(sensor && sensor->Find("axes"), "nested mapping metadata");
   const auto* mapping = bundle.metadata().Find("sequence_keys");
   Check(mapping != nullptr, "mapping metadata");
-  const auto& entries = std::get<leapp::Metadata::Mapping>(mapping->value);
-  Check(std::get<leapp::Metadata::Sequence>(entries[0].key.value).size() == 2,
+  const auto& entries = std::get<lrt::Metadata::Mapping>(mapping->value);
+  Check(std::get<lrt::Metadata::Sequence>(entries[0].key.value).size() == 2,
         "non-string mapping key");
   const auto* unsigned_value = bundle.metadata().Find("unsigned");
   Check(unsigned_value &&
             std::get<uint64_t>(unsigned_value->value) == UINT64_MAX,
         "unsigned metadata");
 
-  Check(!leapp::Bundle::Open(path, &bundle).ok(),
+  Check(!lrt::Bundle::Open(path, &bundle).ok(),
         "reject occupied destination");
   Check(bundle.output_info("a_policy", "actions") == port,
         "failed open preserves snapshot");

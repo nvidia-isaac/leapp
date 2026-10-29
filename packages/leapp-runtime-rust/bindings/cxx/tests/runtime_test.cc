@@ -30,25 +30,25 @@ void Check(bool condition, const char* expression, int line) {
 
 #define CHECK(value) Check((value), #value, __LINE__)
 
-void Ok(leapp::Status status) {
+void Ok(lrt::Status status) {
   if (!status.ok()) {
     std::cerr << status.phase() << ": " << status.message() << "\n";
     std::abort();
   }
 }
 
-leapp::Session Open(const std::filesystem::path& fixtures,
+lrt::Session Open(const std::filesystem::path& fixtures,
                     std::string_view name, bool cuda = false,
-                    leapp::MemoryLocation output_location = {}) {
-  leapp::Bundle bundle;
-  Ok(leapp::Bundle::Open(fixtures / (std::string(name) + ".yaml"), &bundle));
-  leapp::Session runtime;
-  leapp::SessionOptions options;
+                    lrt::MemoryLocation output_location = {}) {
+  lrt::Bundle bundle;
+  Ok(lrt::Bundle::Open(fixtures / (std::string(name) + ".yaml"), &bundle));
+  lrt::Session runtime;
+  lrt::SessionOptions options;
   options.output_overrides.emplace("accumulator/next", output_location);
   if (name != "feedback") options.output_overrides.clear();
   options.device =
-      cuda ? leapp::ExecutionDevice::kCuda : leapp::ExecutionDevice::kCpu;
-  Ok(leapp::Session::Open(bundle, options, &runtime));
+      cuda ? lrt::ExecutionDevice::kCuda : lrt::ExecutionDevice::kCpu;
+  Ok(lrt::Session::Open(bundle, options, &runtime));
   return runtime;
 }
 
@@ -57,21 +57,21 @@ DLTensor Cpu(std::span<const float> data, int64_t* shape) {
           {kDLFloat, 32, 1}, shape, nullptr, 0};
 }
 
-leapp::ManagedTensor Step(leapp::Session& session, float value = 1) {
+lrt::ManagedTensor Step(lrt::Session& session, float value = 1) {
   const std::array<float, 4> input = {value, value, value, value};
   int64_t shape = 4;
   auto descriptor = Cpu(input, &shape);
-  leapp::RunResult result;
+  lrt::RunResult result;
   Ok(session.Run(
       {{"accumulator/observation", &descriptor}},
       &result));
   CHECK(result.names() == std::vector<std::string_view>{"accumulator/next"});
-  leapp::ManagedTensor tensor;
+  lrt::ManagedTensor tensor;
   Ok(result.GetTensor("accumulator/next", &tensor));
   return tensor;
 }
 
-std::vector<float> Values(const leapp::ManagedTensor& tensor) {
+std::vector<float> Values(const lrt::ManagedTensor& tensor) {
   const auto& t = tensor->dl_tensor;
   CHECK(t.dtype.code == kDLFloat && t.dtype.bits == 32 && t.dtype.lanes == 1);
   size_t size = 1;
@@ -88,35 +88,28 @@ std::vector<float> Values(const leapp::ManagedTensor& tensor) {
   return result;
 }
 
-void Expect(const leapp::ManagedTensor& tensor, float value) {
+void Expect(const lrt::ManagedTensor& tensor, float value) {
   CHECK(Values(tensor) == std::vector<float>(4, value));
 }
 
-void EngineSelection(const std::filesystem::path& fixtures) {
-  leapp::Bundle bundle;
-  Ok(leapp::Bundle::Open(fixtures / "feedback.yaml", &bundle));
-  leapp::SessionOptions options{leapp::ExecutionDevice::kCpu, 0, {}, {}};
-  CHECK(options.engine == leapp::EngineKind::kTriton);
-  leapp::Session session;
-  for (int invalid : {-1, 256}) {
-    options.engine = static_cast<leapp::EngineKind>(invalid);
-    auto status = leapp::Session::Open(bundle, options, &session);
-    CHECK(status.code() == leapp::ErrorCode::kInvalidArgument);
-    CHECK(status.message().find("engine") != std::string::npos);
-    CHECK(!session.bundle().is_valid());
+void PoolOptions(const std::filesystem::path& fixtures) {
+  lrt::Bundle bundle;
+  Ok(lrt::Bundle::Open(fixtures / "feedback.yaml", &bundle));
+  for (size_t count : {size_t{0}, size_t{1}, size_t{64}}) {
+    lrt::SessionOptions options;
+    options.output_pool.max_entries = count;
+    lrt::Session session;
+    Ok(lrt::Session::Open(bundle, options, &session));
+    auto first = Step(session);
+    Expect(first, 1);
+    Expect(Step(session), 2);
+    Expect(first, 1);
   }
-  options.engine = leapp::EngineKind::kTriton;
-  Ok(leapp::Session::Open(bundle, options, &session));
-  Expect(Step(session), 1);
-  options.engine = static_cast<leapp::EngineKind>(-1);
-  auto status = leapp::Session::Open(bundle, options, &session);
-  CHECK(status.code() == leapp::ErrorCode::kInvalidArgument);
-  Expect(Step(session), 2);
 }
 
 void FeedbackAndLifetimes(const std::filesystem::path& fixtures) {
   auto runtime = Open(fixtures, "feedback");
-  leapp::Session session;
+  lrt::Session session;
   Ok(runtime.NewSession(&session));
   CHECK(!runtime.NewSession(&session).ok());
   auto first = Step(session);
@@ -131,13 +124,13 @@ void FeedbackAndLifetimes(const std::filesystem::path& fixtures) {
   Ok(runtime.Close());
   CHECK(runtime.bundle().model_names().front() == "accumulator");
   Expect(Step(session), 2);
-  leapp::Session fresh;
+  lrt::Session fresh;
   Ok(session.NewSession(&fresh));
   Expect(Step(fresh), 1);
   Ok(session.Close());
   CHECK(!session.Reset().ok());
   Expect(Step(fresh), 2);
-  leapp::Session closed;
+  lrt::Session closed;
   CHECK(!runtime.NewSession(&closed).ok());
   auto shared = std::move(first);
   runtime = {};
@@ -154,14 +147,14 @@ void FeedbackAndLifetimes(const std::filesystem::path& fixtures) {
 
 void InvalidInputs(const std::filesystem::path& fixtures) {
   auto runtime = Open(fixtures, "dynamic");
-  leapp::Session session;
+  lrt::Session session;
   Ok(runtime.NewSession(&session));
   const std::array<float, 4> data = {1, 2, 3, 4};
-  leapp::RunResult result;
+  lrt::RunResult result;
   int64_t shape = 4;
   auto view = Cpu(data, &shape);
   Ok(session.Run({{"dynamic/input", &view}}, &result));
-  leapp::ManagedTensor retained;
+  lrt::ManagedTensor retained;
   Ok(result.GetTensor("dynamic/output", &retained));
   const auto original = retained->dl_tensor.data;
 
@@ -196,7 +189,7 @@ void InvalidInputs(const std::filesystem::path& fixtures) {
     }
     auto status = session.Run({{name, &invalid}}, &result);
     CHECK(!status.ok());
-    leapp::ManagedTensor preserved;
+    lrt::ManagedTensor preserved;
     Ok(result.GetTensor("dynamic/output", &preserved));
     CHECK(preserved->dl_tensor.data == original);
   }
@@ -207,12 +200,12 @@ void InvalidInputs(const std::filesystem::path& fixtures) {
   CHECK(!session.Run({}, &result).ok());
   CHECK(!result.GetTensor("missing", &retained).ok());
   CHECK(retained->dl_tensor.data == original);
-  leapp::SessionOptions options;
-  options.output_overrides.emplace("missing", leapp::MemoryLocation{});
-  leapp::Session invalid_session;
-  CHECK(!leapp::Session::Open(session.bundle(), options, &invalid_session).ok());
+  lrt::SessionOptions options;
+  options.output_overrides.emplace("missing", lrt::MemoryLocation{});
+  lrt::Session invalid_session;
+  CHECK(!lrt::Session::Open(session.bundle(), options, &invalid_session).ok());
   Ok(session.Run({{"dynamic/input", &retained->dl_tensor}}, &result));
-  leapp::ManagedTensor reused;
+  lrt::ManagedTensor reused;
   Ok(result.GetTensor("dynamic/output", &reused));
   CHECK(Values(reused) == std::vector<float>(data.begin(), data.end()));
   const std::span<const float> empty;
@@ -227,7 +220,7 @@ void InvalidInputs(const std::filesystem::path& fixtures) {
 
 void ConcurrentSessions(const std::filesystem::path& fixtures) {
   auto runtime = Open(fixtures, "feedback");
-  leapp::Session session;
+  lrt::Session session;
   Ok(runtime.NewSession(&session));
   std::vector<float> values(12);
   std::vector<std::thread> threads;
@@ -244,7 +237,7 @@ void ConcurrentSessions(const std::filesystem::path& fixtures) {
   threads.clear();
   for (int i = 0; i < 4; ++i) {
     threads.emplace_back([&] {
-      leapp::Session independent;
+      lrt::Session independent;
       Ok(runtime.NewSession(&independent));
       Expect(Step(independent), 1);
     });
@@ -260,12 +253,12 @@ void ConcurrentSessions(const std::filesystem::path& fixtures) {
     auto descriptor = Cpu(data, &shape);
     started = true;
     for (int i = 0; i < 50; ++i) {
-      leapp::RunResult result;
+      lrt::RunResult result;
       auto status = session.Run({{"accumulator/observation",
                                   &descriptor}},
                                 &result);
       if (!status.ok()) {
-        CHECK(status.code() == leapp::ErrorCode::kInvalidArgument);
+        CHECK(status.code() == lrt::ErrorCode::kInvalidArgument);
         return;
       }
     }
@@ -288,28 +281,28 @@ void CudaBuffers(const std::filesystem::path& fixtures) {
   CHECK(cudaMemcpy(device, data.data(), sizeof(data), cudaMemcpyHostToDevice) ==
         cudaSuccess);
   CHECK(cudaDeviceSynchronize() == cudaSuccess);
-  leapp::ManagedTensor retained;
+  lrt::ManagedTensor retained;
   for (auto output_type :
-       {leapp::MemoryType::kCpu, leapp::MemoryType::kPinnedCpu,
-        leapp::MemoryType::kCuda}) {
+       {lrt::MemoryType::kCpu, lrt::MemoryType::kPinnedCpu,
+        lrt::MemoryType::kCuda}) {
     auto session = Open(fixtures, "feedback", true, {output_type, 0});
     for (auto input_type :
-         {leapp::MemoryType::kCpu, leapp::MemoryType::kPinnedCpu,
-          leapp::MemoryType::kCuda}) {
-      const void* input = input_type == leapp::MemoryType::kCpu ? data.data()
-                          : input_type == leapp::MemoryType::kPinnedCpu ? pinned
+         {lrt::MemoryType::kCpu, lrt::MemoryType::kPinnedCpu,
+          lrt::MemoryType::kCuda}) {
+      const void* input = input_type == lrt::MemoryType::kCpu ? data.data()
+                          : input_type == lrt::MemoryType::kPinnedCpu ? pinned
                                                                         : device;
       Ok(session.Reset());
       int64_t shape = 4;
-      const auto device_type = input_type == leapp::MemoryType::kCpu ? kDLCPU :
-          input_type == leapp::MemoryType::kPinnedCpu ? kDLCUDAHost : kDLCUDA;
+      const auto device_type = input_type == lrt::MemoryType::kCpu ? kDLCPU :
+          input_type == lrt::MemoryType::kPinnedCpu ? kDLCUDAHost : kDLCUDA;
       DLTensor view{const_cast<void*>(input), {device_type, 0}, 1,
                     {kDLFloat, 32, 1}, &shape, nullptr, 0};
-      leapp::RunResult result;
+      lrt::RunResult result;
       Ok(session.Run({{"accumulator/observation", &view}}, &result));
       Ok(result.GetTensor("accumulator/next", &retained));
-      const auto expected_device = output_type == leapp::MemoryType::kCpu ? kDLCPU :
-          output_type == leapp::MemoryType::kPinnedCpu ? kDLCUDAHost : kDLCUDA;
+      const auto expected_device = output_type == lrt::MemoryType::kCpu ? kDLCPU :
+          output_type == lrt::MemoryType::kPinnedCpu ? kDLCUDAHost : kDLCUDA;
       CHECK(retained->dl_tensor.device.device_type == expected_device);
       CHECK(Values(retained) == std::vector<float>(data.begin(), data.end()));
 
@@ -323,11 +316,11 @@ void CudaBuffers(const std::filesystem::path& fixtures) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  static_assert(!std::is_copy_constructible_v<leapp::Session>);
-  static_assert(!std::is_copy_constructible_v<leapp::ManagedTensor>);
+  static_assert(!std::is_copy_constructible_v<lrt::Session>);
+  static_assert(!std::is_copy_constructible_v<lrt::ManagedTensor>);
   CHECK(argc == 3);
   const std::filesystem::path fixtures = argv[1];
-  EngineSelection(fixtures);
+  PoolOptions(fixtures);
   FeedbackAndLifetimes(fixtures);
   InvalidInputs(fixtures);
   ConcurrentSessions(fixtures);

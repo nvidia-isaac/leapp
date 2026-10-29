@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::support;
-use leapp_runtime::dlpack::BorrowedTensor;
-use leapp_runtime::{Bundle, ExecutionDevice, MemoryLocation, Session, SessionOptions};
+use lrt::dlpack::BorrowedTensor;
+use lrt::{Bundle, ExecutionDevice, MemoryLocation, Session, SessionOptions};
 use std::{env, path::PathBuf};
 use support::{placed, TestTensor};
 
@@ -43,10 +43,10 @@ fn ensembles_support_host_and_device_buffers_and_retained_results() {
             options.output_placement.default_location = location;
             let mut session = Session::open(runtime.info(), options).unwrap();
             let result = session
-                .run(&[
+                .run(&std::collections::HashMap::from([
                     ("preprocess/observation", observation.view()),
                     ("policy/bias", bias.view()),
-                ])
+                ]))
                 .unwrap();
             assert_eq!(result.iter().count(), 1);
             let action = result.get("policy/action").unwrap();
@@ -69,10 +69,10 @@ fn dynamic_profile_bounds_report_errors_without_poisoning_session() {
     let mut session = runtime.new_session().unwrap();
     for size in [1, 4, 8, 9, 4] {
         let data: Vec<f32> = (0..size).map(|v| v as f32).collect();
-        let result = session.run(&[(
+        let result = session.run(&std::collections::HashMap::from([(
             "dynamic/input",
             BorrowedTensor::cpu(&data, &[size]).unwrap(),
-        )]);
+        )]));
         if size == 9 {
             assert_eq!(result.err().unwrap().phase(), "execute");
         } else {

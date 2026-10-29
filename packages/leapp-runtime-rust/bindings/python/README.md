@@ -21,10 +21,10 @@ remain available in the same extension.
 
 ```python
 import numpy as np
-import leapp_runtime as lr
+import lrt as lr
 
 bundle = lr.Bundle.open("exports/policy.yaml")
-options = lr.SessionOptions(engine="triton", device="cuda:0", output_device="cpu")
+options = lr.SessionOptions(device="cuda:0", output_device="cpu")
 with lr.Session.open(bundle, options) as session:
     result = session.run(
         {"preprocess/obs": np.zeros(18, dtype=np.float32)},
@@ -74,7 +74,7 @@ use its `copy()` when a writable NumPy array is required.
 Exports support `copy=False` and `copy=None`. Explicit `copy=True` and cross-device
 export requests raise `BufferError`; perform those operations in the consumer.
 There is no `Tensor`, `DLPackView`, `.numpy()`, or `.dlpack_view()` convenience API.
-The engine may recycle unexposed storage after all owners release it. Descriptor
+The session may recycle unexposed storage after all owners release it. Descriptor
 access or DLPack export permanently excludes that allocation from reuse. Retain the
 consumer's DLPack owner until all its uses complete, including work on CUDA streams.
 
@@ -86,13 +86,18 @@ starts from captured initial state rather than the source's current feedback.
 sessions remain usable. Results, arrays, DLPack allocations and bundle metadata
 remain valid after close. Context-manager exit closes only its session.
 
-`SessionOptions` selects the engine and output placement at construction;
-`run` takes only inputs. `engine="triton"` is the default and the only supported
-engine. Unknown engine names raise `ValueError` when opening the session.
+`SessionOptions` configures execution and output placement at construction;
+`run` takes only inputs. Triton is selected automatically.
 Set `output_device` to `"cpu"`, `"pinned"`, or `"cuda:N"` and use `output_overrides`
 for individual public outputs. Configure the engine installation before starting
 Python, as described in the
 [runtime guide](../../README.md#synchronous-execution).
+
+Set `output_pool=lr.OutputPoolOptions(max_entries=64)` to configure retained
+buffer count; zero disables caching. Each session has its own cache, including
+peers from `new_session()`. Its byte budget follows bundle output sizes and grows
+for larger dynamic outputs, with no fixed byte cap. Caching does not limit live
+results, and retained outputs survive close.
 
 Bundle and execution failures raise `BundleError` and `RuntimeError` with
 `code`, `phase`, and `message`; bundle errors also include `path`.

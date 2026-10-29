@@ -15,7 +15,7 @@ fn locations() -> Vec<MemoryLocation> {
 
 fn lease(buffer: Arc<Buffer>) -> SharedTensor {
     let shape = vec![(buffer.len / 4) as i64];
-    crate::engines::triton::memory::dlpack::from_buffer(
+    crate::engines::memory::dlpack::from_buffer(
         DLDataType {
             code: 2,
             bits: 32,
@@ -30,7 +30,7 @@ fn lease(buffer: Arc<Buffer>) -> SharedTensor {
 #[test]
 fn retained_and_weak_owners_block_reuse_until_the_last_owner_drops() {
     for location in locations() {
-        let pool = OutputPool::default();
+        let pool = OutputPool::new(crate::OutputPoolOptions::default(), 0);
         let buffer = pool.allocate(16, location).unwrap();
         let ptr = buffer.ptr;
         let values = [1f32, 2., 3., 4.];
@@ -56,19 +56,19 @@ fn retained_and_weak_owners_block_reuse_until_the_last_owner_drops() {
         let output = lease(reused);
         drop(pool);
         assert_eq!(output.to_cpu_vec::<f32>().unwrap(), values);
-        let copies = OutputPool::default();
+        let copies = OutputPool::new(crate::OutputPoolOptions::default(), 0);
         let input = crate::dlpack::BorrowedTensor::cpu(&values, &[4]).unwrap();
         for _ in 0..3 {
             let copied = copies.copy(input, location).unwrap();
             assert_eq!(copied.to_cpu_vec::<f32>().unwrap(), values);
         }
-        assert_eq!(copies.entries.lock().unwrap().len(), 1);
+        assert_eq!(copies.state.lock().unwrap().entries.len(), 1);
     }
 }
 
 #[test]
 fn reuse_matches_byte_size_location_and_available_cuda_device_ids() {
-    let pool = OutputPool::default();
+    let pool = OutputPool::new(crate::OutputPoolOptions::default(), 0);
     let mut locations = locations();
     let second_device = MemoryLocation::Cuda { device_id: 1 };
     let second_device_available = second_device.validate().is_ok();
@@ -104,7 +104,7 @@ fn reuse_matches_byte_size_location_and_available_cuda_device_ids() {
 fn descriptors_and_exports_permanently_exclude_shared_storage_from_reuse() {
     for location in locations() {
         for versioned in [None, Some(false), Some(true)] {
-            let pool = OutputPool::default();
+            let pool = OutputPool::new(crate::OutputPoolOptions::default(), 0);
             let buffer = pool.allocate(16, location).unwrap();
             let ptr = buffer.ptr;
             let owner = lease(buffer.clone());
@@ -129,50 +129,65 @@ fn descriptors_and_exports_permanently_exclude_shared_storage_from_reuse() {
 }
 
 #[test]
-fn capacity_limits_preserve_live_owners_and_leave_overflow_uncached() {
-    let pool = OutputPool::default();
-    for len in [0, MAX_BYTES + 1] {
-        let buffer = pool.allocate(len, MemoryLocation::Cpu).unwrap();
-        assert_eq!(buffer.len, len);
-        assert_eq!(Arc::strong_count(&buffer), 1);
-        assert!(pool.entries.lock().unwrap().is_empty());
-    }
-    let held: Vec<_> = (1..=128)
-        .map(|n| pool.allocate(n, MemoryLocation::Cpu).unwrap())
-        .collect();
-    assert_eq!(pool.entries.lock().unwrap().len(), MAX_ENTRIES);
-    for (index, buffer) in held.iter().enumerate() {
+fn configurable_limits_allow_large_and_dynamic_buffers() {
+    for location in locations() {
+        let pool = OutputPool::new(crate::OutputPoolOptions { max_entries: 2 }, 128);
+        assert_eq!(pool.state.lock().unwrap().largest_buffer, 128);
+        let first = pool.allocate(128, location).unwrap();
+        let second = pool.allocate(64, location).unwrap();
+        let uncached = pool.allocate(32, location).unwrap();
+        assert_eq!(Arc::strong_count(&uncached), 1);
+        assert_eq!(pool.state.lock().unwrap().entries.len(), 2);
+        let weak = Arc::downgrade(&first);
+        drop(first);
+        // A weak owner also prevents eviction and reuse.
+        assert_eq!(Arc::strong_count(&pool.allocate(256, location).unwrap()), 1);
+        drop(weak);
+        let larger = pool.allocate(256, location).unwrap();
+        assert_eq!(Arc::strong_count(&larger), 2);
+        assert_eq!(pool.state.lock().unwrap().largest_buffer, 256);
+        drop(second);
+        drop(larger);
+        // Larger than the old 64 MiB cap; the same allocation must be reusable.
+        let image_bytes = 65 * 1024 * 1024;
+        let image = pool.allocate(image_bytes, location).unwrap();
+        let identity = Arc::as_ptr(&image);
+        drop(image);
         assert_eq!(
-            Arc::strong_count(buffer),
-            if index < MAX_ENTRIES { 2 } else { 1 }
+            Arc::as_ptr(&pool.allocate(image_bytes, location).unwrap()),
+            identity
         );
-    }
-    drop(held);
-    for size in 129..256 {
-        let next = pool.allocate(size, MemoryLocation::Cpu).unwrap();
-        let entries = pool.entries.lock().unwrap();
-        assert_eq!(entries.len(), MAX_ENTRIES);
-        assert!(entries.iter().any(|entry| Arc::ptr_eq(entry, &next)));
-        assert!(entries.iter().map(|entry| entry.len).sum::<usize>() <= MAX_BYTES);
-    }
+        assert_eq!(pool.state.lock().unwrap().largest_buffer, image_bytes);
+        let fresh = pool.fresh();
+        assert_eq!(fresh.state.lock().unwrap().largest_buffer, 128);
+        assert!(fresh.state.lock().unwrap().entries.is_empty());
 
-    // Exercise the byte budget independently of the entry limit.
-    let pool = OutputPool::default();
-    let first = pool.allocate(MAX_BYTES, MemoryLocation::Cpu).unwrap();
-    let weak = Arc::downgrade(&first);
-    let second = pool.allocate(8, MemoryLocation::Cpu).unwrap();
-    assert_eq!(Arc::strong_count(&second), 1);
-    assert_eq!(pool.entries.lock().unwrap().len(), 1);
-    assert_eq!(pool.entries.lock().unwrap()[0].len, MAX_BYTES);
-    drop(first);
-    let third = pool.allocate(16, MemoryLocation::Cpu).unwrap();
-    assert_eq!(Arc::strong_count(&third), 1);
-    assert_eq!(pool.entries.lock().unwrap()[0].len, MAX_BYTES);
-    drop(weak);
-    let cached = pool.allocate(32, MemoryLocation::Cpu).unwrap();
-    assert_eq!(Arc::strong_count(&cached), 2);
-    assert_eq!(pool.entries.lock().unwrap().len(), 1);
-    assert_eq!(pool.entries.lock().unwrap()[0].len, 32);
+        let disabled =
+            OutputPool::new(crate::OutputPoolOptions { max_entries: 0 }, image_bytes);
+        assert_eq!(
+            Arc::strong_count(&disabled.allocate(16, location).unwrap()),
+            1
+        );
+        assert!(disabled.state.lock().unwrap().entries.is_empty());
+        pool.clear();
+        assert!(pool.state.lock().unwrap().entries.is_empty());
+    }
+}
+
+#[test]
+fn invalid_copy_does_not_populate_the_cache() {
+    let pool = OutputPool::new(crate::OutputPoolOptions::default(), 16);
+    let values = [1_f32; 4];
+    let mut descriptor = *BorrowedTensor::cpu(&values, &[4]).unwrap().descriptor();
+    descriptor.data = std::ptr::null_mut();
+    // SAFETY: null storage is rejected before any dereference; shape is static.
+    assert!(pool
+        .copy(
+            unsafe { BorrowedTensor::new(&descriptor) },
+            MemoryLocation::Cpu
+        )
+        .is_err());
+    assert!(pool.state.lock().unwrap().entries.is_empty());
 }
 
 #[test]
@@ -180,7 +195,7 @@ fn concurrent_requests_reserve_distinct_cached_idle_allocations() {
     const THREADS: usize = 8;
     const ROUNDS: usize = 128;
 
-    let pool = Arc::new(OutputPool::default());
+    let pool = Arc::new(OutputPool::new(crate::OutputPoolOptions::default(), 0));
     let seed: Vec<_> = (0..THREADS)
         .map(|_| pool.allocate(32, MemoryLocation::Cpu).unwrap())
         .collect();
@@ -215,5 +230,5 @@ fn concurrent_requests_reserve_distinct_cached_idle_allocations() {
             "cached reservations differ in round {round}"
         );
     }
-    assert_eq!(pool.entries.lock().unwrap().len(), THREADS);
+    assert_eq!(pool.state.lock().unwrap().entries.len(), THREADS);
 }

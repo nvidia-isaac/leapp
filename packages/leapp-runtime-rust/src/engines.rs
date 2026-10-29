@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Runtime engine selection and the internal execution contract.
+//! Internal execution contract and shared tensor storage.
+pub(crate) mod error;
+pub(crate) mod memory;
 pub(crate) mod triton;
 
 use crate::{
@@ -9,14 +11,8 @@ use crate::{
     OutputPlacement, RuntimeError,
 };
 use indexmap::IndexMap;
+use memory::OutputPool;
 use std::sync::Arc;
-
-/// Execution engine selected when opening a session.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum EngineKind {
-    #[default]
-    Triton,
-}
 
 /// Device used by model instances, independently of input and output storage.
 #[derive(Debug, Clone, Copy, Default)]
@@ -45,13 +41,21 @@ pub(crate) trait Engine: Send + Sync {
         &self,
         inputs: &[(&str, BorrowedTensor<'_>)],
         placement: &OutputPlacement,
+        pool: &Arc<OutputPool>,
     ) -> Result<IndexMap<String, SharedTensor>, RuntimeError>;
     /// Always produce independent, ready storage, even at the same location.
     fn copy(
         &self,
         input: BorrowedTensor<'_>,
         target: MemoryLocation,
-    ) -> Result<SharedTensor, RuntimeError>;
+        pool: Option<&OutputPool>,
+    ) -> Result<SharedTensor, RuntimeError> {
+        match pool {
+            Some(pool) => pool.copy(input, target),
+            None => memory::dlpack::copy(input, Some(target)),
+        }
+        .map_err(Into::into)
+    }
 }
 
 pub(crate) fn open(
@@ -59,10 +63,8 @@ pub(crate) fn open(
     graph: &crate::session::graph::Graph<'_>,
     options: &crate::SessionOptions,
 ) -> Result<Arc<dyn Engine>, RuntimeError> {
-    match options.engine {
-        EngineKind::Triton => triton::open(bundle, graph, options),
-    }
+    triton::open(bundle, graph, options)
 }
 
 /// DLPack producer handoff support for language bindings.
-pub(crate) use triton::HandoffStream;
+pub(crate) use memory::cuda::HandoffStream;

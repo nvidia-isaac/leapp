@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::support::{placed, TestTensor};
-use crate::{Bundle, ExecutionDevice, MemoryLocation, OutputPlacement, Session, SessionOptions};
-use std::path::PathBuf;
+use crate::{
+    Bundle, ExecutionDevice, MemoryLocation, OutputPlacement, OutputPoolOptions, Session,
+    SessionOptions,
+};
+use std::{collections::HashMap, path::PathBuf};
 
 #[test]
 #[ignore = "requires Warp adapters, CUDA, and generated Warp fixtures"]
@@ -26,54 +29,77 @@ fn warp_plugins_execute_through_sessions() {
             MemoryLocation::PinnedCpu,
             MemoryLocation::Cuda { device_id: 0 },
         ] {
-            let graphs_before = graph_count();
-            let mut session = Session::open(
-                &bundle,
-                SessionOptions {
-                    device,
-                    output_placement: OutputPlacement {
-                        default_location: location,
-                        ..Default::default()
+            for max_entries in [0, 1, 64] {
+                let graphs_before = graph_count();
+                let mut session = Session::open(
+                    &bundle,
+                    SessionOptions {
+                        device,
+                        output_placement: OutputPlacement {
+                            default_location: location,
+                            ..Default::default()
+                        },
+                        output_pool: OutputPoolOptions { max_entries },
                     },
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-            let x = placed(
-                &(0..12).map(|i| i as f32).collect::<Vec<_>>(),
-                &[4, 3],
-                location,
-            )
-            .unwrap();
-            let gain = placed(&[1_i32, 2, 3, 4], &[4], location).unwrap();
-            let run = |session: &mut Session| {
-                session
-                    .run(&[("model/x", x.view()), ("model/gain", gain.view())])
-                    .unwrap()
-            };
-            let expected: Vec<_> = (0..12)
-                .map(|i| i as f32 * (i / 3 + 1) as f32 + 4.0)
-                .collect();
-            assert_eq!(
-                run(&mut session)
-                    .get("model/result")
-                    .unwrap()
-                    .to_cpu_vec::<f32>()
-                    .unwrap(),
-                expected,
-                "{fixture} {device:?} {location:?}"
-            );
-            assert_eq!(graph_count(), graphs_before + 1);
-            let mut peer = session.new_session().unwrap();
-            drop(session);
-            assert_eq!(graph_count(), graphs_before + 1);
-            let result = run(&mut peer);
-            drop(peer);
-            let output = result.get("model/result").unwrap();
-            assert_eq!(output.location(), location);
-            assert_eq!(output.to_cpu_vec::<f32>().unwrap(), expected);
-            drop(result);
-            assert_eq!(graph_count(), graphs_before);
+                )
+                .unwrap();
+                let gain = placed(&[1_i32, 2, 3, 4], &[4], location).unwrap();
+                let run = |session: &mut Session, offset: f32| {
+                    let values: Vec<_> = (0..12).map(|i| i as f32 + offset).collect();
+                    let x = placed(&values, &[4, 3], location).unwrap();
+                    session
+                        .run(&HashMap::from([
+                            ("model/x", x.view()),
+                            ("model/gain", gain.view()),
+                        ]))
+                        .unwrap()
+                };
+                let expected = |offset: f32| -> Vec<f32> {
+                    (0..12)
+                        .map(|i| (i as f32 + offset) * (i / 3 + 1) as f32 + 4.0)
+                        .collect()
+                };
+                let retained = run(&mut session, 0.0);
+                assert_eq!(
+                    retained
+                        .get("model/result")
+                        .unwrap()
+                        .to_cpu_vec::<f32>()
+                        .unwrap(),
+                    expected(0.0),
+                    "{fixture} {device:?} {location:?} pool={max_entries}"
+                );
+                for offset in [1.0, 2.0, 3.0] {
+                    assert_eq!(
+                        run(&mut session, offset)
+                            .get("model/result")
+                            .unwrap()
+                            .to_cpu_vec::<f32>()
+                            .unwrap(),
+                        expected(offset)
+                    );
+                }
+                assert_eq!(graph_count(), graphs_before + 1);
+                let mut peer = session.new_session().unwrap();
+                drop(session);
+                assert_eq!(graph_count(), graphs_before + 1);
+                let result = run(&mut peer, 4.0);
+                drop(peer);
+                let output = result.get("model/result").unwrap();
+                assert_eq!(output.location(), location);
+                assert_eq!(output.to_cpu_vec::<f32>().unwrap(), expected(4.0));
+                assert_eq!(
+                    retained
+                        .get("model/result")
+                        .unwrap()
+                        .to_cpu_vec::<f32>()
+                        .unwrap(),
+                    expected(0.0)
+                );
+                drop(result);
+                drop(retained);
+                assert_eq!(graph_count(), graphs_before);
+            }
         }
     }
 }

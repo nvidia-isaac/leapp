@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use leapp_runtime::{Bundle, Metadata, MetadataValue};
+use lrt::{Bundle, Metadata, MetadataValue};
 use pyo3::{
     prelude::*,
     types::{PyDict, PyList},
 };
 use std::path::PathBuf;
 
-#[pyclass(name = "PortRef", frozen, get_all, module = "leapp_runtime")]
+#[pyclass(name = "PortRef", frozen, get_all, module = "lrt")]
 pub struct PortRef {
     node: String,
     port: String,
@@ -25,7 +25,7 @@ impl PortRef {
     }
 }
 
-#[pyclass(frozen, get_all, module = "leapp_runtime")]
+#[pyclass(frozen, get_all, module = "lrt")]
 pub struct PortSpec {
     name: String,
     dtype: String,
@@ -35,7 +35,7 @@ pub struct PortSpec {
 }
 
 /// Lossless fallback for YAML mappings containing keys Python cannot hash.
-#[pyclass(frozen, get_all, module = "leapp_runtime")]
+#[pyclass(frozen, get_all, module = "lrt")]
 pub struct MetadataMapping {
     entries: Py<PyAny>,
 }
@@ -101,7 +101,7 @@ pub fn metadata(py: Python<'_>, data: &Metadata) -> PyResult<Py<PyAny>> {
     Ok(result.into_any().unbind())
 }
 
-fn spec(py: Python<'_>, v: Option<&leapp_runtime::PortSpec>) -> PyResult<Option<PortSpec>> {
+fn spec(py: Python<'_>, v: Option<&lrt::PortSpec>) -> PyResult<Option<PortSpec>> {
     v.map(|v| {
         Ok(PortSpec {
             name: v.name.clone(),
@@ -114,7 +114,7 @@ fn spec(py: Python<'_>, v: Option<&leapp_runtime::PortSpec>) -> PyResult<Option<
     .transpose()
 }
 
-#[pyclass(name = "Bundle", frozen, module = "leapp_runtime")]
+#[pyclass(name = "Bundle", frozen, module = "lrt")]
 pub struct PyBundle {
     pub inner: Bundle,
 }
@@ -216,11 +216,21 @@ impl PyBundle {
             .transpose()
     }
 
-    fn input_info(&self, py: Python<'_>, node: &str, port: &str) -> PyResult<Option<PortSpec>> {
+    fn input_info(
+        &self,
+        py: Python<'_>,
+        node: &str,
+        port: &str,
+    ) -> PyResult<Option<PortSpec>> {
         spec(py, self.inner.input_info(node, port))
     }
 
-    fn output_info(&self, py: Python<'_>, node: &str, port: &str) -> PyResult<Option<PortSpec>> {
+    fn output_info(
+        &self,
+        py: Python<'_>,
+        node: &str,
+        port: &str,
+    ) -> PyResult<Option<PortSpec>> {
         spec(py, self.inner.output_info(node, port))
     }
 }

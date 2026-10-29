@@ -44,7 +44,7 @@ fn feedback_with_host_and_device_memory_placement() {
                 let mut session = Session::open(&bundle, options.clone()).unwrap();
                 check_state(&session, 0.);
                 let input = placed(&[2f32; 4], &[4], input_location).unwrap();
-                let inputs = [("accumulator/observation", input.view())];
+                let inputs = HashMap::from([("accumulator/observation", input.view())]);
                 for expected in [2., 4.] {
                     let result = session.run(&inputs).unwrap();
                     let value = result.get("accumulator/next").unwrap();
@@ -53,6 +53,7 @@ fn feedback_with_host_and_device_memory_placement() {
                     check_state(&session, expected);
                 }
                 let mut peer = session.new_session().unwrap();
+                assert!(!Arc::ptr_eq(&session.output_pool, &peer.output_pool));
                 check_state(&peer, 0.);
                 assert_eq!(
                     peer.run(&inputs)

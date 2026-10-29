@@ -7,7 +7,7 @@ import ctypes as c
 import gc
 import numpy as np
 import pytest
-import leapp_runtime as lr
+import lrt as lr
 from test_runtime import CUDA, open_session, step
 
 

@@ -2,8 +2,14 @@
 
 These plugins execute PyTorch artifacts through Triton's backend API. They build
 independently of Cargo and install beneath a backend directory selected by
-the `LEAPP_TRITON_BACKENDS` environment variable. Shared request handling, model configuration,
-and tensor I/O live in `torch/common`.
+the `LEAPP_TRITON_BACKENDS` environment variable. Applications use the same
+`lrt::Session` API as ONNX bundles; see the [runtime guide](../../../../README.md).
+
+Outputs use the calling session's pool. Set `SessionOptions.output_pool.max_entries`
+once at initialization (default 64; zero disables caching). New sessions share
+loaded models and inherit this limit with separate, empty pools. Retained outputs
+remain valid across later calls and session closure. Buffer sizes follow the
+bundle and actual dynamic outputs, with no fixed byte cap.
 
 Build commands below run from `packages/leapp-runtime-rust`. Supply Linux,
 CMake 3.24+, a C++20 compiler, nlohmann_json 3.11+, Triton 2.69.0, CUDA, and
@@ -14,11 +20,10 @@ fetching or installing them. Set `TRITON_ROOT` and `TORCH_ROOT` to their SDK roo
 ## PT2 / NativeRT
 
 `torch/pt2` executes raw `torch.export.save` archives with tensor-only user inputs
-and outputs in exported-program order. Each model instance owns a NativeRT runner
-and a CUDA stream when executing on a GPU. Inputs use owned storage to contain
-mutation; outputs are copied into Triton's response buffers. CPU, pinned-host,
-and CUDA buffers are supported independently of model placement. Copies and
-execution complete before the request is released, including error paths.
+and outputs in exported-program order. Input mutation is isolated, and outputs
+are copied into the session's response buffers. CPU, pinned-host, and CUDA buffers
+are supported independently of model placement. Copies and execution complete
+before the request is released, including error paths.
 
 Archive input devices must match the selected instance. NativeRT does not remap
 archive weights or graph devices; host constants in CUDA exports are preserved.
@@ -91,6 +96,9 @@ keeping replay tensors on the GPU; CPU models retain host staging. The embedded
 archive is copied to host once when loading. Warm each model serially before
 concurrent inference.
 PT2 model unload releases expired Warp cache entries while preserving live models.
+Warp bundles use the same session-owned output pool and initialization options
+described above. Retained results remain valid across subsequent runs and session
+closure; the adapters continue to own their internal replay buffers.
 
 Install the adapters and link them beside the backends under
 `LEAPP_TRITON_BACKENDS`. Use local backend directories as above so the links do
@@ -128,15 +136,12 @@ cargo test --locked engines::triton::tests::warp -- --ignored --test-threads=1
 
 `torch/jit` executes scripted and traced modules with positional tensor arguments
 and a tensor or flat tuple of tensors as output. Triton ports use `INPUT__N` and
-`OUTPUT__N`; the runtime maps them to public bundle names. Each instance loads
-its own module and owns a CUDA stream when executing on a GPU.
+`OUTPUT__N`; the runtime maps them to public bundle names.
 
-Input alias analysis permits borrowing only for read-only arguments. Arguments
-that may be mutated or retained, nested subgraphs, and unsupported analysis use
-owned storage. Fragmented buffers and transfers to a different execution device
-also use owned storage. Outputs are copied into response buffers and stream work
-finishes before request release. Session reset restores feedback and defaults;
-it does not reset mutable state inside a model.
+Caller inputs remain unchanged, including when a model mutates its arguments.
+Outputs are copied into the session's response buffers, and device work finishes
+before request release. Session reset restores feedback and defaults; it does
+not reset mutable state inside a shared model.
 
 ```sh
 cmake -S src/engines/triton/backends/torch/jit -B target/torchscript-backend \
