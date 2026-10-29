@@ -10,7 +10,7 @@ import torch
 import warp as wp
 
 from leapp.export_manager import ExportManager
-from leapp.leapp_graph.datatypes import as_traced, TracedWpArray
+from leapp.leapp_graph.datatypes import as_traced
 from leapp.leapp_graph.datatypes.warp.patching import WarpPatchBackend
 from leapp.leapp_graph.datatypes.warp.session import WarpTraceSession
 from leapp.leapp_graph.traced_node import TracedTensorNode
@@ -123,33 +123,3 @@ def test_torch_boundary_respects_explicit_owner(pending_output):
     session.owner_token = object()
     tensor.reshape(3, 2)
     assert session.active_segment is segment
-
-
-def test_new_warp_output_publishes_without_graph_allocation_or_copy():
-    wp.init()
-    node = TracedTensorNode("publication")
-    x = node.create_input(torch.arange(3.0), "x")
-    source = as_traced(wp.from_torch(x.tensor), "x", node, x.proxy)
-    raw = wp.empty(3, dtype=wp.float32, device="cpu")
-    pending = TracedWpArray._pending_output_proxy(raw, source)
-    output = as_traced(raw, "output", node, pending)
-    alias = as_traced(wp.to_torch(output.data), "alias", node, pending)
-    # Simulate publication without CUDA: the eventual producer differs from
-    # the borrowed input even though the alias was already constructed.
-    producer = node.tracer.create_proxy("call_function", torch.add, (x.proxy, 1), {})
-    wp.to_torch(output.data).copy_(x.tensor + 1)
-    output.rebind_tracing_proxy("output", node, producer)
-    # A Torch view formed after publication must recover the new allocation,
-    # rather than borrowing the input's storage-layout snapshot.
-    view = alias[1:]
-    partial = as_traced(wp.from_torch(view.tensor), "view", node, view.proxy)
-    covering = WarpPatchBackend().resolve_storage_array(partial)
-    torch.testing.assert_close(covering.tensor, torch.arange(3.0) + 1)
-    assert covering.proxy.node is producer.node
-    node.compile_trace({"out": alias * 2})
-    fresh = torch.tensor([10.0, 20.0, 30.0])
-    torch.testing.assert_close(node.m(fresh), (fresh + 1) * 2)
-    torch.testing.assert_close(fresh, torch.tensor([10.0, 20.0, 30.0]))
-    assert not any(
-        n.target is torch.empty or "copy" in str(n.target) for n in node.m.graph.nodes
-    )

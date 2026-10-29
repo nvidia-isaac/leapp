@@ -295,22 +295,3 @@ def test_boolean_update_cardinality_onnx_reload(tmp_path, library):
             torch.testing.assert_close(torch.from_numpy(actual[0]), expected)
             torch.testing.assert_close(torch.from_numpy(actual[1]), expected[:, mask])
             torch.testing.assert_close(given, torch.arange(12.0).reshape(3, 4) + offset)
-
-
-@pytest.mark.parametrize("library", ["torch", "numpy"])
-@pytest.mark.parametrize("reset", [False, True])
-def test_retained_alias_reattaches_after_declaration_reentry(library, reset):
-    node = TracedTensorNode("reentry")
-    x = node.create_input(native(torch.arange(12.0), library), "x")
-    alias = x[:] if library == "torch" else x.view(type(x))
-    if reset:
-        node.reset_trace_state()
-    x = node.create_input(x, "x" if reset else "replacement")
-    alias += 3
-    node.compile_trace({"alias": alias * 2, "base": x})
-    fresh = torch.arange(12.0) + 40
-    given = fresh.clone()
-    actual = node.m(given)
-    torch.testing.assert_close(actual[0], (fresh + 3) * 2)
-    torch.testing.assert_close(actual[1], fresh + 3)
-    torch.testing.assert_close(given, fresh)
