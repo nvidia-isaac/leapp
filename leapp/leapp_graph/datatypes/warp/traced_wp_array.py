@@ -13,6 +13,7 @@ from ..proxy_view import (
     layout_key,
     may_adopt_view,
     update_view_proxy,
+    conversion_proxy,
 )
 from ..traced_data import TracedData
 from leapp.utils.dtype import DtypeCodec, register_dtype_codec
@@ -222,7 +223,7 @@ class TracedWpArray(wp.array, TracedData):
             if may_adopt_view(src, raw):
                 view, proxy = src.proxy_view, None
             else:
-                view, proxy = None, src.proxy
+                view, proxy = None, conversion_proxy(src, raw)
             return True, as_traced(raw, src.name, src.context_obj, proxy, view=view)
         return True, raw
 
@@ -374,6 +375,7 @@ class TracedWpArray(wp.array, TracedData):
                         trace_source.context_obj,
                         trace_source.proxy,
                     )
+                    traced_array.proxy_view.pending = True
                 elif owner is not None:
                     traced_array = obj
                 else:
@@ -383,6 +385,7 @@ class TracedWpArray(wp.array, TracedData):
                         trace_source.context_obj,
                         trace_source.proxy,
                     )
+                    traced_array.proxy_view.pending = True
                 torch_owner = getattr(obj, "_tensor", None)
                 if isinstance(torch_owner, torch.Tensor) and obj_id in writable_ids:
                     if not may_adopt_view(traced_array, torch_owner):

@@ -311,54 +311,38 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
     # In-place Arithmetic Operators
     # =========================================================================
 
-    def __iadd__(self, other):
-        result = np.add(self, other)
-        if isinstance(result, TracedNpArray):
-            # Copy data in-place since self IS the array
+    def _apply_inplace(self, ufunc, other):
+        active = self.validate_status(args=(other,))
+        if active:
+            result = ufunc(self, other)
             np.copyto(self.view(np.ndarray), result.view(np.ndarray))
             self._proxy_view.proxy = result.proxy
-            return self
-        return result
+        else:
+            ufunc(
+                self.view(np.ndarray),
+                TracedData.unwrap_traced_data(other),
+                out=self.view(np.ndarray),
+            )
+        self._output_port = None
+        return self
+
+    def __iadd__(self, other):
+        return self._apply_inplace(np.add, other)
 
     def __isub__(self, other):
-        result = np.subtract(self, other)
-        if isinstance(result, TracedNpArray):
-            np.copyto(self.view(np.ndarray), result.view(np.ndarray))
-            self._proxy_view.proxy = result.proxy
-            return self
-        return result
+        return self._apply_inplace(np.subtract, other)
 
     def __imul__(self, other):
-        result = np.multiply(self, other)
-        if isinstance(result, TracedNpArray):
-            np.copyto(self.view(np.ndarray), result.view(np.ndarray))
-            self._proxy_view.proxy = result.proxy
-            return self
-        return result
+        return self._apply_inplace(np.multiply, other)
 
     def __itruediv__(self, other):
-        result = np.divide(self, other)
-        if isinstance(result, TracedNpArray):
-            np.copyto(self.view(np.ndarray), result.view(np.ndarray))
-            self._proxy_view.proxy = result.proxy
-            return self
-        return result
+        return self._apply_inplace(np.divide, other)
 
     def __ifloordiv__(self, other):
-        result = np.floor_divide(self, other)
-        if isinstance(result, TracedNpArray):
-            np.copyto(self.view(np.ndarray), result.view(np.ndarray))
-            self._proxy_view.proxy = result.proxy
-            return self
-        return result
+        return self._apply_inplace(np.floor_divide, other)
 
     def __ipow__(self, other):
-        result = np.power(self, other)
-        if isinstance(result, TracedNpArray):
-            np.copyto(self.view(np.ndarray), result.view(np.ndarray))
-            self._proxy_view.proxy = result.proxy
-            return self
-        return result
+        return self._apply_inplace(np.power, other)
 
     # =========================================================================
     # Comparison Operators
@@ -566,9 +550,22 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
                 f"the exported graph will keep {self.dtype}"
             )
             return self._new(result, self.proxy)
-        proxy_out = self._context.tracer.create_proxy(
-            "call_method", "to", (self.proxy, torch_dtype), {}
-        )
+        # NumPy copies even when dtype is unchanged. An explicit clone also
+        # avoids older exporters treating a same-dtype ``to(copy=True)`` as
+        # frozen input storage during functionalization.
+        if np.dtype(dtype) == self.dtype:
+            # Keep the explicit cast even when the native sample already has
+            # this dtype: an imported lowering can have different metadata.
+            cast = self._context.tracer.create_proxy(
+                "call_method", "to", (self.proxy, torch_dtype), {}
+            )
+            proxy_out = self._context.tracer.create_proxy(
+                "call_function", torch.clone, (cast,), {}
+            )
+        else:
+            proxy_out = self._context.tracer.create_proxy(
+                "call_method", "to", (self.proxy, torch_dtype), {}
+            )
         return self._new(result, proxy_out)
 
     def copy(self):

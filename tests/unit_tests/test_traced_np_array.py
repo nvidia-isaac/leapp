@@ -1397,6 +1397,7 @@ def test_structured_outputs_and_constant_snapshot():
         torch.testing.assert_close(actual, torch.from_numpy(reference))
 
 
+@pytest.mark.parametrize("mutate_input", [False, True])
 @pytest.mark.parametrize("backend", ["fx", "jit", "pt2"])
 @pytest.mark.parametrize(
     "fn, message",
@@ -1410,7 +1411,9 @@ def test_structured_outputs_and_constant_snapshot():
         (lambda x: np.cbrt(x, order="C"), "unsupported signature"),
     ],
 )
-def test_failed_capture_on_unused_branch(fn, message, backend, monkeypatch):
+def test_failed_capture_on_unused_branch(
+    fn, message, backend, mutate_input, monkeypatch
+):
     errors = []
     monkeypatch.setattr(_get_logger(), "error", errors.append)
     ctx = TracedTensorNode(name="unused_failure", node_index=0)
@@ -1421,6 +1424,8 @@ def test_failed_capture_on_unused_branch(fn, message, backend, monkeypatch):
     # Consumers of a failed branch can also be discarded with that branch.
     unused + 1
     assert any(message in error and "unused_failure" in error for error in errors)
+    if mutate_input:
+        x += 1
     ctx.compile_trace({"y": np.sin(x)})
     assert not any("leapp_capture_error" in node.meta for node in ctx.graph.nodes)
     model = ctx.m
@@ -1431,16 +1436,22 @@ def test_failed_capture_on_unused_branch(fn, message, backend, monkeypatch):
             model, (torch.from_numpy(sample),), strict=False
         ).module()
     for changed in (sample, sample + 2, -sample):
-        _assert_numpy_output(model(torch.from_numpy(changed)), np.sin(changed))
+        expected = np.sin(changed + 1 if mutate_input else changed)
+        _assert_numpy_output(model(torch.from_numpy(changed)), expected)
 
 
+@pytest.mark.parametrize("mutate_input", [False, True])
 @pytest.mark.parametrize("dependent", [False, True])
 @pytest.mark.parametrize("fn", [np.spacing, lambda x: np.pad(x, 1, mode="reflect")])
-def test_failed_capture_in_output_tree_is_rejected(fn, dependent, monkeypatch):
+def test_failed_capture_in_output_tree_is_rejected(
+    fn, dependent, mutate_input, monkeypatch
+):
     errors = []
     monkeypatch.setattr(_get_logger(), "error", errors.append)
     ctx = TracedTensorNode(name="required_failure", node_index=0)
     x = ctx.create_input(np.array([3.0, 1.0, 2.0], dtype=np.float32), name="x")
+    if mutate_input:
+        x += 1
     failed = fn(x)
     output = np.sin(failed) if dependent else failed
     assert errors

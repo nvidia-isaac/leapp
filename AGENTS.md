@@ -11,7 +11,7 @@ guide for annotating a downstream policy; read [SKILL.md](SKILL.md) for
 that workflow, with API documentation in `docs/source/` and at
 https://nvidia-isaac.github.io/leapp/
 
-Python 3.10+ and PyTorch 2.6.0+. Visualization extras install only on
+Python 3.10+ and PyTorch 2.7.0+. Visualization extras install only on
 3.11+. Environment is a local venv (typically `uv`), never conda.
 
 ## Load this first

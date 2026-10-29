@@ -214,7 +214,7 @@ def promote_in_place(data, name: str, context, proxy) -> TracedData:
     while leaving the object itself looking correct.
     """
     if isinstance(data, TracedData):
-        update_view_proxy(data, name, context, proxy)
+        update_view_proxy(data, name, context, proxy, rebind=True)
         return data
 
     if wp is not None and TracedWpArray is not None and isinstance(data, wp.array):

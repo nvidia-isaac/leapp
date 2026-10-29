@@ -1111,9 +1111,6 @@ class TestTracedTensor(unittest.TestCase):
             torch.nn.functional.relu(y, inplace=True)
 
         ctx.compile_trace({"y": y})
-        targets = [node.target for node in ctx.m.graph.nodes]
-        self.assertIn(torch.nn.functional.relu, targets)
-
         runtime_input = torch.tensor([-1.0, 2.0, -3.0])
         expected = torch.tensor([0.0, 4.0, 0.0])
         self.validate_export(

@@ -27,6 +27,8 @@ from leapp.leapp_graph.datatypes import (
     to_export_torch_tensor,
 )
 from leapp.leapp_graph.datatypes.patching import get_warp_backend
+from leapp.leapp_graph.datatypes.proxy_view import STORAGE_LAYOUT_META_KEY
+from leapp.leapp_graph.aten_rewrites import functionalize_graph, rewrite_aten_ops
 from leapp.utils.tensor_description import (
     resolve_tensor_descriptions_to_names,
     flatten_io_structure,
@@ -46,6 +48,11 @@ if TYPE_CHECKING:
 # keep local so that only the tracedTensorNode can create it.
 class _LeappFXGraph(fx.Graph):
     """FX graph that notifies the Warp backend before graph mutation."""
+
+    def __init__(self):
+        super().__init__()
+        self.recording = True
+        self.requires_functionalization = False
 
     def create_node(self, *args, **kwargs):
         warp_backend = get_warp_backend()
@@ -187,7 +194,12 @@ class TracedTensorNode(LeappNode):
             if not isinstance(value, TracedData):
                 continue
             declared = self._layout_index.get(layout_key(value))
-            if declared is None or declared.proxy_view is value.proxy_view:
+            if (
+                declared is None
+                or declared.proxy_view is value.proxy_view
+                or (declared.proxy_view, value.proxy_view)
+                in self._captured_view_aliases
+            ):
                 continue
             if self.get_io_description_by_name(declared.name, self.inputs) is None:
                 continue
@@ -259,7 +271,7 @@ class TracedTensorNode(LeappNode):
         self.m = fx.GraphModule(self.tracer.root, self.graph)
 
         # Sanitize the FX graph for compatibility with export backends.
-        self._rewrite_aten_ops(self.m.graph)
+        rewrite_aten_ops(self.m.graph)
         self._rewrite_method_descriptors(self.m.graph)
         self._make_tensor_attrs_contiguous(self.m)
         self.m.recompile()
@@ -335,177 +347,6 @@ class TracedTensorNode(LeappNode):
             _get_logger().debug(
                 f"Rewrote {len(rewritten)} tensor-method call_function node(s) "
                 f"to call_method: {rewritten}"
-            )
-        graph.lint()
-
-    @staticmethod
-    def _rewrite_aten_ops(graph: fx.Graph):
-        """Replace low-level ``torch.ops.aten.*`` OpOverload targets with their
-        high-level ``torch.*`` or ``torch.nn.functional.*`` equivalents.
-
-        When a TorchScript model is decomposed via ``TS2EPConverter``, the
-        resulting graph contains aten-level ops (e.g.
-        ``torch.ops.aten.addmm.default``).  These work fine for tracing and
-        ONNX export, but ``torch.jit.script`` cannot resolve them.  This
-        pass rewrites them to the public API equivalents that TorchScript
-        understands.
-        """
-        import torch.nn.functional as F
-
-        # -----------------------------------------------------------------
-        # Ops that should become call_method nodes (tensor methods).
-        # key = overloadpacket name, value = method name on the tensor.
-        # -----------------------------------------------------------------
-        _TO_METHOD = {
-            "view": "view",
-            "reshape": "reshape",
-            "contiguous": "contiguous",
-            "to": "to",
-        }
-
-        # -----------------------------------------------------------------
-        # Ops with custom call_function replacements (different name or
-        # needs arg rewriting).  Each value is (replacement_fn, arg_rewriter)
-        # where arg_rewriter is None or a callable(args, kwargs)->(args, kwargs).
-        # -----------------------------------------------------------------
-        def _upsample_bilinear2d_args(args, kwargs):
-            # aten sig: (input, output_size, align_corners)
-            # F.interpolate sig: (input, size=, mode=, align_corners=)
-            inp, size, align_corners = args[0], args[1], args[2]
-            return (inp,), {
-                "size": size,
-                "mode": "bilinear",
-                "align_corners": align_corners,
-            }
-
-        def _upsample_bicubic2d_args(args, kwargs):
-            inp, size, align_corners = args[0], args[1], args[2]
-            return (inp,), {
-                "size": size,
-                "mode": "bicubic",
-                "align_corners": align_corners,
-            }
-
-        def _upsample_nearest2d_args(args, kwargs):
-            inp, size = args[0], args[1]
-            return (inp,), {"size": size, "mode": "nearest"}
-
-        _CUSTOM_FN = {
-            "upsample_bilinear2d": (F.interpolate, _upsample_bilinear2d_args),
-            "upsample_bicubic2d": (F.interpolate, _upsample_bicubic2d_args),
-            "upsample_nearest2d": (F.interpolate, _upsample_nearest2d_args),
-        }
-
-        # -----------------------------------------------------------------
-        # Ops that can be handled by torch.narrow (slice with dim/start/end).
-        # aten::slice.Tensor(self, dim, start, end, step=1)
-        # When step==1 this is equivalent to torch.narrow.
-        # Identity slices (start=0, end>=2^62) are replaced by the input.
-        # -----------------------------------------------------------------
-        _SLICE_OPS = {"slice", "slice_copy"}
-
-        rewritten = []
-        nodes_to_erase = []
-        warp_op = warp_operator.get_op()
-
-        for node in graph.nodes:
-            if node.op != "call_function":
-                continue
-            target = node.target
-            if not isinstance(target, torch._ops.OpOverload):
-                continue
-            if target.overloadpacket is warp_op:
-                continue
-            op_name = target.overloadpacket.__name__
-
-            # --- Method conversion ---
-            if op_name in _TO_METHOD:
-                method_name = _TO_METHOD[op_name]
-                node.op = "call_method"
-                node.target = method_name
-                # First arg is self; remaining stay as-is.
-                rewritten.append(op_name)
-                continue
-
-            # --- Custom function replacement ---
-            if op_name in _CUSTOM_FN:
-                fn, arg_rewriter = _CUSTOM_FN[op_name]
-                if arg_rewriter is not None:
-                    node.args, node.kwargs = arg_rewriter(node.args, node.kwargs)
-                node.target = fn
-                rewritten.append(op_name)
-                continue
-
-            # --- Slice handling ---
-            # aten::slice.Tensor(self, dim, start, end, step=1)
-            # Rewrite to torch.narrow for all backends:
-            #   - jit-script can't resolve aten OpOverloads
-            #   - onnx-dynamo produces bad ONNX Slice nodes for MAX_INT end
-            # Identity slices (start=0, end=MAX) are removed entirely.
-            # "To end" slices compute length dynamically via size()-start.
-            if op_name in _SLICE_OPS:
-                tensor_arg = node.args[0]
-                dim = node.args[1] if len(node.args) > 1 else 0
-                start = node.args[2] if len(node.args) > 2 else 0
-                end = node.args[3] if len(node.args) > 3 else (1 << 62)
-                step = node.args[4] if len(node.args) > 4 else 1
-                is_end_max = isinstance(end, int) and end >= (1 << 62)
-
-                if step == 1 and start == 0 and is_end_max:
-                    # Identity slice — remove (no-op)
-                    node.replace_all_uses_with(tensor_arg)
-                    nodes_to_erase.append(node)
-                    rewritten.append(op_name)
-                    continue
-
-                if step == 1:
-                    if is_end_max:
-                        # "To end" slice: length = tensor.size(dim) - start
-                        with graph.inserting_before(node):
-                            size_node = graph.call_function(
-                                torch.Tensor.size,
-                                args=(tensor_arg, dim),
-                            )
-                            length_node = graph.call_function(
-                                torch.sub,
-                                args=(size_node, start),
-                            )
-                        node.target = torch.narrow
-                        node.args = (tensor_arg, dim, start, length_node)
-                        node.kwargs = {}
-                    else:
-                        # Bounded slice: length = end - start
-                        length = end - start
-                        node.target = torch.narrow
-                        node.args = (tensor_arg, dim, start, length)
-                        node.kwargs = {}
-                else:
-                    # Stepped slice — fall through to generic lookup
-                    pass
-                rewritten.append(op_name)
-                continue
-
-            # --- Generic name-based lookup ---
-            replacement = getattr(torch, op_name, None)
-            if replacement is None or not callable(replacement):
-                replacement = getattr(F, op_name, None)
-            if replacement is not None and callable(replacement):
-                node.target = replacement
-                rewritten.append(op_name)
-            else:
-                _get_logger().warning(
-                    f"Could not find a high-level equivalent for aten op "
-                    f"'{target._name}'. torch.jit.script may fail."
-                )
-
-        # Erase identity-slice nodes (must be done after iteration)
-        for node in nodes_to_erase:
-            graph.erase_node(node)
-
-        if rewritten:
-            _get_logger().debug(
-                f"Rewrote {len(rewritten)} aten OpOverload node(s) to "
-                f"high-level equivalents: {rewritten}"
             )
         graph.lint()
 
@@ -793,6 +634,65 @@ class TracedTensorNode(LeappNode):
         """
         # Find all nodes that are actually used by traversing backwards from outputs
         output_nodes = [output.proxy.node for output in outputs]
+        self._captured_view_aliases = set()
+        for output in outputs:
+            declared = self._layout_index.get(layout_key(output))
+            if declared is None:
+                continue
+            pending, seen = [output.proxy.node], set()
+            while pending:
+                node = pending.pop()
+                if node is declared.proxy.node:
+                    self._captured_view_aliases.add(
+                        (declared.proxy_view, output.proxy_view)
+                    )
+                    break
+                if node not in seen:
+                    seen.add(node)
+                    pending.extend(node.all_input_nodes)
+        for node in self.graph.nodes:
+            node.meta.pop(STORAGE_LAYOUT_META_KEY, None)
+        self.graph.recording = False
+        if self.graph.requires_functionalization:
+            # A write through a view can affect an output without an explicit
+            # data edge yet. Keep writes and their inputs until normalized,
+            # while pruning unused work and reporting required capture errors
+            # through the same LEAPP checks as the final graph.
+            self._prune_graph(output_nodes, preserve_mutations=True)
+            self.graph.output(
+                output_nodes[0] if len(output_nodes) == 1 else tuple(output_nodes)
+            )
+            self.tracer.root = functionalize_graph(
+                self.graph,
+                self.tracer.root,
+                [to_export_torch_tensor(desc.value) for desc in self.inputs],
+            )
+            output_node = next(n for n in self.graph.nodes if n.op == "output")
+            output_nodes = list(output_node.all_input_nodes)
+
+        self._prune_graph(
+            output_nodes,
+            preserve_mutations=getattr(self.graph, "preserve_mutations", False),
+        )
+
+        # After pruning, record which Warp-segment outputs survived (are actually
+        # used) as a binary mask on the segment marker node's metadata.
+        self._stamp_warp_used_output_masks()
+
+        # Check if graph already has an output node
+        has_output = any(node.op == "output" for node in self.graph.nodes)
+
+        if not has_output:
+            # If single output, return it directly; if multiple, return as tuple
+            if len(output_nodes) == 1:
+                self.graph.output(output_nodes[0])
+            else:
+                self.graph.output(tuple(output_nodes))
+
+    def _prune_graph(
+        self, output_nodes: list[fx.Node], *, preserve_mutations: bool = False
+    ) -> None:
+        """Prune unused computation, validate capture, and update the node inputs."""
         used_nodes = set()
 
         def mark_used(node):
@@ -807,6 +707,13 @@ class TracedTensorNode(LeappNode):
         # Mark all nodes used by any output
         for output_node in output_nodes:
             mark_used(output_node)
+
+        if preserve_mutations:
+            for node in self.graph.nodes:
+                if node.meta.get("leapp_mutation", False) or (
+                    node.op.startswith("call_") and node.is_impure()
+                ):
+                    mark_used(node)
 
         # Capture can fail in work unrelated to the declared outputs. Only a
         # failure that survives the output dependency traversal blocks export.
@@ -829,6 +736,7 @@ class TracedTensorNode(LeappNode):
                 nodes_to_remove.append(node)
 
         # Erase nodes in reverse order to avoid issues with dependencies
+        trimmed_inputs = set()
         for node in reversed(nodes_to_remove):
             if node.op == "placeholder":
                 input_description = LeappNode.get_io_description_by_name(
@@ -840,105 +748,50 @@ class TracedTensorNode(LeappNode):
                         f"could not find input description for placeholder '{node.target}'"
                     )
                     continue
-                self.trimmed_inputs.add(input_description.name_str)
+                trimmed_inputs.add(input_description.name_str)
 
             if len(node.users) == 0:
                 self.graph.erase_node(node)
 
-        if len(self.trimmed_inputs) > 0:
+        if trimmed_inputs:
+            self.trimmed_inputs.update(trimmed_inputs)
             _get_logger().warning(
                 f"Warning: when building the graph module for {self.name}, "
                 "detected the following inputs are not used in the computation or directly returned as output: "
-                f"{self.trimmed_inputs} \n"
+                f"{trimmed_inputs} \n"
                 "For clarity and efficiency, consider removing these inputs"
             )
 
             # Remove trimmed inputs from self.inputs
             self.inputs = [
-                inp for inp in self.inputs if inp.name_str not in self.trimmed_inputs
+                inp for inp in self.inputs if inp.name_str not in trimmed_inputs
             ]
-
-        # After pruning, record which Warp-segment outputs survived (are actually
-        # used) as a binary mask on the segment marker node's metadata.
-        self._stamp_warp_used_output_masks()
-
-        # Check if graph already has an output node
-        has_output = any(node.op == "output" for node in self.graph.nodes)
-
-        if not has_output:
-            # If single output, return it directly; if multiple, return as tuple
-            if len(output_nodes) == 1:
-                self.graph.output(output_nodes[0])
-            else:
-                self.graph.output(tuple(output_nodes))
 
     def _stamp_warp_used_output_masks(self) -> None:
-        """Patch each live ``warp_runner`` node with its used-output mask.
+        """Compute runner output masks from the live graph after normalization.
 
-        Runs after the prune pass in ``build_graph_module``. Surviving
-        output-accessor nodes (those carrying ``leapp_warp_output_ref``) are
-        exactly the segment outputs still consumed by the graph; everything else
-        was erased. For each such segment we build a boolean mask of length
-        ``len(output_refs)`` where ``True`` marks a used output and rewrite the
-        op node's args: ``output_mask`` becomes that mask and the shapes of
-        unused outputs are zeroed to ``[0]`` so the runtime allocates/copies
-        nothing for them, while all N outputs stay in place to keep the
-        surviving ``getitem`` indices valid.
-
-        This runs before the ``GraphModule`` is (re)compiled, so the patched
-        constants are reflected in the generated forward.
+        Export can replace nodes and discard LEAPP's accessor metadata. The
+        runner's serialized output specs and positional getitems remain its
+        contract, so derive masks from those rather than stale segment proxies.
         """
-        used_by_segment: dict[int, tuple[WarpSegment, set[int]]] = {}
+        op = warp_operator.get_op()
         for node in self.graph.nodes:
-            ref = node.meta.get("leapp_warp_output_ref")
-            segment = node.meta.get("leapp_warp_segment")
-            # Only output-accessor (``getitem``) nodes carry both a segment and
-            # an output ref; the op node itself has the segment but no ref.
-            if segment is None or ref is None:
+            if node.op != "call_function" or node.target not in (op, op.default):
                 continue
-            index = node.args[1] if node.target is operator.getitem else 0
-            _, used_indices = used_by_segment.setdefault(id(segment), (segment, set()))
-            used_indices.add(index)
-
-        for segment, used_indices in used_by_segment.values():
-            op_node = (
-                segment.marker_proxy.node if segment.marker_proxy is not None else None
-            )
-            if op_node is None:
-                continue
-            width = len(segment.output_refs)
-            mask = [index in used_indices for index in range(width)]
-
-            runtime_metadata = warp_operator.decode_runtime_metadata(op_node.args[1])
-            shapes = warp_operator.runtime_output_shapes(runtime_metadata)
-            dtypes = warp_operator.runtime_output_dtypes(runtime_metadata)
-            if len(shapes) != width:
-                # Op args out of sync with the segment; skip rather than corrupt.
-                _get_logger().warning(
-                    f"[{self.name}] warp_runner output_shapes width "
-                    f"({len(shapes)}) != segment outputs ({width}); "
-                    "skipping mask patch."
-                )
-                continue
-            shapes = [shapes[i] if mask[i] else [0] for i in range(width)]
-            input_refs = [
-                ref
-                for ref in segment.input_refs.values()
-                if getattr(ref.array, "proxy", None) is not None
-            ]
-            output_refs = list(segment.output_refs.values())
-            runtime_metadata = warp_operator.build_runtime_metadata(
-                segment=segment,
-                input_refs=input_refs,
-                output_refs=output_refs,
-                output_shapes=shapes,
-                output_dtypes=dtypes,
-                output_mask=mask,
-            )
-
-            op_node.update_arg(
-                1, warp_operator.encode_runtime_metadata(runtime_metadata)
-            )
+            metadata = warp_operator.decode_runtime_metadata(node.args[1])
+            outputs = metadata["outputs"]
+            used = set()
+            for user in node.users:
+                if user.target is operator.getitem and isinstance(user.args[1], int):
+                    used.add(user.args[1])
+                else:
+                    used.update(range(len(outputs)))
+            for index, spec in enumerate(outputs):
+                spec["mask"] = index in used
+                if index not in used:
+                    spec["shape"] = [0]
+                    spec["num_bytes"] = 0
+            node.update_arg(1, warp_operator.encode_runtime_metadata(metadata))
 
     def create_state_tensors(
         self, tensors: dict[str, torch.Tensor]
