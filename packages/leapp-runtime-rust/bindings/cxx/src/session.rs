@@ -8,6 +8,13 @@ pub struct SessionHandle(Option<leapp_runtime_bindings::SessionHandle>);
 
 pub struct ResultHandle(Option<RunResult>);
 
+pub fn engine_default() -> ffi::EngineKind {
+    match EngineKind::default() {
+        EngineKind::Native => ffi::EngineKind::Native,
+        EngineKind::Triton => ffi::EngineKind::Triton,
+    }
+}
+
 pub fn session_new() -> Box<SessionHandle> {
     Box::new(SessionHandle(None))
 }

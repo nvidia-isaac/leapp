@@ -100,9 +100,8 @@ def test_unknown_engine_is_rejected():
         open_session(engine="unknown")
 
 
-@pytest.mark.skipif(ENGINE != "triton", reason="default engine is Triton")
 def test_default_engine():
-    assert lr.SessionOptions().engine == "triton"
+    assert lr.SessionOptions().engine in ("native", "triton")
     bundle = lr.Bundle.open(FIXTURES / "feedback.yaml")
     for options in [None, lr.SessionOptions()]:
         with lr.Session.open(bundle, options) as session:

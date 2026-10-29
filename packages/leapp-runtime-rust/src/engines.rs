@@ -16,10 +16,11 @@ use memory::OutputPool;
 use std::sync::Arc;
 
 /// Execution engine selected when opening a session.
+/// Defaults to native.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum EngineKind {
-    #[default]
     Triton,
+    #[default]
     Native,
 }
 

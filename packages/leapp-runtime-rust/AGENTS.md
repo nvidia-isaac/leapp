@@ -13,7 +13,7 @@ Use `name.rs` beside `name/` directories, rather than `mod.rs`.
 - `src/bundle/`: immutable bundle inspection and validation.
 - `src/session.rs` and `src/session/`: public execution API, graph routing,
   initial values, feedback, and session-owned output caches.
-- `src/engines.rs`: private engine contract; Triton is selected automatically.
+- `src/engines.rs`: private engine contract; native is selected by default.
 - `src/engines/memory*`: reusable CPU, pinned-host, and CUDA allocations, copies,
   DLPack validation, and output pooling. Keep engine SDK types out of this code.
 - `src/engines/triton/`: conversion, model repositories, native requests, and

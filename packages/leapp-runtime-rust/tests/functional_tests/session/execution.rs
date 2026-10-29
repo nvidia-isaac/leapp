@@ -55,9 +55,25 @@ fn step(session: &mut Session, value: f32) -> RunResult {
 fn runtime_engine_selection_and_independent_feedback() {
     use lrt::EngineKind;
 
-    assert_eq!(SessionOptions::default().engine, EngineKind::Triton);
+    assert_eq!(SessionOptions::default().engine, EngineKind::Native);
     let bundle = Bundle::open(fixtures("triton").join("feedback.yaml")).unwrap();
     for device in devices() {
+        // Finish the default session before opening explicit engines: separate
+        // embedded Triton servers share process-global memory managers.
+        {
+            let mut session = Session::open(
+                &bundle,
+                SessionOptions {
+                    device,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(values(&step(&mut session, 1.), "accumulator/next"), [1.; 4]);
+            let mut peer = session.new_session().unwrap();
+            drop(session);
+            assert_eq!(values(&step(&mut peer, 3.), "accumulator/next"), [3.; 4]);
+        }
         let mut sessions = Vec::new();
         for engine in [EngineKind::Triton, EngineKind::Native] {
             let result = Session::open(

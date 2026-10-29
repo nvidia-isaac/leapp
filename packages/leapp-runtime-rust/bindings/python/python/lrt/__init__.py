@@ -18,6 +18,7 @@ from ._native import (
     RunResult,
     RuntimeError,
     Session,
+    _DEFAULT_ENGINE,
 )
 
 
@@ -45,7 +46,7 @@ class SessionOptions:
     output_device: str = "cpu"
     output_overrides: dict[str, str] = field(default_factory=dict)
     output_pool: OutputPoolOptions = field(default_factory=OutputPoolOptions)
-    engine: str = "triton"
+    engine: str = _DEFAULT_ENGINE
 
 
 __all__ = [
