@@ -367,7 +367,6 @@ char* invoke(F&& function) noexcept {
 }
 
 const adapter::Api api{
-    2,
     [](const char* path, int32_t device, const adapter::Port* inputs,
        size_t input_count, const adapter::Port* outputs, size_t output_count,
        void** value) noexcept {

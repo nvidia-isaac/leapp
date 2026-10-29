@@ -6,7 +6,7 @@ project(leapp_native_torchscript LANGUAGES CXX)
 add_subdirectory(../torch torch)
 add_library(leapp_torchscript SHARED model.cc input_analysis.cc)
 target_link_libraries(leapp_torchscript PRIVATE leapp_native_torch)
-target_compile_definitions(leapp_torchscript PRIVATE LEAPP_TORCH_ENTRY=leapp_native_torchscript_v2)
+target_compile_definitions(leapp_torchscript PRIVATE LEAPP_TORCH_ENTRY=leapp_native_torchscript)
 set_target_properties(leapp_torchscript PROPERTIES
   CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON
   BUILD_WITH_INSTALL_RPATH ON INSTALL_RPATH "$ORIGIN;$ORIGIN/lib")

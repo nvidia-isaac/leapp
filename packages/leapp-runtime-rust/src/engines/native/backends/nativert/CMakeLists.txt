@@ -35,7 +35,7 @@ set_target_properties(leapp_nativert_backend PROPERTIES
 target_link_libraries(leapp_nativert_backend PRIVATE
   leapp_native_torch "${NATIVERT_LIBRARY}" ${CMAKE_DL_LIBS})
 target_compile_definitions(leapp_nativert_backend PRIVATE
-  FMT_HEADER_ONLY LEAPP_TORCH_ENTRY=leapp_native_nativert_v2)
+  FMT_HEADER_ONLY LEAPP_TORCH_ENTRY=leapp_native_nativert)
 target_include_directories(leapp_nativert_backend PRIVATE
   "${PYTORCH_SOURCE}"
   "${PYTORCH_SOURCE}/third_party/nlohmann/include"
