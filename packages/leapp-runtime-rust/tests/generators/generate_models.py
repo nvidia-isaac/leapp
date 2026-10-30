@@ -217,6 +217,29 @@ def generate(root):
             },
         )
 
+    # Exercise cuDNN in isolated CUDA deployments, beyond elementwise kernels.
+    convolution = save_model(
+        root,
+        "convolution",
+        [port("input", [1, 1, 4, 4])],
+        [port("output", [1, 1, 3, 3])],
+        [helper.make_node("Conv", ["input", "weight"], ["output"])],
+        [numpy_helper.from_array(np.ones((1, 1, 2, 2), dtype=np.float32), "weight")],
+    )
+    write(
+        "convolution",
+        {
+            "models": {"convolution": convolution},
+            "pipeline": {
+                "data_flow": {},
+                "feedback_flow": {},
+                "inputs": {"convolution": ["input"]},
+                "outputs": {"convolution": ["output"]},
+                "configs": {},
+            },
+        },
+    )
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
