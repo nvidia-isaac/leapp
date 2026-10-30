@@ -19,6 +19,11 @@ buffers. Instances created through `new_session()` share loaded models, weights,
 and model-owned state. Execution-context state is private to each instance and
 starts fresh in each peer.
 
+Runtime libraries are loaded only for backends used by the bundle. Keep library
+loading and SDK initialization in the backend's load path so inspection and
+unrelated backends work without that runtime installed. Preserve the underlying
+loader error and library path when reporting initialization failures.
+
 Plugins support two execution paths:
 
 - **Prepared:** bind fixed-address input and output buffers once, then call

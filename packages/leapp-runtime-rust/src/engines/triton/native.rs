@@ -92,8 +92,10 @@ impl Server {
                 sys::TRITONSERVER_ServerOptionsSetModelLoadRetryCount(options.ptr, 0),
                 "load",
             )?;
+            // Retain failed model status long enough to report the underlying
+            // loader error. Readiness below still rejects partial repositories.
             check(
-                sys::TRITONSERVER_ServerOptionsSetExitOnError(options.ptr, true),
+                sys::TRITONSERVER_ServerOptionsSetExitOnError(options.ptr, false),
                 "load",
             )?;
             check(
@@ -140,10 +142,22 @@ impl Server {
                 "load",
             )?;
             if !ready {
+                let mut index = Handle::empty(sys::TRITONSERVER_MessageDelete);
+                // Zero flags includes unavailable models and their load reasons.
+                check(
+                    sys::TRITONSERVER_ServerModelIndex(runtime.server.ptr, 0, &mut index.ptr),
+                    "load",
+                )?;
+                check(
+                    sys::TRITONSERVER_MessageSerializeToJson(index.ptr, &mut json, &mut size),
+                    "load",
+                )?;
+                let diagnostic =
+                    String::from_utf8_lossy(std::slice::from_raw_parts(json.cast::<u8>(), size));
                 return Err(Error::new(
                     ErrorKind::Internal,
                     "load",
-                    "Triton repository is not ready",
+                    format!("Triton failed to load all models; repository status: {diagnostic}"),
                 ));
             }
         }

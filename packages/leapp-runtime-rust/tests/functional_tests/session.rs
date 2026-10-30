@@ -4,6 +4,9 @@
 #[path = "session/execution.rs"]
 mod execution;
 
+#[path = "session/backends.rs"]
+mod backends;
+
 #[path = "session/support.rs"]
 pub(crate) mod support;
 

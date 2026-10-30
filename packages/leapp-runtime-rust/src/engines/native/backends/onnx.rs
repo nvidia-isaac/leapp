@@ -48,7 +48,21 @@ fn initialize(directory: &std::path::Path) -> Result<()> {
             path.display()
         );
     } else {
-        ort::init_from(&path)?.with_name("leapp").commit();
+        ort::init_from(&path)
+            // ORT's load error does not expose libloading's source chain, which
+            // contains the missing dependency or invalid-library diagnostic.
+            .map_err(|error| match error {
+                ort::LoadDynamicError::Dlopen { error, .. } => anyhow::Error::new(error),
+                error => error.into(),
+            })
+            .with_context(|| {
+                crate::error::Unsupported(format!(
+                    "load ONNX Runtime library {}; install a compatible ONNX Runtime and its dependencies, or set ORT_DYLIB_PATH",
+                    path.display()
+                ))
+            })?
+            .with_name("leapp")
+            .commit();
         *loaded = Some((path, ort::environment::Environment::current()?));
     }
     Ok(())
