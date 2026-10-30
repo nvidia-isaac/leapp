@@ -109,3 +109,28 @@ Also verify the installed C++ SDK with `bindings/cxx/tests/consumer` so installe
 headers and CMake targets work without generated bridge headers or Rust sources.
 Pool changes must preserve retained/weak owners, exposure exclusion, byte offsets,
 failed-copy cleanup, independent peer caches, and CPU/pinned/CUDA behavior.
+
+### Minimal backend installations
+
+Use isolated environments where unrelated model SDKs and libraries are absent,
+not just excluded from the backend directory. Build the core runtime and bindings
+with only Triton/CUDA and their system dependencies; reuse those exact binaries
+for ONNX-only, TensorRT-only, LibTorch-only, and LibTorch/NativeRT installations.
+Build each custom plugin inside its corresponding environment. Warp is optional
+and should be omitted from this matrix.
+
+Generate all four fixture sets before isolation and set `LEAPP_TRITON_FIXTURES`,
+`LEAPP_TORCHSCRIPT_FIXTURES`, `LEAPP_PT2_FIXTURES`, and `LEAPP_TENSORRT_FIXTURES`.
+With the Python binding and NumPy installed, run for each engine:
+
+```sh
+python tests/deployment/check_installation.py --backend onnx --engine native --cuda
+python tests/deployment/check_installation.py --backend onnx --engine triton --cuda
+```
+
+Replace `onnx` with `torchscript`, `nativert`, or `tensorrt` in their installations,
+or `none` to check startup, inspection, and missing-backend errors without any
+model runtime. `--cuda` adds GPU execution and is required for TensorRT. The ONNX
+check includes convolution to exercise cuDNN on CUDA. Also run the applicable
+Rust integration tests and the installed C++ SDK checks. Audit
+shared-library dependencies and binary hashes to confirm isolation and reuse.

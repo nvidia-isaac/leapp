@@ -28,7 +28,10 @@ CMake target.
 
 Install only the model runtimes and plugins required by your bundle and selected
 engine; see [model support](#model-support). They load when a session opens;
-bundle inspection does not load them.
+bundle inspection does not load them. Cargo does not download or install these
+runtimes. Adding a backend does not require rebuilding the core binary or
+selecting Cargo features. Running exported bundles does not require Python
+model-export packages.
 
 For native execution, follow the
 [native backend installation guide](src/engines/native/backends/INSTALLATION.md).
@@ -226,11 +229,17 @@ and its ordering. Backends may use auxiliary streams with synchronization.
 
 ## Model support
 
-Both engines support ONNX, TorchScript, and PT2 on CPU or CUDA, and TensorRT
-on CUDA. These backends can share a graph.
+Both engines support the following exported artifacts and mixed-backend graphs.
 Unsupported backends fail when opening a session; bundle inspection still accepts
 custom backend names. Models must be exported before use; the runtime does not
 compile them.
+
+| Model | Bundle backend | Execution device | Required model runtime |
+| --- | --- | --- | --- |
+| ONNX | `onnx` | CPU or CUDA | ONNX Runtime; CUDA providers and cuDNN for GPU |
+| TorchScript | `jit`, `jit-script`, `jit-trace` | CPU or CUDA | CUDA-enabled LibTorch |
+| Exported program | `pt2` | CPU or CUDA | CUDA-enabled LibTorch and matching NativeRT |
+| TensorRT engine | `trt`, `tensorrt` | CUDA | TensorRT compatible with the engine and GPU |
 
 ONNX ports are matched by name, independently of bundle declaration order.
 

@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 
 Run these commands from `packages/leapp-runtime-rust` on Linux. The
 [core runtime](../../../../README.md#installation) and backend plugins build
-separately. Builds use existing
+separately. Install only the backends required by your bundle. Builds use existing
 SDKs without installing them; the C++ plugins require CMake 3.24+ and a C++20
 compiler. Build the runtime and LEAPP plugins from the same source revision.
 
@@ -16,20 +16,23 @@ export LEAPP_NATIVE_BACKENDS="$PWD/target/native-backends"
 ```
 
 The default backend directory is `/opt/leapp/backends`. Make each backend's
-dependencies available through `LD_LIBRARY_PATH` or the system loader.
+dependencies available through `LD_LIBRARY_PATH` or the system loader; setting
+`LEAPP_NATIVE_BACKENDS` alone does not configure dependency lookup. Source trees
+and headers are needed to build plugins, while deployment needs their resulting
+libraries and runtime dependencies.
 
-| Backend | Installed path relative to `LEAPP_NATIVE_BACKENDS` |
-| --- | --- |
-| ONNX | `onnxruntime/libonnxruntime.so` |
-| TorchScript | `torchscript/libleapp_torchscript.so` |
-| NativeRT | `nativert/libleapp_nativert_backend.so` |
-| TensorRT | `tensorrt/libleapp_tensorrt.so` |
+| Backend | Installed path relative to `LEAPP_NATIVE_BACKENDS` | Dependencies |
+| --- | --- | --- |
+| ONNX | `onnxruntime/libonnxruntime.so` | ONNX Runtime; CUDA providers and cuDNN for GPU |
+| TorchScript | `torchscript/libleapp_torchscript.so` | CUDA-enabled LibTorch and CUDA |
+| NativeRT | `nativert/libleapp_nativert_backend.so` | CUDA-enabled LibTorch, matching NativeRT, and CUDA |
+| TensorRT | `tensorrt/libleapp_tensorrt.so` | TensorRT, its plugin library, and CUDA |
 
 ## ONNX
 
 Install an ONNX Runtime library supporting API 24 at the path above, or set
 `ORT_DYLIB_PATH` to its absolute path. This adapter is included in the Rust
-runtime and has no separate plugin build.
+runtime and has no separate plugin build. It needs neither LibTorch nor TensorRT.
 
 For GPU execution, install the CUDA provider libraries beside ONNX Runtime and
 make their CUDA/cuDNN dependencies discoverable. CUDA provider initialization
@@ -70,10 +73,12 @@ cmake --install target/native-nativert
 ```
 
 Make the LibTorch, NativeRT, and CUDA library directories available to the loader.
+Neither Torch backend requires ONNX Runtime or TensorRT.
 
 ## TensorRT
 
-Use TensorRT 10.16 or newer 10.x headers/libraries and CUDA.
+Use TensorRT 10.16 or newer 10.x headers/libraries and CUDA. This plugin does not
+require ONNX Runtime, LibTorch, or NativeRT.
 
 ```sh
 cmake -S src/engines/native/backends/tensorrt -B target/tensorrt-backend \
