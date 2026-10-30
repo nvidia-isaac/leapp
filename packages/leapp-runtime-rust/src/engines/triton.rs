@@ -56,11 +56,36 @@ pub(super) fn open(
     convert::configure_plugins(&mut pipeline, &installation.backend_directory)
         .map_err(|e| crate::RuntimeError::new("load", e))?;
     let repository = convert::repository::ModelRepository::create(&pipeline)?;
-    Ok(std::sync::Arc::new(TritonEngine::load(
-        &pipeline,
-        repository,
-        &installation,
-    )?))
+    let engine = TritonEngine::load(&pipeline, repository, &installation).map_err(|error| {
+        // Triton reports generated model names. Include their bundle names and
+        // configured libraries without probing or loading unrelated backends.
+        let nodes = bundle
+            .model_names()
+            .into_iter()
+            .zip(&pipeline.models)
+            .map(|(node, model)| {
+                let backend = &model.config.backend;
+                let library = installation
+                    .backend_directory
+                    .join(backend)
+                    .join(format!("libtriton_{backend}.so"));
+                format!(
+                    "node {node} ({}): backend {backend}, library {}",
+                    model.config.name,
+                    library.display()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        crate::RuntimeError::classified(
+            error.code(),
+            error.phase(),
+            anyhow::Error::new(error).context(format!(
+                "load Triton models [{nodes}]; check the required backends and their runtime dependencies"
+            )),
+        )
+    })?;
+    Ok(std::sync::Arc::new(engine))
 }
 
 impl TritonEngine {
