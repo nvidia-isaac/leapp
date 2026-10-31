@@ -22,8 +22,10 @@ from torch._export.converter import TS2EPConverter
 from leapp.utils.logging import _get_logger
 from leapp.utils.dtype import DtypeCodec, register_dtype_codec
 from ..proxy import (
+    STORAGE_LAYOUT_META_KEY,
     bind_proxy,
     is_same_value,
+    layout_key,
     update_proxy,
     conversion_proxy,
 )
@@ -473,7 +475,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
     def _record_assignment(self, key, value, real_value):
         """Record one functional assignment and update this object's proxy."""
-        # Plain full replacement may already have promoted with the source proxy.
+        # Full replacement of an actual alias already describes the same storage.
         if (
             isinstance(value, TracedTensor)
             and self.proxy is value.proxy
@@ -485,11 +487,65 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         return self._update_setitem_proxy(key, value_proxy, real_value=real_value)
 
     @classmethod
+    def _plain_destination_proxy(cls, target, source):
+        """Resolve exact aliases; reject shared storage with an uncaptured view."""
+        if not source.is_tracing or target.numel() == 0:
+            return None
+        context = source.context_obj
+        key = layout_key(target)
+        if key is not None and key == layout_key(source):
+            return source.proxy
+        declared = context.find_declared_alias(target)
+        if declared is not None:
+            return declared.proxy
+
+        destination = target.untyped_storage()
+
+        def overlaps(storage):
+            if storage.device != destination.device:
+                return False
+            start, other_start = destination.data_ptr(), storage.data_ptr()
+            return (
+                destination.nbytes() > 0
+                and storage.nbytes() > 0
+                and start < other_start + storage.nbytes()
+                and other_start < start + destination.nbytes()
+            )
+
+        # Allocation snapshots are weak: expired allocations cannot match a
+        # reused address. Compare byte spans as separate storage wrappers can
+        # expose the same physical memory, including Torch/NumPy round trips.
+        for node in context.graph.nodes:
+            layout = node.meta.get(STORAGE_LAYOUT_META_KEY)
+            if layout is None:
+                continue
+            storage = torch.UntypedStorage._new_with_weak_ptr(layout.identity.cdata)
+            if storage is None or not overlaps(storage):
+                continue
+            if (
+                target.data_ptr() == storage.data_ptr()
+                and tuple(target.shape) == layout.shape
+                and tuple(target.stride()) == layout.strides
+                and target.dtype == layout.dtype
+            ):
+                return Proxy(node, context.tracer)
+            raise RuntimeError(
+                "Plain destination has shared storage with a captured tensor "
+                "but no captured view relationship; use the traced destination view"
+            )
+        if overlaps(source.tensor.untyped_storage()):
+            raise RuntimeError(
+                "Plain destination has shared storage with its source but no "
+                "captured view relationship; use the traced destination view"
+            )
+        return None
+
+    @classmethod
     def _handle_plain_assignment(cls, func, args=(), kwargs=None):
         """Promote a plain destination, then re-enter assignment or copy.
 
-        Full replacement with a matching traced source reuses that source's
-        proxy. Partial writes register the pre-write destination as a graph
+        Full replacement preserves independent graph storage for independent
+        buffers. Partial writes register the pre-write destination as a graph
         constant and use it as the promoted proxy.
         """
         kwargs = kwargs or {}
@@ -516,17 +572,36 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             and tuple(target.shape) == tuple(value.shape)
             and target.dtype == value.dtype
         )
-        if full_replacement:
-            dest_proxy = value.proxy
+        existing_proxy = cls._plain_destination_proxy(target, anchor)
+        if existing_proxy is not None:
+            dest_proxy = existing_proxy
+        elif full_replacement:
+            if value.is_tracing:
+                dest_proxy = anchor.context_obj.tracer.create_proxy(
+                    "call_function",
+                    torch.empty_strided,
+                    (tuple(target.shape), tuple(target.stride())),
+                    {"dtype": target.dtype, "device": target.device},
+                )
+            else:
+                dest_proxy = value.proxy
         else:
             dest_proxy = anchor._register_setitem_tensor(
                 target.clone().detach(), "_setitem_destination"
             )
         cls._promote_plain_tensor(target, anchor.name, anchor.context_obj, dest_proxy)
         if full_replacement:
-            # The destination now holds exactly the source's data, so it also
-            # presents the source's boundary identity to the next node.
+            # Initialize independent storage through a real graph copy, keeping
+            # the destination layout for subsequent views and mutations.
+            if is_copy:
+                target.tensor.copy_(
+                    value.tensor, non_blocking=kwargs.get("non_blocking", False)
+                )
+            else:
+                target.tensor[key] = value.tensor
+            target.proxy = value.proxy
             target.output_port = value.output_port
+            return True, target if is_copy else None
         if is_copy:
             return True, target.copy_(
                 value, non_blocking=kwargs.get("non_blocking", False)
