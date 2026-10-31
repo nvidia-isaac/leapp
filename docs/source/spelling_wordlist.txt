@@ -267,6 +267,8 @@ isaac
 canonicalize
 canonicalized
 canonicalizing
+setpoint
+setpoints
 ATen
 ufunc
 namespaces

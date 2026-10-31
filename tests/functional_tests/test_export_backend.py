@@ -294,6 +294,37 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
                 self.assertEqual(onnx_input_names, ["joint_pos_in"])
                 self.assertEqual(onnx_output_names, ["joint_pos_out"])
 
+    def test_onnx_aliased_outputs_keep_declared_names(self):
+        names = ["result", "copy", "identity", "identity_copy"]
+        for optimize in (False, True):
+            with self.subTest(optimize=optimize):
+                leapp.start(self.TEST_GRAPH_NAME)
+                x = annotate.input_tensors("node", {"x": torch.ones(2)})
+                y = x * 2
+                annotate.output_tensors(
+                    "node",
+                    dict(zip(names, (y, y, x, x))),
+                    export_with="onnx",
+                    backend_params={"optimize": optimize},
+                )
+                leapp.stop()
+                self.assertTrue(leapp.compile_graph(visualize=False)["node"])
+                with open(annotate.config_path) as stream:
+                    description = yaml.safe_load(stream)["models"]["node"]
+                model = onnx.load(os.path.join(self.TEST_GRAPH_NAME, "node.onnx"))
+                self.assertEqual([port.name for port in model.graph.input], ["x"])
+                self.assertEqual([port.name for port in model.graph.output], names)
+                self.assertEqual(
+                    [port["name"] for port in description["outputs"]], names
+                )
+                runtime = leapp.InferenceManager(annotate.config_path)
+                value = torch.tensor([3.0, 4.0], device=runtime.nodes["node"].device)
+                actual = runtime({"node/x": value})
+                for name, expected in zip(names, (value * 2, value * 2, value, value)):
+                    torch.testing.assert_close(
+                        actual["node/" + name].cpu(), expected.cpu()
+                    )
+
     def test_onnx_connected_node_names_match_artifact_names(self):
         """Connected nodes should keep each node's own ONNX I/O names."""
         leapp.start(name=self.TEST_GRAPH_NAME)

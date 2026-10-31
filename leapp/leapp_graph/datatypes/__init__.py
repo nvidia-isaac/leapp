@@ -6,7 +6,8 @@
 """Data type compatibility utilities for LEAPP tracing.
 
 This module provides:
-- TracedData base class and its implementations (TracedTensor, TracedNpArray)
+- TracedData base class and its implementations (TracedTensor, TracedNpArray,
+  TracedInt)
 - Type registry for mapping base types to traced types
 - NumPy-to-PyTorch compatibility utilities
 """
@@ -21,6 +22,7 @@ from leapp.utils.logging import _get_logger
 from .traced_data import TracedData
 from .torch.traced_tensor import TracedTensor
 from .numpy.traced_np_array import TracedNpArray
+from .primitives import TracedInt
 from .proxy import (
     bind_proxy,
     layout_key,
@@ -214,6 +216,7 @@ __all__ = [
     "TracedTensor",
     "TracedNpArray",
     "TracedWpArray",
+    "TracedInt",
     "WarpPatchBackend",
     # Proxy binding / alias classification
     "bind_proxy",

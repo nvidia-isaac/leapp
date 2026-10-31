@@ -541,6 +541,9 @@ class TracedData(ABC):
         if bound is None:
             return default
         if isinstance(bound, TracedData):
+            if isinstance(bound, Integral):
+                # A traced integer is already an integer in the graph.
+                return bound.proxy
             return self._context.tracer.create_proxy(
                 "call_method", "item", (bound.proxy,), {}
             )

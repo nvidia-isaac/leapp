@@ -16,11 +16,10 @@
 #
 
 import collections.abc
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, fields
 from typing import Optional, Any, Dict, Tuple, List
 
 import torch
-import yaml
 
 # Dtype mapping lives in a dependency-free module; re-exported here (explicit
 # ``as`` form) for the existing import sites
@@ -39,61 +38,20 @@ from leapp.leapp_graph.datatypes import (
     TracedData,
     is_tracable_tensor_type,
     to_export_torch_tensor,
-    TRACABLE_BASE_TYPES,
 )
 from leapp.utils.utils import safe_deepcopy
-from leapp.utils.enums import InputKindEnum, OutputKindEnum
 
-
-class CompactYamlList(list):
-    """Custom list class for tensor shapes that enables compact YAML formatting
-    This class will behave exactly like a list. The only difference is that it will be
-    formatted in a more compact way in the yaml file.
-
-    """
-
-    pass
-
-
-class CompactYamlDict(dict):
-    """Custom dict class for tensor shapes that enables compact YAML formatting
-    This class will behave exactly like a dict. The only difference is that it will be
-    formatted in a more compact way in the yaml file.
-    """
-
-    pass
-
-
-# Register custom YAML representers so these types are always serialized in flow style
-yaml.add_representer(
-    CompactYamlList,
-    lambda dumper, data: dumper.represent_sequence(
-        "tag:yaml.org,2002:seq", data, flow_style=True
-    ),
+# Preserve existing imports while semantics owns the annotation classes.
+from leapp.utils.semantics import (
+    Axis as Axis,
+    TemporalAxis as TemporalAxis,
+    TensorSemantics as TensorSemantics,
+    TEMPORAL_AXIS_SENTINEL as TEMPORAL_AXIS_SENTINEL,
 )
-yaml.add_representer(
-    CompactYamlDict,
-    lambda dumper, data: dumper.represent_mapping(
-        "tag:yaml.org,2002:map", data, flow_style=True
-    ),
+from leapp.utils.yaml_utils import (
+    CompactYamlList as CompactYamlList,
+    CompactYamlDict as CompactYamlDict,
 )
-
-
-TEMPORAL_AXIS_SENTINEL = "__temporal_axis__"
-
-
-@dataclass(frozen=True)
-class TemporalAxis:
-    """Marks an element_names axis as temporal with a fixed period in ms."""
-
-    period_ms: float
-
-    def __post_init__(self):
-        if self.period_ms <= 0:
-            _get_logger().fatal(
-                "TemporalAxis period_ms must be positive",
-                error_type=ValueError,
-            )
 
 
 @dataclass
@@ -122,154 +80,6 @@ class GraphConfigs:
         if self.extra:
             result.update(self.extra)
         return result
-
-
-@dataclass
-class TensorSemantics:
-    """User-facing semantic metadata for a tensor.
-
-    Add new semantic fields here — they automatically propagate to
-    TensorDescription, YAML serialization, and the unwrap/apply flow.
-
-    Convention:
-        - Internal fields (ref, name) are listed in _INTERNAL_FIELDS and excluded from serialization.
-        - Public fields (kind, element_names, ...) are semantic data that gets serialized to YAML.
-    """
-
-    # Fields excluded from serialization (internal use only)
-    _INTERNAL_FIELDS = frozenset({"ref", "name"})
-
-    name: str = None
-    ref: Any = None
-
-    # Semantic fields
-    kind: Optional[InputKindEnum | OutputKindEnum | str] = None
-    element_names: Optional[List] = None  # deprecated
-    temporal_period_ms: Optional[float] = field(default=None, init=False)
-    extra: Optional[Dict[str, Any]] = None
-
-    def __post_init__(self):
-        """error checking, auto conditioning"""
-        existing_period_ms = self.temporal_period_ms
-        self.temporal_period_ms = None
-        if not is_tracable_tensor_type(
-            self.ref
-        ):  # this checks for both base types and traced types
-            _get_logger().fatal(
-                f"TensorSemantics 'ref' must be a traceable tensor type "
-                f"accepted types are: {TRACABLE_BASE_TYPES}"
-                f"got {type(self.ref).__name__}",
-                error_type=TypeError,
-            )
-        if self.element_names is not None:
-            self.element_names, detected_period_ms = self._normalize_element_names(
-                self.element_names,
-                allow_temporal_sentinel=existing_period_ms is not None,
-            )
-            self.temporal_period_ms = detected_period_ms or existing_period_ms
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Return all non-None semantic fields, excluding internal fields.
-
-        Extra fields are flattened directly into the result dict rather than
-        nested under an 'extra' key.
-        """
-        result = {}
-        for f in fields(self):
-            if f.name in self._INTERNAL_FIELDS or f.name == "extra":
-                continue
-            value = getattr(self, f.name)
-            if value is not None:
-                result[f.name] = value
-        if self.extra:
-            result.update(self.extra)
-        return result
-
-    def update(self, values: Dict[str, Any]):
-        """Set semantic fields from a dict.
-
-        Known dataclass fields are set directly. Unknown keys are stored
-        in the ``extra`` dict so they still appear in the serialized YAML.
-        """
-        valid_fields = {f.name for f in fields(self) if f.init} - self._INTERNAL_FIELDS
-        for key, value in values.items():
-            if key in valid_fields:
-                setattr(self, key, value)
-            else:
-                if self.extra is None:
-                    self.extra = {}
-                self.extra[key] = value
-        self.__post_init__()
-
-    @staticmethod
-    def _normalize_element_names(element_names, allow_temporal_sentinel=False):
-        """Normalize element_names and extract temporal axis metadata."""
-        if isinstance(element_names, str):
-            if element_names == TEMPORAL_AXIS_SENTINEL:
-                if allow_temporal_sentinel:
-                    return CompactYamlList([element_names]), None
-                _get_logger().fatal(
-                    f"{TEMPORAL_AXIS_SENTINEL!r} is reserved for TemporalAxis",
-                    error_type=ValueError,
-                )
-            return CompactYamlList([CompactYamlList([element_names])]), None
-
-        if not isinstance(element_names, list):
-            return element_names, None
-
-        temporal_period_ms = None
-        normalized = CompactYamlList()
-        has_axis_descriptors = False
-        has_temporal_axis = False
-
-        for item in element_names:
-            if isinstance(item, TemporalAxis):
-                if has_temporal_axis:
-                    _get_logger().fatal(
-                        "element_names can contain at most one TemporalAxis",
-                        error_type=ValueError,
-                    )
-                has_axis_descriptors = True
-                has_temporal_axis = True
-                temporal_period_ms = item.period_ms
-                normalized.append(TEMPORAL_AXIS_SENTINEL)
-            elif isinstance(item, str):
-                if item == TEMPORAL_AXIS_SENTINEL:
-                    if not allow_temporal_sentinel:
-                        _get_logger().fatal(
-                            f"{TEMPORAL_AXIS_SENTINEL!r} is reserved for TemporalAxis",
-                            error_type=ValueError,
-                        )
-                    has_axis_descriptors = True
-                    normalized.append(TEMPORAL_AXIS_SENTINEL)
-                else:
-                    normalized.append(item)
-            elif isinstance(item, list):
-                if any(isinstance(child, TemporalAxis) for child in item):
-                    _get_logger().fatal(
-                        "TemporalAxis must be an axis item, not nested in a list",
-                        error_type=ValueError,
-                    )
-                if any(child == TEMPORAL_AXIS_SENTINEL for child in item):
-                    _get_logger().fatal(
-                        f"{TEMPORAL_AXIS_SENTINEL!r} must be a bare axis item, not nested in a list",
-                        error_type=ValueError,
-                    )
-                has_axis_descriptors = True
-                normalized.append(CompactYamlList(item))
-            elif item is None:
-                has_axis_descriptors = True
-                normalized.append(None)
-            else:
-                _get_logger().warning(
-                    "element_names has mixed types, expected names or axis descriptors"
-                )
-                return element_names, temporal_period_ms
-
-        if has_axis_descriptors:
-            return normalized, temporal_period_ms
-
-        return CompactYamlList([CompactYamlList(normalized)]), None
 
 
 class TensorDescription:

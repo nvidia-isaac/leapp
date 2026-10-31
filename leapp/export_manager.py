@@ -35,7 +35,7 @@ from leapp.leapp_graph.datatypes.patching import (
     TracingPatcher,
     warn_if_script_functions_in_scope,
 )
-from leapp.utils.tensor_description import TensorSemantics
+from leapp.utils.semantics import TensorSemantics
 from leapp.utils.tensor_description import (
     verify_data_exact_match,
     flatten_io_structure,
@@ -237,6 +237,12 @@ class ExportManager:
             or any(isinstance(t, TensorSemantics) for t in tensors)
         ):
             tensors, metadata = unwrap_tensor_semantics(tensors)
+            if api_name.startswith("output_tensors"):
+                for semantics in metadata.values():
+                    if semantics.is_setpoint:
+                        raise ValueError(
+                            "is_setpoint=True applies only to inputs; use False or None on outputs"
+                        )
 
         if is_tracable_tensor_type(tensors):
             _get_logger().fatal(
