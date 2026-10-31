@@ -42,65 +42,34 @@ class TestTorchSharedMemory(LEAPPFunctionalTestBase):
     plausible-looking numbers rather than raising.
     """
 
-    def _verify_alias_mutation_propagates(self, make_alias):
-        """Mutate a buffer through an alias and read it back through the source.
-
-        ``make_alias`` takes the traced input and returns a second carrier over
-        the same buffer. The mutation goes through that alias while the node's
-        output is read through the original, so the exported graph matches eager
-        Torch only if the two carriers share provenance.
-        """
-        obs_value = torch.tensor([1.0, 2.0, 3.0])
-        expected = (obs_value + 1.0) * 2.0
-
+    def test_view_alias_mutation_replays(self):
+        """A write through a sliced view reaches its base and detached alias."""
         leapp.start(name=self.TEST_GRAPH_NAME)
-        obs = annotate.input_tensors("policy", {"obs": obs_value.clone()})
-
-        alias = make_alias(obs)
-        alias += 1.0
-        action = obs * 2.0
-
-        # Eager Torch wrote through shared memory, so this is the value the
-        # exported graph has to reproduce.
-        self.assertTrue(
-            torch.equal(action.tensor, expected),
-            f"eager value diverged: got {action.tensor}, expected {expected}",
-        )
-
-        annotate.output_tensors("policy", {"action": action}, export_with="jit")
+        x = annotate.input_tensors("policy", {"x": torch.arange(6.0)})
+        v = x[1:5]
+        a = v
+        b = v.detach()
+        a.add_(5)
+        expected = torch.tensor([0.0, 6.0, 7.0, 8.0, 9.0, 5.0])
+        torch.testing.assert_close(x.tensor, expected)
+        torch.testing.assert_close(b.tensor, expected[1:5])
+        annotate.output_tensors("policy", {"base": x, "alias": b}, export_with="jit")
         leapp.stop()
-        leapp.compile_graph(visualize=False)
-
-        self.verify_num_connections(
-            annotate,
-            nodes=1,
-            inputs=1,
-            outputs=1,
-            internal_connections=0,
-            feedback_connections=0,
+        leapp.compile_graph(visualize=False, validate=True, strict=True)
+        manager = leapp.InferenceManager(
+            str(Path(self.TEST_GRAPH_NAME) / f"{self.TEST_GRAPH_NAME}.yaml")
         )
-        self.verify_inference_manager(
-            source_inputs={"policy/obs": obs_value},
-            source_outputs={"policy/action": expected},
-        )
-
-    def test_detach_alias_shares_provenance(self):
-        """``detach`` returns this buffer at this layout."""
-        self._verify_alias_mutation_propagates(lambda tensor: tensor.detach())
-
-    def test_full_slice_alias_shares_provenance(self):
-        """A ``[:]`` key selects everything, so it narrows nothing."""
-        self._verify_alias_mutation_propagates(lambda tensor: tensor[:])
-
-    def test_noop_conversion_alias_shares_provenance(self):
-        """A ``to`` that neither casts nor moves allocates nothing."""
-        self._verify_alias_mutation_propagates(lambda tensor: tensor.to(torch.float32))
-
-    def test_chained_aliases_share_one_provenance(self):
-        """An alias of an alias still names the one original value."""
-        self._verify_alias_mutation_propagates(
-            lambda tensor: tensor.detach()[:].to(torch.float32)
-        )
+        for fresh in (
+            torch.arange(10.0, 16.0),
+            torch.tensor([-7.0, 3.0, -1.0, 100.0, 0.25, 8.0]),
+        ):
+            before = fresh.clone()
+            expected = fresh.clone()
+            expected[1:5] += 5
+            actual = manager.run_policy({"policy/x": fresh})
+            torch.testing.assert_close(actual["policy/base"], expected)
+            torch.testing.assert_close(actual["policy/alias"], expected[1:5])
+            torch.testing.assert_close(fresh, before)
 
     def test_inplace_dispatch_mutation_reaches_the_alias(self):
         """An in-place operation reaching dispatch rebinds the shared root.
@@ -172,40 +141,25 @@ class TestTorchSharedMemory(LEAPPFunctionalTestBase):
             source_outputs={"policy/action": expected},
         )
 
-    def test_aliasing_records_no_operation(self):
-        """An alias is a second name for a value, not a computation.
-
-        Recording a node for it would leave the graph carrying work that has no
-        consumers, so the aliasing chain should contribute nothing between the
-        placeholder and the multiply.
-        """
+    def test_full_slice_and_noop_conversion_preserve_aliases(self):
+        """A write through chained full-layout aliases reaches the source."""
         obs_value = torch.tensor([1.0, 2.0, 3.0])
 
         leapp.start(name=self.TEST_GRAPH_NAME)
         obs = annotate.input_tensors("policy", {"obs": obs_value.clone()})
 
-        action = obs.detach()[:].to(torch.float32) * 2.0
-        targets = [str(node.target) for node in annotate.nodes["policy"].graph.nodes]
+        alias = obs.detach()[:].to(torch.float32)
+        alias += 1.0
+        action = obs * 2.0
+        torch.testing.assert_close(action.tensor, (obs_value + 1.0) * 2.0)
 
         annotate.output_tensors("policy", {"action": action}, export_with="jit")
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
-        self.assertEqual(
-            2,
-            len(targets),
-            f"expected only a placeholder and a multiply, got {targets}",
-        )
-        self.assertFalse(
-            any(
-                "detach" in target or "getitem" in target or target == "to"
-                for target in targets
-            ),
-            f"an aliasing operation was recorded: {targets}",
-        )
         self.verify_inference_manager(
-            source_inputs={"policy/obs": obs_value},
-            source_outputs={"policy/action": obs_value * 2.0},
+            source_inputs={"policy/obs": obs_value + 10.0},
+            source_outputs={"policy/action": (obs_value + 11.0) * 2.0},
         )
 
     def test_two_declared_aliases_share_one_root_and_one_port(self):

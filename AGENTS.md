@@ -60,6 +60,16 @@ allowed on `leapp.annotate` are listed in `AnnotateAPI._ALLOWED_APIS` in
 `leapp/leapp.py`. Do not add a consumer API without updating both, the
 docs, and tests.
 
+## Test design
+
+- Unit tests cover each observed unit-level situation in detail. Parameterize
+  repetitive cases where possible, keeping each case identifiable when it fails.
+- Functional tests cover larger parts of the LEAPP tracing pipeline and the
+  interactions between them. Each functional test must justify its existence
+  by providing coverage that unit tests do not provide. State that additional
+  coverage in its docstring. Prefer a few representative combined scenarios
+  over repeating a unit-test matrix through the full pipeline.
+
 ## Commands
 
 ```bash
