@@ -43,7 +43,7 @@ class TestTorchSharedMemory(LEAPPFunctionalTestBase):
     """
 
     def test_view_alias_mutation_replays(self):
-        """A write through a sliced view reaches its base and detached alias."""
+        """Replay both aliased output ports through public annotation and YAML reload."""
         leapp.start(name=self.TEST_GRAPH_NAME)
         x = annotate.input_tensors("policy", {"x": torch.arange(6.0)})
         v = x[1:5]
@@ -109,57 +109,6 @@ class TestTorchSharedMemory(LEAPPFunctionalTestBase):
         self.verify_inference_manager(
             source_inputs={"policy/obs": obs_value},
             source_outputs={"policy/action": expected},
-        )
-
-    def test_clone_is_a_separate_value(self):
-        """A copy shares no memory, so mutating it must not move the source.
-
-        The complement of the tests above: sharing a root here would make the
-        source inherit a mutation eager Torch never applied to it.
-        """
-        obs_value = torch.tensor([1.0, 2.0, 3.0])
-        expected = obs_value * 2.0
-
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        obs = annotate.input_tensors("policy", {"obs": obs_value.clone()})
-
-        copy = obs.clone()
-        copy += 100.0
-        action = obs * 2.0
-
-        self.assertTrue(
-            torch.equal(action.tensor, expected),
-            f"eager value diverged: got {action.tensor}, expected {expected}",
-        )
-
-        annotate.output_tensors("policy", {"action": action}, export_with="jit")
-        leapp.stop()
-        leapp.compile_graph(visualize=False)
-
-        self.verify_inference_manager(
-            source_inputs={"policy/obs": obs_value},
-            source_outputs={"policy/action": expected},
-        )
-
-    def test_full_slice_and_noop_conversion_preserve_aliases(self):
-        """A write through chained full-layout aliases reaches the source."""
-        obs_value = torch.tensor([1.0, 2.0, 3.0])
-
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        obs = annotate.input_tensors("policy", {"obs": obs_value.clone()})
-
-        alias = obs.detach()[:].to(torch.float32)
-        alias += 1.0
-        action = obs * 2.0
-        torch.testing.assert_close(action.tensor, (obs_value + 1.0) * 2.0)
-
-        annotate.output_tensors("policy", {"action": action}, export_with="jit")
-        leapp.stop()
-        leapp.compile_graph(visualize=False)
-
-        self.verify_inference_manager(
-            source_inputs={"policy/obs": obs_value + 10.0},
-            source_outputs={"policy/action": (obs_value + 11.0) * 2.0},
         )
 
     def test_two_declared_aliases_share_one_root_and_one_port(self):
@@ -386,82 +335,6 @@ class TestWarpSharedMemory(WarpTestCase, LEAPPFunctionalTestBase):
                         delta, torch.tensor([float(amount)], device=self.DEVICE)
                     )
 
-    def test_from_torch_alias_follows_the_segment(self):
-        """A segment writing a converted buffer moves its Torch carrier too.
-
-        Nothing reads the Warp array after the launch. Only the Torch tensor is
-        read, so the runner survives pruning solely because the conversion left
-        the two sharing one root.
-        """
-        obs_value = torch.tensor([1.0, 2.0, 3.0], device=self.DEVICE)
-        expected = (obs_value + 1.0) * 2.0
-
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        for _ in range(2):
-            obs = annotate.input_tensors("node_a", {"obs": obs_value.clone()})
-            array = wp.from_torch(obs)
-            with annotate.warp_op("node_a", device=self.DEVICE):
-                wp.launch(
-                    self.kernels.increment_in_place,
-                    dim=array.size,
-                    inputs=[array],
-                    device=self.DEVICE,
-                )
-            action = obs * 2.0
-
-            self.assertTrue(
-                torch.equal(action.tensor, expected),
-                f"eager value diverged: got {action.tensor}, expected {expected}",
-            )
-            annotate.output_tensors("node_a", {"action": action}, export_with="onnx")
-
-        leapp.stop()
-        leapp.compile_graph(visualize=False)
-
-        self.verify_inference_manager(
-            source_inputs={"node_a/obs": obs_value},
-            source_outputs={"node_a/action": expected},
-        )
-
-    def test_to_torch_inside_an_open_segment_follows_the_close(self):
-        """A conversion made before the runner exists still ends up on it.
-
-        The conversion keeps the input's stable FX handle. Segment close
-        records the runner's write before the alias is consumed.
-        """
-        source_value = torch.tensor([1.0, 2.0, 3.0], device=self.DEVICE)
-        expected = (source_value + 1.0) * 2.0
-
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        for _ in range(2):
-            array = annotate.input_tensors(
-                "node_a",
-                {"in_a": wp.from_torch(source_value.clone())},
-            )
-            with annotate.warp_op("node_a", device=self.DEVICE):
-                wp.launch(
-                    self.kernels.increment_in_place,
-                    dim=array.size,
-                    inputs=[array],
-                    device=self.DEVICE,
-                )
-                tensor = wp.to_torch(array)
-            action = tensor * 2.0
-
-            self.assertTrue(
-                torch.equal(action.tensor, expected),
-                f"eager value diverged: got {action.tensor}, expected {expected}",
-            )
-            annotate.output_tensors("node_a", {"action": action}, export_with="onnx")
-
-        leapp.stop()
-        leapp.compile_graph(visualize=False)
-
-        self.verify_inference_manager(
-            source_inputs={"node_a/in_a": source_value},
-            source_outputs={"node_a/action": expected},
-        )
-
     def test_new_warp_output_alias_replays_after_segment_close(self):
         """A new output converted before publication retains the runner result."""
         for backend in ("onnx", "pt2"):
@@ -536,52 +409,6 @@ class TestWarpSharedMemory(WarpTestCase, LEAPPFunctionalTestBase):
                             )
                             torch.testing.assert_close(given, fresh)
 
-    def test_second_warp_handle_on_one_buffer_follows_the_segment(self):
-        """A launch writing one buffer through a second Warp handle moves it too.
-
-        ``array[:]`` selects everything, so Warp hands back another wp.array over
-        the same bytes at the same layout. The launch writes the buffer through
-        that second handle and the node's output is read back through it, so the
-        exported graph reproduces eager Warp only if the handle ends up on a
-        segment output. Folding it into the original's output leaves it on the
-        pre-segment proxy, which prunes the runner and exports the input
-        unchanged.
-        """
-        source_value = torch.tensor([1.0, 2.0, 3.0], device=self.DEVICE)
-        expected = (source_value + 1.0) * 2.0
-
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        for _ in range(2):
-            array = annotate.input_tensors(
-                "node_a",
-                {"in_a": wp.from_torch(source_value.clone())},
-            )
-            with annotate.warp_op("node_a", device=self.DEVICE):
-                alias = array[:]
-                wp.launch(
-                    self.kernels.add_scalar,
-                    dim=array.size,
-                    inputs=[array, wp.float32(1.0)],
-                    outputs=[alias],
-                    device=self.DEVICE,
-                )
-                tensor = wp.to_torch(alias)
-            action = tensor * 2.0
-
-            self.assertTrue(
-                torch.equal(action.tensor, expected),
-                f"eager value diverged: got {action.tensor}, expected {expected}",
-            )
-            annotate.output_tensors("node_a", {"action": action}, export_with="onnx")
-
-        leapp.stop()
-        leapp.compile_graph(visualize=False)
-
-        self.verify_inference_manager(
-            source_inputs={"node_a/in_a": source_value},
-            source_outputs={"node_a/action": expected},
-        )
-
     def test_launch_mutating_two_buffers_keeps_them_separate(self):
         """One launch writing two arrays gives each its own segment output.
 
@@ -639,43 +466,29 @@ class TestWarpSharedMemory(WarpTestCase, LEAPPFunctionalTestBase):
         )
 
     def test_warp_torch_warp_mutations_chain_on_one_buffer(self):
-        """Three in-place writes to one allocation, alternating frameworks.
+        """Replay ordered cross-framework writes and retained aliases via ONNX/YAML.
 
-        ``test_cuda_warp_to_torch_to_warp_in_one_node`` already covers this
-        ordering, but its Torch stage allocates, so the second segment works on
-        a different buffer and each segment can own a root of its own. Here
-        every stage writes the original bytes, so the Torch mutation has to land
-        on the root the first segment left behind and the second segment has to
-        pick up the root the Torch mutation left, all on one view that changes
-        hands twice.
-
-        Eager Torch reports the right answer either way, because in-place writes
-        reach the buffer whatever the graph believes, so a broken chain shows up
-        only after export. The three factors do not commute and none is the
-        identity, so dropping or reordering any stage changes the result.
+        Unlike conversion unit tests, this crosses two real Warp segments,
+        creates a Torch alias before segment close, and reloads the pipeline.
         """
-        source_value = torch.tensor([2.0, 4.0, 6.0], device=self.DEVICE)
-        # Warp adds one, Torch triples, Warp halves, then the output is read
-        # back through the original Torch carrier.
-        expected = (((source_value + 1.0) * 3.0) / 2.0) * 2.0
-
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        for _ in range(2):
-            tensor = annotate.input_tensors("node_a", {"in_a": source_value.clone()})
+        leapp.start(name=self.TEST_GRAPH_NAME, max_cached_io=2)
+        for offset in (0.0, 5.0):
+            tensor = annotate.input_tensors(
+                "node_a",
+                {"in_a": torch.tensor([2.0, 4.0, 6.0], device=self.DEVICE) + offset},
+            )
             array = wp.from_torch(tensor)
-
             with annotate.warp_op("node_a", device=self.DEVICE):
+                second_handle = array[:]
                 wp.launch(
-                    self.kernels.increment_in_place,
+                    self.kernels.add_scalar,
                     dim=array.size,
-                    inputs=[array],
+                    inputs=[array, wp.float32(1.0)],
+                    outputs=[second_handle],
                     device=self.DEVICE,
                 )
-
-            # Torch writes the same bytes between the two segments, so this
-            # mutation has to be visible to the Warp array as well.
-            tensor.mul_(3.0)
-
+                alias = wp.to_torch(second_handle)
+            alias.mul_(3.0)
             with annotate.warp_op("node_a", device=self.DEVICE):
                 wp.launch(
                     self.kernels.divide_in_place,
@@ -683,28 +496,22 @@ class TestWarpSharedMemory(WarpTestCase, LEAPPFunctionalTestBase):
                     inputs=[array, wp.float32(2.0)],
                     device=self.DEVICE,
                 )
-
-            action = tensor * 2.0
-            self.assertTrue(
-                torch.equal(action.tensor, expected),
-                f"eager value diverged: got {action.tensor}, expected {expected}",
+            annotate.output_tensors(
+                "node_a", {"base": tensor, "alias": alias}, export_with="onnx"
             )
-            annotate.output_tensors("node_a", {"action": action}, export_with="onnx")
-
-        node = annotate.get_nodes()["node_a"]
         leapp.stop()
-        leapp.compile_graph(visualize=False)
-
-        # The Torch mutation between the launches has to split them, otherwise
-        # the two would have merged into one segment and lost the middle stage.
-        self.assertEqual(
-            ["warp_segment_0", "warp_segment_1"],
-            [segment.runner_name for segment in node.warp_segments],
+        leapp.compile_graph(visualize=False, validate=True, strict=True)
+        manager = leapp.InferenceManager(
+            str(Path(self.TEST_GRAPH_NAME) / f"{self.TEST_GRAPH_NAME}.yaml")
         )
-        self.verify_inference_manager(
-            source_inputs={"node_a/in_a": source_value},
-            source_outputs={"node_a/action": expected},
-        )
+        for values in ([10.0, 20.0, 30.0], [-2.0, 0.0, 4.0]):
+            fresh = torch.tensor(values, device=self.DEVICE)
+            before = fresh.clone()
+            expected = ((fresh + 1) * 3) / 2
+            actual = manager.run_policy({"node_a/in_a": fresh})
+            torch.testing.assert_close(actual["node_a/base"].cpu(), expected.cpu())
+            torch.testing.assert_close(actual["node_a/alias"].cpu(), expected.cpu())
+            torch.testing.assert_close(fresh, before)
 
     def test_host_readback_is_a_separate_value(self):
         """A device-to-host conversion copies, so it starts its own root.
@@ -1059,108 +866,38 @@ class TestNumpySharedMemory(LEAPPFunctionalTestBase):
             )
             torch.testing.assert_close(result["policy/action"].cpu(), expected * 2)
 
-    def test_cpu_numpy_conversion_shares_a_root(self):
-        """``.numpy()`` on a CPU tensor is a second handle, not a copy."""
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        obs = annotate.input_tensors("policy", {"obs": torch.tensor([1.0, 2.0])})
+    def test_numpy_and_torch_mutations_replay_through_shared_storage(self):
+        """Replay writes from both frameworks through YAML and both output ports.
 
-        self.assertIs(
-            obs.proxy,
-            obs.numpy().proxy,
-            "a zero-copy .numpy() did not share the tensor's root",
-        )
-
-    def test_identical_layout_numpy_view_shares_a_root(self):
-        """A view cast covers the same bytes at the same layout."""
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        arr = annotate.input_tensors(
-            "policy", {"obs": np.array([1.0, 2.0, 3.0], dtype=np.float32)}
-        )
-
-        self.assertIs(
-            arr.proxy,
-            arr.view(type(arr)).proxy,
-            "an identical-layout view did not share its source's root",
-        )
-
-    def test_narrowing_and_allocating_results_are_separate_values(self):
-        """A slice covers fewer bytes and a ufunc result covers other bytes.
-
-        Neither is the same value as its source, so each needs a root of its
-        own; sharing would make the source report a value it never held.
+        Unit tests check individual conversions; this checks their composition
+        with public annotation, cached validation, and InferenceManager reload.
         """
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        arr = annotate.input_tensors(
-            "policy", {"obs": np.array([1.0, 2.0, 3.0], dtype=np.float32)}
-        )
-
-        self.assertIsNot(
-            arr.proxy,
-            arr[0:2].proxy,
-            "a narrowing slice shared its source's root",
-        )
-        self.assertIsNot(
-            arr.proxy,
-            np.add(arr, 1.0).proxy,
-            "a freshly allocated ufunc result shared its source's root",
-        )
-
-    def test_numpy_mutation_reaches_the_torch_carrier(self):
-        """A write through the NumPy carrier moves the Torch carrier with it.
-
-        The mutation and the read are on opposite carriers, so the exported
-        graph reproduces eager NumPy only if the two share provenance. Driven to
-        InferenceManager because a stale proxy still exports a graph that runs
-        and returns plausible-looking numbers rather than raising.
-        """
-        obs_value = torch.tensor([1.0, 2.0, 3.0])
-        expected = (obs_value + 1.0) * 2.0
-
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        obs = annotate.input_tensors("policy", {"obs": obs_value.clone()})
-
-        np_view = obs.numpy()
-        np_view += 1.0
-        action = obs * 2.0
-
-        self.assertTrue(
-            torch.equal(action.tensor, expected),
-            f"eager value diverged: got {action.tensor}, expected {expected}",
-        )
-
-        annotate.output_tensors("policy", {"action": action}, export_with="jit")
+        leapp.start(name=self.TEST_GRAPH_NAME, max_cached_io=2)
+        for offset in (0.0, 5.0):
+            obs = annotate.input_tensors(
+                "policy", {"obs": torch.tensor([-2.0, 1.0, 3.0]) + offset}
+            )
+            np_view = obs.numpy()
+            np_view += 1.0
+            torch.relu_(obs)
+            annotate.output_tensors(
+                "policy",
+                {"torch": obs * 2, "numpy": np_view * 3},
+                export_with="jit",
+            )
         leapp.stop()
-        leapp.compile_graph(visualize=False)
-
-        self.verify_inference_manager(
-            source_inputs={"policy/obs": obs_value},
-            source_outputs={"policy/action": expected},
+        leapp.compile_graph(visualize=False, validate=True, strict=True)
+        manager = leapp.InferenceManager(
+            str(Path(self.TEST_GRAPH_NAME) / f"{self.TEST_GRAPH_NAME}.yaml")
         )
-
-    def test_torch_mutation_reaches_the_numpy_carrier(self):
-        """The reverse direction: a Torch write is visible through NumPy.
-
-        Validate exported behavior: native view handles remain stable while
-        functionalization resolves their recorded mutation.
-        """
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        obs = annotate.input_tensors("policy", {"obs": torch.tensor([-1.0, 2.0, -3.0])})
-
-        np_view = obs.numpy()
-        torch.relu_(obs)
-
-        self.assertIs(
-            obs.proxy,
-            np_view.proxy,
-            "the Torch mutation replaced the root instead of its proxy",
-        )
-        annotate.output_tensors("policy", {"action": np_view * 2}, export_with="jit")
-        leapp.stop()
-        leapp.compile_graph(visualize=False)
-        self.verify_inference_manager(
-            source_inputs={"policy/obs": torch.tensor([-4.0, 5.0, -6.0])},
-            source_outputs={"policy/action": torch.tensor([0.0, 10.0, 0.0])},
-        )
+        for values in ([-4.0, 5.0, -6.0], [2.0, -0.5, 7.0]):
+            fresh = torch.tensor(values)
+            before = fresh.clone()
+            expected = torch.relu(fresh + 1)
+            actual = manager.run_policy({"policy/obs": fresh})
+            torch.testing.assert_close(actual["policy/torch"], expected * 2)
+            torch.testing.assert_close(actual["policy/numpy"], expected * 3)
+            torch.testing.assert_close(fresh, before)
 
 
 if __name__ == "__main__":

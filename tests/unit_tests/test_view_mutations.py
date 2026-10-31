@@ -179,6 +179,27 @@ def test_view_mutation_replay(function, library):
 
 
 @pytest.mark.parametrize(
+    "make_alias",
+    [
+        lambda x: x.detach(),
+        lambda x: x[:],
+        lambda x: x.to(torch.float32),
+        lambda x: x.detach()[:].to(torch.float32),
+    ],
+    ids=["detach", "full_slice", "noop_conversion", "chained"],
+)
+def test_torch_full_layout_alias_mutation_replay(make_alias):
+    def apply(x, delta):
+        alias = make_alias(x)
+        alias += delta
+        return x, alias
+
+    model = capture(apply, "torch")
+    for replay in (model, torch.jit.script(model)):
+        check_replay(replay, apply, "torch")
+
+
+@pytest.mark.parametrize(
     "function,library",
     [
         (astype_copy, "numpy"),
