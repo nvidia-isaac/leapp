@@ -25,16 +25,26 @@ jobs:
         run: ruff format --check .
 
   test:
+    name: Python ${{ matrix.python-version }} / PyTorch ${{ matrix.torch-version }}
     runs-on: [self-hosted, gpu]
     container:
-      image: nvidia/cuda:12.8.1-devel-ubuntu24.04
+      image: nvidia/cuda:${{ matrix.cuda-version }}-devel-ubuntu24.04
       options: --gpus all
     strategy:
       fail-fast: false
       matrix:
-        # Minimum supported and newest compatible with the CUDA 12 dependencies.
-        # cupti-python 12.8 has wheels only through Python 3.12.
-        python-version: ["3.10", "3.12"]
+        include:
+          - python-version: "3.10"
+            torch-version: "2.7.0+cu128"
+            torch-index: cu128
+            cuda-version: "12.8.1"
+            warp-extra: warp-cu12
+          # Python 3.15 is blocked by ONNX Runtime wheel availability.
+          - python-version: "3.14"
+            torch-version: "2.15.0+cu132"
+            torch-index: cu132
+            cuda-version: "13.2.1"
+            warp-extra: warp-cu13
 
     steps:
       # The CUDA devel image is minimal; checkout needs git and git-lfs.
@@ -55,17 +65,26 @@ jobs:
       - name: Upgrade pip
         run: python -m pip install --upgrade pip
 
+      - name: Install pinned PyTorch
+        run: >-
+          python -m pip install "torch==${{ matrix.torch-version }}"
+          --index-url https://download.pytorch.org/whl/${{ matrix.torch-index }}
+
       # Visualization modules ship with leapp; gated deps install on 3.11+.
       - name: Install package and test dependencies
-        run: python -m pip install -e ".[dev,test,warp-cu12]" cmake ninja
+        run: >-
+          python -m pip install -e ".[dev,test,${{ matrix.warp-extra }}]"
+          "torch==${{ matrix.torch-version }}" cmake ninja
 
       - name: Build Warp runtime
-        run: leapp-build-warp-runtime
+        run: >-
+          leapp-build-warp-runtime --build-dir
+          leapp/leapp_graph/custom_operator_registry/warp_operator/runtime/build
 
       - name: Run pytest
         env:
           CMAKE_GENERATOR: Ninja
-        run: pytest tests/ packages/leapp-visualization/tests/ -v
+        run: pytest tests/ packages/leapp-visualization/tests/ -v --durations=30
 
   docs:
     runs-on: ubuntu-latest
