@@ -340,7 +340,7 @@ class TestTracedTensorIdentityPreservation(unittest.TestCase):
 
     Tests verify that:
     - torch.as_tensor returns same TracedTensor (no copy)
-    - torch.tensor returns new TracedTensor with same proxy (copy semantics)
+    - torch.tensor returns an independent traced copy
     """
 
     def setUp(self):
@@ -362,11 +362,7 @@ class TestTracedTensorIdentityPreservation(unittest.TestCase):
         self.assertIs(result, traced)  # Same object (no copy)
 
     def test_torch_tensor_creates_new_traced_tensor(self):
-        """Test torch.tensor returns new TracedTensor with same proxy.
-
-        torch.tensor() always creates a copy, so we get a NEW TracedTensor
-        (not the same object), but it preserves the proxy/context for tracing.
-        """
+        """A copied conversion remains independent when the copy is mutated."""
         ctx = TracedTensorNode(name="test", node_index=0)
         traced = ctx.create_input(torch.randn(2, 3), name="x")
 
@@ -374,8 +370,13 @@ class TestTracedTensorIdentityPreservation(unittest.TestCase):
 
         self.assertIsInstance(result, TracedTensor)
         self.assertIsNot(result, traced)  # Different object (copy semantics)
-        self.assertIs(result.proxy, traced.proxy)  # Same proxy (tracing preserved)
         self.assertTrue(torch.allclose(result.tensor, traced.tensor))
+        result += 1
+        ctx.compile_trace({"original": traced, "copy": result})
+        fresh = torch.randn(2, 3)
+        original, copied = ctx.m(fresh)
+        torch.testing.assert_close(original, fresh)
+        torch.testing.assert_close(copied, fresh + 1)
 
 
 class TestTracedTensorToWarp(unittest.TestCase):
@@ -457,9 +458,29 @@ class TestTracedNumpyToWarp(unittest.TestCase):
         y = wp.from_numpy(x)
 
         self.assertIsInstance(y, TracedWpArray)
-        self.assertIs(y.proxy, x.proxy)
         self.assertEqual(y.shape, x.shape)
         self.assertEqual(y.dtype, wp.float32)
+        # The default CUDA conversion copies host data. A later write must
+        # not change the NumPy source in the captured graph either.
+        converted = wp.to_torch(y)
+        converted.add_(1)
+        ctx.compile_trace({"source": x, "converted": converted})
+        runtime = torch.tensor([10.0, 20.0, 30.0])
+        source, copied = ctx.m(runtime)
+        torch.testing.assert_close(source, runtime)
+        torch.testing.assert_close(copied, runtime + 1)
+
+    def test_wp_array_copy_preserves_independent_storage(self):
+        ctx = TracedTensorNode(name="test", node_index=0)
+        x = ctx.create_input(np.arange(6, dtype=np.float32), name="x")
+        array = wp.array(x, dtype=wp.float32, device="cpu", copy=True)
+        copied = wp.to_torch(array)
+        copied.add_(7)
+        ctx.compile_trace({"source": x, "copy": copied})
+        runtime = torch.arange(100.0, 106.0)
+        source, result = ctx.m(runtime)
+        torch.testing.assert_close(source, runtime)
+        torch.testing.assert_close(result, runtime + 7)
 
 
 class TestWarpToTracedNumpy(unittest.TestCase):
@@ -484,10 +505,15 @@ class TestWarpToTracedNumpy(unittest.TestCase):
         y = x.numpy()
 
         self.assertIsInstance(y, TracedNpArray)
-        self.assertIs(y.proxy, x.proxy)
         np.testing.assert_array_almost_equal(
             y, np.array([1.0, 2.0, 3.0], dtype=np.float32)
         )
+        y += 1
+        ctx.compile_trace({"source": x_torch, "converted": y})
+        runtime = torch.tensor([10.0, 20.0, 30.0], device="cuda")
+        source, copied = ctx.m(runtime)
+        torch.testing.assert_close(source, runtime)
+        torch.testing.assert_close(copied, runtime + 1)
 
 
 class TestPatchingBehavior(unittest.TestCase):

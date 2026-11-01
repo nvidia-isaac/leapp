@@ -11,7 +11,7 @@ guide for annotating a downstream policy; read [SKILL.md](SKILL.md) for
 that workflow, with API documentation in `docs/source/` and at
 https://nvidia-isaac.github.io/leapp/
 
-Python 3.10+ and PyTorch 2.6.0+. Visualization extras install only on
+Python 3.10+ and PyTorch 2.7.0+. Visualization extras install only on
 3.11+. Environment is a local venv (typically `uv`), never conda.
 
 ## Load this first
@@ -59,6 +59,16 @@ Public imports are only what `leapp/__init__.py` exports. Annotation names
 allowed on `leapp.annotate` are listed in `AnnotateAPI._ALLOWED_APIS` in
 `leapp/leapp.py`. Do not add a consumer API without updating both, the
 docs, and tests.
+
+## Test design
+
+- Unit tests cover each observed unit-level situation in detail. Parameterize
+  repetitive cases where possible, keeping each case identifiable when it fails.
+- Functional tests cover larger parts of the LEAPP tracing pipeline and the
+  interactions between them. Each functional test must justify its existence
+  by providing coverage that unit tests do not provide. State that additional
+  coverage in its docstring. Prefer a few representative combined scenarios
+  over repeating a unit-test matrix through the full pipeline.
 
 ## Commands
 

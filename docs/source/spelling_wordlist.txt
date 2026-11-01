@@ -274,3 +274,6 @@ ufunc
 namespaces
 functionalizes
 TopK
+functionalization
+writeback
+strided

@@ -21,6 +21,17 @@ from torch.onnx import _constants
 from leapp.leapp_graph.custom_operator_registry import warp_operator
 
 
+def _functional_copy_symbolic(graph, destination, source, non_blocking):
+    """Legacy ONNX equivalent of the functional copy emitted by PyTorch."""
+    from torch.onnx import symbolic_opset9
+
+    cast = symbolic_opset9.type_as(graph, source, destination)
+    return symbolic_opset9.expand_as(graph, cast, destination)
+
+
+torch.onnx.register_custom_op_symbolic("aten::copy", _functional_copy_symbolic, 9)
+
+
 class ONNXExportBackend(ExportBackend):
     def get_backend_metadata(self):
         metadata = {}

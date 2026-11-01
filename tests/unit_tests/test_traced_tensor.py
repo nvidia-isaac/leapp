@@ -1111,9 +1111,6 @@ class TestTracedTensor(unittest.TestCase):
             torch.nn.functional.relu(y, inplace=True)
 
         ctx.compile_trace({"y": y})
-        targets = [node.target for node in ctx.m.graph.nodes]
-        self.assertIn(torch.nn.functional.relu, targets)
-
         runtime_input = torch.tensor([-1.0, 2.0, -3.0])
         expected = torch.tensor([0.0, 4.0, 0.0])
         self.validate_export(
@@ -2559,8 +2556,8 @@ class TestTracedTensor(unittest.TestCase):
 
     # ==================== Plain-destination assignment promotion ====================
     # A plain tensor is promoted when its assignment depends on a traced source
-    # or traced index. Full replacement may reuse the source proxy; partial
-    # replacement starts from a registered snapshot of the original destination.
+    # or traced index. Independent full replacements retain their own storage;
+    # partial replacements preserve the original destination's untouched values.
 
     def test_class_swap_full_slice(self):
         """plain_buf[:] = traced upgrades buf and continues the trace."""
@@ -2613,6 +2610,97 @@ class TestTracedTensor(unittest.TestCase):
         input_tensor = torch.tensor([1.0, 2.0, 3.0])
         expected = input_tensor - 1.0
         self.validate_export(ctx.m, (input_tensor,), expected, "class_swap_copy")
+
+    def test_plain_full_copy_preserves_independence_and_layout(self):
+        """Copied buffers stay independent and retain reshape/view semantics."""
+        cases = [
+            (operation, mutation, "contiguous")
+            for operation in ("copy", "ellipsis", "slice")
+            for mutation in ("source", "destination")
+        ] + [
+            ("copy", "reshape", "transposed_source"),
+            ("copy", "reshape", "transposed_destination"),
+        ]
+        for operation, mutation, layout in cases:
+            with self.subTest(operation=operation, mutation=mutation, layout=layout):
+
+                def apply(x):
+                    source = x.T if layout == "transposed_source" else x
+                    buf = (
+                        torch.zeros(2, 3).T
+                        if layout == "transposed_destination"
+                        else torch.zeros(3, 2)
+                    )
+                    if operation == "copy":
+                        buf.copy_(source)
+                    elif operation == "ellipsis":
+                        buf[...] = source
+                    else:
+                        buf[:] = source
+                    if mutation == "source":
+                        source.add_(5)
+                    elif mutation == "reshape":
+                        buf.reshape(-1).add_(5)
+                    else:
+                        buf.add_(5)
+                    return torch.stack((x.reshape(-1), buf.reshape(-1)))
+
+                shape = (2, 3) if layout == "transposed_source" else (3, 2)
+                ctx = TracedTensorNode("plain_copy")
+                x = ctx.create_input(torch.arange(6.0).reshape(shape), "x")
+                ctx.compile_trace({"out": apply(x)})
+                fresh = torch.arange(20.0, 26.0).reshape(shape)
+                self.validate_export(
+                    ctx.m,
+                    (fresh,),
+                    apply(fresh.clone()),
+                    f"plain_copy_{operation}_{mutation}_{layout}",
+                    # Legacy ONNX cannot lower the copying reshape's _unsafe_view.
+                    verify_legacy_onnx=layout != "transposed_destination",
+                    verify_dynamo_onnx=True,
+                )
+                torch.testing.assert_close(
+                    fresh, torch.arange(20.0, 26.0).reshape(shape)
+                )
+
+    def test_plain_copy_reuses_other_captured_allocation(self):
+        """A raw alias of another graph value must keep that value's writes."""
+        for computed in (False, True):
+            with self.subTest(computed=computed):
+                ctx = TracedTensorNode("known_copy")
+                x = ctx.create_input(torch.arange(3.0), "x")
+                y = ctx.create_input(torch.arange(3.0) + 100, "y")
+                parent = y * 2 if computed else y
+                buf = parent.tensor
+                buf.copy_(x)
+                buf.add_(5)
+                ctx.compile_trace({"out": torch.stack((x, parent, buf))})
+                fresh = {"x": torch.tensor([10.0, 20.0, 30.0]), "y": torch.arange(3.0)}
+                inputs = tuple(
+                    fresh[node.target]
+                    for node in ctx.m.graph.nodes
+                    if node.op == "placeholder"
+                )
+                self.validate_export(
+                    ctx.m,
+                    inputs,
+                    torch.stack((fresh["x"], fresh["x"] + 5, fresh["x"] + 5)),
+                    f"known_copy_{computed}",
+                    verify_dynamo_onnx=True,
+                )
+
+    def test_plain_copy_rejects_uncaptured_shared_views(self):
+        """Unrecorded views cannot silently become independent allocations."""
+        for other_root in (False, True):
+            with self.subTest(other_root=other_root):
+                ctx = TracedTensorNode("unrecorded_copy")
+                x = ctx.create_input(torch.arange(12.0), "x")
+                y = ctx.create_input(torch.arange(12.0) + 100, "y")
+                buf = y.tensor[2:8] if other_root else x.tensor[6:]
+                with self.assertRaisesRegex(RuntimeError, "captured view relationship"):
+                    buf.copy_(x[:6])
+                torch.testing.assert_close(x.tensor, torch.arange(12.0))
+                torch.testing.assert_close(y.tensor, torch.arange(12.0) + 100)
 
     def test_plain_destination_inplace_binary_methods(self):
         """Plain receivers preserve mutation and trace every supported method."""
