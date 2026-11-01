@@ -60,7 +60,9 @@ allowed on `leapp.annotate` are listed in `AnnotateAPI._ALLOWED_APIS` in
 `leapp/leapp.py`. Do not add a consumer API without updating both, the
 docs, and tests.
 
-## Test design
+## Testing
+
+### Coverage and test design
 
 - Unit tests cover each observed unit-level situation in detail. Parameterize
   repetitive cases where possible, keeping each case identifiable when it fails.
@@ -70,24 +72,108 @@ docs, and tests.
   coverage in its docstring. Prefer a few representative combined scenarios
   over repeating a unit-test matrix through the full pipeline.
 
-## Commands
+Apply these rules when adding or changing tests:
 
-```bash
-python -m pip install -e ".[dev,test,warp-cu12]"  # CUDA 12
-python -m pip install -e ".[dev,test,warp-cu13]"  # CUDA 13
-pytest tests/ packages/leapp-visualization/tests/ -v
-```
+1. **Search before adding.** Find the closest existing coverage and extend its
+   cases where possible. Each new test must add a distinct behavior, boundary
+   condition, or failure mode. Consolidate overlapping regressions instead of
+   keeping a separate test for every agent task or implementation change.
+2. **Use the cheapest sufficient layer.** Check frontend tracing through FX
+   replay. Add exporter coverage when export is part of the contract or the
+   regression. Keep backend-specific lowerings and historical failures covered
+   explicitly; a generic helper should not automatically export every unit case
+   through every backend.
+3. **Justify matrix dimensions.** Document why combinations such as operation,
+   dtype, device, and backend interact before taking their Cartesian product.
+   Cover independent dimensions separately and retain known failing combinations.
+4. **Compile once, replay several inputs.** Reuse captured/exported artifacts
+   for changed-input replay. Choose inputs that expose frozen capture values and
+   relevant boundaries; extra random samples need a coverage reason.
+5. **Parameterize for maintainability.** Parameterization removes repeated code
+   but still executes every case. Combining cases into one large test or a
+   subtest loop also preserves their execution cost. Reduce redundant cases and
+   exports rather than optimizing the displayed test count.
+6. **Prefer behavioral assertions.** Check values, shapes, dtypes, mutation,
+   identity, and pipeline connections as relevant. Exact graph names, node counts,
+   private helper calls, and migration-only assertions need a specific contract
+   or failure mode to justify them.
+7. **Share only immutable expensive fixtures.** Reuse exported artifacts when
+   safe; copy fixtures that a test edits. Give independent cases fresh inference
+   managers, mutable buffers, and recurrent state. Restore global patches and
+   singleton state after each test.
+8. **Make validation proportional.** Run affected cases while iterating, then
+   the relevant neighboring suites before handoff. Run the full suite for broad
+   changes and in CI. After checks pass, rerun or broaden them when new changes,
+   failures, or unresolved concerns justify it. Report what ran and material gaps.
 
-Narrower (use these while iterating):
+### Choosing validation
+
+Select affected files or pytest node IDs from these areas during iteration;
+use the broader commands when the change spans that area.
 
 | Change | Run |
 |---|---|
-| Torch tracing / indexing | `pytest tests/unit_tests/test_traced_tensor.py tests/unit_tests/export_format_validation.py -v` |
+| Torch tracing / indexing | `pytest tests/unit_tests/test_traced_tensor.py tests/unit_tests/test_view_mutations.py -v` |
 | NumPy tracing | `pytest tests/unit_tests/test_traced_np_array.py tests/unit_tests/test_numpy_compatibility.py tests/unit_tests/test_conversion.py -v` |
 | Annotate / I/O / state | `pytest tests/functional_tests/ -v` |
 | Examples | `pytest tests/test_examples/ -v` |
 | Visualization | `pytest packages/leapp-visualization/tests/ -v` (Python 3.11+) |
+| Warp runtime build / discovery | `pytest tests/unit_tests/test_warp_runtime.py -v` |
 | Warp tracing | see [Warp guide](references/warp.md) |
+
+Full suite with timing information:
+
+```bash
+pytest tests/ packages/leapp-visualization/tests/ -v --durations=30
+```
+
+Required regression coverage for affected behavior:
+
+- Shared indexing changes: both Torch and NumPy unit suites, plus FX, JIT, and
+  ExportedProgram coverage. Use `onnx-dynamo` for modern indexing cases; require
+  legacy ONNX only where that exporter supports the operation.
+- Recoverable capture failures: an unsupported unused branch must allow export
+  of supported outputs. Test rejection of direct and downstream dependencies on
+  a failed capture separately.
+- NumPy capture: retain shape, dtype, value, and changed-input parity checks,
+  including final exported-node validation rejecting wrong outputs.
+- Annotation semantics: update the matching `tests/test_examples/` case when
+  its example is affected. Examples are part of CI.
+
+### Test cost and CI
+
+Use durations and exporter/session call counts to locate expensive repeated
+work before removing coverage. Separate pytest execution from container setup,
+dependency installation, and native builds when diagnosing CI latency. Prefer
+a tested dependency environment and caches in writable locations; account for
+cost across the Python/backend matrix. Changing which compatibility checks CI
+runs is a separate policy change, not an implicit consequence of test cleanup.
+
+Before enabling parallel tests, isolate output directories and mutable global
+state. Many existing tests share `test_graph`, global patches, and CUDA capture
+resources, so parallelism requires checking those assumptions first.
+
+### Documentation checks
+
+CI uses `-W`; spelling needs `enchant-2`:
+
+```bash
+python -m pip install -r docs/requirements.txt
+python -m sphinx -b html -W --keep-going docs/source docs/build/html
+python -m sphinx -b spelling -W --keep-going docs/source docs/build/spelling
+python -m sphinx -b linkcheck docs/source docs/build/linkcheck
+```
+
+Add unknown words to `docs/source/spelling_wordlist.txt`. New screenshots:
+`docs/source/_static/images/`. `*.png` and `*.gif` are Git LFS (see
+`.gitattributes`).
+
+## Development commands
+
+```bash
+python -m pip install -e ".[dev,test,warp-cu12]"  # CUDA 12
+python -m pip install -e ".[dev,test,warp-cu13]"  # CUDA 13
+```
 
 ### Python formatting
 
@@ -128,7 +214,6 @@ platform-specific artifact paths, cache paths, and runtime resolution.
 ```bash
 leapp-build-warp-runtime
 leapp-build-warp-runtime --status
-pytest tests/unit_tests/test_warp_runtime.py -v
 ```
 
 The build always produces the ONNX and PT2 adapters together in
@@ -141,19 +226,6 @@ ONNX Runtime 1.29 and newer. Runtime replay is not CUPTI-dependent, so
 do not add a blanket Linux build gate. Windows builds require
 `LEAPP_WARP_IMPORT_LIBRARY` because the `warp-lang` wheel does not ship
 `warp.lib`.
-
-Docs (CI uses `-W`; spelling needs `enchant-2`):
-
-```bash
-python -m pip install -r docs/requirements.txt
-python -m sphinx -b html -W --keep-going docs/source docs/build/html
-python -m sphinx -b spelling -W --keep-going docs/source docs/build/spelling
-python -m sphinx -b linkcheck docs/source docs/build/linkcheck
-```
-
-Add unknown words to `docs/source/spelling_wordlist.txt`. New screenshots:
-`docs/source/_static/images/`. `*.png` and `*.gif` are Git LFS (see
-`.gitattributes`).
 
 Commits must be DCO signed (`git commit -s`). See `CONTRIBUTING.md`.
 
@@ -198,15 +270,12 @@ User-facing integration recipes belong here, not in this file.
   outputs. Report recoverable capture or translation failures with
   `_get_logger().error(...)`, which logs without raising; do not abort the
   entire trace merely because such a branch cannot be captured. Keep this
-  distinction from `_get_logger().fatal(...)`, which raises. Test that an
-  unsupported operation on an unused branch does not prevent exporting the
-  supported output graph. Preserve failed-operation dependencies until output
-  pruning, and reject export if a declared output depends on a failed capture;
-  test direct and downstream dependencies separately.
+  distinction from `_get_logger().fatal(...)`, which raises. Preserve
+  failed-operation dependencies until output pruning, and reject export if a
+  declared output depends on a failed capture.
 - NumPy capture checks graph structure and mutation safety. Leave numerical
   comparisons to final exported-node validation; do not add per-call eager
-  parity checks to the adapter. Retain shape, dtype, value, and changed-input
-  parity coverage in tests, including final validation rejecting wrong outputs.
+  parity checks to the adapter.
 - Prefer extending `TracedData` once (`_map_structure`, index lowering,
   port preserve/clear) over copying logic into tensor, NumPy, and Warp
   classes. Warp value semantics live on `TracedWpArray`; `WarpPatchBackend`
@@ -214,13 +283,7 @@ User-facing integration recipes belong here, not in this file.
   needs a raw `wp.array` alias because Warp rejects subclasses. Segment
   lifecycle stays in `warp/session.py`, `warp_op.py`, and
   `warp/warp_segment.py`.
-- After shared indexing changes: both torch and NumPy unit suites, plus
-  FX / jit / exported-program coverage in `tests/`.
-  `onnx-dynamo` for modern index cases; do not require legacy ONNX if
-  that exporter cannot lower the op.
 - Do not invent graph edges for data a node did not publish. Clearing
   `output_port` is the correct default after a transforming op.
-- Examples in `examples/` are CI. If you change annotate semantics,
-  update the matching `tests/test_examples/` case.
 - Conventional commits (`feat`, `fix`, `docs`, `chore`, …). Do not bump
   the version unless the user asked for a release.
