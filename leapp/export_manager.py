@@ -264,6 +264,7 @@ class ExportManager:
     # annotation APIs
     #########################################################
     def input_tensors(self, node_name: str, tensors):
+        """Input layout is not preserved; inputs are treated as logically dense."""
         if TracingLock().is_active:
             _get_logger().fatal(
                 "Cannot call input_tensors() while a _method()-traced function "

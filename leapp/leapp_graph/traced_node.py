@@ -669,6 +669,7 @@ class TracedTensorNode(LeappNode):
             node.meta.pop(STORAGE_LAYOUT_META_KEY, None)
         self.graph.recording = False
         if self.graph.requires_functionalization:
+            self._validate_mutated_input_layouts()
             # A write through a view can affect an output without an explicit
             # data edge yet. Keep writes and their inputs until normalized,
             # while pruning unused work and reporting required capture errors
@@ -703,6 +704,36 @@ class TracedTensorNode(LeappNode):
                 self.graph.output(output_nodes[0])
             else:
                 self.graph.output(tuple(output_nodes))
+
+    def _validate_mutated_input_layouts(self):
+        # Follow destinations, not mutation sources: a read-only input may
+        # supply values for an update without its own aliasing being relevant.
+        pending = [
+            node.args[0]
+            for node in self.graph.nodes
+            if node.meta.get("leapp_mutation", False) and node.args
+        ]
+        ancestors = set()
+        while pending:
+            node = pending.pop()
+            if node in ancestors:
+                continue
+            ancestors.add(node)
+            pending.extend(node.all_input_nodes)
+        for node in self.graph.nodes:
+            if node.op != "placeholder" or node not in ancestors:
+                continue
+            description = self.get_io_description_by_name(node.target, self.inputs)
+            if description is not None and not description.is_dense:
+                _get_logger().fatal(
+                    f"Cannot capture node '{self.name}': input '{description.name}' "
+                    f"has a non-dense layout with strides {description.strides} "
+                    "and feeds a mutation destination. Runtime inputs are treated "
+                    "as logically dense, so view-mutation behavior can differ "
+                    f"from this capture. Pass {description.name}.contiguous() "
+                    "as this input to annotate.input_tensors().",
+                    error_type=ValueError,
+                )
 
     def _prune_graph(
         self, output_nodes: list[fx.Node], *, preserve_mutations: bool = False
