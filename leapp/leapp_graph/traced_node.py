@@ -739,27 +739,22 @@ class TracedTensorNode(LeappNode):
         self, output_nodes: list[fx.Node], *, preserve_mutations: bool = False
     ) -> None:
         """Prune unused computation, validate capture, and update the node inputs."""
-        used_nodes = set()
-
-        def mark_used(node):
-            """Recursively mark all nodes used in computing this node."""
-            if node in used_nodes:
-                return
-            used_nodes.add(node)
-            # Traverse all input nodes
-            for arg in node.all_input_nodes:
-                mark_used(arg)
-
-        # Mark all nodes used by any output
-        for output_node in output_nodes:
-            mark_used(output_node)
-
+        pending = list(output_nodes)
         if preserve_mutations:
             for node in self.graph.nodes:
                 if node.meta.get("leapp_mutation", False) or (
                     node.op.startswith("call_") and node.is_impure()
                 ):
-                    mark_used(node)
+                    pending.append(node)
+
+        # Walk dependencies without consuming one Python frame per graph level.
+        used_nodes = set()
+        while pending:
+            node = pending.pop()
+            if node in used_nodes:
+                continue
+            used_nodes.add(node)
+            pending.extend(node.all_input_nodes)
 
         # Capture can fail in work unrelated to the declared outputs. Only a
         # failure that survives the output dependency traversal blocks export.
