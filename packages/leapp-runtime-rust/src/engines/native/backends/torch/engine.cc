@@ -242,6 +242,8 @@ struct Call {
   }
 
   void run();
+  bool run_borrowed(std::span<const View> views);
+  void execute(Inputs& arguments);
 };
 
 struct Outputs {
@@ -261,12 +263,30 @@ std::unique_ptr<Call> Context::prepare(std::span<const View> inputs,
 }
 
 void Call::run() {
+  execute(inputs);
+}
+
+bool Call::run_borrowed(std::span<const View> views) {
+  if (context.plan.background_work ||
+      std::any_of(
+          context.plan.access.begin(), context.plan.access.end(),
+          [](InputAccess access) { return access != InputAccess::Borrow; })) {
+    return false;
+  }
+  // Only read-only, non-retained inputs reach this path. Temporary wrappers
+  // outlive execution and its completion guard; prepared bindings stay intact.
+  Inputs borrowed(context, views);
+  execute(borrowed);
+  return true;
+}
+
+void Call::execute(Inputs& arguments) {
   // Keep result owners alive until the stream finishes, including on
   // exceptions.
   std::vector<at::Tensor> values;
   Context::Execution execution(context);
-  inputs.refresh();
-  context.forward(inputs.args, values);
+  arguments.refresh();
+  context.forward(arguments.args, values);
   for (size_t i = 0; i < values.size(); ++i) {
     TORCH_CHECK(values[i].sizes() == destinations[i].sizes(),
                 "Torch output shape differs from fixed workspace");
@@ -401,6 +421,13 @@ const adapter::Api api{
     [](void* value) noexcept { delete static_cast<Call*>(value); },
     [](void* value) noexcept {
       return invoke([&] { static_cast<Call*>(value)->run(); });
+    },
+    [](void* call, const adapter::View* inputs, size_t count,
+       bool* handled) noexcept {
+      *handled = false;
+      return invoke([&] {
+        *handled = static_cast<Call*>(call)->run_borrowed({inputs, count});
+      });
     },
     [](void* session, const adapter::View* inputs, size_t count,
        void** value) noexcept {

@@ -45,6 +45,7 @@ struct Api {
                    void**) noexcept;
   void (*destroy_call)(void*) noexcept;
   char* (*run)(void*) noexcept;
+  char* (*run_borrowed)(void*, const View*, size_t, bool* handled) noexcept;
   char* (*run_dynamic)(void*, const View*, size_t, void**) noexcept;
   void (*destroy_outputs)(void*) noexcept;
   const View* (*views)(const void*, size_t*) noexcept;

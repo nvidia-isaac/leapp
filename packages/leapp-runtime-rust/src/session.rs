@@ -109,7 +109,7 @@ pub struct Session {
     inputs: IndexMap<String, SharedTensor>,
     feedback: IndexMap<String, String>,
     placement: OutputPlacement,
-    state_location: MemoryLocation,
+    engine_placement: OutputPlacement,
 }
 
 impl Session {
@@ -150,7 +150,7 @@ impl Session {
         let output_pool = Arc::new(OutputPool::new(options.output_pool, largest_output));
         let initial_inputs =
             initial_state::initial_inputs(bundle, graph, state_location, engine.as_ref())?;
-        let feedback = bundle
+        let feedback: IndexMap<String, String> = bundle
             .0
             .description
             .pipeline
@@ -162,17 +162,31 @@ impl Session {
                     .map(move |target| (target.name(), source.name()))
             })
             .collect();
+        let public_outputs: IndexSet<String> =
+            bundle.pipeline_outputs().iter().map(|p| p.name()).collect();
+        // SessionOptions and graph routing are immutable after initialization.
+        let mut engine_placement = OutputPlacement::default();
+        for name in &public_outputs {
+            engine_placement
+                .overrides
+                .insert(name.clone(), options.output_placement.location(name));
+        }
+        for source in feedback.values() {
+            engine_placement
+                .overrides
+                .insert(source.clone(), state_location);
+        }
         Ok(Self {
             engine: Some(engine),
             bundle: bundle.clone(),
             output_pool,
             public_inputs: bundle.pipeline_inputs().iter().map(|p| p.name()).collect(),
-            public_outputs: bundle.pipeline_outputs().iter().map(|p| p.name()).collect(),
+            public_outputs,
             inputs: initial_inputs.clone(),
             initial_inputs,
             feedback,
             placement: options.output_placement,
-            state_location,
+            engine_placement,
         })
     }
 
@@ -204,7 +218,7 @@ impl Session {
             inputs: self.initial_inputs.clone(),
             feedback: self.feedback.clone(),
             placement: self.placement.clone(),
-            state_location: self.state_location,
+            engine_placement: self.engine_placement.clone(),
         })
     }
 
@@ -279,19 +293,7 @@ impl Session {
                 .iter()
                 .map(|(name, tensor)| (name.as_str(), unsafe { tensor.borrow() })),
         );
-        // Public placement applies only to public outputs. Private terminals use the default.
-        let mut placement = OutputPlacement::default();
-        for name in &self.public_outputs {
-            placement
-                .overrides
-                .insert(name.clone(), self.placement.location(name));
-        }
-        for source in self.feedback.values() {
-            placement
-                .overrides
-                .insert(source.clone(), self.state_location);
-        }
-        let outputs = engine.run(&values, &placement, &self.output_pool)?;
+        let outputs = engine.run(&values, &self.engine_placement, &self.output_pool)?;
         let output = |name: &str| -> anyhow::Result<SharedTensor> {
             outputs.get(name).cloned().ok_or_else(|| {
                 crate::error::Internal(format!("missing engine output {name}")).into()

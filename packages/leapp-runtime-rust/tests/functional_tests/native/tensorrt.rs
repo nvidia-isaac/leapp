@@ -112,6 +112,56 @@ fn fixed_bindings_reuse_addresses_metadata_and_contexts_in_mixed_graphs() {
 
 #[test]
 #[ignore = "requires TensorRT backend, GPU, and generated engines"]
+fn borrowed_inputs_restore_bindings_between_direct_and_staged_calls() {
+    let engine = load("dynamic_fixed");
+    let mut retained = Vec::new();
+    for (location, offset) in [
+        (MemoryLocation::Cuda { device_id: 0 }, 0),
+        (MemoryLocation::Cuda { device_id: 0 }, 1),
+        (MemoryLocation::Cpu, 0),
+        (MemoryLocation::Cuda { device_id: 0 }, 0),
+    ] {
+        let values = [1f32, 2., 3., 4., 5., 6., 7., 8., 9.];
+        let owner = placed(&values, &[9], location).unwrap();
+        let mut descriptor = *owner.view().descriptor();
+        let shape = [8i64];
+        descriptor.shape = shape.as_ptr().cast_mut();
+        descriptor.byte_offset = offset * 4;
+        // SAFETY: the owner/shape retain a ready contiguous eight-element slice.
+        let input = unsafe { BorrowedTensor::new(&descriptor) };
+        if location == (MemoryLocation::Cuda { device_id: 0 }) {
+            // Also check the optional plugin entry point, including its decline
+            // without execution for a valid but unaligned GPU input.
+            let mut workspace = engine.workspace.lock().unwrap();
+            assert_eq!(
+                workspace.models[0].run_borrowed(&[input]).unwrap(),
+                offset == 0
+            );
+        }
+        let output = engine
+            .run(
+                &[("dynamic/input", input)],
+                &OutputPlacement::default(),
+                &Arc::new(OutputPool::new(Default::default(), 0)),
+            )
+            .unwrap();
+        assert_eq!(owner.to_cpu_vec::<f32>().unwrap(), values);
+        retained.push((
+            values[offset as usize..offset as usize + 8].to_vec(),
+            output,
+        ));
+    }
+    drop(engine);
+    for (expected, result) in retained {
+        assert_eq!(
+            result["dynamic/output"].to_cpu_vec::<f32>().unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires TensorRT backend, GPU, and generated engines"]
 fn peer_profiles_match_all_inputs_and_recover_after_rejection() {
     let session = Session::open(&bundle("concat"), options()).unwrap();
     let peer = session.new_session().unwrap();

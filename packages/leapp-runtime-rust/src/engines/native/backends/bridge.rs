@@ -191,6 +191,27 @@ impl BackendPlugin for Model {
         }
     }
 
+    fn run_borrowed(&mut self, inputs: &[BorrowedTensor<'_>]) -> Result<bool> {
+        ensure!(self.is_prepared(), "unprepared native backend model");
+        let inputs = inputs
+            .iter()
+            .map(|&value| view(value, self.location))
+            .collect::<Result<Vec<_>>>()?;
+        let mut handled = false;
+        let api = &self.loaded.library.api;
+        // SAFETY: owners remain borrowed until completion, including failures.
+        // The backend restores bindings before releasing the borrow.
+        unsafe {
+            api.check((api.run_borrowed)(
+                self.prepared,
+                inputs.as_ptr(),
+                inputs.len(),
+                &mut handled,
+            ))?;
+        }
+        Ok(handled)
+    }
+
     fn run_dynamic(
         &mut self,
         inputs: &[BorrowedTensor<'_>],

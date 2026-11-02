@@ -88,6 +88,18 @@ pub(super) trait BackendPlugin: Send {
         Err(crate::error::Unsupported("backend has no prepared execution path".into()).into())
     }
 
+    /// Execute with caller inputs and prepared output buffers, reusing metadata.
+    /// The engine validates inputs against prepared ports. Inputs may alias each
+    /// other, but not outputs, and remain borrowed only for this call.
+    /// Return `Ok(true)` after execution, or `Ok(false)` before execution to let
+    /// the engine copy inputs and call `run()`. Errors propagate without retry.
+    ///
+    /// Finish all work before returning or unwinding; never retain caller pointers.
+    /// Restore original bindings, or reject later runs if restoration fails.
+    fn run_borrowed(&mut self, _inputs: &[BorrowedTensor<'_>]) -> Result<bool> {
+        Ok(false)
+    }
+
     /// Execute without fixed bindings, including concrete models that cannot be
     /// prepared. Inputs and the copy helper are borrowed only for this call.
     /// Return ready, independently owned outputs in declared port order; they

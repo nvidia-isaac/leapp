@@ -68,6 +68,12 @@ fn fixed_torch_buffers_and_bindings_survive_changed_inputs_and_placements() {
                         if backend == "jit" {
                             inputs.push(("model/INPUT__9", bias.view()));
                         }
+                        if input_location == engine.location {
+                            let views = inputs.iter().map(|(_, value)| *value).collect::<Vec<_>>();
+                            assert!(engine.workspace.lock().unwrap().models[0]
+                                .run_borrowed(&views)
+                                .unwrap());
+                        }
                         let result = engine
                             .run(
                                 &inputs,
@@ -84,6 +90,7 @@ fn fixed_torch_buffers_and_bindings_survive_changed_inputs_and_placements() {
                             data[2] * 4. + 30.,
                             data[3] * 5. + 40.,
                         ];
+                        assert_eq!(values.to_cpu_vec::<f32>().unwrap(), data);
                         assert_eq!(result[output].location(), output_location);
                         assert_eq!(identities(&engine.workspace.lock().unwrap()), before);
                         retained.push((expected, result));
@@ -94,6 +101,22 @@ fn fixed_torch_buffers_and_bindings_survive_changed_inputs_and_placements() {
             for (expected, result) in retained {
                 assert_eq!(result[output].to_cpu_vec::<f32>().unwrap(), expected);
             }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires native TorchScript backend and CPU/CUDA fixtures"]
+fn torch_borrowing_declines_mutation_retention_and_background_work() {
+    for device in devices() {
+        for name in ["mutating", "retaining", "forked"] {
+            let bundle = bundle("jit", name, device);
+            let engine = engine(&bundle, device);
+            let input = placed(&[1f32; 4], &[4], engine.location).unwrap();
+            assert!(!engine.workspace.lock().unwrap().models[0]
+                .run_borrowed(&[input.view()])
+                .unwrap());
+            assert_eq!(input.to_cpu_vec::<f32>().unwrap(), [1.; 4]);
         }
     }
 }

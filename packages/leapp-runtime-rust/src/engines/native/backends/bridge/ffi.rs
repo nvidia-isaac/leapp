@@ -54,6 +54,8 @@ pub(super) struct Api {
     ) -> *mut c_char,
     pub destroy_call: unsafe extern "C" fn(*mut c_void),
     pub run: unsafe extern "C" fn(*mut c_void) -> *mut c_char,
+    pub run_borrowed:
+        unsafe extern "C" fn(*mut c_void, *const View, usize, *mut bool) -> *mut c_char,
     pub run_dynamic:
         unsafe extern "C" fn(*mut c_void, *const View, usize, *mut *mut c_void) -> *mut c_char,
     pub destroy_outputs: unsafe extern "C" fn(*mut c_void),
@@ -77,10 +79,7 @@ impl Library {
                 let entry =
                     library.get::<unsafe extern "C" fn() -> *const Api>(symbol.as_bytes())?;
                 let api = entry();
-                anyhow::ensure!(
-                    !api.is_null(),
-                    "{backend} backend returned a null API"
-                );
+                anyhow::ensure!(!api.is_null(), "{backend} backend returned a null API");
 
                 Ok(Self {
                     api: *api,

@@ -137,6 +137,13 @@ fn peer_caches_inherit_policy_and_close_independently() {
     for max_entries in [0, 1] {
         let options = SessionOptions {
             output_pool: OutputPoolOptions { max_entries },
+            output_placement: OutputPlacement {
+                default_location: MemoryLocation::PinnedCpu,
+                overrides: HashMap::from([(
+                    "a_policy/next_state".into(),
+                    MemoryLocation::Cuda { device_id: 0 },
+                )]),
+            },
             ..Default::default()
         };
         let mut session =
@@ -147,6 +154,22 @@ fn peer_caches_inherit_policy_and_close_independently() {
             .unwrap();
         assert_eq!(Arc::strong_count(&source), 1 + max_entries);
         let mut peer = session.new_session().unwrap();
+        // Effective engine placement preserves private state independently of
+        // public overrides, and peers inherit the immutable routing metadata.
+        for current in [&session, &peer] {
+            assert_eq!(
+                current.engine_placement.location("a_policy/next_state"),
+                MemoryLocation::Cpu
+            );
+            assert_eq!(
+                current.engine_placement.location("a_policy/actions"),
+                MemoryLocation::PinnedCpu
+            );
+            assert_eq!(
+                current.placement.location("a_policy/next_state"),
+                MemoryLocation::Cuda { device_id: 0 }
+            );
+        }
         let retained = peer.output_pool.allocate(12, MemoryLocation::Cpu).unwrap();
         assert_eq!(Arc::strong_count(&retained), 1 + max_entries);
         assert_ne!(source.ptr, retained.ptr);

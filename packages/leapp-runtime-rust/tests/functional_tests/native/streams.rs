@@ -71,11 +71,10 @@ fn external_streams_support_onnx_fixed_dynamic_feedback_and_cpu_transfers() {
             ("dynamic", "dynamic/input"),
         ] {
             let bundle = Bundle::open(fixtures().join(format!("{name}.yaml"))).unwrap();
-            let input = HashMap::from([(
-                input,
-                BorrowedTensor::cpu(&[1_f32, 2., 3., 4.], &[4]).unwrap(),
-            )]);
-            exercise(&bundle, device, &input);
+            for location in [MemoryLocation::Cpu, MemoryLocation::Cuda { device_id: 0 }] {
+                let value = placed(&[1_f32, 2., 3., 4.], &[4], location).unwrap();
+                exercise(&bundle, device, &HashMap::from([(input, value.view())]));
+            }
         }
     }
 }
@@ -157,14 +156,14 @@ fn external_streams_support_tensorrt_fixed_and_dynamic() {
         let bundle = super::tensorrt::bundle(name);
         let data = [1_f32; 8];
         let count = if name == "dynamic_fixed" { 8 } else { 4 };
-        exercise(
-            &bundle,
-            ExecutionDevice::Cuda { device_id: 0 },
-            &HashMap::from([(
-                "dynamic/input",
-                BorrowedTensor::cpu(&data[..count], &[count as i64]).unwrap(),
-            )]),
-        );
+        for location in [MemoryLocation::Cpu, MemoryLocation::Cuda { device_id: 0 }] {
+            let value = placed(&data[..count], &[count as i64], location).unwrap();
+            exercise(
+                &bundle,
+                ExecutionDevice::Cuda { device_id: 0 },
+                &HashMap::from([("dynamic/input", value.view())]),
+            );
+        }
     }
 }
 

@@ -695,6 +695,7 @@ struct Call {
   }
 
   void run() {
+    require(execution.context != nullptr, "TensorRT prepared call is unusable");
     Work work(execution.stream);
     const auto stream = execution.stream.value;
     execution.refresh(stream);
@@ -707,6 +708,57 @@ struct Call {
       transfer.run(stream);
     }
     work.finish();
+  }
+
+  bool run_borrowed(std::span<const adapter::View> views) {
+    require(execution.context != nullptr, "TensorRT prepared call is unusable");
+    invalid(views.size() == execution.model.inputs.size(),
+            "input count mismatch");
+    // Existing staging/control transfers refer to prepared workspace storage.
+    // Borrow only when all inputs can be bound directly for this invocation.
+    if (!execution.transfers.empty()) {
+      return false;
+    }
+    for (size_t i = 0; i < views.size(); ++i) {
+      const auto& port = execution.model.inputs[i];
+      port.check(views[i], execution.model.device);
+      if (port.host || port.control || views[i].bytes == 0 ||
+          views[i].data % 256 != 0) {
+        return false;
+      }
+    }
+    DeviceScope scope(execution.model.device);
+    scope.check();
+    try {
+      for (size_t i = 0; i < views.size(); ++i) {
+        require(execution.context->setInputTensorAddress(
+                    execution.model.inputs[i].name.c_str(),
+                    reinterpret_cast<const void*>(views[i].data)),
+                "TensorRT borrowed input binding failed");
+      }
+      run();  // Work drains the stream before restoration, even on exceptions.
+    } catch (...) {
+      restore_inputs();
+      throw;
+    }
+    require(restore_inputs(), "TensorRT input binding restoration failed");
+    return true;
+  }
+
+  bool restore_inputs() noexcept {
+    bool restored = true;
+    for (size_t i = 0; i < execution.addresses.size(); ++i) {
+      if (!execution.context->setInputTensorAddress(
+              execution.model.inputs[i].name.c_str(), execution.addresses[i])) {
+        restored = false;
+      }
+    }
+    if (!restored) {
+      // Destroy the context while caller storage is still alive. Later calls
+      // must fail instead of executing with a dangling borrowed address.
+      execution.context.reset();
+    }
+    return restored;
   }
 
   std::vector<std::unique_ptr<Buffer>> staging;
@@ -776,6 +828,13 @@ const adapter::Api api{
     [](void* value) noexcept { delete static_cast<Call*>(value); },
     [](void* value) noexcept {
       return invoke([&] { static_cast<Call*>(value)->run(); });
+    },
+    [](void* call, const adapter::View* inputs, size_t count,
+       bool* handled) noexcept {
+      *handled = false;
+      return invoke([&] {
+        *handled = static_cast<Call*>(call)->run_borrowed({inputs, count});
+      });
     },
     [](void* session, const adapter::View* inputs, size_t count,
        void** value) noexcept {

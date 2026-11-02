@@ -246,8 +246,11 @@ ONNX ports are matched by name, independently of bundle declaration order.
 ### Native engine
 
 Native sessions share loaded models and weights, with private reusable workspace
-buffers. Concrete-shaped models reuse fixed addresses and prepared bindings where
-supported. Returned results own storage independent of the workspace.
+buffers. Concrete-shaped models reuse fixed workspace addresses and cached backend
+metadata. Eligible inputs are borrowed directly on ONNX, TorchScript, and NativeRT
+(CPU/GPU), and TensorRT (GPU). Copies remain where needed to protect caller inputs
+or satisfy backend and memory placement requirements. Returned results own storage
+independent of the workspace.
 
 Peers may run concurrently, but TorchScript, NativeRT, and Warp models
 serialize execution across peers. Nodes within one graph

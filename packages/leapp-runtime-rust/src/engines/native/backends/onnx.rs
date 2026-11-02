@@ -189,9 +189,17 @@ impl BackendPlugin for Model {
                 .iter()
                 .map(|value| value.ptr() as usize)
                 .chain(prepared.name_ptrs.iter().map(|&name| name as usize))
+                .chain(prepared.input_metadata.iter().flat_map(|metadata| {
+                    [
+                        metadata.info.ptr() as usize,
+                        metadata.shape.as_ptr() as usize,
+                    ]
+                }))
                 .chain([
                     prepared.inputs.as_ptr() as usize,
                     prepared.outputs.as_ptr() as usize,
+                    prepared.borrowed_inputs.as_ptr() as usize,
+                    prepared.run_options.ptr() as usize,
                 ])
                 .collect(),
         )
@@ -228,6 +236,12 @@ impl BackendPlugin for Model {
                 // SAFETY: the caller retains exclusive fixed output storage.
                 values.push(unsafe { borrowed_value(writable)? });
             }
+            let input_metadata = inputs
+                .iter()
+                .map(|&input| InputMetadata::new(input))
+                .collect::<Result<Vec<_>>>()?;
+            let borrowed_inputs = vec![ptr::null(); inputs.len()];
+            let run_options = ort::session::RunOptions::new()?;
             let count = inputs.len();
             let name_ptrs = names.iter().map(|n| n.as_ptr()).collect();
             let inputs = values[..count].iter().map(|v| v.ptr()).collect();
@@ -250,6 +264,9 @@ impl BackendPlugin for Model {
                 None
             };
             Ok(Prepared {
+                input_metadata,
+                borrowed_inputs,
+                run_options,
                 binding,
                 _values: values,
                 _names: names,
@@ -284,13 +301,13 @@ impl BackendPlugin for Model {
                     }
                     ort::Error::result_from_status((ort::api().RunWithBinding)(
                         session.ptr().cast_mut(),
-                        ptr::null(),
+                        prepared.run_options.ptr(),
                         binding.ptr(),
                     ))
                 } else {
                     ort::Error::result_from_status((ort::api().Run)(
                         session.ptr().cast_mut(),
-                        ptr::null(),
+                        prepared.run_options.ptr(),
                         prepared.name_ptrs.as_ptr(),
                         prepared.inputs.as_ptr(),
                         prepared.inputs.len(),
@@ -303,6 +320,69 @@ impl BackendPlugin for Model {
             completion.finish(result)
         };
         run()
+    }
+
+    fn run_borrowed(&mut self, inputs: &[BorrowedTensor<'_>]) -> Result<bool> {
+        if self.loaded.custom_ops {
+            return Ok(false);
+        }
+        let prepared = self.prepared.as_mut().context("unprepared ONNX model")?;
+        ensure!(
+            inputs.len() == prepared.input_metadata.len(),
+            "ONNX input count mismatch"
+        );
+        let api = ort::api();
+        // Reuse the pointer array, but release all caller-backed handles on return.
+        let values = InputValues {
+            pointers: &mut prepared.borrowed_inputs,
+            api,
+        };
+        // Drop this guard before the wrappers, including on failure or unwind.
+        let mut completion = Completion::new(self.loaded.location)?;
+        for ((metadata, input), slot) in prepared
+            .input_metadata
+            .iter()
+            .zip(inputs)
+            .zip(values.pointers.iter_mut())
+        {
+            let descriptor = input.descriptor();
+            let mut raw = ptr::null_mut();
+            // Boundary validation checked this run's shape, dtype, contiguous layout
+            // and device. Only immutable model metadata survives between calls.
+            unsafe {
+                ort::Error::result_from_status((api.CreateTensorWithDataAsOrtValue)(
+                    metadata.info.ptr(),
+                    descriptor
+                        .data
+                        .cast::<u8>()
+                        .wrapping_add(descriptor.byte_offset as usize)
+                        .cast(),
+                    metadata.bytes,
+                    metadata.shape.as_ptr(),
+                    metadata.shape.len(),
+                    metadata.dtype,
+                    &mut raw,
+                ))?;
+            }
+            *slot = NonNull::new(raw)
+                .context("ORT returned null borrowed tensor")?
+                .as_ptr();
+        }
+        // Same entry point and lifetime handling for CPU and CUDA tensors.
+        let result = unsafe {
+            ort::Error::result_from_status((api.Run)(
+                self.loaded.session.ptr().cast_mut(),
+                prepared.run_options.ptr(),
+                prepared.name_ptrs.as_ptr(),
+                values.pointers.as_ptr(),
+                values.pointers.len(),
+                prepared.name_ptrs[values.pointers.len()..].as_ptr(),
+                prepared.outputs.len(),
+                prepared.outputs.as_mut_ptr(),
+            ))
+        };
+        completion.finish(result)?;
+        Ok(true)
     }
 
     fn run_dynamic(
@@ -448,12 +528,52 @@ fn check_ports(specs: &[PortSpec], outlets: &[Outlet]) -> Result<Vec<String>> {
 }
 
 struct Prepared {
+    input_metadata: Vec<InputMetadata>,
+    borrowed_inputs: Vec<*const ort::sys::OrtValue>,
+    run_options: ort::session::RunOptions,
     binding: Option<IoBinding>,
     _values: Vec<DynValue>,
     _names: Vec<CString>,
     name_ptrs: Vec<*const c_char>,
     inputs: Vec<*const ort::sys::OrtValue>,
     outputs: Vec<*mut ort::sys::OrtValue>,
+}
+
+struct InputMetadata {
+    info: MemoryInfo<'static>,
+    shape: Vec<i64>,
+    bytes: usize,
+    dtype: ort::sys::ONNXTensorElementDataType,
+}
+
+impl InputMetadata {
+    fn new(view: BorrowedTensor<'_>) -> Result<Self> {
+        let (shape, bytes) = dlpack::layout(view)?;
+        Ok(Self {
+            info: memory(dlpack::location(view.descriptor().device)?)?,
+            shape: shape.to_vec(),
+            bytes,
+            dtype: ort_type(dlpack::data_type(view.descriptor().dtype)?).into(),
+        })
+    }
+}
+
+struct InputValues<'a> {
+    pointers: &'a mut [*const ort::sys::OrtValue],
+    api: &'static ort::sys::OrtApi,
+}
+
+impl Drop for InputValues<'_> {
+    fn drop(&mut self) {
+        for value in self.pointers.iter_mut() {
+            if !value.is_null() {
+                // SAFETY: each non-null entry owns its wrapper; completion has
+                // drained all work before this invocation guard is dropped.
+                unsafe { (self.api.ReleaseValue)(value.cast_mut()) };
+                *value = ptr::null();
+            }
+        }
+    }
 }
 
 // SAFETY: pointers refer to owned wrappers/names and fixed workspace storage.

@@ -3,7 +3,10 @@
 
 use super::*;
 use crate::DataType;
-use std::sync::Weak;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Weak,
+};
 
 // A minimal dynamic-only backend: the defaults provide guarded execution and
 // unsupported prepared calls. No SDK is needed to exercise trait dispatch.
@@ -55,6 +58,7 @@ fn dynamic_only_trait_defaults_and_peers_preserve_output_ownership() {
     assert!(model.needs_guard());
     assert!(!model.can_prepare());
     assert!(!model.is_prepared());
+    assert!(!model.run_borrowed(&[]).unwrap());
     assert_eq!(
         backends::error("execute", model.run().unwrap_err()).code(),
         crate::ErrorCode::Unsupported
@@ -108,6 +112,119 @@ fn dynamic_only_trait_defaults_and_peers_preserve_output_ownership() {
     drop(peer);
     assert_eq!(first["output"].to_cpu_vec::<f32>().unwrap(), [2.]);
     assert_eq!(second["output"].to_cpu_vec::<f32>().unwrap(), [7.]);
+}
+
+// A prepared backend verifies direct routing, decline, and no retry after an
+// execution error without needing an SDK or adding production test hooks.
+struct PreparedProbe {
+    outcome: Result<bool, &'static str>,
+    input: usize,
+    output: usize,
+    runs: Arc<AtomicUsize>,
+}
+
+impl BackendPlugin for PreparedProbe {
+    fn new_session(&self) -> anyhow::Result<Box<dyn BackendPlugin>> {
+        Ok(Box::new(Self {
+            input: 0,
+            output: 0,
+            runs: self.runs.clone(),
+            outcome: self.outcome,
+        }))
+    }
+
+    fn can_prepare(&self) -> bool {
+        true
+    }
+
+    fn is_prepared(&self) -> bool {
+        self.output != 0
+    }
+
+    unsafe fn prepare(
+        &mut self,
+        inputs: &[BorrowedTensor<'_>],
+        outputs: &[BorrowedTensor<'_>],
+    ) -> anyhow::Result<()> {
+        self.input = inputs[0].descriptor().data as usize;
+        self.output = outputs[0].descriptor().data as usize;
+        Ok(())
+    }
+
+    fn run(&mut self) -> anyhow::Result<()> {
+        self.runs.fetch_add(1, Ordering::SeqCst);
+        // SAFETY: this fixture prepares one f32 input/output, retained by the workspace.
+        unsafe {
+            *(self.output as *mut f32) = *(self.input as *const f32);
+        }
+        Ok(())
+    }
+
+    fn run_borrowed(&mut self, inputs: &[BorrowedTensor<'_>]) -> anyhow::Result<bool> {
+        assert_ne!(inputs[0].descriptor().data as usize, self.input);
+        let handled = self.outcome.map_err(anyhow::Error::msg)?;
+        if handled {
+            let value = inputs[0]
+                .as_cpu_slice::<f32>()
+                .map_err(anyhow::Error::msg)?[0];
+            // SAFETY: the prepared output is exclusively owned under the workspace lock.
+            unsafe {
+                *(self.output as *mut f32) = value;
+            }
+        }
+        Ok(handled)
+    }
+
+    fn run_dynamic(
+        &mut self,
+        _: &[BorrowedTensor<'_>],
+        _: &mut Transfers,
+    ) -> anyhow::Result<Vec<SharedTensor>> {
+        unreachable!("prepared fixture")
+    }
+
+    fn loaded_identity(&self) -> usize {
+        Arc::as_ptr(&self.runs) as usize
+    }
+}
+
+#[test]
+fn borrowed_execution_only_falls_back_after_an_explicit_decline() {
+    for outcome in [Ok(true), Ok(false), Err("injected execution failure")] {
+        let runs = Arc::new(AtomicUsize::new(0));
+        let model = PreparedProbe {
+            outcome,
+            input: 0,
+            output: 0,
+            runs: runs.clone(),
+        };
+        let engine = NativeEngine::with_models(
+            plan(1),
+            vec![Box::new(model)],
+            MemoryLocation::Cpu,
+            None,
+            Default::default(),
+        )
+        .unwrap();
+        let result = engine.run(
+            &[("input", BorrowedTensor::cpu(&[7f32], &[1]).unwrap())],
+            &OutputPlacement::default(),
+            &Arc::new(OutputPool::new(Default::default(), 0)),
+        );
+        if outcome.is_err() {
+            assert!(result
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("injected execution failure"));
+        } else {
+            assert_eq!(result.unwrap()["output"].to_cpu_vec::<f32>().unwrap(), [7.]);
+        }
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            usize::from(outcome == Ok(false))
+        );
+    }
 }
 
 // Simulate an SDK retaining partial binding resources before prepare fails.

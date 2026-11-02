@@ -96,11 +96,18 @@ impl NativeEngine {
             .collect::<anyhow::Result<Vec<_>>>()
             .map_err(|e| RuntimeError::new("prepare", e))?;
         let input_order = vec![usize::MAX; plan.inputs.len()];
+        let mut input_positions = vec![None; plan.slots.len()];
+        for (position, &slot) in plan.inputs.values().enumerate() {
+            input_positions[slot] = Some(position);
+        }
+        let borrow_calls = vec![false; models.len()];
         let mut workspace = Workspace {
             models,
             slots,
             plan,
             input_order,
+            input_positions,
+            borrow_calls,
             transfers: Transfers::new(location, &cuda_streams)
                 .map_err(|e| backends::error("prepare", e))?,
         };
@@ -176,6 +183,8 @@ struct Workspace {
     slots: Vec<plan::Slot>,
     plan: Arc<Plan>,
     input_order: Vec<usize>,
+    input_positions: Vec<Option<usize>>,
+    borrow_calls: Vec<bool>,
     transfers: Transfers,
 }
 
@@ -270,12 +279,58 @@ impl Workspace {
         for name in self.plan.outputs.keys() {
             placement.location(name).validate()?;
         }
-        for ((_, &id), &position) in self.plan.inputs.iter().zip(&self.input_order) {
-            self.slots[id].assign(inputs[position].1, &mut self.transfers)?;
+        // Preserve upfront staging for dynamic calls and incompatible devices.
+        // Each boundary slot belongs to one call; forward edges use output slots.
+        for call in &self.plan.calls {
+            let mut borrow = self.models[call.model].is_prepared();
+            let mut external = false;
+            for &id in &call.inputs {
+                if let Some(order) = self.input_positions[id] {
+                    external = true;
+                    if borrow {
+                        let source = inputs[self.input_order[order]].1.descriptor().device;
+                        let target = self.slots[id].view()?.descriptor().device;
+                        borrow = source.device_type == target.device_type
+                            && source.device_id == target.device_id;
+                    }
+                }
+            }
+            self.borrow_calls[call.model] = borrow && external;
+            if !self.borrow_calls[call.model] {
+                for &id in &call.inputs {
+                    if let Some(order) = self.input_positions[id] {
+                        self.slots[id]
+                            .assign(inputs[self.input_order[order]].1, &mut self.transfers)?;
+                    }
+                }
+            }
         }
 
         for call in &self.plan.calls {
             let model = &mut self.models[call.model];
+            if self.borrow_calls[call.model] {
+                let views = call
+                    .inputs
+                    .iter()
+                    .map(|&id| match self.input_positions[id] {
+                        Some(order) => Ok(inputs[self.input_order[order]].1),
+                        None => self.slots[id].view(),
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+                if model
+                    .run_borrowed(&views)
+                    .with_context(|| format!("execute node {}", call.name))?
+                {
+                    continue;
+                }
+                // A declined call has not executed or changed its bindings.
+                for &id in &call.inputs {
+                    if let Some(order) = self.input_positions[id] {
+                        self.slots[id]
+                            .assign(inputs[self.input_order[order]].1, &mut self.transfers)?;
+                    }
+                }
+            }
             if model.is_prepared() {
                 model
                     .run()

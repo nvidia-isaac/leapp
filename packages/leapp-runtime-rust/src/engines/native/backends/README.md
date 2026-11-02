@@ -33,6 +33,11 @@ Plugins support two execution paths:
   outputs. This path also supports models with fixed shapes when preparation
   is unavailable.
 
+Prepared plugins may also implement `run_borrowed(inputs)` to execute directly
+from inputs borrowed for one invocation, keeping output buffers fixed. The
+engine uses this on both CPU and GPU when memory placement is compatible.
+Declining a call preserves the ordinary prepared path and its input copies.
+
 To add a backend, implement `BackendPlugin` and register its validation and
 loading functions in [`backends.rs`](../backends.rs). ONNX implements the trait
 in Rust; C++ backends can reuse the [shared bridge](bridge.rs). See the
@@ -48,6 +53,7 @@ in Rust; C++ backends can reuse the [shared bridge](bridge.rs). See the
 | `is_prepared()` | Report whether this instance has valid prepared bindings. New instances start unprepared. | `false` |
 | `prepare(inputs, outputs)` | Bind fixed buffers and cache reusable metadata. On success, `is_prepared()` must become `true`. | Unsupported |
 | `run()` | Execute with prepared bindings and current input contents, writing into bound outputs. Return an error if unprepared. | Unsupported |
+| `run_borrowed(inputs)` | Optionally execute with invocation-scoped inputs and prepared outputs. Return `true` after completion, or `false` before execution with original bindings intact. Errors propagate without retry. | `false` |
 | `run_dynamic(inputs, transfers)` | Execute with borrowed inputs and return independently owned outputs. The workspace transfer helper is available for copies. | Required |
 
 A minimal backend implements `new_session()` and `run_dynamic()`. Supporting
@@ -66,7 +72,9 @@ All implementations must honor these guarantees:
 - **Buffer lifetime:** prepared buffers remain at fixed addresses until the
   plugin instance is destroyed. Retained metadata must be owned or copied, and
   partially prepared instances must be safe to destroy. Preparation failure
-  aborts workspace creation.
+  aborts workspace creation. Invocation-scoped inputs must not be retained.
+  Restore any temporarily replaced bindings before returning; if restoration
+  fails, the instance must reject further execution.
 - **Output ownership:** dynamic outputs survive later calls and plugin
   destruction, without aliasing inputs or mutable backend state.
 - **Concurrency and state:** instances are `Send` and called exclusively, but
