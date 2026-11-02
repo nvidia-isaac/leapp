@@ -24,6 +24,7 @@ you to trace and export complex policy pipelines with interconnected components 
 various formats including PyTorch JIT, ONNX, and generate visualization and YAML specifications.
 """
 
+from .utils.shape_contracts import Variable
 from .export_manager import ExportManager
 from .inference_manager import InferenceManager
 
@@ -65,6 +66,7 @@ __email__ = "frlai@nvidia.com"
 
 __all__ = [
     "ExportManager",
+    "Variable",
     "InferenceManager",
     "InputKindEnum",
     "OutputKindEnum",

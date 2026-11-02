@@ -18,10 +18,12 @@ import numpy as np
 import torch
 from torch.fx.proxy import Proxy
 
+from leapp.utils.shape_values import suppress_dynamic_shape_tracing
 from leapp.utils.logging import _get_logger
 from leapp.utils.dtype import DtypeCodec, dtype_to_name, register_dtype_codec
 from ..proxy import bind_proxy
 from ..traced_data import TracedData
+from ..primitives.traced_int import TracedInt, graph_sizes, graph_value
 from .aten_adapter import capture_numpy_call
 
 
@@ -103,6 +105,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         bind_proxy(obj, name, context, proxy)
         return obj
 
+    @suppress_dynamic_shape_tracing
     def __array_finalize__(self, obj):
         """Finalize array creation - called for views and new-from-template.
 
@@ -145,9 +148,26 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
     # =========================================================================
 
     # =========================================================================
-    # Array Properties - inherited from np.ndarray
-    # shape, dtype, ndim, size, T are all inherited automatically
+    # Array properties and dynamic-shape handling
     # =========================================================================
+
+    @property
+    def shape(self):
+        from leapp.utils.shape_values import enabled, dimension
+
+        if enabled(self):
+            return tuple(dimension(self, i) for i in range(self.ndim))
+        return self.data.shape
+
+    @shape.setter
+    def shape(self, value):
+        np.ndarray.shape.__set__(self, value)
+
+    @property
+    def size(self):
+        from leapp.utils.shape_values import enabled, numel
+
+        return numel(self) if enabled(self) else self.data.size
 
     # Override T to go through our tracing
     @property
@@ -201,7 +221,13 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         """Recursively extract proxies and convert constant NumPy arrays."""
 
         def convert(item):
+            if isinstance(item, TracedInt) and not item.is_recording:
+                return graph_value(item)
             if isinstance(item, TracedData):
+                if item.context_obj is not self.context_obj:
+                    raise ValueError(
+                        "Shape expressions and arrays belong to different nodes"
+                    )
                 return item.proxy
             if isinstance(item, np.ndarray):
                 return torch.from_numpy(item.copy())
@@ -215,8 +241,10 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
     # NumPy dispatch
     # =========================================================================
 
+    @suppress_dynamic_shape_tracing
     def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
         """Capture active calls; retain native NumPy behavior in transit."""
+        inputs, kwargs = graph_sizes((inputs, kwargs))
         source = self.find_traced_array((inputs, kwargs))
         active = source is not None and source.validate_status(inputs, kwargs)
         if method != "__call__" and active:
@@ -228,9 +256,20 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
             **TracedData.unwrap_traced_data(kwargs),
         )
 
+    @suppress_dynamic_shape_tracing
     def __array_function__(self, func, types, args, kwargs):
         """Use the compatibility layer plus overrides for active calls."""
+        args, kwargs = graph_sizes((args, kwargs))
         source = self.find_traced_array((args, kwargs))
+        from leapp.utils.shape_contracts import has_variable_inputs
+        from leapp.utils.shape_values import dimension, numel
+
+        if self.is_tracing and has_variable_inputs(self.context_obj):
+            if func is np.shape:
+                return tuple(dimension(self, i) for i in range(self.ndim))
+            if func is np.size:
+                axis = args[1] if len(args) > 1 else kwargs.get("axis")
+                return numel(self) if axis is None else dimension(self, axis)
         if source is not None and source.validate_status(args, kwargs):
             return capture_numpy_call(source, func, args, kwargs)
         result = func(
@@ -396,15 +435,23 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
     # Indexing
     # =========================================================================
 
+    @suppress_dynamic_shape_tracing
     def __getitem__(self, key):
         """Handle array indexing."""
+        key = graph_sizes(key)
         real_key = TracedData.unwrap_traced_data(key)
         result = self.view(np.ndarray)[real_key]
 
         if not self.validate_status(args=(key,)):
             return result
 
-        proxy_out = self._create_getitem_proxy(key)
+        from ..primitives.traced_int import find_recording_int
+
+        proxy_out = (
+            None
+            if find_recording_int(key) is not None
+            else self._create_getitem_proxy(key)
+        )
         if proxy_out is None:
             proxy_key = self._extract_proxy(key)
             proxy_out = self._context.tracer.create_proxy(
@@ -413,6 +460,10 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
 
         if isinstance(result, np.ndarray):
             return self._new(result, proxy_out)
+        from leapp.utils.shape_contracts import has_variable_inputs
+
+        if isinstance(result, np.generic) and has_variable_inputs(self.context_obj):
+            return self._new(np.asarray(result), proxy_out)
         return result
 
     def _record_assignment(self, key, value, real_value):
@@ -445,6 +496,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         Plain ``np.ndarray`` destinations cannot be promoted into
         ``TracedNpArray``; the destination must already be traced.
         """
+        key = graph_sizes(key)
         real_key = TracedData.unwrap_traced_data(key)
         real_value = TracedData.unwrap_traced_data(value)
         self.view(np.ndarray)[real_key] = real_value

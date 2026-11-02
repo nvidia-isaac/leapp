@@ -318,6 +318,9 @@ class ExportManager:
                     f"New call site:\n{format_caller_identity(_caller_identity)}"
                 )
                 traced_tensors_node._caller_identities.add(_caller_identity)
+            from leapp.utils.shape_contracts import validate_reentry_variable_axes
+
+            validate_reentry_variable_axes(metadata, traced_tensors_node.inputs)
             traced_tensors_node.reentry_validate_inputs(tensors)
             rebound_tensors = {
                 tensor_name: traced_tensors_node._create_io_helper(
@@ -385,6 +388,9 @@ class ExportManager:
             flattened_static = {}
             if normalized_static_outputs is not None:
                 flattened_static = flatten_io_structure(normalized_static_outputs, "")
+            from leapp.utils.shape_contracts import validate_reentry_variable_axes
+
+            validate_reentry_variable_axes(metadata, traced_tensors_node.outputs)
             traced_tensors_node.reentry_validate_outputs(
                 flattened_tensors, flattened_static
             )
@@ -718,6 +724,12 @@ class ExportManager:
                 bound_args = sig.bind(*args, **kwargs)
                 bound_args.apply_defaults()
 
+                def annotate_argument(key, value):
+                    return self.input_tensors(
+                        name,
+                        value if isinstance(value, TensorSemantics) else {key: value},
+                    )
+
                 params_list = list(sig.parameters.items())
                 new_args = []
                 new_kwargs = {}
@@ -728,12 +740,12 @@ class ExportManager:
                         continue
                     if param.kind == inspect.Parameter.VAR_POSITIONAL:
                         for j, a in enumerate(args[i:]):
-                            new_args.append(self.input_tensors(name, {f"arg_{j}": a}))
+                            new_args.append(annotate_argument(f"arg_{j}", a))
                         break
-                    new_args.append(self.input_tensors(name, {param_name: arg}))
+                    new_args.append(annotate_argument(param_name, arg))
 
                 for key, value in kwargs.items():
-                    new_kwargs[key] = self.input_tensors(name, {key: value})
+                    new_kwargs[key] = annotate_argument(key, value)
 
                 # ~~~~~~~~~~~~~~~~~~~ register default kwargs as buffers ~~~~~~~~ #
                 for param_name, param_value in bound_args.arguments.items():
@@ -946,8 +958,25 @@ class ExportManager:
 
     def compile_models(self):
         _get_logger().section(f"Discovered {len(self.nodes)} nodes")
-        for node_context in self.nodes.values():
+        from leapp.utils.shape_contracts import prepare_shape_contracts, Variable
+
+        declarations = {}
+        for node in self.nodes.values():
+            for desc in node.inputs + node.outputs:
+                for axis in getattr(desc.semantics, "axes", None) or []:
+                    variable = getattr(axis, "variable", None)
+                    if isinstance(variable, Variable):
+                        if (
+                            variable.name in declarations
+                            and declarations[variable.name] != variable
+                        ):
+                            raise ValueError(
+                                f"Conflicting bounds for shared variable {variable.name}"
+                            )
+                        declarations[variable.name] = variable
+        for node_context in sorted(self.nodes.values(), key=lambda n: n.node_index):
             _get_logger().section(f"Compiling {node_context.name}")
+            prepare_shape_contracts(node_context)
             node_context.compile_model()
             _get_logger().info("Success\n")
 
