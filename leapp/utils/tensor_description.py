@@ -17,6 +17,7 @@
 
 import collections.abc
 from dataclasses import dataclass, fields
+from leapp.utils.shape_contracts import serialize_shape_axes
 from typing import Optional, Any, Dict, Tuple, List
 
 import torch
@@ -100,6 +101,10 @@ class TensorDescription:
             source_node = value.context_obj
             port = value.output_port
 
+        import numpy as np
+
+        self.dynamic_array_supported = isinstance(value, (torch.Tensor, np.ndarray))
+
         # unwrap TracedData to the underlying tensor
         if isinstance(value, TracedData):
             value = value.tensor
@@ -178,7 +183,7 @@ class TensorDescription:
         result = {
             "name": self.name,
             "dtype": self.dtype,
-            "shape": self.shape,
+            "shape": list(self.shape),
             "type": self.type,
         }
         if self.value is not None and not ignore_value:
@@ -189,6 +194,9 @@ class TensorDescription:
                 result[key] = value.value
             else:
                 result[key] = value
+        axes = serialize_shape_axes(self)
+        if axes:
+            result["axes"] = axes
         return result
 
     def change_name(self, new_name: str):

@@ -60,7 +60,9 @@ class ExportedProgramExportBackend(ExportBackend):
         if "strict" in self.backend_params:
             export_kwargs["strict"] = self.backend_params["strict"]
 
-        self.exported_program = torch.export.export(m, export_args, **export_kwargs)
+        self.exported_program = getattr(self.node_context, "shape_program", None)
+        if self.exported_program is None:
+            self.exported_program = torch.export.export(m, export_args, **export_kwargs)
         self._load_warp_runtime(self.exported_program)
         self.compiled_model = self.exported_program.module()
         self.compiled_module = m

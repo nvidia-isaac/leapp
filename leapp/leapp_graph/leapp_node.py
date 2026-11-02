@@ -457,6 +457,31 @@ class LeappNode:
             current_io_description_dict = io_description.dict()
             current_io_description_dict["name"] = existing_io_description.name
 
+            from leapp.utils.shape_contracts import (
+                has_variable_inputs,
+                build_declared_shape_contract,
+                validate_shape_contract,
+            )
+
+            dynamic_reentry = has_variable_inputs(self)
+            if dynamic_reentry:
+                # Output and inherited-input contracts are inferred at compile time;
+                # cached samples are checked against those final contracts there.
+                if (
+                    current_io_list is self.inputs
+                    and not existing_io_description.has_source
+                ):
+                    validate_shape_contract(
+                        build_declared_shape_contract(
+                            existing_io_description, self.name
+                        ),
+                        io_description.shape,
+                        name=f"{self.name}/{existing_io_description.name}",
+                    )
+                if len(existing_io_description.shape) != len(io_description.shape):
+                    raise ValueError("Variable axes retain a fixed tensor rank")
+                existing_io_description_dict.pop("shape", None)
+                current_io_description_dict.pop("shape", None)
             common_keys = (
                 existing_io_description_dict.keys() & current_io_description_dict.keys()
             )

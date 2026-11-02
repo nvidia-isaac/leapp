@@ -12,6 +12,7 @@ Numerical validation happens on the exported node outputs.
 import inspect
 import operator
 from functools import lru_cache
+from typing import Union
 
 import numpy as np
 import torch
@@ -19,6 +20,8 @@ import torch._numpy as tnp
 from torch.fx.experimental.proxy_tensor import make_fx
 from torch.fx.node import map_arg
 
+from ..primitives.traced_int import TracedInt
+from leapp.utils.shape_contracts import has_variable_inputs
 from leapp.utils.logging import _get_logger
 
 from ..traced_data import TracedData
@@ -110,43 +113,69 @@ def capture_numpy_call(source, func, args, kwargs):
         )
         if func(*native_args, **native_kwargs) is None:
             raise NotImplementedError(f"{label}: untraced mutation is unsupported")
-        message = str(exc)
-        _get_logger().error(
-            f"{message}. Continuing eager execution; export requires this operation "
-            "to be independent of the declared outputs."
-        )
-        # A traced marker preserves dependency information until output pruning.
-        # Returning a plain ndarray here could freeze a live failed computation.
         expected = func(
             *TracedData.unwrap_traced_data(args),
             **TracedData.unwrap_traced_data(kwargs),
         )
-        inputs = []
-        TracedData._map_structure(
-            (args, kwargs),
-            lambda x: inputs.append(x.proxy) if isinstance(x, TracedData) else x,
+        return record_numpy_capture_failure(source, expected, args, kwargs, str(exc))
+
+
+def record_numpy_capture_failure(source, expected, args, kwargs, message):
+    from .traced_np_array import TracedNpArray
+
+    _get_logger().error(
+        f"{message}. Continuing eager execution; export requires this operation "
+        "to be independent of the declared outputs."
+    )
+    inputs = []
+    TracedData._map_structure(
+        (args, kwargs),
+        lambda x: inputs.append(x.proxy) if isinstance(x, TracedData) else x,
+    )
+
+    def wrap(value):
+        proxy = source.context_obj.tracer.create_proxy(
+            "call_function", _failed_numpy_capture, (message, *inputs), {}
+        )
+        proxy.node.meta["leapp_capture_error"] = message
+        return TracedNpArray(
+            np.asarray(value), proxy.node.name, source.context_obj, proxy
         )
 
-        def wrap(value):
-            proxy = source._context.tracer.create_proxy(
-                "call_function", _failed_numpy_capture, (message, *inputs), {}
-            )
-            proxy.node.meta["leapp_capture_error"] = message
-            return source._new(np.asarray(value), proxy)
+    return TracedData._map_structure(expected, wrap)
 
-        return TracedData._map_structure(expected, wrap)
+
+def _shape_tensor(
+    value: Union[int, torch.Tensor], dtype: torch.dtype, device: torch.device
+):
+    if isinstance(value, torch.Tensor):
+        return value.to(dtype=dtype, device=device)
+    return torch.scalar_tensor(value, dtype=dtype, device=device)
 
 
 def _capture_numpy_call(source, func, args, kwargs, implementation, label):
     inputs = []
     TracedData._map_structure(
-        (args, kwargs), lambda x: inputs.append(x) if isinstance(x, TracedData) else x
+        (args, kwargs),
+        lambda x: inputs.append(x) if isinstance(x, TracedData) else x,
     )
+
+    scalar_dtype = None
+    if isinstance(func, np.ufunc) and any(isinstance(x, TracedInt) for x in inputs):
+        dtype = np.result_type(*TracedData.unwrap_traced_data(args[: func.nin]))
+        scalar_dtype = torch.from_numpy(np.empty((), dtype=dtype)).dtype
 
     def lower(*tensors):
         values = iter(tensors)
 
         def convert(x):
+            if isinstance(x, TracedInt):
+                value = next(values)
+                # Ufunc scalar promotion otherwise converts symbolic integers
+                # to capture-time Python values. Shape arguments stay integers.
+                if isinstance(func, np.ufunc):
+                    return tnp.asarray(torch.scalar_tensor(value, dtype=scalar_dtype))
+                return value
             if isinstance(x, TracedData):
                 return tnp.asarray(next(values))
             if isinstance(x, np.dtype) or (
@@ -166,11 +195,19 @@ def _capture_numpy_call(source, func, args, kwargs, implementation, label):
         )
 
     try:
-        examples = tuple(torch.from_numpy(np.array(x.data, copy=True)) for x in inputs)
-        captured = make_fx(lower)(*examples)
+        examples = tuple(
+            int(x)
+            if isinstance(x, TracedInt)
+            else torch.from_numpy(np.array(x.data, copy=True))
+            for x in inputs
+        )
+        mode = "symbolic" if has_variable_inputs(source.context_obj) else "real"
+        captured = make_fx(lower, tracing_mode=mode)(*examples)
         # Composite ATen kernels (e.g. isclose) introduce temporary mutations
         # during decomposition. Functionalize the decomposed graph itself.
-        captured = make_fx(torch.func.functionalize(captured))(*examples)
+        captured = make_fx(torch.func.functionalize(captured), tracing_mode=mode)(
+            *examples
+        )
         for node in captured.graph.nodes:
             if (
                 isinstance(node.target, torch._ops.OpOverload)
@@ -190,7 +227,17 @@ def _capture_numpy_call(source, func, args, kwargs, implementation, label):
             if node.op not in ("placeholder", "get_attr", "call_function", "output"):
                 raise ValueError(f"unsupported graph node: {node.op}")
             if node.op == "call_function" and node.target is not operator.getitem:
-                if not isinstance(node.target, torch._ops.OpOverload):
+                if not isinstance(node.target, torch._ops.OpOverload) and not (
+                    mode == "symbolic"
+                    and node.target
+                    in (
+                        operator.add,
+                        operator.sub,
+                        operator.mul,
+                        operator.floordiv,
+                        operator.mod,
+                    )
+                ):
                     raise ValueError(f"non-ATen operation: {node.target}")
 
     except _NumpyMutationError:
@@ -231,11 +278,32 @@ def _capture_numpy_call(source, func, args, kwargs, implementation, label):
             if node.target is torch.ops.aten.lift_fresh_copy.default:
                 # Constants need a copy, but legacy ONNX has no lift lowering.
                 target = torch.clone
+            call_kwargs = map_arg(node.kwargs, bindings.__getitem__)
+            if (
+                mode == "symbolic"
+                and node.target is torch.ops.aten.scalar_tensor.default
+            ):
+                # JIT tracing represents runtime sizes as scalar tensors.
+                target = _shape_tensor
+                call_kwargs = {
+                    k: v for k, v in call_kwargs.items() if k in ("dtype", "device")
+                }
+            operation = node.op
+            if mode == "symbolic":
+                if node.target in (
+                    torch.ops.aten.view.default,
+                    torch.ops.aten.reshape.default,
+                ):
+                    target = torch.reshape
+                elif node.target is torch.ops.aten.sym_size.int:
+                    operation, target = "call_method", "size"
+                elif node.target is torch.ops.aten.sym_numel.default:
+                    operation, target = "call_method", "numel"
             bindings[node] = tracer.create_proxy(
-                node.op,
+                operation,
                 target,
                 map_arg(node.args, bindings.__getitem__),
-                map_arg(node.kwargs, bindings.__getitem__),
+                call_kwargs,
             )
         elif node.op == "output":
             output = map_arg(node.args[0], bindings.__getitem__)
