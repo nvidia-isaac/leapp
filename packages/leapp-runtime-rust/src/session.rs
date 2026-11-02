@@ -326,5 +326,5 @@ impl Session {
 }
 
 #[cfg(test)]
-#[path = "../tests/functional_tests/triton/state.rs"]
+#[path = "../tests/functional_tests/session/state.rs"]
 mod native_tests;
