@@ -213,6 +213,87 @@ def test_copy_and_metadata_contracts(function, library):
     check_replay(capture(function, library), function, library)
 
 
+INPUT_LAYOUTS = {
+    "contiguous": lambda: torch.arange(24.0).reshape(4, 6),
+    "transposed": lambda: torch.arange(24.0).reshape(6, 4).T,
+    "permuted": lambda: torch.arange(24.0).reshape(2, 3, 4).permute(2, 0, 1),
+    "row_slice": lambda: torch.arange(24.0).reshape(4, 6)[1:3],
+    "column_slice": lambda: torch.arange(24.0).reshape(4, 6)[:, 2:4],
+    "stepped": lambda: torch.arange(24.0).reshape(4, 6)[::2, ::2],
+    "expanded": lambda: torch.arange(3.0).expand(4, 3),
+    "overlapping": lambda: torch.arange(4.0).as_strided((2, 3), (1, 1)),
+}
+NON_DENSE_LAYOUTS = ("column_slice", "stepped", "expanded", "overlapping")
+
+
+@pytest.mark.parametrize("layout", INPUT_LAYOUTS)
+@pytest.mark.parametrize("input_name", ["x", "joint_pos"])
+def test_declared_input_layout_mutation_diagnostic(layout, input_name):
+    make_input = INPUT_LAYOUTS[layout]
+    original = make_input()
+    strides = tuple(original.stride())
+    # Build the reference from the original layout, not a condensing clone.
+    expected = original, original.reshape(-1)
+    expected[1].add_(1)
+    patcher = TracingPatcher()
+    patcher.install()
+    try:
+        node = TracedTensorNode("input_layout")
+        x = node.create_input(make_input(), input_name)
+        y = x.reshape(-1)
+        y.add_(1)
+        if layout in NON_DENSE_LAYOUTS:
+            with pytest.raises(ValueError) as error:
+                node.compile_trace({"original": x, "reshaped": y})
+            message = str(error.value)
+            assert f"input '{input_name}'" in message
+            assert f"strides {strides}" in message
+            assert "Runtime inputs are treated as logically dense" in message
+            assert message.endswith(
+                f"Pass {input_name}.contiguous() as this input to "
+                "annotate.input_tensors()."
+            )
+            return
+        node.compile_trace({"original": x, "reshaped": y})
+    finally:
+        patcher.uninstall()
+    actual = node.m(make_input().clone())
+    for result, reference in zip(actual, expected):
+        torch.testing.assert_close(result, reference)
+
+
+@pytest.mark.parametrize("layout", NON_DENSE_LAYOUTS)
+@pytest.mark.parametrize("mutate_other", [False, True])
+def test_read_only_non_dense_input_is_legal(layout, mutate_other):
+    make_input = INPUT_LAYOUTS[layout]
+    expected = make_input()
+    patcher = TracingPatcher()
+    patcher.install()
+    try:
+        node = TracedTensorNode("read_only_layout")
+        x = node.create_input(make_input(), "x")
+        z = node.create_input(torch.ones(1), "z")
+        if mutate_other:
+            # Even using x as a source does not make its aliasing load-bearing.
+            z.add_(x.sum())
+        node.compile_trace({"original": x, "reshaped": x.reshape(-1), "other": z})
+    finally:
+        patcher.uninstall()
+    actual = node.m(make_input().contiguous(), torch.ones(1))
+    torch.testing.assert_close(actual[0], expected)
+    torch.testing.assert_close(actual[1], expected.reshape(-1))
+    torch.testing.assert_close(
+        actual[2], torch.ones(1) + expected.sum() if mutate_other else torch.ones(1)
+    )
+
+
+def test_input_layout_validation_handles_argumentless_mutation_marker():
+    node = TracedTensorNode("argumentless_mutation")
+    marker = node.graph.call_function(torch.rand, (), {"size": (1,)})
+    marker.meta["leapp_mutation"] = True
+    node._validate_mutated_input_layouts()
+
+
 SLICE_BOUNDS = [
     (None, None),
     (-3, None),

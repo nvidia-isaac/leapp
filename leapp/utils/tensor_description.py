@@ -107,6 +107,23 @@ class TensorDescription:
         dtype, shape = TensorDescription.get_shape_and_dtype(value)
 
         self._aliases = [name]
+        # Capture-only layout facts must precede safe_deepcopy's dense snapshot.
+        tensor = to_export_torch_tensor(value)
+        self.strides = None
+        self.is_dense = True
+        if tensor.layout == torch.strided and not tensor.is_nested:
+            self.strides = tuple(tensor.stride())
+            if tensor.numel() != 0:
+                expected_stride = 1
+                for stride, size in sorted(
+                    (stride, size)
+                    for stride, size in zip(self.strides, shape)
+                    if size > 1
+                ):
+                    if stride != expected_stride:
+                        self.is_dense = False
+                        break
+                    expected_stride *= size
         self.value = safe_deepcopy(value)
         self.dtype = dtype
         self.shape = CompactYamlList(shape)
