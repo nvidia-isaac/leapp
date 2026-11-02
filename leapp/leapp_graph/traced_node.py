@@ -73,6 +73,7 @@ class TracedTensorNode(LeappNode):
         self.tracer.graph = self.graph
         self.tracer.root = torch.nn.Module()
         self.tracer.tensor_attrs = {}
+        self._parameter_constants: dict[tuple, torch.Tensor] = {}
         self._discovered_warp_segments: list["WarpSegment"] = []
         self._pending_warp_segments: deque["WarpSegment"] = deque()
         self._is_warp_capture_active = False
@@ -154,6 +155,7 @@ class TracedTensorNode(LeappNode):
         self.tracer.graph = self.graph
         self.tracer.root = torch.nn.Module()
         self.tracer.tensor_attrs = {}
+        self._parameter_constants.clear()
         self.trimmed_inputs = set()
         self._next_buffer_idx = 0
         self.m = None
@@ -175,6 +177,28 @@ class TracedTensorNode(LeappNode):
             self._input_rebindings[previous.node] = proxy
         bind_proxy(data, name, self, proxy)
         return data
+
+    def _get_parameter_constant(self, parameter: torch.nn.Parameter) -> torch.Tensor:
+        """Reuse a detached constant for each parameter storage view in this trace."""
+        data = parameter.data
+        if data.layout != torch.strided or data.device.type == "meta":
+            return data
+
+        # Parameter.data creates a new tensor object on every access, while FX
+        # interns constants by object identity. Key by storage view so tied
+        # parameters share a constant, but a .data rebind or a different view
+        # does not reuse the wrong value. Cached tensors keep the storage alive.
+        key = (
+            data.untyped_storage().data_ptr(),
+            data.storage_offset(),
+            tuple(data.shape),
+            tuple(data.stride()),
+            data.dtype,
+            data.device,
+            data.is_conj(),
+            data.is_neg(),
+        )
+        return self._parameter_constants.setdefault(key, data)
 
     def find_declared_alias(self, value):
         """Carrier declared on this node that ``value`` may share a root with.
@@ -739,27 +763,22 @@ class TracedTensorNode(LeappNode):
         self, output_nodes: list[fx.Node], *, preserve_mutations: bool = False
     ) -> None:
         """Prune unused computation, validate capture, and update the node inputs."""
-        used_nodes = set()
-
-        def mark_used(node):
-            """Recursively mark all nodes used in computing this node."""
-            if node in used_nodes:
-                return
-            used_nodes.add(node)
-            # Traverse all input nodes
-            for arg in node.all_input_nodes:
-                mark_used(arg)
-
-        # Mark all nodes used by any output
-        for output_node in output_nodes:
-            mark_used(output_node)
-
+        pending = list(output_nodes)
         if preserve_mutations:
             for node in self.graph.nodes:
                 if node.meta.get("leapp_mutation", False) or (
                     node.op.startswith("call_") and node.is_impure()
                 ):
-                    mark_used(node)
+                    pending.append(node)
+
+        # Walk dependencies without consuming one Python frame per graph level.
+        used_nodes = set()
+        while pending:
+            node = pending.pop()
+            if node in used_nodes:
+                continue
+            used_nodes.add(node)
+            pending.extend(node.all_input_nodes)
 
         # Capture can fail in work unrelated to the declared outputs. Only a
         # failure that survives the output dependency traversal blocks export.
