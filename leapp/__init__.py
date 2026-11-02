@@ -58,8 +58,8 @@ from .utils.semantics import (
     force_application_position,
 )
 
-__version__ = "0.7.2"
-__config_version__ = "1.3"
+__version__ = "0.8.0"
+__config_version__ = "1.4"
 __author__ = "Frank Lai"
 __email__ = "frlai@nvidia.com"
 
