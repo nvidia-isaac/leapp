@@ -178,11 +178,6 @@ class TestFunctional(unittest.TestCase):
         """Test F.relu activation."""
         self._run_trace_and_compile(F.relu, (4, 8), "test_relu")
 
-    def test_relu_inplace(self):
-        """Test F.relu with inplace=True."""
-        # Note: inplace may behave differently, test non-inplace for tracing
-        self._run_trace_and_compile(F.relu, (4, 8), "test_relu_inplace", inplace=False)
-
     def test_leaky_relu_default(self):
         """Test F.leaky_relu with default negative_slope=0.01."""
         self._run_trace_and_compile(F.leaky_relu, (4, 8), "test_leaky_relu")

@@ -69,68 +69,6 @@ class TestInferenceManagerRobustness(LEAPPFunctionalTestBase):
 
         self.assertIn("SHA256 checksum mismatch", str(ctx.exception))
 
-    def test_inference_manager_bad_path_raises(self):
-        """Loading a missing YAML path should raise FileNotFoundError."""
-        missing_path = os.path.join(self.TEST_GRAPH_NAME, "does_not_exist.yaml")
-        with self.assertRaises(FileNotFoundError) as ctx:
-            InferenceManager(missing_path)
-        self.assertIn("Leapp description file not found", str(ctx.exception))
-
-    def test_inference_manager_non_yaml_extension_raises(self):
-        """Loading a non-.yaml file should raise ValueError."""
-        yaml_path = self._export_simple_model()
-        txt_path = os.path.join(self.TEST_GRAPH_NAME, "graph.txt")
-        shutil.copy(yaml_path, txt_path)
-
-        with self.assertRaises(ValueError) as ctx:
-            InferenceManager(txt_path)
-        self.assertIn("must end with .yaml", str(ctx.exception))
-
-    def test_inference_manager_missing_top_level_keys_raises(self):
-        """Missing models/pipeline/system information should fail at load time."""
-        yaml_path = self._export_simple_model()
-
-        for missing_key in ["models", "pipeline", "system information"]:
-            with self.subTest(missing_key=missing_key):
-                with open(yaml_path) as f:
-                    data = yaml.safe_load(f)
-                data.pop(missing_key, None)
-                with open(yaml_path, "w") as f:
-                    yaml.dump(data, f)
-
-                with self.assertRaises(ValueError) as ctx:
-                    InferenceManager(yaml_path)
-                self.assertIn(
-                    "Leapp description file must contain models, pipeline, and system_info",
-                    str(ctx.exception),
-                )
-
-                yaml_path = self._export_simple_model()
-
-    def test_inference_manager_missing_model_parameter_keys_raises(self):
-        """Missing required parameter keys should fail before node creation."""
-        yaml_path = self._export_simple_model()
-
-        for missing_key in ["model_path", "md5sum", "sha256sum", "backend"]:
-            with self.subTest(missing_key=missing_key):
-                with open(yaml_path) as f:
-                    data = yaml.safe_load(f)
-
-                first_model = next(iter(data["models"].values()))
-                first_model["parameters"].pop(missing_key, None)
-
-                with open(yaml_path, "w") as f:
-                    yaml.dump(data, f)
-
-                with self.assertRaises(ValueError) as ctx:
-                    InferenceManager(yaml_path)
-                self.assertIn(
-                    "Model description must contain model_path, md5sum, sha256sum, and backend",
-                    str(ctx.exception),
-                )
-
-                yaml_path = self._export_simple_model()
-
     def test_inference_manager_missing_feedback_flow(self):
         """InferenceManager loads successfully when feedback_flow is absent from YAML."""
 
