@@ -8,9 +8,9 @@ PyTorch is the path LEAPP is built around. Tensors handed to
 and every torch operation applied to one is recorded into the graph that gets
 exported.
 
-Nothing is translated along the way. :doc:`NumPy <numpy>` tracing looks each
-call up in a table of torch equivalents and :doc:`Warp <warp>` hands whole
-regions to APIC capture, but a torch call is recorded as itself. See
+A torch call is recorded as itself. :doc:`NumPy <numpy>` function tracing
+captures tensor-backed compatibility implementations as ATen operations, while
+:doc:`Warp <warp>` hands whole regions to APIC capture. See
 :doc:`torch_how_it_works` for the interception model and
 :doc:`torch_limitations` for what it cannot represent.
 

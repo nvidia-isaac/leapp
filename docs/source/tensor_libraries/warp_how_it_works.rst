@@ -5,9 +5,9 @@ How it works
 LEAPP does not rewrite Warp kernels as torch operations. It hands the work to
 Warp's own APIC capture and stores the result, so LEAPP exports a subset of
 what APIC already supports: if APIC cannot capture and replay a piece of Warp
-code, LEAPP cannot export it either. This is in contrast to
-:doc:`NumPy tracing <how_it_works>`, where each call is looked up and recorded
-as an equivalent torch operation.
+code, LEAPP cannot export it either. :doc:`NumPy tracing <how_it_works>`
+captures each supported function through a tensor-backed compatibility
+implementation and inserts its ATen operations into the graph.
 
 The unit LEAPP captures is a **segment**: a consecutive run of Warp calls on
 values belonging to one LEAPP node. A segment is neither a single launch nor
@@ -111,8 +111,11 @@ new one.
    * - Cause
      - What happens
    * - A recorded torch operation
-     - Adding a node to the traced graph closes the segment first. One
-       ``torch.clamp()`` in the middle of a Warp block splits it in two.
+     - Traced Torch operations close the segment before executing or reading
+       their graph inputs, including views such as reshape and slicing that
+       launch no CUDA work. This ensures an existing Torch alias reads the
+       finalized Warp output. One ``torch.clamp()`` in the middle of a Warp
+       block splits it in two.
    * - Reading data out of Warp
      - ``wp.to_torch()`` and ``wp.array.numpy()`` end the segment.
        ``wp.from_torch()`` and ``wp.from_numpy()`` do not.

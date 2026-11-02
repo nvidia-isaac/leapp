@@ -20,32 +20,33 @@ from leapp.utils.logging import _get_logger
 
 class TracingLock:
     """Singleton class to manage global function tracing lock.
-    
+
     This acts as a global mutex to prevent re-entrant tracing across the entire
     process. When _is_active_function_tracing is True, sys.settrace is active
     for a node and no other tracing should be started.
     """
+
     _instance = None
-    
+
     def __new__(cls):
         """Singleton implementation - only one instance allowed."""
         if cls._instance is None:
             cls._instance = super(TracingLock, cls).__new__(cls)
             cls._instance._is_active_function_tracing = False
         return cls._instance
-    
+
     @property
     def is_active(self) -> bool:
         """Check if function tracing is currently active.
-        
+
         Returns:
             bool: True if sys.settrace is active for a node, False otherwise.
         """
         return self._is_active_function_tracing
-    
+
     def acquire(self):
         """Acquire the tracing lock.
-        
+
         Raises:
             Exception: If tracing lock is already acquired.
         """
@@ -55,14 +56,14 @@ class TracingLock:
                 error_type=Exception,
             )
         self._is_active_function_tracing = True
-    
+
     def release(self):
         """Release the tracing lock."""
         self._is_active_function_tracing = False
-    
+
     def reset(self):
         """Reset the tracing lock to False.
-        
+
         This is useful for error recovery or reset scenarios.
         """
         self._is_active_function_tracing = False

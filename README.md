@@ -24,7 +24,7 @@ Input and output annotations capture computation as your application runs. A sin
 pip install leapp
 ```
 
-Requires Python 3.10+ and PyTorch 2.6.0+.
+Requires Python 3.10+ and PyTorch 2.7.0+.
 
 This example exports NumPy preprocessing, a small PyTorch policy, and action scaling and clipping together:
 

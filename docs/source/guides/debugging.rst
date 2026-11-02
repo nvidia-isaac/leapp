@@ -30,6 +30,20 @@ the exported model on each sample, compares outputs with
 ``torch.allclose(..., rtol=..., atol=...)``, logs any deviation, and
 returns a dict mapping node names to results.
 
+After the last sample, LEAPP runs sample 0 again, with buffers declared
+through ``annotate.register_buffer()`` restored to their exported values.
+The export must give the same result for the same inputs. If the replay
+differs, the exported model carries state between calls that the
+annotations do not declare. A common cause is a buffer allocated outside
+the node that the node resets and then accumulates into, such as a Warp
+array cleared with ``zero_()`` and written with ``wp.atomic_add``. LEAPP
+only records work on traced data, so the reset is lost and the exported
+model keeps adding to the previous call's result. Declare the buffer with
+``annotate.register_buffer()``, or allocate it inside the node. Declare
+state that should carry over between calls, such as a warm start or a filter
+value, with ``annotate.state_tensors()`` and ``annotate.update_state()``
+so it becomes an explicit model input and output.
+
 .. code-block:: python
 
    leapp.compile_graph(
@@ -81,6 +95,21 @@ first passes, the log names that ``sample N``.
 Re-entry also checks names, shapes, dtypes, and connectivity against
 the first step. Those failures show up during tracing, not at
 ``compile_graph()``.
+
+Data-dependent shapes
+---------------------
+
+``torch.nonzero``, boolean masks such as ``x[x > 0]``, ``masked_select``
+and ``torch.unique`` return tensors whose size depends on the input
+values. LEAPP keeps reads of such sizes symbolic: ``.shape``,
+``.size()``, ``.numel()``, integer arithmetic on them, and
+``torch.tensor(x.shape)`` are recorded in the graph, so the export
+computes them at run time.
+
+``len(x)`` and Python ``float`` arithmetic on sizes always produce plain
+numbers and are inlined as constants. Use ``x.size(0)`` or
+``x.shape[0]`` instead of ``len(x)``. Include samples with different
+counts, so validation would catch an inlined size.
 
 .. _stateful-validation:
 

@@ -68,10 +68,11 @@ def _validate_user_patches(
             raise TypeError("patching entries must be FunctionPatch instances")
         if not isinstance(definition.module, ModuleType):
             raise TypeError("FunctionPatch.module must be a Python module")
-        if not isinstance(definition.function_name, str) or not definition.function_name:
-            raise ValueError(
-                "FunctionPatch.function_name must be a non-empty string"
-            )
+        if (
+            not isinstance(definition.function_name, str)
+            or not definition.function_name
+        ):
+            raise ValueError("FunctionPatch.function_name must be a non-empty string")
         try:
             target = getattr(definition.module, definition.function_name)
         except AttributeError:
@@ -110,9 +111,7 @@ def _try_create_warp_backend() -> WarpPatchBackend | None:
 
     cached_paths = warp_runtime_artifact_paths()
     runtime_library_available = any(
-        Path(os.environ.get(env_name) or cached_paths[backend])
-        .expanduser()
-        .is_file()
+        Path(os.environ.get(env_name) or cached_paths[backend]).expanduser().is_file()
         for backend, env_name in WARP_RUNTIME_ENVIRONMENTS.items()
     )
     if (

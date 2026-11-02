@@ -13,16 +13,12 @@ import pytest
 from leapp import warp_runtime
 
 _BUILD_SCRIPT_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "scripts"
-    / "leapp-build-warp-runtime"
+    Path(__file__).resolve().parents[2] / "scripts" / "leapp-build-warp-runtime"
 )
 _BUILD_SCRIPT_LOADER = SourceFileLoader(
     "leapp_build_warp_runtime", str(_BUILD_SCRIPT_PATH)
 )
-_BUILD_SCRIPT_SPEC = spec_from_loader(
-    _BUILD_SCRIPT_LOADER.name, _BUILD_SCRIPT_LOADER
-)
+_BUILD_SCRIPT_SPEC = spec_from_loader(_BUILD_SCRIPT_LOADER.name, _BUILD_SCRIPT_LOADER)
 assert _BUILD_SCRIPT_SPEC is not None
 _BUILD_SCRIPT = module_from_spec(_BUILD_SCRIPT_SPEC)
 _BUILD_SCRIPT_LOADER.exec_module(_BUILD_SCRIPT)
@@ -37,9 +33,7 @@ def _create_build_resources(tmp_path, windows=False):
 
     ort_dir = tmp_path / "onnxruntime"
     (ort_dir / "capi").mkdir(parents=True)
-    ort_library = (
-        "onnxruntime.dll" if windows else "libonnxruntime.so.1.2.3"
-    )
+    ort_library = "onnxruntime.dll" if windows else "libonnxruntime.so.1.2.3"
     (ort_dir / "capi" / ort_library).touch()
 
     torch_dir = tmp_path / "torch"
@@ -53,9 +47,7 @@ def _create_build_resources(tmp_path, windows=False):
             __version__="1.2.3",
         ),
         "torch": SimpleNamespace(
-            utils=SimpleNamespace(
-                cmake_prefix_path=str(torch_dir / "share" / "cmake")
-            )
+            utils=SimpleNamespace(cmake_prefix_path=str(torch_dir / "share" / "cmake"))
         ),
     }
     return modules
@@ -88,8 +80,7 @@ def test_windows_cache_and_artifact_names(tmp_path, monkeypatch):
 def test_environment_override_wins_over_cached_artifact(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     cache_library = (
-        warp_runtime.warp_runtime_build_dir()
-        / "libleapp_wrp_onnx_custom_op.so"
+        warp_runtime.warp_runtime_build_dir() / "libleapp_wrp_onnx_custom_op.so"
     )
     cache_library.parent.mkdir(parents=True)
     cache_library.touch()
@@ -100,24 +91,17 @@ def test_environment_override_wins_over_cached_artifact(tmp_path, monkeypatch):
     assert warp_runtime.resolve_warp_runtime_library("onnx") == override
 
 
-def test_missing_environment_override_does_not_fall_back(
-    tmp_path, monkeypatch
-):
+def test_missing_environment_override_does_not_fall_back(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     cached_library = (
-        warp_runtime.warp_runtime_build_dir()
-        / "libleapp_wrp_torch_custom_op.so"
+        warp_runtime.warp_runtime_build_dir() / "libleapp_wrp_torch_custom_op.so"
     )
     cached_library.parent.mkdir(parents=True)
     cached_library.touch()
     missing_override = tmp_path / "missing.so"
-    monkeypatch.setenv(
-        "LEAPP_WARP_PT2_CUSTOM_OP_LIBRARY", str(missing_override)
-    )
+    monkeypatch.setenv("LEAPP_WARP_PT2_CUSTOM_OP_LIBRARY", str(missing_override))
 
-    with pytest.raises(
-        FileNotFoundError, match="LEAPP_WARP_PT2_CUSTOM_OP_LIBRARY"
-    ):
+    with pytest.raises(FileNotFoundError, match="LEAPP_WARP_PT2_CUSTOM_OP_LIBRARY"):
         warp_runtime.resolve_warp_runtime_library("pt2")
 
 
@@ -164,18 +148,14 @@ def test_missing_warp_dependency_recommends_cuda_extra(monkeypatch):
     def missing_module(name):
         raise ImportError(name)
 
-    monkeypatch.setattr(
-        _BUILD_SCRIPT.importlib, "import_module", missing_module
-    )
+    monkeypatch.setattr(_BUILD_SCRIPT.importlib, "import_module", missing_module)
     monkeypatch.setattr(
         _BUILD_SCRIPT.shutil,
         "which",
         lambda name: "/usr/bin/cmake" if name == "cmake" else None,
     )
 
-    with pytest.raises(
-        RuntimeError, match="never installs dependencies"
-    ) as exc_info:
+    with pytest.raises(RuntimeError, match="never installs dependencies") as exc_info:
         _BUILD_SCRIPT._validate_build_resources()
 
     message = str(exc_info.value)
@@ -183,9 +163,7 @@ def test_missing_warp_dependency_recommends_cuda_extra(monkeypatch):
     assert "leapp[warp-cu13]" in message
 
 
-def test_windows_preflight_reports_missing_warp_import_library(
-    tmp_path, monkeypatch
-):
+def test_windows_preflight_reports_missing_warp_import_library(tmp_path, monkeypatch):
     modules = _create_build_resources(tmp_path, windows=True)
     monkeypatch.setattr(_BUILD_SCRIPT.sys, "platform", "win32")
     monkeypatch.delenv("LEAPP_WARP_IMPORT_LIBRARY", raising=False)
@@ -217,14 +195,10 @@ def test_build_configures_both_adapters(tmp_path, monkeypatch):
     def run(command, check):
         commands.append(command)
         if "--build" in command:
-            for path in warp_runtime.warp_runtime_artifact_paths(
-                build_dir
-            ).values():
+            for path in warp_runtime.warp_runtime_artifact_paths(build_dir).values():
                 path.touch()
 
-    monkeypatch.setattr(
-        _BUILD_SCRIPT, "_runtime_source_dir", lambda: source_dir
-    )
+    monkeypatch.setattr(_BUILD_SCRIPT, "_runtime_source_dir", lambda: source_dir)
     monkeypatch.setattr(
         _BUILD_SCRIPT,
         "_validate_build_resources",
@@ -241,15 +215,12 @@ def test_build_configures_both_adapters(tmp_path, monkeypatch):
     assert not stale_file.exists()
 
 
-def test_discovery_reports_cache_and_missing_artifacts(
-    tmp_path, monkeypatch, capsys
-):
+def test_discovery_reports_cache_and_missing_artifacts(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
     monkeypatch.delenv("LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY", raising=False)
     monkeypatch.delenv("LEAPP_WARP_PT2_CUSTOM_OP_LIBRARY", raising=False)
     onnx_library = (
-        warp_runtime.warp_runtime_build_dir()
-        / "libleapp_wrp_onnx_custom_op.so"
+        warp_runtime.warp_runtime_build_dir() / "libleapp_wrp_onnx_custom_op.so"
     )
     onnx_library.parent.mkdir(parents=True)
     onnx_library.touch()

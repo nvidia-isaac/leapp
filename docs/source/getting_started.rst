@@ -9,7 +9,7 @@ Installation
 
    pip install leapp
 
-LEAPP requires Python 3.10+ and PyTorch 2.6.0+. Graph visualization requires
+LEAPP requires Python 3.10+ and PyTorch 2.7.0+. Graph visualization requires
 Python 3.11+; on Python 3.10, LEAPP warns and skips PNG generation while
 completing the rest of the export. The full dependency list is in
 `pyproject.toml <https://github.com/nvidia-isaac/leapp/blob/develop/pyproject.toml>`_.

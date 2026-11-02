@@ -92,19 +92,35 @@ def _geometry() -> GraphGeometry:
                 "edge:input",
                 "graph_input",
                 "obs",
-                (Point(128.0, 140.0), Point(134.0, 140.0), Point(134.0, 153.0), Point(140.0, 153.0)),
+                (
+                    Point(128.0, 140.0),
+                    Point(134.0, 140.0),
+                    Point(134.0, 153.0),
+                    Point(140.0, 153.0),
+                ),
             ),
             "edge:feedback": EdgeGeometry(
                 "edge:feedback",
                 "feedback",
                 "state",
-                (Point(380.0, 153.0), Point(410.0, 153.0), Point(410.0, 92.0), Point(110.0, 92.0), Point(110.0, 153.0)),
+                (
+                    Point(380.0, 153.0),
+                    Point(410.0, 153.0),
+                    Point(410.0, 92.0),
+                    Point(110.0, 92.0),
+                    Point(110.0, 153.0),
+                ),
             ),
             "edge:output": EdgeGeometry(
                 "edge:output",
                 "graph_output",
                 "action",
-                (Point(380.0, 176.0), Point(382.0, 176.0), Point(382.0, 176.0), Point(384.0, 176.0)),
+                (
+                    Point(380.0, 176.0),
+                    Point(382.0, 176.0),
+                    Point(382.0, 176.0),
+                    Point(384.0, 176.0),
+                ),
             ),
         },
     )
@@ -197,7 +213,9 @@ def test_draw_edge_renders_feedback_with_rounded_route(monkeypatch):
     ]
 
 
-def test_write_png_renders_on_scaled_canvas_then_downsamples(monkeypatch, tmp_path: Path):
+def test_write_png_renders_on_scaled_canvas_then_downsamples(
+    monkeypatch, tmp_path: Path
+):
     calls = {"new": None, "convert": None, "resize": None, "save": None}
 
     class FinalImageStub:
@@ -216,14 +234,27 @@ def test_write_png_renders_on_scaled_canvas_then_downsamples(monkeypatch, tmp_pa
     monkeypatch.setattr(
         png_renderer.Image,
         "new",
-        lambda mode, size, color: calls.__setitem__("new", (mode, size, color)) or ImageStub(),
+        lambda mode, size, color: (
+            calls.__setitem__("new", (mode, size, color)) or ImageStub()
+        ),
     )
     monkeypatch.setattr(png_renderer.ImageDraw, "Draw", lambda image: object())
-    monkeypatch.setattr(png_renderer, "_load_fonts", lambda: {"label": object(), "label_bold": object(), "label_bold_small": object(), "title": object()})
+    monkeypatch.setattr(
+        png_renderer,
+        "_load_fonts",
+        lambda: {
+            "label": object(),
+            "label_bold": object(),
+            "label_bold_small": object(),
+            "title": object(),
+        },
+    )
     monkeypatch.setattr(png_renderer, "_draw_edge", lambda draw, edge: None)
     monkeypatch.setattr(png_renderer, "_draw_terminal", lambda *args, **kwargs: None)
     monkeypatch.setattr(png_renderer, "_draw_node_card", lambda *args, **kwargs: None)
-    monkeypatch.setattr(png_renderer, "_draw_backend_badge", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        png_renderer, "_draw_backend_badge", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr(png_renderer, "_draw_text", lambda *args, **kwargs: None)
     monkeypatch.setattr(png_renderer, "_draw_port", lambda *args, **kwargs: None)
 
@@ -237,17 +268,40 @@ def test_write_png_renders_on_scaled_canvas_then_downsamples(monkeypatch, tmp_pa
     assert calls["save"] == (str(path), "PNG")
 
 
-def test_write_png_passes_terminal_and_port_geometry_to_drawers(monkeypatch, tmp_path: Path):
+def test_write_png_passes_terminal_and_port_geometry_to_drawers(
+    monkeypatch, tmp_path: Path
+):
     terminal_calls = []
     port_calls = []
 
-    monkeypatch.setattr(png_renderer, "_load_fonts", lambda: {"label": object(), "label_bold": object(), "label_bold_small": object(), "title": object()})
+    monkeypatch.setattr(
+        png_renderer,
+        "_load_fonts",
+        lambda: {
+            "label": object(),
+            "label_bold": object(),
+            "label_bold_small": object(),
+            "title": object(),
+        },
+    )
     monkeypatch.setattr(png_renderer, "_draw_edge", lambda draw, edge: None)
-    monkeypatch.setattr(png_renderer, "_draw_terminal", lambda draw, rect, anchor, title, kind, fonts: terminal_calls.append((rect, anchor, title, kind, fonts)))
+    monkeypatch.setattr(
+        png_renderer,
+        "_draw_terminal",
+        lambda draw, rect, anchor, title, kind, fonts: terminal_calls.append(
+            (rect, anchor, title, kind, fonts)
+        ),
+    )
     monkeypatch.setattr(png_renderer, "_draw_node_card", lambda *args, **kwargs: None)
-    monkeypatch.setattr(png_renderer, "_draw_backend_badge", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        png_renderer, "_draw_backend_badge", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr(png_renderer, "_draw_text", lambda *args, **kwargs: None)
-    monkeypatch.setattr(png_renderer, "_draw_port", lambda draw, port, fonts: port_calls.append((port, fonts)))
+    monkeypatch.setattr(
+        png_renderer,
+        "_draw_port",
+        lambda draw, port, fonts: port_calls.append((port, fonts)),
+    )
 
     path = tmp_path / "graph.png"
     geometry = _geometry()

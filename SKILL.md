@@ -21,7 +21,7 @@ Start with the [online LEAPP documentation](https://nvidia-isaac.github.io/leapp
 | Export formats, parameters, prebuilt models | [Export](https://nvidia-isaac.github.io/leapp/guides/export.html) |
 | Unsupported functions and trace loss | [Function patches](https://nvidia-isaac.github.io/leapp/guides/patching.html), [Torch limitations](https://nvidia-isaac.github.io/leapp/tensor_libraries/torch_limitations.html), [NumPy limitations](https://nvidia-isaac.github.io/leapp/tensor_libraries/limitations.html) |
 | State and resets | [State](https://nvidia-isaac.github.io/leapp/guides/graph.html) |
-| Optional deployment metadata | [Semantics](https://nvidia-isaac.github.io/leapp/semantics/usage.html), [standard kinds](https://nvidia-isaac.github.io/leapp/semantics/kind_element_names.html), [temporal axes](https://nvidia-isaac.github.io/leapp/semantics/temporal.html) |
+| Optional deployment metadata | [Semantics](https://nvidia-isaac.github.io/leapp/semantics/usage.html), [standard kinds](https://nvidia-isaac.github.io/leapp/semantics/kind_element_names.html), [convenience helpers](https://nvidia-isaac.github.io/leapp/semantics/convenience.html), [temporal axes](https://nvidia-isaac.github.io/leapp/semantics/kind_element_names.html#semantics-time-axes) |
 | Validation and deployment | [Debugging](https://nvidia-isaac.github.io/leapp/guides/debugging.html), [runtime](https://nvidia-isaac.github.io/leapp/leapp_runtime.html), [bundle/YAML](https://nvidia-isaac.github.io/leapp/generated_configs.html) |
 | Warp | [Setup](https://nvidia-isaac.github.io/leapp/tensor_libraries/installation.html), [capture](https://nvidia-isaac.github.io/leapp/tensor_libraries/warp.html), [limitations](https://nvidia-isaac.github.io/leapp/tensor_libraries/warp_limitations.html) |
 
@@ -155,10 +155,11 @@ Calls in NumPy, SciPy, scikit-learn, scikit-image, OpenCV, or other libraries **
 
 | Hazard | What the agent should do |
 |--------|--------------------------|
-| Unmapped NumPy/native operation | Treat the trace warning as a correctness failure. A plain result mixed back into traced data can become a constant. Patch the operation and compare new inputs against the original. |
+| Unsupported NumPy/native operation | NumPy capture checks graph structure; numerical comparison happens during final exported-node validation. Recoverable capture failures log errors and continue eager execution. Unused failures are pruned; a failed dependency in the declared output graph blocks export. Unsupported mutations remain immediate errors. Calls that bypass the hooks can still return plain values that become constants. Patch unsupported computation and compare new inputs against the original. |
 | `.item()`, `.tolist()`, `float()`, `int()` | Audit explicitly: Torch extraction can be silent. Keep dynamic data in traced operations; logs alone cannot prove correctness. |
-| NumPy indexing down to a scalar or NumPy scalar operands | Check for loss of array tracing or unsupported operand types. Use a faithful adapter preserving the needed array computation. |
-| NumPy negative-stride slicing, unsupported `astype` dtype | Eager and exported behavior can disagree. Check the online limitations and implement supported equivalent operations within the adapter. |
+| NumPy indexing down to a scalar | Keep an array dimension to preserve runtime dependence. Constant NumPy scalar operands are accepted, but cannot restore a dependency lost by indexing. |
+| NumPy negative-stride slicing | Static basic reads use `flip` or normalized indices with `index_select`. Runtime bounds, mixed advanced indices, reverse assignment, and mutation through reversed views need separate support. |
+| Unsupported `astype` dtype | Eager and exported dtypes can disagree. Use a supported dtype and check replay against the original. |
 | Tensor-dependent Python `if`/`while` or iteration counts | Only the executed path is captured. Use a faithful traceable expression in an adapter where possible; otherwise document the supported domain or external control-flow boundary. Another exporter cannot recover a branch already lost. |
 
 Supported NumPy/Torch conversions such as `torch.from_numpy()` and `.numpy()` can preserve tracing with global patching enabled. Do not rewrite all NumPy code or treat every conversion as a trace break.
@@ -167,14 +168,14 @@ Supported NumPy/Torch conversions such as `torch.from_numpy()` and `.numpy()` ca
 
 Add semantics when a user requests them or an identified downstream consumer needs tensor meaning to bind observations, map joint order, interpret commands, or apply action chunks. They are not required for tracing, export, numerical validation, or state feedback. Default to named raw tensors for ordinary internal node connections; do not annotate every intermediate value or add nodes solely for metadata.
 
-When needed, read [deployment semantics](references/semantics.md). **Prefer standard `InputKindEnum` / `OutputKindEnum` kinds** over custom strings or `extra`. Keep annotations compact: reuse existing ordered names, specify only consumed fields, and avoid repeated wrappers or metadata factories. Do not guess physical meaning for normalized features, latent vectors, or mixed observations. State/reset contracts are covered separately in [state](references/state.md).
+When needed, read [deployment semantics](references/semantics.md). **Prefer quantity helpers or `Kind` with `Axis`** over custom strings or `extra` for new integrations whose consumers support them. These APIs remain experimental. Keep annotations compact: reuse existing ordered names, specify only consumed fields, and avoid repeated wrappers or metadata factories. Do not guess physical meaning for normalized features, latent vectors, or mixed observations. State/reset contracts are covered separately in [state](references/state.md).
 
 ## Warp setup and export (experimental)
 
 Warp is part of this skill. **Before integrating Warp, read [the complete Warp guide](references/warp.md)** for prerequisites, native runtime setup, automatic/explicit capture, limitations, replay, and troubleshooting. No separate skill or LEAPP source checkout is required.
 
 - Use the matching `leapp[warp-cu12]` or `leapp[warp-cu13]` extra, then run `leapp-build-warp-runtime` and `leapp-build-warp-runtime --status` in that environment.
-- Export capture currently requires Linux, a CUDA GPU, the matching CUDA toolkit, and Warp >=1.16. Verify current requirements in the online setup guide.
+- Export capture currently requires Linux, a CUDA GPU, the matching CUDA toolkit, and Warp >=1.18. Verify current requirements in the online setup guide.
 - Initialize Warp before `start(global_patching=True)`. Run the same Warp path at least twice: discovery then capture. A segment groups Warp calls inside a node; it is not a reason to split the full pipeline into multiple models.
 - Use ONNX Dynamo by default; PT2 is the other supported Warp exporter. Deploy the corresponding native runtime dependency along with the bundle.
 

@@ -21,7 +21,10 @@ import warnings
 
 from safetensors.torch import save_file
 
-from leapp.utils.tensor_description import CompactYamlList, validate_connection_compatibility
+from leapp.utils.tensor_description import (
+    CompactYamlList,
+    validate_connection_compatibility,
+)
 from leapp.utils.logging import _get_logger
 
 
@@ -58,14 +61,15 @@ class LeappGraph:
         self.graph_name = graph_name
 
         # process graph connections
-        _get_logger().section(
-            "Processing Node Connections Using Traced Output Ports")
+        _get_logger().section("Processing Node Connections Using Traced Output Ports")
         self.connections, self.feedback_connections = self._build_connections(
-            self.nodes)
+            self.nodes
+        )
 
         _get_logger().section("Discovering graph inputs and outputs")
         self.graph_inputs, self.graph_outputs = self._compile_graph_io(
-            self.nodes, self.connections, self.feedback_connections)
+            self.nodes, self.connections, self.feedback_connections
+        )
 
         _get_logger().section("Validating connection compatibility")
         self._validate_connection_compatibility()
@@ -73,9 +77,9 @@ class LeappGraph:
     def get_feedback_initial_values(self):
         feedback_initial_values = {}
         for connection in self.feedback_connections:
-            for target in connection['targets']:
-                node = target['node']
-                input_desc = node.inputs[target['idx']]
+            for target in connection["targets"]:
+                node = target["node"]
+                input_desc = node.inputs[target["idx"]]
                 key = f"{node.name}/{input_desc.name_str}"
                 value = input_desc.value
                 feedback_initial_values[key] = value
@@ -95,25 +99,30 @@ class LeappGraph:
     def get_full_pipeline_description(self):
         processed_connections = self._finalize_connections(self.connections)
         processed_feedback_connections = self._finalize_connections(
-            self.feedback_connections)
+            self.feedback_connections
+        )
         graph_inputs = {}
         for input in self.graph_inputs:
-            if '/' in input:
-                node_name, field_name = input.split('/', 1)
+            if "/" in input:
+                node_name, field_name = input.split("/", 1)
                 if node_name not in graph_inputs:
                     graph_inputs[node_name] = CompactYamlList()
                 graph_inputs[node_name].append(field_name)
         graph_outputs = {}
         for output in self.graph_outputs:
-            if '/' in output:
-                node_name, field_name = output.split('/', 1)
+            if "/" in output:
+                node_name, field_name = output.split("/", 1)
                 if node_name not in graph_outputs:
                     graph_outputs[node_name] = CompactYamlList()
                 graph_outputs[node_name].append(field_name)
-        pipeline = {'pipeline': {'data_flow': processed_connections,
-                                 'feedback_flow': processed_feedback_connections,
-                                 'inputs': graph_inputs,
-                                 'outputs': graph_outputs}}
+        pipeline = {
+            "pipeline": {
+                "data_flow": processed_connections,
+                "feedback_flow": processed_feedback_connections,
+                "inputs": graph_inputs,
+                "outputs": graph_outputs,
+            }
+        }
 
         return pipeline
 
@@ -141,25 +150,32 @@ class LeappGraph:
     def get_graph_statistics(self):
         internal_connections = 0
         for connection in self.connections:
-            internal_connections += len(connection['targets'])
+            internal_connections += len(connection["targets"])
         for connection in self.feedback_connections:
-            internal_connections += len(connection['targets'])
+            internal_connections += len(connection["targets"])
 
-        total_edges = internal_connections + \
-            len(self.graph_inputs) + len(self.graph_outputs)
+        total_edges = (
+            internal_connections + len(self.graph_inputs) + len(self.graph_outputs)
+        )
         return internal_connections, total_edges
 
     def _finalize_connections(self, connections_dict):
         processed_connections = {}
         for connection in connections_dict:
-            source = connection['source']
-            targets = connection['targets']
-            source_port = source['node'].name + '/' + \
-                source['node'].outputs[source['idx']].name_str
+            source = connection["source"]
+            targets = connection["targets"]
+            source_port = (
+                source["node"].name
+                + "/"
+                + source["node"].outputs[source["idx"]].name_str
+            )
             target_ports = CompactYamlList()
             for target in targets:
-                target_ports.append(target['node'].name + '/' +
-                                    target['node'].inputs[target['idx']].name_str)
+                target_ports.append(
+                    target["node"].name
+                    + "/"
+                    + target["node"].inputs[target["idx"]].name_str
+                )
 
             processed_connections[source_port] = target_ports
         return processed_connections
@@ -175,7 +191,8 @@ class LeappGraph:
             _get_logger().error(
                 f"Error: input {node.name}/{input_desc.name_str} came from node "
                 f"'{source_node.name}', which is not part of this graph.\n"
-                f"Treating it as a dangling input.")
+                f"Treating it as a dangling input."
+            )
             return None
 
         for out_idx, output in enumerate(source_node.outputs):
@@ -187,7 +204,8 @@ class LeappGraph:
             f"'{input_desc.port}' from node '{source_node.name}', "
             f"which does not produce it.\n"
             f"Available outputs: {[o.port for o in source_node.outputs]}\n"
-            f"Treating it as a dangling input.")
+            f"Treating it as a dangling input."
+        )
         return None
 
     def _build_state_connections(self, nodes, feedback_connections):
@@ -197,6 +215,7 @@ class LeappGraph:
         its own inputs, so it is always a feedback edge and never depends on
         what value happened to cross the boundary.
         """
+
         def index_of(descriptions, description):
             for idx, candidate in enumerate(descriptions):
                 if candidate is description:
@@ -212,19 +231,20 @@ class LeappGraph:
                     _get_logger().error(
                         f"Error: state pair '{input_desc.name_str}' of node "
                         f"'{node.name}' is not registered on the node, so its "
-                        f"feedback edge cannot be built.")
+                        f"feedback edge cannot be built."
+                    )
                     continue
                 claimed.add(id(input_desc))
                 key = (node, output_desc.port)
-                bucket = feedback_connections.setdefault(key, {
-                    'source': {'node': node, 'idx': out_idx},
-                    'targets': []
-                })
-                bucket['targets'].append({'node': node, 'idx': in_idx})
+                bucket = feedback_connections.setdefault(
+                    key, {"source": {"node": node, "idx": out_idx}, "targets": []}
+                )
+                bucket["targets"].append({"node": node, "idx": in_idx})
                 _get_logger().info(
                     f"Found state feedback connection: "
                     f"{node.name}/{output_desc.name_str} "
-                    f" -> {node.name}/{input_desc.name_str}")
+                    f" -> {node.name}/{input_desc.name_str}"
+                )
         return claimed
 
     def _build_connections(self, nodes):
@@ -234,18 +254,23 @@ class LeappGraph:
         for node in nodes.values():
             # A node cannot receive the same source output on two of its inputs,
             # because the runtime has one value to deliver and two places to put it.
-            sources = [(input.source_node, input.port)
-                       for input in node.inputs
-                       if input.has_source and id(input) not in state_inputs]
-            duplicates = {source for source,
-                          count in Counter(sources).items() if count > 1}
+            sources = [
+                (input.source_node, input.port)
+                for input in node.inputs
+                if input.has_source and id(input) not in state_inputs
+            ]
+            duplicates = {
+                source for source, count in Counter(sources).items() if count > 1
+            }
             if duplicates:
                 duplicate_list = ", ".join(
-                    sorted(f"{source.name}/{port}" for source, port in duplicates))
+                    sorted(f"{source.name}/{port}" for source, port in duplicates)
+                )
                 _get_logger().fatal(
                     f"Error: unsupported use of sending the same tensor multiple times to the same node. "
                     f"Duplicate input sources in node {node.name}: {duplicate_list}",
-                    error_type=Exception)
+                    error_type=Exception,
+                )
 
             for in_idx, input in enumerate(node.inputs):
                 if id(input) in state_inputs:  # already wired from its declaration
@@ -265,14 +290,15 @@ class LeappGraph:
                 key = (source_node, input.port)
                 if key not in bucket:
                     bucket[key] = {
-                        'source': {'node': source_node, 'idx': out_idx},
-                        'targets': []
+                        "source": {"node": source_node, "idx": out_idx},
+                        "targets": [],
                     }
-                bucket[key]['targets'].append({'node': node, 'idx': in_idx})
+                bucket[key]["targets"].append({"node": node, "idx": in_idx})
                 _get_logger().info(
                     f"Found {'connection' if is_forward else 'feedback connection'}: "
                     f"{source_node.name}/{source_node.outputs[out_idx].name_str} "
-                    f" -> {node.name}/{node.inputs[in_idx].name_str}")
+                    f" -> {node.name}/{node.inputs[in_idx].name_str}"
+                )
 
         return list(connections.values()), list(feedback_connections.values())
 
@@ -284,29 +310,41 @@ class LeappGraph:
         # Collect all target ports (destinations) from both forward and feedback connections
         all_target_ports = set()
         for connection in connections:
-            for target in connection['targets']:
-                target_port = target['node'].name + '/' + \
-                    target['node'].inputs[target['idx']].name_str
+            for target in connection["targets"]:
+                target_port = (
+                    target["node"].name
+                    + "/"
+                    + target["node"].inputs[target["idx"]].name_str
+                )
                 all_target_ports.add(target_port)
 
         for connection in feedback_connections:
-            for target in connection['targets']:
-                target_port = target['node'].name + '/' + \
-                    target['node'].inputs[target['idx']].name_str
+            for target in connection["targets"]:
+                target_port = (
+                    target["node"].name
+                    + "/"
+                    + target["node"].inputs[target["idx"]].name_str
+                )
                 all_target_ports.add(target_port)
 
         # Collect all source ports from both forward and feedback connections
         all_source_ports = set()
         for connection in connections:
-            source = connection['source']
-            source_port = source['node'].name + '/' + \
-                source['node'].outputs[source['idx']].name_str
+            source = connection["source"]
+            source_port = (
+                source["node"].name
+                + "/"
+                + source["node"].outputs[source["idx"]].name_str
+            )
             all_source_ports.add(source_port)
 
         for connection in feedback_connections:
-            source = connection['source']
-            source_port = source['node'].name + '/' + \
-                source['node'].outputs[source['idx']].name_str
+            source = connection["source"]
+            source_port = (
+                source["node"].name
+                + "/"
+                + source["node"].outputs[source["idx"]].name_str
+            )
             all_source_ports.add(source_port)
 
         # Find dangling inputs and outputs
@@ -314,14 +352,14 @@ class LeappGraph:
             # An input is dangling if it's not the target of any internal connection
             for input_desc in node.inputs:
                 input_name = input_desc.name_str
-                node_input = node.name + '/' + input_name
+                node_input = node.name + "/" + input_name
                 if node_input not in all_target_ports:
                     graph_inputs.append(node_input)
 
             # An output is dangling if it's not the source of any internal connection
             for output_desc in node.outputs:
                 output_name = output_desc.name_str
-                node_output = node.name + '/' + output_name
+                node_output = node.name + "/" + output_name
                 if node_output not in all_source_ports:
                     graph_outputs.append(node_output)
 
@@ -331,12 +369,12 @@ class LeappGraph:
 
     def _validate_connection_compatibility(self):
         for connection in self.connections + self.feedback_connections:
-            source = connection['source']
-            source_desc = source['node'].outputs[source['idx']]
+            source = connection["source"]
+            source_desc = source["node"].outputs[source["idx"]]
             source_name = f"{source['node'].name}/{source_desc.name_str}"
 
-            for target in connection['targets']:
-                target_desc = target['node'].inputs[target['idx']]
+            for target in connection["targets"]:
+                target_desc = target["node"].inputs[target["idx"]]
                 target_name = f"{target['node'].name}/{target_desc.name_str}"
                 validate_connection_compatibility(
                     source_name=source_name,

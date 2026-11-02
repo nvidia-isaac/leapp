@@ -85,10 +85,7 @@ def verify_onnx(
                 output_names=list(output_names),
             )
             session = ort.InferenceSession(str(onnx_path))
-            onnx_inputs = {
-                name: inp.numpy()
-                for name, inp in zip(input_names, inputs)
-            }
+            onnx_inputs = {name: inp.numpy() for name, inp in zip(input_names, inputs)}
             output_onnx = session.run(None, onnx_inputs)[0]
             testcase.assertTrue(
                 np.allclose(output_onnx, expected.detach().numpy(), atol=atol),
@@ -168,8 +165,7 @@ def verify_exported_program(
             f"{test_name}: ExportedProgram output doesn't match expected",
         )
     except Exception as exc:
-        testcase.fail(
-            f"{test_name}: ExportedProgram export/execution failed: {exc}")
+        testcase.fail(f"{test_name}: ExportedProgram export/execution failed: {exc}")
 
 
 def verify_exported_program_on_random_inputs(
@@ -198,5 +194,4 @@ def verify_exported_program_on_random_inputs(
                 f"{index + 1}/{num_inputs}",
             )
     except Exception as exc:
-        testcase.fail(
-            f"{test_name}: ExportedProgram export/execution failed: {exc}")
+        testcase.fail(f"{test_name}: ExportedProgram export/execution failed: {exc}")

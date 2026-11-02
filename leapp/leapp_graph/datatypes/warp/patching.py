@@ -18,36 +18,15 @@ they first touch actively traced Warp data.
 
 ``wp.to_torch`` inside an open segment
 ---------------------------------------
-A zero-copy conversion does not copy a proxy, it shares the source's
-``ProxyView``, which is what lets a Torch alias of a Warp buffer stay correct
-across a segment it was created inside:
+A zero-copy conversion directly keeps the source's FX tensor handle.
+New Warp outputs temporarily borrow provenance through their own FX Proxy.
+At segment close, publication resolves that proxy to the runner output, so
+aliases created before close follow it without a graph allocation or copy.
+Writes to existing buffers still use stable handles and PyTorch functionalization.
+Copying conversions continue to record independent graph storage.
 
-1. A traced Torch input is converted to Warp and gives the segment trace state.
-2. A kernel writes a preallocated Warp output.  Until segment close, that
-   output temporarily carries the donor's proxy.
-3. ``wp.to_torch(output_wp)`` runs inside ``forward``.  The layouts match, so
-   the resulting ``TracedTensor`` adopts ``output_wp``'s view rather than
-   snapshotting its temporary proxy.
-4. Segment close replaces the proxy inside that one view, so the Warp array and
-   the Torch alias both move to the runner output together.
-5. ``annotate.output_tensors`` sees the runner output, which keeps it alive
-   through pruning.
-
-Before view sharing, step 3 copied the temporary proxy and step 4 rebound only
-the Warp array, so the declared output still resolved to the pre-segment input
-and the runner was pruned for having no consumers.  The eager numbers were
-right either way, which is what made it a silent tracing failure.  Conversions
-that genuinely copy -- a CUDA readback, a device move -- still get an
-independent root, so the same hazard would return for them.
-
-Standalone regression reproducer
----------------------------------
-From ``leapp_repo`` run:
-
-``.venv/bin/python reproduce_autograd_warp_segment.py all``
-
-It covers conversion inside an open segment and after it closes. Keep those
-cases when changing boundary propagation or segment finalization.
+Regression coverage lives in ``tests/functional_tests/test_shared_memory_arrays.py``
+and ``tests/unit_tests/test_warp_torch_boundaries.py``.
 """
 
 from typing import Any, Callable
@@ -58,14 +37,19 @@ import inspect
 import sys
 
 import torch
+from torch.fx.proxy import Proxy
+from torch.multiprocessing.reductions import StorageWeakRef
 import warp as wp
 from warp._src.context import Function as WarpKernelLanguageFunction
 
-from leapp.utils.caller_identity import caller_identity_has_same_anchor, get_caller_stack_identity
+from leapp.utils.caller_identity import (
+    caller_identity_has_same_anchor,
+    get_caller_stack_identity,
+)
 from leapp.utils.logging import _get_logger
 
 from .._attribute_patching import AttributePatchRegistry
-from ..proxy_view import may_adopt_view
+from ..proxy import STORAGE_LAYOUT_META_KEY, conversion_proxy
 from .cupti_oracle import WarpCudaOracle
 from .session import WarpTraceSession
 from .traced_wp_array import TracedWpArray
@@ -163,7 +147,7 @@ class WarpPatchBackend:
 
     def close_warp_segment(self, *_args: Any, **_kwargs: Any) -> None:
         """Request closure of the active unowned Warp segment."""
-        if self._session is None:
+        if self._session is None or self._session.active_warp_op is None:
             return
         if self._session.paused:
             return
@@ -191,9 +175,7 @@ class WarpPatchBackend:
         return id(func) == self._full_copy_function_id
 
     def function_qualname(self, func: Callable) -> str:
-        return self._qualnames_by_original_id.get(
-            id(func), f"warp.{func.__qualname__}"
-        )
+        return self._qualnames_by_original_id.get(id(func), f"warp.{func.__qualname__}")
 
     def uninstall(self) -> None:
         """Restore every attribute patched by this detector."""
@@ -293,7 +275,9 @@ class WarpPatchBackend:
                 # this is not a namespace; maybe it is a callable we should wrap, otherwise ignore it.
                 self._patch_callable_attr(owner, attr_name, value, attr_qualname)
 
-    def _should_scan_class(self, cls: Any, owner_module_name: str, class_depth: int) -> bool:
+    def _should_scan_class(
+        self, cls: Any, owner_module_name: str, class_depth: int
+    ) -> bool:
         # Class scan criteria:
         # - The depth is not too deep.
         # - Only scan actual class objects.
@@ -318,7 +302,9 @@ class WarpPatchBackend:
 
         return True
 
-    def _patch_callable_attr(self, owner: Any, attr_name: str, raw_value: Any, qualname: str) -> None:
+    def _patch_callable_attr(
+        self, owner: Any, attr_name: str, raw_value: Any, qualname: str
+    ) -> None:
         # Patch only safe callable attributes:
         # - Preserve staticmethod/classmethod binding by unwrapping, wrapping, then
         #   restoring the original descriptor type.
@@ -336,9 +322,13 @@ class WarpPatchBackend:
 
         if attr_name.startswith("__") and attr_name not in _ALLOWED_DUNDER_METHODS:
             return
-        if callable_original is None or getattr(callable_original, _WRAPPER_MARKER, False):
+        if callable_original is None or getattr(
+            callable_original, _WRAPPER_MARKER, False
+        ):
             return
-        if inspect.isclass(callable_original) or isinstance(callable_original, property):
+        if inspect.isclass(callable_original) or isinstance(
+            callable_original, property
+        ):
             return
         if isinstance(callable_original, WarpKernelLanguageFunction):
             """In Warp, symbols like these often look callable from Python:
@@ -380,7 +370,11 @@ class WarpPatchBackend:
             return
 
         wrapper_func = self._get_or_make_wrapper(qualname, callable_original)
-        wrapper = descriptor_type(wrapper_func) if descriptor_type is not None else wrapper_func
+        wrapper = (
+            descriptor_type(wrapper_func)
+            if descriptor_type is not None
+            else wrapper_func
+        )
 
         try:
             self._patches.install(
@@ -492,12 +486,8 @@ class WarpPatchBackend:
         with self.pause_context():
             original(*call_args, **call_kwargs)
 
-        if may_adopt_view(src, args[0]):
-            view, proxy = src.proxy_view, None
-        else:
-            view, proxy = None, src.proxy
         TracedWpArray.make_traced_in_place(
-            args[0], src.name, src.context_obj, proxy, view=view
+            args[0], src.name, src.context_obj, conversion_proxy(src, args[0])
         )
         return True, None
 
@@ -543,6 +533,65 @@ class WarpPatchBackend:
         for array in traced_inputs:
             if not segment.knows_array(array):
                 segment.add_input_ref(array)
+
+    def resolve_storage_array(self, array: TracedWpArray) -> TracedWpArray:
+        """Bind a Torch-backed view to APIC's whole-allocation graph value.
+
+        Kernel offsets and strides remain in the APIC capture. Both segment
+        inputs and outputs must expose the allocation, so a later Torch read
+        or write observes the same storage, including bytes outside the view.
+        """
+        owner = getattr(array, "_tensor", None)
+        if not isinstance(owner, torch.Tensor):
+            return array
+        allocation_bytes = array._storage_nbytes
+        owner = owner.as_subclass(torch.Tensor)
+        storage = owner.untyped_storage()
+        if (
+            owner.storage_offset() == 0
+            and owner.is_contiguous()
+            and owner.numel() * owner.element_size() == storage.nbytes()
+        ):
+            return array
+        if (
+            allocation_bytes != storage.nbytes()
+            or array._storage_base_ptr != storage.data_ptr()
+        ):
+            raise RuntimeError("Warp view allocation does not match its Torch storage")
+
+        proxy = getattr(array, "proxy", None)
+        identity = StorageWeakRef(storage)
+        pending, seen = ([proxy.node] if proxy is not None else []), set()
+        while pending:
+            node = pending.pop()
+            if node in seen:
+                continue
+            seen.add(node)
+            layout = node.meta.get(STORAGE_LAYOUT_META_KEY)
+            if layout is not None and layout.identity == identity:
+                if layout.dtype != owner.dtype:
+                    raise RuntimeError(
+                        "Warp views cannot reinterpret Torch storage dtype"
+                    )
+                # Reconstruct a zero-copy native alias; do not trace allocation
+                # plumbing or add a second conversion operation to the graph.
+                with self.pause_context():
+                    full = torch.empty(0, device=owner.device, dtype=layout.dtype)
+                    full.set_(storage, 0, layout.shape, layout.strides)
+                    raw = wp.from_torch(full)
+                return TracedWpArray.make_traced_in_place(
+                    raw,
+                    array.name,
+                    array.context_obj,
+                    proxy=Proxy(node, proxy.tracer),
+                )
+            pending.extend(node.all_input_nodes)
+        # Only follow this view's graph ancestry. A separately declared parent
+        # is not evidence of an alias relationship in the exported program.
+        raise RuntimeError(
+            "Warp view has no full storage value in this node's graph; "
+            "declare the covering Torch tensor before creating the view"
+        )
 
     #########################################################
     # static Helper functions

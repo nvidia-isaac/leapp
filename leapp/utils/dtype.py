@@ -25,12 +25,23 @@ from typing import Any, Callable, Dict, List, Tuple
 
 # Canonical common dtype-name vocabulary shared across backends. Backend codecs
 # map their dtype objects onto these names.
-_VALID_DTYPE_NAMES = frozenset({
-    "float16", "float32", "float64", "bfloat16",
-    "int8", "int16", "int32", "int64",
-    "uint8", "uint16", "uint32", "uint64",
-    "bool",
-})
+_VALID_DTYPE_NAMES = frozenset(
+    {
+        "float16",
+        "float32",
+        "float64",
+        "bfloat16",
+        "int8",
+        "int16",
+        "int32",
+        "int64",
+        "uint8",
+        "uint16",
+        "uint32",
+        "uint64",
+        "bool",
+    }
+)
 
 
 def map_to_torch_dtype(string):
@@ -52,6 +63,7 @@ def map_to_torch_dtype(string):
 # =============================================================================
 # Backend dtype-codec registry
 # =============================================================================
+
 
 @dataclass(frozen=True)
 class DtypeCodec:

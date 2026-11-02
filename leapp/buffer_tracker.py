@@ -59,6 +59,7 @@ if TYPE_CHECKING:
 @dataclass
 class _BufferInfo:
     """Tracking info for a single injected buffer."""
+
     clean_name: str
     original_traced: TracedTensor
     original_buffer: torch.Tensor
@@ -160,7 +161,8 @@ class BufferTracker:
 
         _get_logger().info(
             f"BufferTracker: injected {len(self._injected)} buffer(s) "
-            f"into node '{self._node_name}'")
+            f"into node '{self._node_name}'"
+        )
 
     def collect(self) -> None:
         """Detect mutated buffers and register as state outputs.
@@ -196,7 +198,8 @@ class BufferTracker:
             self._export_manager.update_state(self._node_name, mutated)
             _get_logger().info(
                 f"BufferTracker: detected {len(mutated)} mutated buffer(s): "
-                f"{list(mutated.keys())}")
+                f"{list(mutated.keys())}"
+            )
 
         # Bake non-mutated buffers as constants in the FX graph.
         # They should keep their trained values (e.g. normalizer mean/var)
@@ -230,7 +233,8 @@ class BufferTracker:
 
             _get_logger().info(
                 f"BufferTracker: baked {len(non_mutated)} non-mutated buffer(s) "
-                f"as constants: {non_mutated}")
+                f"as constants: {non_mutated}"
+            )
 
         self._collected = True
 
@@ -249,4 +253,3 @@ class BufferTracker:
             info.owning_module.register_buffer(info.attr_name, raw)
 
         self._injected.clear()
-

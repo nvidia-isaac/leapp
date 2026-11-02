@@ -41,8 +41,7 @@ class BaseExampleTest(unittest.TestCase):
 
         # Ensure examples directory exists
         if not cls.examples_dir.exists():
-            raise FileNotFoundError(
-                f"Examples directory not found: {cls.examples_dir}")
+            raise FileNotFoundError(f"Examples directory not found: {cls.examples_dir}")
 
         # Original working directory
         cls.original_cwd = os.getcwd()
@@ -54,7 +53,7 @@ class BaseExampleTest(unittest.TestCase):
     def tearDown(self):
         """Clean up after each test."""
         os.chdir(self.original_cwd)
-        
+
         # Reset ExportManager singleton to avoid stale state between tests
         # This is necessary because different examples may use the same node names
         if ExportManager.is_interpret_graph_enabled():
@@ -90,7 +89,7 @@ class BaseExampleTest(unittest.TestCase):
             cwd=self.repo_root,
             capture_output=True,
             text=True,
-            timeout=300  # 5 minute timeout
+            timeout=300,  # 5 minute timeout
         )
 
         return result, output_dir_path
@@ -106,18 +105,17 @@ class BaseExampleTest(unittest.TestCase):
         # Check that output directory was created
         self.assertTrue(
             output_dir_path.exists(),
-            f"Output directory was not created: {output_dir_path}"
+            f"Output directory was not created: {output_dir_path}",
         )
 
         # Check that it's actually a directory
         self.assertTrue(
             output_dir_path.is_dir(),
-            f"Output path is not a directory: {output_dir_path}"
+            f"Output path is not a directory: {output_dir_path}",
         )
 
         # Get list of actual files
-        actual_files = [f.name for f in output_dir_path.iterdir()
-                        if f.is_file()]
+        actual_files = [f.name for f in output_dir_path.iterdir() if f.is_file()]
 
         # Check each expected file
         for expected_file in expected_files:
@@ -133,24 +131,25 @@ class BaseExampleTest(unittest.TestCase):
                 expected_file,
                 actual_files,
                 f"Expected file '{expected_file}' not found in {output_dir_path}. "
-                f"Actual files: {actual_files}"
+                f"Actual files: {actual_files}",
             )
 
-    def _run_and_verify_example(self, script_name, output_dir_name, expected_files, test_description):
+    def _run_and_verify_example(
+        self, script_name, output_dir_name, expected_files, test_description
+    ):
         """
         Complete workflow to run an example and verify its outputs.
 
         Args:
             script_name: Name of the script file
-            output_dir_name: Expected output directory name  
+            output_dir_name: Expected output directory name
             expected_files: List of expected output files
             test_description: Description for logging
         """
         print(f"\n=== {test_description} ===")
 
         # Run the example
-        result, output_dir = self._run_example_script(
-            script_name, output_dir_name)
+        result, output_dir = self._run_example_script(script_name, output_dir_name)
 
         # Check that script ran successfully
         if result.returncode != 0:
@@ -158,24 +157,24 @@ class BaseExampleTest(unittest.TestCase):
             print(f"STDERR:\n{result.stderr}")
 
         self.assertEqual(
-            result.returncode, 0,
+            result.returncode,
+            0,
             f"{script_name} failed with return code {result.returncode}.\n"
             f"STDOUT:\n{result.stdout}\n"
-            f"STDERR:\n{result.stderr}"
+            f"STDERR:\n{result.stderr}",
         )
 
         # Verify expected output files exist
         self._verify_output_files(output_dir, expected_files)
 
         print(f"✓ {script_name} completed successfully")
-        print(
-            f"✓ Generated {len(expected_files)} expected files in {output_dir}")
+        print(f"✓ Generated {len(expected_files)} expected files in {output_dir}")
 
         self.run_generated_models(output_dir)
 
     def run_generated_models(self, output_dir):
-        '''Run the generated full graph'''
-        graph_yaml = os.path.split(output_dir)[-1] + '.yaml'
+        """Run the generated full graph"""
+        graph_yaml = os.path.split(output_dir)[-1] + ".yaml"
         graph_yaml_path = os.path.join(output_dir, graph_yaml)
 
         # Load the inference manager (validates the graph structure)

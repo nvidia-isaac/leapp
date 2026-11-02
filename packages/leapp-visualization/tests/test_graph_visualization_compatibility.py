@@ -32,10 +32,8 @@ def test_visualization_dependency_is_conditional_on_python_311():
     root_pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
     assert 'requires-python = ">=3.10"' in root_pyproject
-    assert (
-        '"fast-sugiyama>=0.5.3; python_version >= \'3.11\'"' in root_pyproject
-    )
-    assert '"Pillow>=10.0.0; python_version >= \'3.11\'"' in root_pyproject
+    assert "\"fast-sugiyama>=0.5.3; python_version >= '3.11'\"" in root_pyproject
+    assert "\"Pillow>=10.0.0; python_version >= '3.11'\"" in root_pyproject
 
 
 def test_visualization_modules_are_shipped_with_leapp():

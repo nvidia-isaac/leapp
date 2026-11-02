@@ -37,11 +37,7 @@ def warp_runtime_build_dir() -> Path:
         return cache_root / "leapp" / "warp-runtime" / "build"
 
     cache_home = os.environ.get("XDG_CACHE_HOME")
-    cache_root = (
-        Path(cache_home).expanduser()
-        if cache_home
-        else Path.home() / ".cache"
-    )
+    cache_root = Path(cache_home).expanduser() if cache_home else Path.home() / ".cache"
     return cache_root / "leapp" / "warp-runtime" / "build"
 
 
@@ -54,10 +50,8 @@ def warp_runtime_artifact_paths(
         else warp_runtime_build_dir()
     )
     return {
-        "onnx": output_dir
-        / _shared_library_name("leapp_wrp_onnx_custom_op"),
-        "pt2": output_dir
-        / _shared_library_name("leapp_wrp_torch_custom_op"),
+        "onnx": output_dir / _shared_library_name("leapp_wrp_onnx_custom_op"),
+        "pt2": output_dir / _shared_library_name("leapp_wrp_torch_custom_op"),
     }
 
 

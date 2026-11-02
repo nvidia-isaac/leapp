@@ -2,6 +2,29 @@
 SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0
 -->
+#### Formatting
+
+LEAPP uses Ruff for Python formatting, with an 88-character line width. Install
+the development dependencies and run the formatter from the repository root:
+
+```bash
+python -m pip install -e ".[dev]"
+ruff format .
+ruff format --check .
+```
+
+The separate `Ruff formatting` CI job checks pull requests and fails if files
+need formatting. Run `ruff format .` locally and include the resulting changes
+in your PR. No local Git hook is required. You can also enable format on save
+with the Ruff editor extension.
+
+The `examples/` directory is excluded from formatting to preserve the examples'
+existing layout, including when files are passed explicitly to Ruff.
+
+Keep the Ruff version in `pyproject.toml` and `.github/workflows/ci.yml` in sync
+and regenerate `uv.lock` when upgrading. Formatting does not run lint fixes or
+sort imports.
+
 #### Signing Your Work
 
 * We require that all contributors "sign-off" on their commits. This certifies that the contribution is your original work, or you have rights to submit it under the same license, or a compatible license.

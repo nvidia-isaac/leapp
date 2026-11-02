@@ -23,8 +23,11 @@ EXAMPLE = Path(__file__).resolve().parents[2] / "examples" / "function_patch.py"
 def test_function_patch_example():
     with tempfile.TemporaryDirectory() as workdir:
         result = subprocess.run(
-            [sys.executable, str(EXAMPLE)], cwd=workdir,
-            capture_output=True, text=True, timeout=120,
+            [sys.executable, str(EXAMPLE)],
+            cwd=workdir,
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
         assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
         assert "Patch restored: True" in result.stdout
@@ -34,7 +37,8 @@ def test_function_patch_example():
         manager = InferenceManager(str(graph_dir / "function_patch_example.yaml"))
         inputs = manager.get_mock_input()
         assert set(inputs) == {
-            "camera_preprocess/left_bgr", "camera_preprocess/right_bgr",
+            "camera_preprocess/left_bgr",
+            "camera_preprocess/right_bgr",
         }
         rng = np.random.default_rng(17)
         frames = {
@@ -43,7 +47,9 @@ def test_function_patch_example():
         }
         # Change each camera independently to catch frozen OpenCV results.
         for changed_camera in ("left_bgr", "right_bgr"):
-            frames[changed_camera] = rng.integers(0, 256, size=(8, 12, 3), dtype=np.uint8)
+            frames[changed_camera] = rng.integers(
+                0, 256, size=(8, 12, 3), dtype=np.uint8
+            )
             expected_views = []
             for name, bgr in frames.items():
                 key = f"camera_preprocess/{name}"

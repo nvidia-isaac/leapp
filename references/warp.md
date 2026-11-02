@@ -6,7 +6,7 @@ LEAPP records Warp regions as `leapp::warp_runner` custom operations, embedding 
 
 ## Set up the export environment
 
-Current export/capture requirements are Linux, a CUDA GPU, Warp >=1.16, and a matching CUDA toolkit with `nvcc`. Native builds also need a C++17 compiler, CMake >=3.18, and network access to download ONNX Runtime headers. PTX is currently targeted at compute capability 7.5: older GPUs and kernels relying on newer hardware features are outside this export contract. Verify version-specific requirements before installing.
+Current export/capture requirements are Linux, a CUDA GPU, Warp >=1.18, and a matching CUDA toolkit with `nvcc`. Native builds also need a C++17 compiler (C++20 for PyTorch >=2.13), CMake >=3.18, and network access to download ONNX Runtime headers. PTX is currently targeted at compute capability 7.5: older GPUs and kernels relying on newer hardware features are outside this export contract. Verify version-specific requirements before installing.
 
 Use the application's environment and package manager. A default `leapp` installation does not install Warp support. Select **one** extra matching the CUDA toolkit (not merely the driver's maximum supported CUDA version):
 
@@ -113,9 +113,12 @@ A Warp operation must not consume active arrays owned by different nodes. Finish
 | Missing CUDA provider / CPU validation fails | Check GPU runtime/provider and device placement; CPU fallback cannot run Warp. |
 | Cross-context / owner-token error | Keep one node per active operation; leave explicit regions before another node starts. |
 | Replay mismatch | Inspect inputs, mutations, region boundaries, and logs; compare fresh inputs with the original before changing tolerances. |
+| Replayed sample 0 differs | The export keeps undeclared state between calls, usually an array allocated outside the node that is reset and then accumulated into. Declare it with `annotate.register_buffer()` or allocate it inside the node. |
 
 Deliver the full LEAPP bundle plus native-runtime setup information. Embedded kernels do not make the model self-contained: the destination needs the adapter for its ONNX/PT2 backend and compatible CUDA/runtime dependencies. Test loading and replay there when available. Do not claim portability from a CPU-only smoke test.
 
 ## Only when maintaining LEAPP itself
+
+Traced CUDA Warp-to-Torch conversions use zero-copy DLPack across supported PyTorch versions. CUDA graph allocation pointers are not device-queryable before the first graph launch, so older PyTorch's CUDA array-interface conversion cannot wrap them during capture. Preserve allocation ownership, gradient buffers, and stream ordering when changing this conversion.
 
 For internal changes, use the tracing-maintenance skill if available. Traced Torch operations (including views/indexing) must close a pending automatic Warp region **before eager execution or extracting FX argument proxies**. Closing only at FX insertion can preserve stale proxies; view operations may have no CUDA callback. Internal paused work and explicit owner-protected regions retain their lifecycle. In source checkouts, relevant regression coverage includes `tests/unit_tests/test_warp_torch_boundaries.py` and `test_torch_view_consumes_pending_warp_output` in the Warp functional suite. This is maintainer guidance, not an application rewrite requirement.

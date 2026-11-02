@@ -213,10 +213,13 @@ class TestWarpPatchingGate(unittest.TestCase):
             self.skipTest("warp-lang is not installed")
 
         original_rand_init = wp.rand_init
-        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
-            os.environ,
-            {"XDG_CACHE_HOME": temp_dir},
-            clear=False,
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            mock.patch.dict(
+                os.environ,
+                {"XDG_CACHE_HOME": temp_dir},
+                clear=False,
+            ),
         ):
             for env_name in patching_module.WARP_RUNTIME_ENVIRONMENTS.values():
                 os.environ.pop(env_name, None)
@@ -240,10 +243,13 @@ class TestWarpPatchingGate(unittest.TestCase):
         from leapp.leapp_graph.datatypes.warp import cupti_oracle
 
         original_rand_init = wp.rand_init
-        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
-            os.environ,
-            {"XDG_CACHE_HOME": temp_dir},
-            clear=False,
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            mock.patch.dict(
+                os.environ,
+                {"XDG_CACHE_HOME": temp_dir},
+                clear=False,
+            ),
         ):
             for env_name in patching_module.WARP_RUNTIME_ENVIRONMENTS.values():
                 os.environ.pop(env_name, None)
@@ -251,11 +257,14 @@ class TestWarpPatchingGate(unittest.TestCase):
             runtime_library.parent.mkdir(parents=True)
             runtime_library.touch()
 
-            with mock.patch.object(
-                warp_context,
-                "runtime",
-                object(),
-            ), mock.patch.object(cupti_oracle, "CUPTI_AVAILABLE", False):
+            with (
+                mock.patch.object(
+                    warp_context,
+                    "runtime",
+                    object(),
+                ),
+                mock.patch.object(cupti_oracle, "CUPTI_AVAILABLE", False),
+            ):
                 patcher = TracingPatcher()
                 patcher.install()
                 try:

@@ -11,22 +11,27 @@ guide for annotating a downstream policy; read [SKILL.md](SKILL.md) for
 that workflow, with API documentation in `docs/source/` and at
 https://nvidia-isaac.github.io/leapp/
 
-Python 3.10+ and PyTorch 2.6.0+. Visualization extras install only on
+Python 3.10+ and PyTorch 2.7.0+. Visualization extras install only on
 3.11+. Environment is a local venv (typically `uv`), never conda.
 
 ## Load this first
 
+All instruction and skill references below are relative to the repository
+root and tracked in Git. Do not require machine-local or editor-specific
+skill installations.
+
 | If you are changing… | Read this before editing |
 |---|---|
-| Tracing, `TracedData` / `TracedTensor` / `TracedNpArray`, indexing, mutation, node-boundary identity, FX proxies, NumPy dispatch | `.cursor/skills/leap_agent/SKILL.md` |
-| Warp tracing (`TracedWpArray`, APIC, `warp_op`) | `warp_support.md` |
+| Tracing, `TracedData` / `TracedTensor` / `TracedNpArray`, indexing, mutation, node-boundary identity, FX proxies, NumPy dispatch | [SKILL.md](SKILL.md), especially "Preserve graph connections and computation" and "Diagnose trace loss before changing exporters"; implementation in `leapp/leapp_graph/` |
+| Warp tracing (`TracedWpArray`, APIC, `warp_op`) | [Warp guide](references/warp.md) |
 | Public annotate/lifecycle API or docs examples | `docs/source/api/index.rst` plus the matching guide under `docs/source/` |
 | Graph PNG layout | `packages/leapp-visualization/` |
 | Export backends | `leapp/backends/` |
 | YAML / `InferenceManager` | `leapp/leapp.py` (`compile_graph`), `leapp/inference_manager.py`, `docs/source/generated_configs.rst` |
 
-Do not mix the skill's current `(context_obj, output_port)` identity with
-legacy `leapp_tag` helpers. The skill states which checkout you have.
+Do not mix the current `(context_obj, output_port)` identity with
+legacy `leapp_tag` helpers. Check the implementation in this repository
+when changing tracing internals.
 
 ## Tree (start here)
 
@@ -55,24 +60,148 @@ allowed on `leapp.annotate` are listed in `AnnotateAPI._ALLOWED_APIS` in
 `leapp/leapp.py`. Do not add a consumer API without updating both, the
 docs, and tests.
 
-## Commands
+## Testing
 
-```bash
-python -m pip install -e ".[dev,test,warp-cu12]"  # CUDA 12
-python -m pip install -e ".[dev,test,warp-cu13]"  # CUDA 13
-pytest tests/ packages/leapp-visualization/tests/ -v
-```
+### Coverage and test design
 
-Narrower (use these while iterating):
+- Unit tests cover each observed unit-level situation in detail. Parameterize
+  repetitive cases where possible, keeping each case identifiable when it fails.
+- Functional tests cover larger parts of the LEAPP tracing pipeline and the
+  interactions between them. Each functional test must justify its existence
+  by providing coverage that unit tests do not provide. State that additional
+  coverage in its docstring. Prefer a few representative combined scenarios
+  over repeating a unit-test matrix through the full pipeline.
+
+Apply these rules when adding or changing tests:
+
+1. **Search before adding.** Find the closest existing coverage and extend its
+   cases where possible. Each new test must add a distinct behavior, boundary
+   condition, or failure mode. Consolidate overlapping regressions instead of
+   keeping a separate test for every agent task or implementation change.
+2. **Use the cheapest sufficient layer.** Check frontend tracing through FX
+   replay. Add exporter coverage when export is part of the contract or the
+   regression. Keep backend-specific lowerings and historical failures covered
+   explicitly; a generic helper should not automatically export every unit case
+   through every backend.
+3. **Justify matrix dimensions.** Document why combinations such as operation,
+   dtype, device, and backend interact before taking their Cartesian product.
+   Cover independent dimensions separately and retain known failing combinations.
+4. **Compile once, replay several inputs.** Reuse captured/exported artifacts
+   for changed-input replay. Choose inputs that expose frozen capture values and
+   relevant boundaries; extra random samples need a coverage reason.
+5. **Parameterize for maintainability.** Parameterization removes repeated code
+   but still executes every case. Combining cases into one large test or a
+   subtest loop also preserves their execution cost. Reduce redundant cases and
+   exports rather than optimizing the displayed test count.
+6. **Prefer behavioral assertions.** Check values, shapes, dtypes, mutation,
+   identity, and pipeline connections as relevant. Exact graph names, node counts,
+   private helper calls, and migration-only assertions need a specific contract
+   or failure mode to justify them.
+7. **Share only immutable expensive fixtures.** Reuse exported artifacts when
+   safe; copy fixtures that a test edits. Give independent cases fresh inference
+   managers, mutable buffers, and recurrent state. Restore global patches and
+   singleton state after each test.
+8. **Make validation proportional.** Run affected cases while iterating, then
+   the relevant neighboring suites before handoff. Run the full suite for broad
+   changes and in CI. After checks pass, rerun or broaden them when new changes,
+   failures, or unresolved concerns justify it. Report what ran and material gaps.
+
+### Choosing validation
+
+Select affected files or pytest node IDs from these areas during iteration;
+use the broader commands when the change spans that area.
 
 | Change | Run |
 |---|---|
-| Torch tracing / indexing | `pytest tests/unit_tests/test_traced_tensor.py tests/unit_tests/export_format_validation.py -v` |
+| Torch tracing / indexing | `pytest tests/unit_tests/test_traced_tensor.py tests/unit_tests/test_view_mutations.py -v` |
 | NumPy tracing | `pytest tests/unit_tests/test_traced_np_array.py tests/unit_tests/test_numpy_compatibility.py tests/unit_tests/test_conversion.py -v` |
 | Annotate / I/O / state | `pytest tests/functional_tests/ -v` |
 | Examples | `pytest tests/test_examples/ -v` |
 | Visualization | `pytest packages/leapp-visualization/tests/ -v` (Python 3.11+) |
-| Warp tracing | see `warp_support.md` |
+| Warp runtime build / discovery | `pytest tests/unit_tests/test_warp_runtime.py -v` |
+| Warp tracing | see [Warp guide](references/warp.md) |
+
+Full suite with timing information:
+
+```bash
+pytest tests/ packages/leapp-visualization/tests/ -v --durations=30
+```
+
+Required regression coverage for affected behavior:
+
+- Shared indexing changes: both Torch and NumPy unit suites, plus FX, JIT, and
+  ExportedProgram coverage. Use `onnx-dynamo` for modern indexing cases; require
+  legacy ONNX only where that exporter supports the operation.
+- Recoverable capture failures: an unsupported unused branch must allow export
+  of supported outputs. Test rejection of direct and downstream dependencies on
+  a failed capture separately.
+- NumPy capture: retain shape, dtype, value, and changed-input parity checks,
+  including final exported-node validation rejecting wrong outputs.
+- Annotation semantics: update the matching `tests/test_examples/` case when
+  its example is affected. Examples are part of CI.
+
+### Test cost and CI
+
+Use durations and exporter/session call counts to locate expensive repeated
+work before removing coverage. Separate pytest execution from container setup,
+dependency installation, and native builds when diagnosing CI latency. Prefer
+a tested dependency environment and caches in writable locations; account for
+cost across the Python/backend matrix. Changing which compatibility checks CI
+runs is a separate policy change, not an implicit consequence of test cleanup.
+
+Before enabling parallel tests, isolate output directories and mutable global
+state. Many existing tests share `test_graph`, global patches, and CUDA capture
+resources, so parallelism requires checking those assumptions first.
+
+### Documentation checks
+
+CI uses `-W`; spelling needs `enchant-2`:
+
+```bash
+python -m pip install -r docs/requirements.txt
+python -m sphinx -b html -W --keep-going docs/source docs/build/html
+python -m sphinx -b spelling -W --keep-going docs/source docs/build/spelling
+python -m sphinx -b linkcheck docs/source docs/build/linkcheck
+```
+
+Add unknown words to `docs/source/spelling_wordlist.txt`. New screenshots:
+`docs/source/_static/images/`. `*.png` and `*.gif` are Git LFS (see
+`.gitattributes`).
+
+## Development commands
+
+```bash
+python -m pip install -e ".[dev,test,warp-cu12]"  # CUDA 12
+python -m pip install -e ".[dev,test,warp-cu13]"  # CUDA 13
+```
+
+### Python formatting
+
+Use Ruff for Python formatting. The pinned development dependency and
+`[tool.ruff]` configuration in `pyproject.toml` set an 88-character line width
+and Python 3.10 compatibility. Run these commands from the repository root
+after editing Python code and before handing off changes:
+
+```bash
+ruff format .
+ruff format --check .
+```
+
+This covers the main package, visualization package, tests, Python
+docs configuration, and `scripts/leapp-build-warp-runtime`. The separate
+`Ruff formatting` CI job runs `ruff format --check .` on pull requests and
+fails if formatting changes are needed. No local Git hook is required.
+
+The entire `examples/` directory is excluded from Ruff formatting, including
+when example files are passed explicitly. Preserve their existing layout.
+When editing examples, check documentation excerpts and source links; prefer
+function names or text boundaries over fixed line ranges.
+
+Use the pinned Ruff version instead of Black. Formatting does not include
+lint fixes or import sorting; keep those changes out of formatting-only work.
+When upgrading Ruff, update the dependency and `required-version` in
+`pyproject.toml`, the install pin in `.github/workflows/ci.yml`, and `uv.lock`
+together.
 
 ### Warp runtime build
 
@@ -85,7 +214,6 @@ platform-specific artifact paths, cache paths, and runtime resolution.
 ```bash
 leapp-build-warp-runtime
 leapp-build-warp-runtime --status
-pytest tests/unit_tests/test_warp_runtime.py -v
 ```
 
 The build always produces the ONNX and PT2 adapters together in
@@ -98,19 +226,6 @@ ONNX Runtime 1.29 and newer. Runtime replay is not CUPTI-dependent, so
 do not add a blanket Linux build gate. Windows builds require
 `LEAPP_WARP_IMPORT_LIBRARY` because the `warp-lang` wheel does not ship
 `warp.lib`.
-
-Docs (CI uses `-W`; spelling needs `enchant-2`):
-
-```bash
-python -m pip install -r docs/requirements.txt
-python -m sphinx -b html -W --keep-going docs/source docs/build/html
-python -m sphinx -b spelling -W --keep-going docs/source docs/build/spelling
-python -m sphinx -b linkcheck docs/source docs/build/linkcheck
-```
-
-Add unknown words to `docs/source/spelling_wordlist.txt`. New screenshots:
-`docs/source/_static/images/`. `*.png` and `*.gif` are Git LFS (see
-`.gitattributes`).
 
 Commits must be DCO signed (`git commit -s`). See `CONTRIBUTING.md`.
 
@@ -151,6 +266,16 @@ User-facing integration recipes belong here, not in this file.
 
 ## Guardrails when changing behavior
 
+- Tracing can enter branches that are not needed to produce the declared
+  outputs. Report recoverable capture or translation failures with
+  `_get_logger().error(...)`, which logs without raising; do not abort the
+  entire trace merely because such a branch cannot be captured. Keep this
+  distinction from `_get_logger().fatal(...)`, which raises. Preserve
+  failed-operation dependencies until output pruning, and reject export if a
+  declared output depends on a failed capture.
+- NumPy capture checks graph structure and mutation safety. Leave numerical
+  comparisons to final exported-node validation; do not add per-call eager
+  parity checks to the adapter.
 - Prefer extending `TracedData` once (`_map_structure`, index lowering,
   port preserve/clear) over copying logic into tensor, NumPy, and Warp
   classes. Warp value semantics live on `TracedWpArray`; `WarpPatchBackend`
@@ -158,13 +283,7 @@ User-facing integration recipes belong here, not in this file.
   needs a raw `wp.array` alias because Warp rejects subclasses. Segment
   lifecycle stays in `warp/session.py`, `warp_op.py`, and
   `warp/warp_segment.py`.
-- After shared indexing changes: both torch and NumPy unit suites, plus
-  FX / jit / exported-program coverage as the skill describes.
-  `onnx-dynamo` for modern index cases; do not require legacy ONNX if
-  that exporter cannot lower the op.
 - Do not invent graph edges for data a node did not publish. Clearing
   `output_port` is the correct default after a transforming op.
-- Examples in `examples/` are CI. If you change annotate semantics,
-  update the matching `tests/test_examples/` case.
 - Conventional commits (`feat`, `fix`, `docs`, `chore`, …). Do not bump
   the version unless the user asked for a release.

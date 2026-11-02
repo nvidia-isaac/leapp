@@ -31,6 +31,28 @@ ONNX or PT2 artifact. Export Warp-containing nodes with
 :doc:`warp_how_it_works` for the capture model and :doc:`warp_limitations`
 for what it rules out.
 
+Torch-backed views and buffers
+==============================
+
+Torch-backed sliced, strided, and compound-element views are supported at
+Warp segment boundaries. Writes through these views remain visible through
+the covering Torch tensor and its other views.
+
+Declare the covering tensor as an input, or derive it within the traced
+computation, before creating views. For a preallocated buffer, open the node
+with ``annotate.input_tensors()`` and use ``annotate.register_buffer()`` to
+register the full buffer before slicing it:
+
+.. code-block:: python
+
+   buffer = annotate.register_buffer("policy", {"buffer": buffer})
+   view = wp.from_torch(buffer[1::2])
+
+Use the returned buffer when creating views so they share its traced
+allocation. Registering only a partial view cannot supply the rest of an
+otherwise untraced allocation. This support does not cover general Warp-native
+views or storage dtype reinterpretation.
+
 Example: a simulated robot policy
 =================================
 

@@ -81,7 +81,9 @@ class TestWarpTwoPassPlanning(unittest.TestCase):
             capture=False,
         )
 
-        with self.assertRaisesRegex(RuntimeError, "before the Warp operation was initialized"):
+        with self.assertRaisesRegex(
+            RuntimeError, "before the Warp operation was initialized"
+        ):
             warp_op.__exit__(None, None, None)
 
     def test_backend_call_stack_match_uses_open_call_stack(self):
@@ -119,9 +121,7 @@ class TestWarpTwoPassPlanning(unittest.TestCase):
         def install_patch():
             backend._patches.install(module, "target", original, wrapper)
 
-        oracle_path = (
-            "leapp.leapp_graph.datatypes.warp.patching.WarpCudaOracle"
-        )
+        oracle_path = "leapp.leapp_graph.datatypes.warp.patching.WarpCudaOracle"
         with (
             patch("torch.cuda.is_available", return_value=False),
             patch(oracle_path) as oracle_class,

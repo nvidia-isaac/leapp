@@ -36,8 +36,7 @@ class ExportedProgramExportBackend(ExportBackend):
             torch.ops.load_library(str(library_path))
         except OSError as exc:
             _get_logger().fatal(
-                "Failed to load the PT2 Warp custom operator library: "
-                f"{library_path}",
+                f"Failed to load the PT2 Warp custom operator library: {library_path}",
                 error_type=RuntimeError,
                 cause=exc,
             )
@@ -53,8 +52,7 @@ class ExportedProgramExportBackend(ExportBackend):
             m = self.module_builder()
         m = m.eval()
 
-        input_values = [
-            tensor_desc.value for tensor_desc in self.node_context.inputs]
+        input_values = [tensor_desc.value for tensor_desc in self.node_context.inputs]
         input_values = prepare_tensors_for_export(input_values)
         export_args = tuple(input_values)
 
@@ -62,8 +60,7 @@ class ExportedProgramExportBackend(ExportBackend):
         if "strict" in self.backend_params:
             export_kwargs["strict"] = self.backend_params["strict"]
 
-        self.exported_program = torch.export.export(
-            m, export_args, **export_kwargs)
+        self.exported_program = torch.export.export(m, export_args, **export_kwargs)
         self._load_warp_runtime(self.exported_program)
         self.compiled_model = self.exported_program.module()
         self.compiled_module = m
@@ -73,7 +70,8 @@ class ExportedProgramExportBackend(ExportBackend):
         if self.exported_program is None:
             _get_logger().fatal(
                 f"No exported program found for {self.node_context.name}",
-                error_type=RuntimeError)
+                error_type=RuntimeError,
+            )
 
         path = os.path.join(save_path, f"{self.node_context.name}.pt2")
         torch.export.save(self.exported_program, path)
@@ -86,7 +84,8 @@ class ExportedProgramExportBackend(ExportBackend):
             _get_logger().fatal(
                 f"SHA256 checksum mismatch for {model_path}: "
                 f"expected {sha256sum}, got {actual_sha256sum}",
-                error_type=ValueError)
+                error_type=ValueError,
+            )
 
         self.exported_program = torch.export.load(model_path)
         self._load_warp_runtime(self.exported_program)

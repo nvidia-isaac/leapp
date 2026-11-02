@@ -10,6 +10,7 @@ torch.Tensor (for tensor operations), enabling seamless operation interception
 and graph recording.
 """
 
+import functools
 import operator
 from abc import ABCMeta
 
@@ -20,13 +21,16 @@ from torch._export.converter import TS2EPConverter
 
 from leapp.utils.logging import _get_logger
 from leapp.utils.dtype import DtypeCodec, register_dtype_codec
-from ..proxy_view import (
-    bind_new_view,
-    may_adopt_view,
-    share_view,
-    update_view_proxy,
+from ..proxy import (
+    STORAGE_LAYOUT_META_KEY,
+    bind_proxy,
+    is_same_value,
+    layout_key,
+    update_proxy,
+    conversion_proxy,
 )
 from ..traced_data import TracedData
+from ..primitives.traced_int import TracedInt
 
 
 # torch dtype object -> common name string. Lives with the torch node library
@@ -45,13 +49,14 @@ _TORCH_DTYPE_TO_NAME = {
     torch.bfloat16: "bfloat16",
 }
 
-register_dtype_codec(DtypeCodec(
-    backend="torch",
-    matches=lambda v: isinstance(v, torch.Tensor),
-    value_dtype=lambda v: v.dtype,
-    dtype_to_name=_TORCH_DTYPE_TO_NAME,
-))
-
+register_dtype_codec(
+    DtypeCodec(
+        backend="torch",
+        matches=lambda v: isinstance(v, torch.Tensor),
+        value_dtype=lambda v: v.dtype,
+        dtype_to_name=_TORCH_DTYPE_TO_NAME,
+    )
+)
 
 
 # Combined metaclass to resolve conflict between ABCMeta (from TracedData)
@@ -59,6 +64,7 @@ register_dtype_codec(DtypeCodec(
 # the TracedTensor class to not inherit from tracedData and reimplement all the common functions
 class _TracedTensorMeta(ABCMeta, type(torch.Tensor)):
     """Metaclass combining ABCMeta and torch.Tensor's metaclass."""
+
     pass
 
 
@@ -75,33 +81,32 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     # Torch ops whose result holds the same values, shape, and dtype as their
     # source, so a finished boundary value survives them intact. ``to`` is
     # handled separately because device moves and dtype casts share one method.
-    _EQUIVALENT_COPY_NAMES = frozenset(
-        {"clone", "detach", "contiguous", "cpu", "cuda"}
-    )
-    # In-place methods whose allocating torch.* counterpart has the same
-    # argument order and describes the receiver's complete post-write value.
-    # This lets one mutation path preserve receiver identity eagerly while
-    # recording the corresponding functional operation in FX.
-    _FUNCTIONAL_INPLACE_NAMES = frozenset({
-        "add_", "sub_", "mul_", "div_", "pow_",
-        "subtract_", "multiply_", "divide_", "true_divide_",
-        "floor_divide_", "remainder_", "fmod_",
-        "clamp_", "clamp_min_", "clamp_max_", "clip_", "lerp_",
-        "addcmul_", "addcdiv_",
-        "addmm_", "addmv_", "addr_", "addbmm_", "baddbmm_",
-    })
+    _EQUIVALENT_COPY_NAMES = frozenset({"clone", "detach", "contiguous", "cpu", "cuda"})
     _NATIVE_TYPE = torch.Tensor
+    # Ops whose output size depends on input values. Their results, and every
+    # tensor computed from them, answer size queries with TracedInt so the
+    # exported graph reads those sizes at run time instead of baking them in.
+    _DATA_DEPENDENT_SHAPE_NAMES = frozenset(
+        {
+            "nonzero",
+            "argwhere",
+            "masked_select",
+            "unique",
+            "unique_consecutive",
+        }
+    )
+    _data_dependent_shape = False
 
     @staticmethod
     def __new__(cls, tensor: torch.Tensor, name: str, context, proxy: Proxy):
         """Create a new TracedTensor instance.
-        
+
         Args:
             tensor: The actual torch.Tensor data to wrap
             name: Name for the tensor (used in ONNX export and graph)
             context: The TraceContext that owns this tensor
             proxy: The fx.Proxy for graph recording
-            
+
         Returns:
             A new TracedTensor instance sharing storage with the input tensor
         """
@@ -122,7 +127,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             context: The TraceContext that owns this tensor
             proxy: The fx.Proxy for graph recording
         """
-        bind_new_view(self, name, context, proxy)
+        bind_proxy(self, name, context, proxy)
 
     # =========================================================================
     # Properties
@@ -132,7 +137,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     def tensor(self) -> torch.Tensor:
         """Get the underlying torch.Tensor (for compatibility with original API)."""
         return self.as_subclass(torch.Tensor)
-    
+
     @property
     def data(self) -> torch.Tensor:
         """Get the underlying data."""
@@ -157,20 +162,140 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         return TracedTensor(tensor, intermediate_name, self._context, proxy)
 
     def _new_alias(self, tensor: torch.Tensor) -> "TracedTensor":
-        """Wrap ``tensor`` as a second carrier for this exact value.
-
-        The result shares this carrier's ``ProxyView`` rather than owning one,
-        so an in-place mutation through either object is visible through both.
-        Callers must have established that ``tensor`` is an identical-layout
-        alias; see :func:`~leapp.leapp_graph.datatypes.proxy_view.may_adopt_view`.
-        """
-        alias = TracedTensor(tensor, self._name, self._context, None)
-        share_view(alias, self)
-        return alias
+        """Wrap an identical-layout alias over this stable FX tensor handle."""
+        return TracedTensor(tensor, self.name, self.context_obj, self.proxy)
 
     # =========================================================================
     # Static Methods
     # =========================================================================
+
+    @staticmethod
+    def _schema_arguments_match(inplace_arg, functional_arg) -> bool:
+        """Whether two schema arguments expose the same Python call contract."""
+        if (
+            inplace_arg.name != functional_arg.name
+            or str(inplace_arg.type) != str(functional_arg.type)
+            or inplace_arg.kwarg_only != functional_arg.kwarg_only
+            or inplace_arg.has_default_value() != functional_arg.has_default_value()
+        ):
+            return False
+        if not inplace_arg.has_default_value():
+            return True
+        return inplace_arg.default_value == functional_arg.default_value
+
+    @classmethod
+    def _schemas_are_functional_twins(cls, inplace_schema, functional_schema) -> bool:
+        """Check that a functional schema describes one receiver-only write."""
+        if (
+            not inplace_schema.is_mutable
+            or functional_schema.is_mutable
+            or len(inplace_schema.arguments) != len(functional_schema.arguments)
+            or len(inplace_schema.returns) != 1
+            or len(functional_schema.returns) != 1
+            or str(inplace_schema.returns[0].type) != "Tensor"
+            or str(functional_schema.returns[0].type) != "Tensor"
+        ):
+            return False
+
+        if not all(
+            cls._schema_arguments_match(inplace_arg, functional_arg)
+            for inplace_arg, functional_arg in zip(
+                inplace_schema.arguments, functional_schema.arguments
+            )
+        ):
+            return False
+
+        writes = [
+            index
+            for index, argument in enumerate(inplace_schema.arguments)
+            if argument.alias_info is not None and argument.alias_info.is_write
+        ]
+        if writes != [0] or any(
+            argument.alias_info is not None and argument.alias_info.is_write
+            for argument in functional_schema.arguments
+        ):
+            return False
+
+        receiver_alias = inplace_schema.arguments[0].alias_info
+        return_alias = inplace_schema.returns[0].alias_info
+        if receiver_alias is None or return_alias is None:
+            return False
+        return bool(
+            receiver_alias.after_set & return_alias.after_set
+            or receiver_alias.before_set & return_alias.before_set
+        )
+
+    @staticmethod
+    def _schema_tags(packet, overload_name):
+        overload = getattr(packet, overload_name or "default")
+        return set(overload.tags)
+
+    @classmethod
+    @functools.lru_cache(maxsize=None)
+    def _functional_inplace_spec(cls, func_name):
+        """Return ``(torch functional, mutates metadata)`` when schemas prove it."""
+        if (
+            not func_name.endswith("_")
+            or func_name.startswith("_")
+            or len(func_name) == 1
+        ):
+            return None
+
+        functional_name = func_name[:-1]
+        functional = getattr(torch, functional_name, None)
+        if not callable(functional):
+            return None
+
+        try:
+            inplace_packet = getattr(torch.ops.aten, func_name)
+            functional_packet = getattr(torch.ops.aten, functional_name)
+            inplace_schemas = inplace_packet._schemas
+            functional_schemas = functional_packet._schemas
+            inplace_view_tag = torch.Tag.inplace_view
+            nondeterministic_tags = {
+                torch.Tag.nondeterministic_bitwise,
+                torch.Tag.nondeterministic_seeded,
+            }
+        except (AttributeError, RuntimeError):
+            return None
+
+        tensor_inplace_schemas = [
+            (overload_name, schema)
+            for overload_name, schema in inplace_schemas.items()
+            if schema.arguments
+            and str(schema.arguments[0].type) == "Tensor"
+            and len(schema.returns) == 1
+            and str(schema.returns[0].type) == "Tensor"
+        ]
+        metadata_flags = []
+        for overload_name, inplace_schema in tensor_inplace_schemas:
+            try:
+                inplace_tags = cls._schema_tags(inplace_packet, overload_name)
+            except AttributeError:
+                return None
+            if inplace_tags & nondeterministic_tags:
+                return None
+
+            matched = False
+            for functional_overload, functional_schema in functional_schemas.items():
+                try:
+                    functional_tags = cls._schema_tags(
+                        functional_packet, functional_overload
+                    )
+                except AttributeError:
+                    continue
+                if functional_tags & nondeterministic_tags:
+                    continue
+                if cls._schemas_are_functional_twins(inplace_schema, functional_schema):
+                    matched = True
+                    break
+            if not matched:
+                return None
+            metadata_flags.append(inplace_view_tag in inplace_tags)
+
+        if not metadata_flags or len(set(metadata_flags)) != 1:
+            return None
+        return functional, metadata_flags[0]
 
     @staticmethod
     def _convert_method_descriptor(func, context=None):
@@ -184,22 +309,14 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         """
         # Check if it's a method descriptor on torch.Tensor
         func_type = type(func).__name__
-        if func_type in ('method_descriptor', 'builtin_function_or_method'):
+        if func_type in ("method_descriptor", "builtin_function_or_method"):
             # Try to get the method name
-            func_name = getattr(func, '__name__', None)
+            func_name = getattr(func, "__name__", None)
             if func_name:
                 # Look for equivalent in torch module
                 torch_func = getattr(torch, func_name, None)
                 if torch_func is not None and callable(torch_func):
                     return torch_func
-
-                # Handle in-place operations (e.g., add_ -> torch.add)
-                # In-place methods end with '_' but torch.* functions don't
-                if func_name.endswith('_') and len(func_name) > 1:
-                    base_name = func_name[:-1]  # Remove trailing underscore
-                    torch_func = getattr(torch, base_name, None)
-                    if torch_func is not None and callable(torch_func):
-                        return torch_func
 
                 if context is not None:
                     _get_logger().debug(
@@ -264,9 +381,9 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             # ScriptMethod.  func.owner returns the C++ ScriptModule
             # (not an nn.Module).  Save → reload via BytesIO so
             # torch.jit.load performs full Python-level init.
-            script_module = getattr(func, '__self__', None)
+            script_module = getattr(func, "__self__", None)
             if not isinstance(script_module, torch.nn.Module):
-                cpp_module = getattr(func, 'owner', None)
+                cpp_module = getattr(func, "owner", None)
                 if cpp_module is not None:
                     _buf = _io.BytesIO()
                     _tmp = torch.jit.RecursiveScriptModule._construct(
@@ -275,15 +392,12 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                     torch.jit.save(_tmp, _buf)
                     _buf.seek(0)
                     _dev = next(
-                        (a.device for a in real_args
-                            if isinstance(a, torch.Tensor)),
-                        torch.device('cpu'),
+                        (a.device for a in real_args if isinstance(a, torch.Tensor)),
+                        torch.device("cpu"),
                     )
-                    script_module = torch.jit.load(
-                        _buf, map_location=_dev
-                    )
+                    script_module = torch.jit.load(_buf, map_location=_dev)
 
-            #validate the script_module
+            # validate the script_module
             if not isinstance(script_module, torch.nn.Module):
                 _get_logger().fatal(
                     f"Could not obtain nn.Module from {type(func).__name__}. "
@@ -304,9 +418,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                 k: v.clone().detach() if isinstance(v, torch.Tensor) else v
                 for k, v in (real_kwargs or {}).items()
             }
-            ep = TS2EPConverter(
-                script_module, _clean, _clean_kw
-            ).convert()
+            ep = TS2EPConverter(script_module, _clean, _clean_kw).convert()
             fx_module = ep.module()
 
         except Exception as e:
@@ -332,21 +444,30 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     # Torch Function Interception
     # =========================================================================
 
+    @staticmethod
+    def _close_warp_segment():
+        # Lazy to avoid the patching -> datatypes -> TracedTensor import cycle.
+        from ..patching import get_warp_backend
+
+        backend = get_warp_backend()
+        if backend is not None:
+            backend.close_warp_segment()
+
     @classmethod
     def _promote_plain_tensor(cls, target, name, context, proxy):
         """Attach tracing state to an existing plain tensor object."""
         target.__class__ = cls
-        bind_new_view(target, name, context, proxy)
+        bind_proxy(target, name, context, proxy)
         return target
 
     def clear_tracing_state(self) -> torch.Tensor:
         """Undo :meth:`_promote_plain_tensor`, returning a plain ``torch.Tensor``.
 
-        The view a carrier holds points at one graph, so a tensor that outlives
+        The proxy points at one graph, so a tensor that outlives
         the pass that promoted it has to shed that provenance before the next
         pass can describe it.
         """
-        for attribute in ("_name", "_context", "_proxy_view", "_output_port"):
+        for attribute in ("_name", "_context", "_proxy", "_output_port"):
             self.__dict__.pop(attribute, None)
         self.__class__ = torch.Tensor
         return self
@@ -368,7 +489,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
     def _record_assignment(self, key, value, real_value):
         """Record one functional assignment and update this object's proxy."""
-        # Plain full replacement may already have promoted with the source proxy.
+        # Full replacement of an actual alias already describes the same storage.
         if (
             isinstance(value, TracedTensor)
             and self.proxy is value.proxy
@@ -376,17 +497,78 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         ):
             return True
 
+        if isinstance(value, TracedInt):
+            if not value.is_recording:
+                value = real_value = int(value)
+            else:
+                # The assignment source must be a tensor in the graph, but a
+                # traced integer's proxy is a Python int there.
+                value = self._context.tracer.create_proxy(
+                    "call_function", torch.scalar_tensor, (value.proxy,), {}
+                )
         value_proxy = value.proxy if isinstance(value, TracedTensor) else value
-        return self._update_setitem_proxy(
-            key, value_proxy, real_value=real_value
-        )
+        return self._update_setitem_proxy(key, value_proxy, real_value=real_value)
+
+    @classmethod
+    def _plain_destination_proxy(cls, target, source):
+        """Resolve exact aliases; reject shared storage with an uncaptured view."""
+        if not source.is_tracing or target.numel() == 0:
+            return None
+        context = source.context_obj
+        key = layout_key(target)
+        if key is not None and key == layout_key(source):
+            return source.proxy
+        declared = context.find_declared_alias(target)
+        if declared is not None:
+            return declared.proxy
+
+        destination = target.untyped_storage()
+
+        def overlaps(storage):
+            if storage.device != destination.device:
+                return False
+            start, other_start = destination.data_ptr(), storage.data_ptr()
+            return (
+                destination.nbytes() > 0
+                and storage.nbytes() > 0
+                and start < other_start + storage.nbytes()
+                and other_start < start + destination.nbytes()
+            )
+
+        # Allocation snapshots are weak: expired allocations cannot match a
+        # reused address. Compare byte spans as separate storage wrappers can
+        # expose the same physical memory, including Torch/NumPy round trips.
+        for node in context.graph.nodes:
+            layout = node.meta.get(STORAGE_LAYOUT_META_KEY)
+            if layout is None:
+                continue
+            storage = torch.UntypedStorage._new_with_weak_ptr(layout.identity.cdata)
+            if storage is None or not overlaps(storage):
+                continue
+            if (
+                target.data_ptr() == storage.data_ptr()
+                and tuple(target.shape) == layout.shape
+                and tuple(target.stride()) == layout.strides
+                and target.dtype == layout.dtype
+            ):
+                return Proxy(node, context.tracer)
+            raise RuntimeError(
+                "Plain destination has shared storage with a captured tensor "
+                "but no captured view relationship; use the traced destination view"
+            )
+        if overlaps(source.tensor.untyped_storage()):
+            raise RuntimeError(
+                "Plain destination has shared storage with its source but no "
+                "captured view relationship; use the traced destination view"
+            )
+        return None
 
     @classmethod
     def _handle_plain_assignment(cls, func, args=(), kwargs=None):
         """Promote a plain destination, then re-enter assignment or copy.
 
-        Full replacement with a matching traced source reuses that source's
-        proxy. Partial writes register the pre-write destination as a graph
+        Full replacement preserves independent graph storage for independent
+        buffers. Partial writes register the pre-write destination as a graph
         constant and use it as the promoted proxy.
         """
         kwargs = kwargs or {}
@@ -413,18 +595,36 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             and tuple(target.shape) == tuple(value.shape)
             and target.dtype == value.dtype
         )
-        if full_replacement:
-            dest_proxy = value.proxy
+        existing_proxy = cls._plain_destination_proxy(target, anchor)
+        if existing_proxy is not None:
+            dest_proxy = existing_proxy
+        elif full_replacement:
+            if value.is_tracing:
+                dest_proxy = anchor.context_obj.tracer.create_proxy(
+                    "call_function",
+                    torch.empty_strided,
+                    (tuple(target.shape), tuple(target.stride())),
+                    {"dtype": target.dtype, "device": target.device},
+                )
+            else:
+                dest_proxy = value.proxy
         else:
             dest_proxy = anchor._register_setitem_tensor(
                 target.clone().detach(), "_setitem_destination"
             )
-        cls._promote_plain_tensor(
-            target, anchor.name, anchor.context_obj, dest_proxy)
+        cls._promote_plain_tensor(target, anchor.name, anchor.context_obj, dest_proxy)
         if full_replacement:
-            # The destination now holds exactly the source's data, so it also
-            # presents the source's boundary identity to the next node.
+            # Initialize independent storage through a real graph copy, keeping
+            # the destination layout for subsequent views and mutations.
+            if is_copy:
+                target.tensor.copy_(
+                    value.tensor, non_blocking=kwargs.get("non_blocking", False)
+                )
+            else:
+                target.tensor[key] = value.tensor
+            target.proxy = value.proxy
             target.output_port = value.output_port
+            return True, target if is_copy else None
         if is_copy:
             return True, target.copy_(
                 value, non_blocking=kwargs.get("non_blocking", False)
@@ -442,10 +642,29 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         """
         kwargs = kwargs or {}
         func_name = getattr(func, "__name__", "")
-        if func_name not in cls._FUNCTIONAL_INPLACE_NAMES or not args:
+        if not args:
             return False, None
 
         target = args[0]
+        if type(target) is not torch.Tensor and not isinstance(target, cls):
+            return False, None
+
+        spec = cls._functional_inplace_spec(func_name)
+        if spec is None:
+            exact_inplace = getattr(torch, func_name, None)
+            functional = getattr(torch, func_name[:-1], None)
+            if callable(exact_inplace) and not callable(functional):
+                return False, None
+            if func_name.endswith("_") and not func_name.startswith("__"):
+                _get_logger().fatal(
+                    f"TracedTensor cannot safely lower in-place method "
+                    f"{func_name}: no deterministic functional ATen schema "
+                    f"with the same call contract was found.",
+                    error_type=NotImplementedError,
+                )
+            return False, None
+
+        functional, mutates_metadata = spec
         operands = args[1:]
         if type(target) is torch.Tensor:
             anchor = cls.find_traced_tensor((operands, kwargs))
@@ -458,12 +677,13 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             cls._promote_plain_tensor(
                 target, anchor.name, anchor.context_obj, dest_proxy
             )
-        elif not isinstance(target, cls):
-            return False, None
 
-        functional = getattr(torch, func_name[:-1])
         return True, target._apply_inplace(
-            functional, func_name, *operands, **kwargs
+            functional,
+            func_name,
+            *operands,
+            _mutates_metadata=mutates_metadata,
+            **kwargs,
         )
 
     @classmethod
@@ -487,15 +707,19 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             kwargs = {}
 
         func_type_name = type(func).__name__
-        func_module = type(func).__module__ if hasattr(type(func), '__module__') else ''
+        func_module = type(func).__module__ if hasattr(type(func), "__module__") else ""
 
-        is_scripted = ('ScriptMethod' in func_type_name or 'ScriptModule' in func_type_name)
+        is_scripted = (
+            "ScriptMethod" in func_type_name or "ScriptModule" in func_type_name
+        )
 
         if not is_scripted:
-            if func_module.startswith('torch.jit') or func_module.startswith('torch._C'):
-                if hasattr(func, '__self__') and hasattr(func.__self__, '__class__'):
+            if func_module.startswith("torch.jit") or func_module.startswith(
+                "torch._C"
+            ):
+                if hasattr(func, "__self__") and hasattr(func.__self__, "__class__"):
                     self_class_name = func.__self__.__class__.__name__
-                    is_scripted = 'Script' in self_class_name
+                    is_scripted = "Script" in self_class_name
 
         if not is_scripted:
             return False, None
@@ -519,6 +743,24 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
         """Intercept torch operations to record them in the graph.
+
+        Size queries on tensors with data-dependent shapes are answered with
+        traced sizes; every other call is recorded by ``_record_torch_function``.
+        """
+        if kwargs is None:
+            kwargs = {}
+        sizes = cls._traced_size_query(func, args, kwargs)
+        if sizes is not None:
+            return sizes
+        args, kwargs = _graph_sizes(args), _graph_sizes(kwargs)
+        result = cls._record_torch_function(func, types, args, kwargs)
+        if cls._makes_data_dependent_shape(func, args, kwargs):
+            cls._mark_data_dependent_shape(result)
+        return result
+
+    @classmethod
+    def _record_torch_function(cls, func, types, args=(), kwargs=None):
+        """Execute ``func`` on the real tensors and record it in the graph.
 
         This method is called by PyTorch whenever a torch function is applied
         to this object. We execute the operation on the real tensor and record
@@ -547,6 +789,21 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
         traced_tensor = TracedTensor.find_traced_tensor((args, kwargs))
 
+        # Finalize shared output proxies before executing Torch or reading its
+        # arguments' proxies, including the mutation handlers below. Graph
+        # insertion is too late, and view-only ops emit no CUDA callback.
+        if traced_tensor is not None:
+            cls._close_warp_segment()
+
+        # A carrier is an alias, which Torch refuses to detach in place, and the
+        # autograd state detach_ edits is never read while tracing.
+        if (
+            getattr(func, "__name__", "") == "detach_"
+            and args
+            and isinstance(args[0], TracedTensor)
+        ):
+            return args[0]
+
         # A plain receiver must be promoted before method-descriptor conversion
         # turns an in-place method into an allocating function.
         handled, result = cls._handle_plain_assignment(func, args, kwargs)
@@ -566,15 +823,11 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             # Fallback to default behavior if no TracedTensor found
             return NotImplemented
 
-        # A carrier is an alias, which Torch refuses to detach in place, and the
-        # autograd state detach_ edits is never read while tracing.
-        if (getattr(func, "__name__", "") == "detach_"
-                and args and isinstance(args[0], TracedTensor)):
-            return args[0]
-
         # Extract real tensors for actual computation
         real_args = tuple(TracedTensor.unwrap_traced_tensor(arg) for arg in args)
-        real_kwargs = {k: TracedTensor.unwrap_traced_tensor(v) for k, v in kwargs.items()}
+        real_kwargs = {
+            k: TracedTensor.unwrap_traced_tensor(v) for k, v in kwargs.items()
+        }
         # Only args[0]: donor/mutation tracking is receiver-only; out=/foreach stay as today.
         receiver = args[0] if args and isinstance(args[0], TracedTensor) else None
         real_receiver = real_args[0] if receiver is not None else None
@@ -629,22 +882,22 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         # ================== SPECIAL CASES IN HANDLING ==================
 
         # A result that is an identical-layout alias of the receiver is the same
-        # value, so it adopts the receiver's view and records nothing; the node
+        # value, so it reuses the receiver's handle and records nothing; the node
         # would be a no-op with no consumers. Only the receiver may donate, and
         # only when nothing was mutated: an operation writing through an alias
-        # belongs to the mutated-receiver path below, and adopting the view of
+        # belongs to the mutated-receiver path below, and reusing the handle of
         # an argument the result merely happens to alias -- an ``out=``
         # destination -- would drop the operation in favor of that argument's
         # pre-call proxy.
         if (
             receiver is not None
             and not receiver_requires_proxy_update
-            and may_adopt_view(receiver, tensor_out)
+            and is_same_value(receiver, tensor_out)
         ):
             return receiver._new_alias(tensor_out)
 
         def extract_proxy_leaf(item):
-            if isinstance(item, TracedTensor):
+            if isinstance(item, (TracedTensor, TracedInt)):
                 return item.proxy
             if isinstance(item, torch.nn.Parameter):
                 # Inline parameters as constants for ONNX/JIT freezing.
@@ -665,7 +918,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             and isinstance(tensor_out, torch.Tensor)
             and tensor_out is real_receiver
         ):
-            update_view_proxy(
+            update_proxy(
                 receiver,
                 receiver._name_from_proxy(proxy_out),
                 receiver.context_obj,
@@ -694,6 +947,77 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             return tensor_out
 
     # =========================================================================
+    # Data-Dependent Shapes
+    # =========================================================================
+
+    @classmethod
+    def _makes_data_dependent_shape(cls, func, args, kwargs) -> bool:
+        """Whether ``func``'s result has a size that depends on input values."""
+        name = getattr(func, "__name__", "")
+        if name in cls._DATA_DEPENDENT_SHAPE_NAMES:
+            return True
+        if name == "where" and len(args) == 1 and not kwargs:
+            return True
+        found = False
+
+        def visit(item):
+            nonlocal found
+            if isinstance(item, TracedInt) or (
+                isinstance(item, TracedTensor) and item._data_dependent_shape
+            ):
+                found = True
+            return item
+
+        TracedData._map_structure((args, kwargs), visit)
+        return found
+
+    @staticmethod
+    def _mark_data_dependent_shape(result):
+        def mark(item):
+            if isinstance(item, TracedTensor):
+                item._data_dependent_shape = True
+            return item
+
+        TracedData._map_structure(result, mark)
+
+    @classmethod
+    def _traced_size_query(cls, func, args, kwargs):
+        """Answer ``shape``/``size()``/``numel()`` with traced sizes, else None."""
+        if not args or not isinstance(args[0], TracedTensor):
+            return None
+        receiver = args[0]
+        if not receiver._data_dependent_shape or receiver.describes_replaced_graph():
+            return None
+        is_shape = getattr(func, "__self__", None) is torch._C.TensorBase.shape
+        if not (
+            is_shape
+            or func is torch._C.TensorBase.size
+            or func is torch._C.TensorBase.numel
+        ):
+            return None
+        if not receiver.validate_status(args[1:], kwargs):
+            return None
+        if func is torch._C.TensorBase.numel:
+            proxy = receiver._context.tracer.create_proxy(
+                "call_method", "numel", (receiver.proxy,), {}
+            )
+            return receiver._new_int(receiver.tensor.numel(), proxy)
+        dim = None if is_shape else (args[1] if len(args) > 1 else kwargs.get("dim"))
+        if dim is not None:
+            return receiver._traced_dim(dim)
+        return torch.Size(receiver._traced_dim(d) for d in range(receiver.tensor.dim()))
+
+    def _traced_dim(self, dim: int) -> TracedInt:
+        proxy = self._context.tracer.create_proxy(
+            "call_method", "size", (self.proxy, dim), {}
+        )
+        return self._new_int(self.tensor.shape[dim], proxy)
+
+    def _new_int(self, value: int, proxy: Proxy) -> TracedInt:
+        """Wrap an integer graph value read from this tensor in its node."""
+        return TracedInt(value, self._name_from_proxy(proxy), self._context, proxy)
+
+    # =========================================================================
     # Attribute Access
     # =========================================================================
 
@@ -714,18 +1038,22 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             return self.__dict__[name]
 
         # Handle in-place operations (methods ending with _)
-        if name.endswith('_') and not name.startswith('_') and len(name) > 1:
+        if name.endswith("_") and not name.startswith("_") and len(name) > 1:
             base_name = name[:-1]  # Remove trailing underscore
             torch_func = getattr(torch, base_name, None)
 
             if torch_func is not None and callable(torch_func):
+
                 def inplace_method(*args, **kwargs):
                     if not self.is_tracing:
                         # Just call the in-place method on the tensor and return raw tensor
                         underlying = self.as_subclass(torch.Tensor)
                         method = getattr(underlying, name, None)
                         if method is not None:
-                            method(*TracedData.unwrap_traced_data(args), **TracedData.unwrap_traced_data(kwargs))
+                            method(
+                                *TracedData.unwrap_traced_data(args),
+                                **TracedData.unwrap_traced_data(kwargs),
+                            )
                         self._output_port = None
                         return self
 
@@ -736,7 +1064,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                     if isinstance(result, TracedTensor):
                         with torch.no_grad():
                             self.copy_(result.tensor)
-                        self._proxy_view.proxy = result.proxy
+                        self.proxy = result.proxy
 
                     return self
 
@@ -760,6 +1088,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         if attr is not None:
             # If it's a callable method, wrap it to ensure it goes through __torch_function__
             if callable(attr):
+
                 def wrapped_method(*args, **kwargs):
                     # Call the method on the underlying tensor
                     result = attr(*args, **kwargs)
@@ -770,15 +1099,16 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                         # Create a proxy node for this operation
                         self_proxy = self.proxy
                         proxy = self_proxy._tracer.create_proxy(
-                            'call_method', name, (self_proxy,) + args, kwargs)
+                            "call_method", name, (self_proxy,) + args, kwargs
+                        )
                         return self._new(result, proxy)
                     return result
+
                 return wrapped_method
             return attr
 
         # Attribute not found
-        raise AttributeError(
-            f"'TracedTensor' object has no attribute '{name}'")
+        raise AttributeError(f"'TracedTensor' object has no attribute '{name}'")
 
     # =========================================================================
     # Special Methods: reshape and permute need custom handling
@@ -871,7 +1201,14 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     # In-place Arithmetic Operators (for +=, -=, etc.)
     # =========================================================================
 
-    def _apply_inplace(self, functional, inplace_name, *operands, **kwargs):
+    def _apply_inplace(
+        self,
+        functional,
+        inplace_name,
+        *operands,
+        _mutates_metadata=False,
+        **kwargs,
+    ):
         """Mutate this tensor in place, recording the operation functionally.
 
         Native eager execution preserves PyTorch's identity, casting, and error
@@ -892,13 +1229,14 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         before = underlying.clone() if should_trace else None
 
         if inplace_name is None:
-            underlying.copy_(
-                functional(underlying, *real_operands, **real_kwargs)
-            )
+            underlying.copy_(functional(underlying, *real_operands, **real_kwargs))
+        elif _mutates_metadata:
+            # Shape/view mutations change the receiver's tensor metadata, not
+            # its storage, so mutating an ``as_subclass`` alias is insufficient.
+            with torch._C.DisableTorchFunction():
+                getattr(torch.Tensor, inplace_name)(self, *real_operands, **real_kwargs)
         else:
-            getattr(underlying, inplace_name)(
-                *real_operands, **real_kwargs
-            )
+            getattr(underlying, inplace_name)(*real_operands, **real_kwargs)
 
         if not should_trace:
             self._output_port = None
@@ -909,7 +1247,10 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         if isinstance(result, TracedTensor) and result.dtype != self.dtype:
             result = result.to(dtype=self.dtype)
         if isinstance(result, TracedTensor):
-            self._proxy_view.proxy = result.proxy
+            if _mutates_metadata:
+                bind_proxy(self, self.name, self._context, result.proxy)
+            else:
+                self.proxy = result.proxy
         self._output_port = None
         return self
 
@@ -963,8 +1304,32 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         """In-place power method."""
         return self._apply_inplace(torch.pow, "pow_", exponent)
 
+    def index_add_(self, dim, index, source, *, alpha=1):
+        """Accumulate into this receiver while recording a functional update."""
+        if not self.is_tracing:
+            self.tensor.index_add_(
+                dim,
+                TracedTensor.unwrap_traced_tensor(index),
+                TracedTensor.unwrap_traced_tensor(source),
+                alpha=alpha,
+            )
+            self._output_port = None
+            return self
+
+        # Descriptor conversion would otherwise discard the receiver mutation.
+        return self.copy_(torch.index_add(self, dim, index, source, alpha=alpha))
+
+    def polygamma_(self, n):
+        """Handle the functional form's reversed ``n, input`` arguments."""
+        return self._apply_inplace(
+            lambda tensor, order: torch.polygamma(order, tensor),
+            "polygamma_",
+            n,
+        )
+
     def copy_(self, src, non_blocking=False):
         """Copy ``src`` into this tensor and record a full functional write."""
+        self._close_warp_segment()
         if self._shed_replaced_graph():
             return self.copy_(src, non_blocking=non_blocking)
         real_value = TracedTensor.unwrap_traced_tensor(src)
@@ -980,9 +1345,11 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                 "recording raw __setitem__, which may not export."
             )
             value_proxy = src.proxy if isinstance(src, TracedTensor) else src
-            self._proxy_view.proxy = self._context.tracer.create_proxy(
-                "call_method", "__setitem__",
-                (self.proxy, Ellipsis, value_proxy), {},
+            self.proxy = self._context.tracer.create_proxy(
+                "call_method",
+                "__setitem__",
+                (self.proxy, Ellipsis, value_proxy),
+                {},
             )
         return self
 
@@ -1023,6 +1390,29 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     # =========================================================================
 
     def __getitem__(self, key):
+        """Indexing operator; see ``_traced_getitem``.
+
+        Boolean masks, data-dependent operands, and traced sizes in the key
+        give a result whose size depends on input values.
+        """
+        result = self._traced_getitem(key)
+        dependent = self._data_dependent_shape
+
+        def visit(item):
+            nonlocal dependent
+            if isinstance(item, TracedInt) or (
+                isinstance(item, TracedTensor)
+                and (item._data_dependent_shape or item.tensor.dtype == torch.bool)
+            ):
+                dependent = True
+            return item
+
+        TracedData._map_structure(key, visit)
+        if dependent:
+            self._mark_data_dependent_shape(result)
+        return result
+
+    def _traced_getitem(self, key):
         """Indexing operator for TracedTensor.
 
         Supports all Python indexing operations: slicing, integer indexing,
@@ -1032,6 +1422,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         Tuple/mixed traced indices are converted to FX proxies and recorded as
         operator.getitem so augmented assignment can write the result back.
         """
+        self._close_warp_segment()
         # Check for boolean mask indexing with TracedTensor
         if isinstance(key, TracedTensor):
             result_tensor = self.tensor[key.tensor]
@@ -1057,7 +1448,10 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                 "call_method", "reshape", (key.proxy, (-1,)), {}
             )
             proxy_out = self._context.tracer.create_proxy(
-                "call_function", torch.index_select, (self.proxy, 0, flat_index_proxy), {}
+                "call_function",
+                torch.index_select,
+                (self.proxy, 0, flat_index_proxy),
+                {},
             )
 
             if key.ndim > 1:
@@ -1067,7 +1461,10 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                 )
             return self._new(result_tensor, proxy_out)
 
-        if TracedData.find_traced_data(key) is not None:
+        # Traced integers are plain graph values that operator.getitem accepts
+        # directly, including as slice bounds and steps, so only traced
+        # tensors and arrays need the mixed-index lowering.
+        if _find_traced_array(key) is not None:
             if not self._is_supported_index_key(key):
                 _get_logger().fatal(
                     "Mixed traced indexing supports boolean and integer "
@@ -1081,18 +1478,22 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             proxy_out = self._create_getitem_proxy(key)
             return self._new(result_tensor, proxy_out)
 
+        key = _graph_sizes(key)
         result_tensor = self.tensor[key]
 
-        if not self.validate_status():
+        if not self.validate_status(args=(key,)):
             return result_tensor
 
         # A key covering the whole tensor, such as ``[:]``, selects nothing and
         # yields the same value. A narrowing key does not and keeps its node.
-        if may_adopt_view(self, result_tensor):
+        if is_same_value(self, result_tensor):
             return self._new_alias(result_tensor)
 
         proxy_out = self._context.tracer.create_proxy(
-            "call_function", operator.getitem, (self.proxy, key), {}
+            "call_function",
+            operator.getitem,
+            (self.proxy, TracedData.extract_proxy(key)),
+            {},
         )
         if isinstance(result_tensor, torch.Tensor):
             return self._new(result_tensor, proxy_out)
@@ -1105,9 +1506,11 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         ``_handle_plain_assignment`` promotes them and installs a destination
         constant as this tensor's proxy.
         """
+        self._close_warp_segment()
         if self._shed_replaced_graph():
             self[key] = value
             return
+        key = _graph_sizes(key)
         real_key = TracedData.unwrap_traced_data(key)
         real_value = TracedTensor.unwrap_traced_tensor(value)
         self.tensor[real_key] = real_value
@@ -1122,7 +1525,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                 "functionally; recording raw __setitem__, which may not export."
             )
             value_proxy = value.proxy if isinstance(value, TracedTensor) else value
-            self._proxy_view.proxy = self._context.tracer.create_proxy(
+            self.proxy = self._context.tracer.create_proxy(
                 "call_method", "__setitem__", (self.proxy, key, value_proxy), {}
             )
 
@@ -1166,7 +1569,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
         # A no-op conversion hands back this exact buffer, so it is the same
         # value rather than a new one. A cast or a device move allocates.
-        if may_adopt_view(self, result_tensor):
+        if is_same_value(self, result_tensor):
             return self._new_alias(result_tensor)
 
         # For type conversions, we track it as an operation
@@ -1177,53 +1580,52 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
     def numpy(self):
         """Convert to numpy array, preserving tracing as TracedNpArray.
-        
+
         If tracing is active, returns a TracedNpArray that shares the proxy
         and context, allowing the trace to continue across the conversion.
-        
+
         If not tracing, returns a regular numpy array.
-        
+
         Returns:
             TracedNpArray if tracing, else np.ndarray
         """
         np_data = self.as_subclass(torch.Tensor).detach().cpu().numpy()
 
         # A CPU tensor's ``.numpy()`` hands back its own bytes, so the result is
-        # a second handle on this value and shares the cell. A CUDA source is
+        # a second carrier over the same FX handle. A CUDA source is
         # copied by the ``cpu()`` above and keeps an independent root, which the
         # pointer comparison establishes without a device test here.
         #
         # Conversion is representation-only, so both active and inactive
         # sources forward their complete tracing state.
         from leapp.leapp_graph.datatypes import as_traced
-        if may_adopt_view(self, np_data):
-            view, proxy = self.proxy_view, None
-        else:
-            view, proxy = None, self.proxy
+
         return self.preserve_port(
-            as_traced(np_data, self.name, self.context_obj, proxy, view=view)
+            as_traced(
+                np_data, self.name, self.context_obj, conversion_proxy(self, np_data)
+            )
         )
 
     def __array__(self, dtype=None, copy=None):
         """NumPy array protocol - called by np.array(), np.asarray(), etc.
-        
+
         This allows seamless conversion to numpy while preserving tracing.
-        
+
         Args:
             dtype: Optional dtype for the resulting array
             copy: Optional copy flag (NumPy 2.0+)
                 - None: Copy only if necessary (default)
                 - True: Always copy
                 - False: Never copy; raise ValueError if copy required
-            
+
         Returns:
             TracedNpArray if tracing, else np.ndarray
         """
         result = self.numpy()
-        
+
         # Check if dtype change requires a copy
         needs_dtype_copy = dtype is not None and dtype != result.dtype
-        
+
         # copy=False but copy is required → raise error (NumPy 2.0 semantics)
         if copy is False and needs_dtype_copy:
             _get_logger().fatal(
@@ -1231,11 +1633,72 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                 f"from array with dtype {result.dtype}.",
                 error_type=ValueError,
             )
-        
+
         if needs_dtype_copy:
             result = result.astype(dtype)
-        
+
         if copy is True:
             result = result.copy()
-        
+
         return result
+
+
+# =============================================================================
+# Traced integer arguments
+# =============================================================================
+
+
+def _contains_traced_int(obj) -> bool:
+    found = False
+
+    def visit(item):
+        nonlocal found
+        found = found or isinstance(item, TracedInt)
+        return item
+
+    TracedData._map_structure(obj, visit)
+    return found
+
+
+def _find_traced_array(obj):
+    """First traced value in ``obj`` other than a :class:`TracedInt`, else None."""
+    found = None
+
+    def visit(item):
+        nonlocal found
+        if (
+            found is None
+            and isinstance(item, TracedData)
+            and not isinstance(item, TracedInt)
+        ):
+            found = item
+        return item
+
+    TracedData._map_structure(obj, visit)
+    return found
+
+
+def _graph_sizes(obj):
+    """Prepare arguments holding traced integers for FX recording.
+
+    FX records a size as a proxy, which ``torch.Size`` cannot hold, so sizes
+    become tuples. A traced integer whose node stopped recording has no node in
+    the graph being built and becomes the plain integer it holds.
+    """
+    if not _contains_traced_int(obj):
+        return obj
+
+    def convert(item):
+        if isinstance(item, TracedInt):
+            return item if item.is_recording else int(item)
+        if isinstance(item, torch.Size):
+            return tuple(convert(size) for size in item)
+        if isinstance(item, slice):
+            return slice(convert(item.start), convert(item.stop), convert(item.step))
+        if isinstance(item, (list, tuple)) and not hasattr(item, "_fields"):
+            return type(item)(convert(value) for value in item)
+        if isinstance(item, dict):
+            return {name: convert(value) for name, value in item.items()}
+        return item
+
+    return convert(obj)

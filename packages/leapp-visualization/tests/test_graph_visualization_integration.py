@@ -61,7 +61,11 @@ def test_leapp_graph_visualize_writes_png(tmp_path: Path):
     node = FakeNode(
         name="policy",
         inputs=[FakeTensorDescription("obs", "float32", (1, 12))],
-        outputs=[FakeTensorDescription("action", "float32", (1, 4), semantics={"kind": "command"})],
+        outputs=[
+            FakeTensorDescription(
+                "action", "float32", (1, 4), semantics={"kind": "command"}
+            )
+        ],
         backend="jit-script",
     )
 

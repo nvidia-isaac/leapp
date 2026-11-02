@@ -32,9 +32,9 @@ import os
 SECTION = 25
 SYSTEM = 31
 FATAL = logging.ERROR + 1
-logging.addLevelName(SECTION, 'SECTION')
-logging.addLevelName(SYSTEM, 'SYSTEM')
-logging.addLevelName(FATAL, 'FATAL')
+logging.addLevelName(SECTION, "SECTION")
+logging.addLevelName(SYSTEM, "SYSTEM")
+logging.addLevelName(FATAL, "FATAL")
 
 
 class _ColoredFormatter(logging.Formatter):
@@ -42,20 +42,20 @@ class _ColoredFormatter(logging.Formatter):
 
     # ANSI color codes (matching export_manager.py style)
     COLORS = {
-        'DEBUG': '',              # White (no color)
-        'INFO': '',               # White
-        'SECTION': '\033[1;4;97m',     # Bold white (for section headers)
-        'SYSTEM': '',             # White, but above WARNING for non-verbose console output
-        'WARNING': '\033[1;33m',  # Bold yellow (matching export_manager.py)
-        'ERROR': '\033[91m',      # Bright red
-        'FATAL': '\033[91m',      # Same as ERROR, but raises after logging
-        'CRITICAL': '\033[1;31m',  # Bold red
-        'RESET': '\033[0m'        # Reset
+        "DEBUG": "",  # White (no color)
+        "INFO": "",  # White
+        "SECTION": "\033[1;4;97m",  # Bold white (for section headers)
+        "SYSTEM": "",  # White, but above WARNING for non-verbose console output
+        "WARNING": "\033[1;33m",  # Bold yellow (matching export_manager.py)
+        "ERROR": "\033[91m",  # Bright red
+        "FATAL": "\033[91m",  # Same as ERROR, but raises after logging
+        "CRITICAL": "\033[1;31m",  # Bold red
+        "RESET": "\033[0m",  # Reset
     }
 
     def format(self, record):
         # Add color to entire message
-        log_color = self.COLORS.get(record.levelname, self.COLORS['RESET'])
+        log_color = self.COLORS.get(record.levelname, self.COLORS["RESET"])
         if log_color:
             record.levelname = f"{log_color}{record.levelname}{self.COLORS['RESET']}"
             record.msg = f"{log_color}{record.msg}{self.COLORS['RESET']}"
@@ -66,7 +66,7 @@ class _LeappLogger:
     """Internal logger class for leapp."""
 
     def __init__(self):
-        self.logger = logging.getLogger('leapp')
+        self.logger = logging.getLogger("leapp")
         self.logger.setLevel(logging.DEBUG)  # Capture everything
         self.initialized = False
         self.console_handler = None
@@ -81,14 +81,14 @@ class _LeappLogger:
 
         # log file handler
         if os.path.exists(savepath):
-            filepath = os.path.join(savepath, 'log.txt')
+            filepath = os.path.join(savepath, "log.txt")
             self.log_path = filepath
             self.file_handler = logging.FileHandler(
-                filepath, mode='w', encoding='utf-8')
+                filepath, mode="w", encoding="utf-8"
+            )
             self.file_handler.setLevel(logging.DEBUG)
             # Plain format for file (with timestamp, no colors)
-            file_formatter = logging.Formatter(
-                '[%(levelname)s]: %(message)s')
+            file_formatter = logging.Formatter("[%(levelname)s]: %(message)s")
             self.file_handler.setFormatter(file_formatter)
             self.logger.addHandler(self.file_handler)
         else:
@@ -99,7 +99,8 @@ class _LeappLogger:
         self.set_verbose(verbose)
         # Use simple format for console (no timestamp, just message)
         self.console_handler.setFormatter(
-            _ColoredFormatter('[%(levelname)s]: %(message)s'))
+            _ColoredFormatter("[%(levelname)s]: %(message)s")
+        )
         self.logger.addHandler(self.console_handler)
 
         self.initialized = True
@@ -109,8 +110,7 @@ class _LeappLogger:
         self.verbose = verbose
         if self.console_handler:
             # When verbose, show everything (DEBUG and above)
-            self.console_handler.setLevel(
-                logging.DEBUG if verbose else logging.WARNING)
+            self.console_handler.setLevel(logging.DEBUG if verbose else logging.WARNING)
 
     def is_verbose(self):
         return self.verbose
@@ -147,7 +147,8 @@ class _LeappLogger:
         for node in nodes_to_report:
             if node.model_path:
                 saved_models.append(
-                    f"- {node.name}: {os.path.abspath(node.model_path)}")
+                    f"- {node.name}: {os.path.abspath(node.model_path)}"
+                )
             else:
                 nodes_without_artifacts.append(node.name)
 
@@ -165,7 +166,8 @@ class _LeappLogger:
 
         if nodes_without_artifacts:
             message_lines.append(
-                "Nodes without saved model artifacts: " + ", ".join(nodes_without_artifacts)
+                "Nodes without saved model artifacts: "
+                + ", ".join(nodes_without_artifacts)
             )
 
         self.system("\n".join(message_lines))

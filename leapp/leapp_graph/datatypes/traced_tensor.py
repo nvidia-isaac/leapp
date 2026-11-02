@@ -23,12 +23,12 @@ from leapp.utils.logging import _get_logger
 from .traced_data import TracedData
 
 
-
 # Combined metaclass to resolve conflict between ABCMeta (from TracedData)
 # and torch.Tensor's metaclass. In the future if this breaks, we need to convert
 # the TracedTensor class to not inherit from tracedData and reimplement all the common functions
 class _TracedTensorMeta(ABCMeta, type(torch.Tensor)):
     """Metaclass combining ABCMeta and torch.Tensor's metaclass."""
+
     pass
 
 
@@ -45,13 +45,13 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     @staticmethod
     def __new__(cls, tensor: torch.Tensor, name: str, context, proxy: Proxy):
         """Create a new TracedTensor instance.
-        
+
         Args:
             tensor: The actual torch.Tensor data to wrap
             name: Name for the tensor (used in ONNX export and graph)
             context: The TraceContext that owns this tensor
             proxy: The fx.Proxy for graph recording
-            
+
         Returns:
             A new TracedTensor instance sharing storage with the input tensor
         """
@@ -82,7 +82,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     def tensor(self) -> torch.Tensor:
         """Get the underlying torch.Tensor (for compatibility with original API)."""
         return self.as_subclass(torch.Tensor)
-    
+
     @property
     def data(self) -> torch.Tensor:
         """Get the underlying data."""
@@ -122,9 +122,9 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         """
         # Check if it's a method descriptor on torch.Tensor
         func_type = type(func).__name__
-        if func_type in ('method_descriptor', 'builtin_function_or_method'):
+        if func_type in ("method_descriptor", "builtin_function_or_method"):
             # Try to get the method name
-            func_name = getattr(func, '__name__', None)
+            func_name = getattr(func, "__name__", None)
             if func_name:
                 # Look for equivalent in torch module
                 torch_func = getattr(torch, func_name, None)
@@ -133,7 +133,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
                 # Handle in-place operations (e.g., add_ -> torch.add)
                 # In-place methods end with '_' but torch.* functions don't
-                if func_name.endswith('_') and len(func_name) > 1:
+                if func_name.endswith("_") and len(func_name) > 1:
                     base_name = func_name[:-1]  # Remove trailing underscore
                     torch_func = getattr(torch, base_name, None)
                     if torch_func is not None and callable(torch_func):
@@ -223,13 +223,8 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
         # Return a new TracedTensor that wraps target but uses source's proxy
         # This effectively makes target "become" traced
-        return TracedTensor(
-            target,
-            source.name,
-            source._context,
-            source.proxy
-        )
-    
+        return TracedTensor(target, source.name, source._context, source.proxy)
+
     @staticmethod
     def _handle_TS_decomposition(func, real_args, real_kwargs):
         """Handle TorchScript decomposition."""
@@ -247,9 +242,9 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             # ScriptMethod.  func.owner returns the C++ ScriptModule
             # (not an nn.Module).  Save → reload via BytesIO so
             # torch.jit.load performs full Python-level init.
-            script_module = getattr(func, '__self__', None)
+            script_module = getattr(func, "__self__", None)
             if not isinstance(script_module, torch.nn.Module):
-                cpp_module = getattr(func, 'owner', None)
+                cpp_module = getattr(func, "owner", None)
                 if cpp_module is not None:
                     _buf = _io.BytesIO()
                     _tmp = torch.jit.RecursiveScriptModule._construct(
@@ -258,15 +253,12 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                     torch.jit.save(_tmp, _buf)
                     _buf.seek(0)
                     _dev = next(
-                        (a.device for a in real_args
-                            if isinstance(a, torch.Tensor)),
-                        torch.device('cpu'),
+                        (a.device for a in real_args if isinstance(a, torch.Tensor)),
+                        torch.device("cpu"),
                     )
-                    script_module = torch.jit.load(
-                        _buf, map_location=_dev
-                    )
+                    script_module = torch.jit.load(_buf, map_location=_dev)
 
-            #validate the script_module
+            # validate the script_module
             if not isinstance(script_module, torch.nn.Module):
                 raise RuntimeError(
                     f"Could not obtain nn.Module from {type(func).__name__}. "
@@ -286,9 +278,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                 k: v.clone().detach() if isinstance(v, torch.Tensor) else v
                 for k, v in (real_kwargs or {}).items()
             }
-            ep = TS2EPConverter(
-                script_module, _clean, _clean_kw
-            ).convert()
+            ep = TS2EPConverter(script_module, _clean, _clean_kw).convert()
             fx_module = ep.module()
 
         except Exception as e:
@@ -325,18 +315,19 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         if kwargs is None:
             kwargs = {}
 
-        original_func_name = getattr(func, '__name__', '')
+        original_func_name = getattr(func, "__name__", "")
 
-        if original_func_name == '__setitem__' and len(args) >= 3:
+        if original_func_name == "__setitem__" and len(args) >= 3:
             target, key, value = args[0], args[1], args[2]
             if type(target) is torch.Tensor and isinstance(value, TracedTensor):
                 is_full_copy = (
-                    (isinstance(key, slice) and key == slice(None))
-                    or key is Ellipsis
-                )
+                    isinstance(key, slice) and key == slice(None)
+                ) or key is Ellipsis
                 if is_full_copy:
                     target.__class__ = TracedTensor
-                    target._init_tracing_state(value.name, value.context_obj, value.proxy)
+                    target._init_tracing_state(
+                        value.name, value.context_obj, value.proxy
+                    )
                     return True, None
 
                 _get_logger().warning(
@@ -347,11 +338,13 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                     "reassign the variable (target = source) instead."
                 )
 
-        elif original_func_name == 'copy_' and len(args) >= 2:
+        elif original_func_name == "copy_" and len(args) >= 2:
             target, source = args[0], args[1]
             if type(target) is torch.Tensor and isinstance(source, TracedTensor):
                 target.__class__ = TracedTensor
-                target._init_tracing_state(source.name, source.context_obj, source.proxy)
+                target._init_tracing_state(
+                    source.name, source.context_obj, source.proxy
+                )
                 return True, target
 
         return False, None
@@ -377,15 +370,19 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             kwargs = {}
 
         func_type_name = type(func).__name__
-        func_module = type(func).__module__ if hasattr(type(func), '__module__') else ''
+        func_module = type(func).__module__ if hasattr(type(func), "__module__") else ""
 
-        is_scripted = ('ScriptMethod' in func_type_name or 'ScriptModule' in func_type_name)
+        is_scripted = (
+            "ScriptMethod" in func_type_name or "ScriptModule" in func_type_name
+        )
 
         if not is_scripted:
-            if func_module.startswith('torch.jit') or func_module.startswith('torch._C'):
-                if hasattr(func, '__self__') and hasattr(func.__self__, '__class__'):
+            if func_module.startswith("torch.jit") or func_module.startswith(
+                "torch._C"
+            ):
+                if hasattr(func, "__self__") and hasattr(func.__self__, "__class__"):
                     self_class_name = func.__self__.__class__.__name__
-                    is_scripted = 'Script' in self_class_name
+                    is_scripted = "Script" in self_class_name
 
         if not is_scripted:
             return False, None
@@ -435,11 +432,13 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
         # Extract real tensors for actual computation
         real_args = tuple(TracedTensor.unwrap_traced_tensor(arg) for arg in args)
-        real_kwargs = {k: TracedTensor.unwrap_traced_tensor(v) for k, v in kwargs.items()}
+        real_kwargs = {
+            k: TracedTensor.unwrap_traced_tensor(v) for k, v in kwargs.items()
+        }
         # used to detect in-place mutations
         # specific to fill_ copy_ things that mutate the 0th index
         # more general case is not supported yet
-        receiver = args[0] if args and isinstance(args[0], TracedTensor) else None 
+        receiver = args[0] if args and isinstance(args[0], TracedTensor) else None
         real_receiver = real_args[0] if receiver is not None else None
         receiver_version = cls._safe_tensor_version(real_receiver)
 
@@ -550,18 +549,22 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             return self.__dict__[name]
 
         # Handle in-place operations (methods ending with _)
-        if name.endswith('_') and not name.startswith('_') and len(name) > 1:
+        if name.endswith("_") and not name.startswith("_") and len(name) > 1:
             base_name = name[:-1]  # Remove trailing underscore
             torch_func = getattr(torch, base_name, None)
 
             if torch_func is not None and callable(torch_func):
+
                 def inplace_method(*args, **kwargs):
                     if not self.is_tracing:
                         # Just call the in-place method on the tensor and return raw tensor
                         underlying = self.as_subclass(torch.Tensor)
                         method = getattr(underlying, name, None)
                         if method is not None:
-                            method(*TracedData.unwrap_traced_data(args), **TracedData.unwrap_traced_data(kwargs))
+                            method(
+                                *TracedData.unwrap_traced_data(args),
+                                **TracedData.unwrap_traced_data(kwargs),
+                            )
                         return underlying
 
                     # Record as functional operation
@@ -595,6 +598,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         if attr is not None:
             # If it's a callable method, wrap it to ensure it goes through __torch_function__
             if callable(attr):
+
                 def wrapped_method(*args, **kwargs):
                     # Call the method on the underlying tensor
                     result = attr(*args, **kwargs)
@@ -605,15 +609,16 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                             return result
                         # Create a proxy node for this operation
                         proxy = self._proxy._tracer.create_proxy(
-                            'call_method', name, (self._proxy,) + args, kwargs)
+                            "call_method", name, (self._proxy,) + args, kwargs
+                        )
                         return self._new(result, proxy)
                     return result
+
                 return wrapped_method
             return attr
 
         # Attribute not found
-        raise AttributeError(
-            f"'TracedTensor' object has no attribute '{name}'")
+        raise AttributeError(f"'TracedTensor' object has no attribute '{name}'")
 
     # =========================================================================
     # Special Methods: reshape and permute need custom handling
@@ -721,7 +726,9 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
         # Update internal state to maintain in-place semantics
         with torch.no_grad():
-            torch.Tensor.copy_(self, result.tensor if isinstance(result, TracedTensor) else result)
+            torch.Tensor.copy_(
+                self, result.tensor if isinstance(result, TracedTensor) else result
+            )
         if isinstance(result, TracedTensor):
             self._proxy = result.proxy
 
@@ -737,7 +744,9 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
         result = torch.sub(self, other)
         with torch.no_grad():
-            torch.Tensor.copy_(self, result.tensor if isinstance(result, TracedTensor) else result)
+            torch.Tensor.copy_(
+                self, result.tensor if isinstance(result, TracedTensor) else result
+            )
         if isinstance(result, TracedTensor):
             self._proxy = result.proxy
         return self
@@ -752,7 +761,9 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
         result = torch.mul(self, other)
         with torch.no_grad():
-            torch.Tensor.copy_(self, result.tensor if isinstance(result, TracedTensor) else result)
+            torch.Tensor.copy_(
+                self, result.tensor if isinstance(result, TracedTensor) else result
+            )
         if isinstance(result, TracedTensor):
             self._proxy = result.proxy
         return self
@@ -767,7 +778,9 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
         result = torch.div(self, other)
         with torch.no_grad():
-            torch.Tensor.copy_(self, result.tensor if isinstance(result, TracedTensor) else result)
+            torch.Tensor.copy_(
+                self, result.tensor if isinstance(result, TracedTensor) else result
+            )
         if isinstance(result, TracedTensor):
             self._proxy = result.proxy
         return self
@@ -782,7 +795,9 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
         result = torch.pow(self, other)
         with torch.no_grad():
-            torch.Tensor.copy_(self, result.tensor if isinstance(result, TracedTensor) else result)
+            torch.Tensor.copy_(
+                self, result.tensor if isinstance(result, TracedTensor) else result
+            )
         if isinstance(result, TracedTensor):
             self._proxy = result.proxy
         return self
@@ -799,7 +814,9 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
         result = torch.matmul(self, other)
         with torch.no_grad():
-            torch.Tensor.copy_(self, result.tensor if isinstance(result, TracedTensor) else result)
+            torch.Tensor.copy_(
+                self, result.tensor if isinstance(result, TracedTensor) else result
+            )
         if isinstance(result, TracedTensor):
             self._proxy = result.proxy
         return self
@@ -818,7 +835,9 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         # Record as functional operation
         result = torch.add(self, other, alpha=alpha)
         with torch.no_grad():
-            torch.Tensor.copy_(self, result.tensor if isinstance(result, TracedTensor) else result)
+            torch.Tensor.copy_(
+                self, result.tensor if isinstance(result, TracedTensor) else result
+            )
         if isinstance(result, TracedTensor):
             self._proxy = result.proxy
         return self
@@ -833,7 +852,9 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
         result = torch.sub(self, other, alpha=alpha)
         with torch.no_grad():
-            torch.Tensor.copy_(self, result.tensor if isinstance(result, TracedTensor) else result)
+            torch.Tensor.copy_(
+                self, result.tensor if isinstance(result, TracedTensor) else result
+            )
         if isinstance(result, TracedTensor):
             self._proxy = result.proxy
         return self
@@ -848,7 +869,9 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
         result = torch.mul(self, other)
         with torch.no_grad():
-            torch.Tensor.copy_(self, result.tensor if isinstance(result, TracedTensor) else result)
+            torch.Tensor.copy_(
+                self, result.tensor if isinstance(result, TracedTensor) else result
+            )
         if isinstance(result, TracedTensor):
             self._proxy = result.proxy
         return self
@@ -863,7 +886,9 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
         result = torch.div(self, other, rounding_mode=rounding_mode)
         with torch.no_grad():
-            torch.Tensor.copy_(self, result.tensor if isinstance(result, TracedTensor) else result)
+            torch.Tensor.copy_(
+                self, result.tensor if isinstance(result, TracedTensor) else result
+            )
         if isinstance(result, TracedTensor):
             self._proxy = result.proxy
         return self
@@ -878,7 +903,9 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
         result = torch.pow(self, exponent)
         with torch.no_grad():
-            torch.Tensor.copy_(self, result.tensor if isinstance(result, TracedTensor) else result)
+            torch.Tensor.copy_(
+                self, result.tensor if isinstance(result, TracedTensor) else result
+            )
         if isinstance(result, TracedTensor):
             self._proxy = result.proxy
         return self
@@ -967,7 +994,10 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                 "call_method", "reshape", (key.proxy, (-1,)), {}
             )
             proxy_out = self._context.tracer.create_proxy(
-                "call_function", torch.index_select, (self._proxy, 0, flat_index_proxy), {}
+                "call_function",
+                torch.index_select,
+                (self._proxy, 0, flat_index_proxy),
+                {},
             )
 
             if key.ndim > 1:
@@ -1009,7 +1039,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
     def __setitem__(self, key, value):
         """Indexed assignment using functional operations for graph compatibility.
-        
+
         Uses the shared _create_setitem_proxy helper from TracedData to convert
         __setitem__ to torch.index_put for FX/TorchScript/ONNX compatibility.
         """
@@ -1028,11 +1058,11 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
         # Use shared helper to create the proxy
         proxy_out = self._create_setitem_proxy(key, value_proxy)
-        
+
         if proxy_out is not None:
             self._proxy = proxy_out
             return
-        
+
         # Handle unsupported cases with warnings
         has_slice = isinstance(key, tuple) and any(isinstance(k, slice) for k in key)
         if has_slice:
@@ -1061,7 +1091,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
                 "Consider using torch.index_put or torch.masked_scatter directly.",
                 stacklevel=2,
             )
-        
+
         # Fallback: record __setitem__ directly (may not export)
         self._proxy = self._context.tracer.create_proxy(
             "call_method", "__setitem__", (self._proxy, key, value_proxy), {}
@@ -1111,56 +1141,57 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
     def numpy(self):
         """Convert to numpy array, preserving tracing as TracedNpArray.
-        
+
         If tracing is active, returns a TracedNpArray that shares the proxy
         and context, allowing the trace to continue across the conversion.
-        
+
         If not tracing, returns a regular numpy array.
-        
+
         Returns:
             TracedNpArray if tracing, else np.ndarray
         """
         np_data = self.as_subclass(torch.Tensor).detach().cpu().numpy()
-        
+
         # Skip tracing if context is not tracing - return raw numpy array
         if not self.validate_status():
             return np_data
-        
+
         # Return TracedNpArray with inherited proxy/context
-        from . import as_traced #lazy import to avoid circular dependency
+        from . import as_traced  # lazy import to avoid circular dependency
+
         return as_traced(np_data, self.name, self.context_obj, self.proxy)
 
     def __array__(self, dtype=None, copy=None):
         """NumPy array protocol - called by np.array(), np.asarray(), etc.
-        
+
         This allows seamless conversion to numpy while preserving tracing.
-        
+
         Args:
             dtype: Optional dtype for the resulting array
             copy: Optional copy flag (NumPy 2.0+)
                 - None: Copy only if necessary (default)
                 - True: Always copy
                 - False: Never copy; raise ValueError if copy required
-            
+
         Returns:
             TracedNpArray if tracing, else np.ndarray
         """
         result = self.numpy()
-        
+
         # Check if dtype change requires a copy
         needs_dtype_copy = dtype is not None and dtype != result.dtype
-        
+
         # copy=False but copy is required → raise error (NumPy 2.0 semantics)
         if copy is False and needs_dtype_copy:
             raise ValueError(
                 f"Unable to avoid copy while creating an array with dtype {dtype} "
                 f"from array with dtype {result.dtype}."
             )
-        
+
         if needs_dtype_copy:
             result = result.astype(dtype)
-        
+
         if copy is True:
             result = result.copy()
-        
+
         return result

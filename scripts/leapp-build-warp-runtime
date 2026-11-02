@@ -97,20 +97,16 @@ def _validate_build_resources() -> tuple[Path, Path | None]:
     apic_header = warp_dir / "native" / "apic.h"
     if not warp_library.is_file():
         raise RuntimeError(
-            "Warp is installed, but its native library was not found: "
-            f"{warp_library}"
+            f"Warp is installed, but its native library was not found: {warp_library}"
         )
     if not apic_header.is_file():
         raise RuntimeError(
-            "Warp is installed, but its APIC header was not found: "
-            f"{apic_header}"
+            f"Warp is installed, but its APIC header was not found: {apic_header}"
         )
 
     warp_import_library = None
     if sys.platform == "win32":
-        configured_import_library = os.environ.get(
-            "LEAPP_WARP_IMPORT_LIBRARY"
-        )
+        configured_import_library = os.environ.get("LEAPP_WARP_IMPORT_LIBRARY")
         warp_import_library = (
             Path(configured_import_library).expanduser()
             if configured_import_library
@@ -136,13 +132,9 @@ def _validate_build_resources() -> tuple[Path, Path | None]:
         )
 
     torch = _require_module("torch", "pip install torch")
-    cmake_prefix = getattr(
-        getattr(torch, "utils", None), "cmake_prefix_path", None
-    )
+    cmake_prefix = getattr(getattr(torch, "utils", None), "cmake_prefix_path", None)
     if not cmake_prefix:
-        raise RuntimeError(
-            "PyTorch is installed, but its CMake path is unavailable."
-        )
+        raise RuntimeError("PyTorch is installed, but its CMake path is unavailable.")
     torch_cmake_dir = Path(cmake_prefix) / "Torch"
     if not (torch_cmake_dir / "TorchConfig.cmake").is_file():
         raise RuntimeError(
@@ -183,9 +175,7 @@ def build_warp_runtime(
         "-DLEAPP_WARP_BUILD_TORCH=ON",
     ]
     if warp_import_library is not None:
-        configure_command.append(
-            f"-DWARP_IMPORT_LIBRARY={warp_import_library}"
-        )
+        configure_command.append(f"-DWARP_IMPORT_LIBRARY={warp_import_library}")
     subprocess.run(configure_command, check=True)
     subprocess.run(
         ["cmake", "--build", str(output_dir), "--config", "Release", "-j"],
@@ -195,8 +185,7 @@ def build_warp_runtime(
     missing = [str(path) for path in artifacts.values() if not path.is_file()]
     if missing:
         raise RuntimeError(
-            "Warp runtime build completed without producing: "
-            + ", ".join(missing)
+            "Warp runtime build completed without producing: " + ", ".join(missing)
         )
     return artifacts
 

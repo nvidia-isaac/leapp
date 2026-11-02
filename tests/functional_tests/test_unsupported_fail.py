@@ -30,8 +30,7 @@ def _force_boundary_source(source, target):
     This is what mirror_leapp_tags() does minus its equality check, so a test
     can build a deliberately incompatible connection.
     """
-    promoted = promote_in_place(
-        target, source.name, source.context_obj, source.proxy)
+    promoted = promote_in_place(target, source.name, source.context_obj, source.proxy)
     promoted.output_port = source.output_port
     return promoted
 
@@ -40,35 +39,45 @@ def _force_boundary_source(source, target):
 # Module-level helpers for caller identity tests
 # ---------------------------------------------------------------------------
 
+
 def _helper_path_a(name, tensor):
-    return annotate.input_tensors(name, {'input': tensor})
+    return annotate.input_tensors(name, {"input": tensor})
+
 
 def _helper_path_b(name, tensor):
-    return annotate.input_tensors(name, {'input': tensor})
+    return annotate.input_tensors(name, {"input": tensor})
+
 
 def _shared_helper(name, tensor):
-    return annotate.input_tensors(name, {'input': tensor})
+    return annotate.input_tensors(name, {"input": tensor})
+
 
 class _BasePipeline:
     def annotate_input(self, tensor):
-        return annotate.input_tensors('func', {'input': tensor})
+        return annotate.input_tensors("func", {"input": tensor})
+
 
 class _PipelineA(_BasePipeline):
     def run(self, tensor):
         return self.annotate_input(tensor)
 
+
 class _PipelineB(_BasePipeline):
     def run(self, tensor):
         return self.annotate_input(tensor)
+
 
 def _timing_decorator(func):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         return func(*args, **kwargs)
+
     return wrapper
 
+
 def _raw_annotate(tensor):
-    return annotate.input_tensors('func', {'input': tensor})
+    return annotate.input_tensors("func", {"input": tensor})
+
 
 _decorated_annotate = _timing_decorator(_raw_annotate)
 
@@ -79,7 +88,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
     def test_input_tensors_bare_tensor_fails(self):
         """Bare tensors must be wrapped in a dict or TensorSemantics."""
         with self.assertRaises(TypeError) as exc:
-            annotate.input_tensors('func', torch.tensor([1.0, 2.0, 3.0]))
+            annotate.input_tensors("func", torch.tensor([1.0, 2.0, 3.0]))
         self.assertIn("does not accept a bare tensor", str(exc.exception))
 
     def test_output_tensors_bare_tensor_fails(self):
@@ -87,9 +96,11 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         leapp.start(name=self.TEST_GRAPH_NAME)
 
         try:
-            traced = annotate.input_tensors('func', {'input': torch.tensor([1.0, 2.0, 3.0])})
+            traced = annotate.input_tensors(
+                "func", {"input": torch.tensor([1.0, 2.0, 3.0])}
+            )
             with self.assertRaises(TypeError) as exc:
-                annotate.output_tensors('func', traced + 1.0, export_with="jit")
+                annotate.output_tensors("func", traced + 1.0, export_with="jit")
             self.assertIn("does not accept a bare tensor", str(exc.exception))
         finally:
             leapp.stop()
@@ -99,11 +110,13 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         leapp.start(name=self.TEST_GRAPH_NAME)
 
         try:
-            traced = annotate.input_tensors('func', {'input': torch.tensor([1.0, 2.0, 3.0])})
+            traced = annotate.input_tensors(
+                "func", {"input": torch.tensor([1.0, 2.0, 3.0])}
+            )
             with self.assertRaises(TypeError) as exc:
                 annotate.output_tensors(
-                    'func',
-                    {'output': traced + 1.0},
+                    "func",
+                    {"output": traced + 1.0},
                     static_outputs=torch.tensor([4.0, 5.0, 6.0]),
                     export_with="jit",
                 )
@@ -114,10 +127,13 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
     def test_input_tensors_top_level_raw_list_fails(self):
         """Top-level raw collections must be named via a dict."""
         with self.assertRaises(TypeError) as exc:
-            annotate.input_tensors('func', [
-                torch.tensor([1.0, 2.0, 3.0]),
-                torch.tensor([4.0, 5.0, 6.0]),
-            ])
+            annotate.input_tensors(
+                "func",
+                [
+                    torch.tensor([1.0, 2.0, 3.0]),
+                    torch.tensor([4.0, 5.0, 6.0]),
+                ],
+            )
         self.assertIn("expects either a dict of named tensors", str(exc.exception))
 
     def test_output_tensors_top_level_raw_list_fails(self):
@@ -125,10 +141,12 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         leapp.start(name=self.TEST_GRAPH_NAME)
 
         try:
-            traced = annotate.input_tensors('func', {'input': torch.tensor([1.0, 2.0, 3.0])})
+            traced = annotate.input_tensors(
+                "func", {"input": torch.tensor([1.0, 2.0, 3.0])}
+            )
             outputs = [traced + 1.0, traced + 2.0]
             with self.assertRaises(TypeError) as exc:
-                annotate.output_tensors('func', outputs, export_with="jit")
+                annotate.output_tensors("func", outputs, export_with="jit")
             self.assertIn("expects either a dict of named tensors", str(exc.exception))
         finally:
             leapp.stop()
@@ -138,15 +156,17 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         leapp.start(name=self.TEST_GRAPH_NAME, save_path=self.TEST_GRAPH_NAME)
 
         for value in (1.0, 2.0):
-            traced = annotate.input_tensors('func', {'input': torch.tensor([value, value + 1.0])})
-            annotate.output_tensors('func', {'output': traced + 1.0}, export_with="jit")
+            traced = annotate.input_tensors(
+                "func", {"input": torch.tensor([value, value + 1.0])}
+            )
+            annotate.output_tensors("func", {"output": traced + 1.0}, export_with="jit")
 
         leapp.stop()
 
-        annotate.nodes['func'].outputs[0].cached_values[0] += 10.0
+        annotate.nodes["func"].outputs[0].cached_values[0] += 10.0
         results = leapp.compile_graph(visualize=False, validate=True, strict=False)
 
-        self.assertFalse(results['func'])
+        self.assertFalse(results["func"])
 
         log_path = _get_logger().path
         with open(log_path) as f:
@@ -160,12 +180,14 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         leapp.start(name=self.TEST_GRAPH_NAME, save_path=self.TEST_GRAPH_NAME)
 
         for value in (1.0, 2.0):
-            traced = annotate.input_tensors('func', {'input': torch.tensor([value, value + 1.0])})
-            annotate.output_tensors('func', {'output': traced + 1.0}, export_with="jit")
+            traced = annotate.input_tensors(
+                "func", {"input": torch.tensor([value, value + 1.0])}
+            )
+            annotate.output_tensors("func", {"output": traced + 1.0}, export_with="jit")
 
         leapp.stop()
 
-        annotate.nodes['func'].outputs[0].cached_values[0] += 10.0
+        annotate.nodes["func"].outputs[0].cached_values[0] += 10.0
 
         with self.assertRaises(Exception) as exc:
             leapp.compile_graph(visualize=False, validate=True, strict=True)
@@ -181,8 +203,8 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
 
         try:
             annotate.output_tensors(
-                'orphan_node',
-                {'output': torch.tensor([1.0, 2.0, 3.0])},
+                "orphan_node",
+                {"output": torch.tensor([1.0, 2.0, 3.0])},
                 export_with="jit",
             )
             self.fail("Expected an exception")
@@ -201,11 +223,11 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
 
             for idx in range(2):
                 traced = annotate.input_tensors(
-                    'shape_node', {'input': torch.tensor([1.0, 2.0, 3.0])}
+                    "shape_node", {"input": torch.tensor([1.0, 2.0, 3.0])}
                 )
                 output = traced + 1.0 if idx == 0 else traced.reshape(1, 3)
                 annotate.output_tensors(
-                    'shape_node', {'output': output}, export_with="jit"
+                    "shape_node", {"output": output}, export_with="jit"
                 )
 
             leapp.stop()
@@ -220,13 +242,14 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
 
     def test_same_output_sent_twice_to_one_node_fails(self):
         """One node output cannot feed two inputs of the same consumer."""
+
         @annotate.method()
         def funcA(inputA: torch.Tensor):
             return inputA
 
         @annotate.method()
         def funcB(inputB: torch.Tensor, inputC: torch.Tensor):
-            return inputB+inputC
+            return inputB + inputC
 
         leapp.start(name=self.TEST_GRAPH_NAME)
         retvalA = funcA(torch.tensor([1, 2, 3]))
@@ -295,11 +318,14 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         try:
             leapp.compile_graph()
         except Exception as e:
-            self.assertEqual(str(e),
-                             "Error requesting input name change for funcC/input: detections is already in use")
+            self.assertEqual(
+                str(e),
+                "Error requesting input name change for funcC/input: detections is already in use",
+            )
 
     def test_mirror_leapp_tags_data_mismatch(self):
         """Test mirror_leapp_tags with various data mismatch scenarios"""
+
         @annotate.method(export_with="jit")
         def funcA(inputA: torch.Tensor):
             return inputA * 2.0
@@ -309,28 +335,35 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             return inputA, inputA + 1.0
 
         leapp.start(name=self.TEST_GRAPH_NAME)
-        
+
         # Test 1: Tensors with at least one element that is not equal
         # This should log an error but not raise an exception
         out_funcA = funcA(torch.tensor([1.0, 2.0, 3.0]))
         wrong_buffer = torch.tensor([1.0, 2.0, 4.0])  # Last element is wrong
         try:
-            annotate.mirror_leapp_tags(out_funcA, wrong_buffer)  # Logs error, doesn't raise
+            annotate.mirror_leapp_tags(
+                out_funcA, wrong_buffer
+            )  # Logs error, doesn't raise
             self.fail("Expected an exception")
         except Exception as e:
             self.assertIn("source and target do not match", str(e))
-        
+
         # Test 2: List of tensors with one element wrong
         # This should log an error but not raise an exception
         out1, out2 = funcB(torch.tensor([1.0, 2.0, 3.0]))
         source_list = [out1, out2]
-        target_list = [out1.clone(), torch.tensor([1.0, 2.0, 99.0])]  # Second tensor is wrong
+        target_list = [
+            out1.clone(),
+            torch.tensor([1.0, 2.0, 99.0]),
+        ]  # Second tensor is wrong
         try:
-            annotate.mirror_leapp_tags(source_list, target_list)  # Logs error, doesn't raise
+            annotate.mirror_leapp_tags(
+                source_list, target_list
+            )  # Logs error, doesn't raise
             self.fail("Expected an exception")
         except Exception as e:
             self.assertIn("source and target do not match", str(e))
-        
+
         # Test 3: Lists with different number of elements
         # The exact-match check rejects this before any state is transferred
         source_list2 = [out1, out2]
@@ -340,25 +373,31 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             self.fail("Expected an exception")
         except Exception as e:
             self.assertIn("source and target do not match", str(e))
-        
+
         # Test 4: Dicts with different keys
         # This should log an error but not raise an exception
-        source_dict = {'a': out_funcA, 'b': out_funcA + 1.0}
-        target_dict = {'a': out_funcA.clone(), 'c': (out_funcA + 1.0).clone()}  # 'b' vs 'c'
+        source_dict = {"a": out_funcA, "b": out_funcA + 1.0}
+        target_dict = {
+            "a": out_funcA.clone(),
+            "c": (out_funcA + 1.0).clone(),
+        }  # 'b' vs 'c'
         try:
-            annotate.mirror_leapp_tags(source_dict, target_dict)  # Logs error, doesn't raise
+            annotate.mirror_leapp_tags(
+                source_dict, target_dict
+            )  # Logs error, doesn't raise
             self.fail("Expected an exception")
         except Exception as e:
             self.assertIn("source and target do not match", str(e))
-        
+
         leapp.stop()
 
     def test_reentrant_tracing_method_inside_method(self):
         """Test that nested method decorators are properly rejected.
-        
+
         Calling one @annotate.method from within another should fail
         because the tracing lock is already acquired.
         """
+
         @annotate.method()
         def inner_func(inputA: torch.Tensor):
             return inputA * 2.0
@@ -370,7 +409,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             return result
 
         leapp.start(name=self.TEST_GRAPH_NAME)
-        
+
         try:
             outer_func(torch.tensor([1.0, 2.0, 3.0]))
             leapp.stop()
@@ -379,47 +418,67 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             leapp.stop()
             # The error should mention that we're trying to set up a new trace
             self.assertIn("Mixing active contexts is not allowed", str(e))
-    
-    def test_reentrant_tracing_using_traced_tensors(self): #TODO: these both need to fail
+
+    def test_reentrant_tracing_using_traced_tensors(
+        self,
+    ):  # TODO: these both need to fail
         try:
             leapp.start(name=self.TEST_GRAPH_NAME)
-            tensors = annotate.input_tensors('func', {'inputA': torch.tensor([1.0, 2.0, 3.0])})
+            tensors = annotate.input_tensors(
+                "func", {"inputA": torch.tensor([1.0, 2.0, 3.0])}
+            )
             tensors += 100
             input = torch.tensor([1.0, 2.0, 3.0])
+
             @annotate.method()
             def inner_func(inputA: torch.Tensor):
                 return inputA + tensors
+
             output_tensors = inner_func(input)
-            annotate.output_tensors('func', {'outputA': output_tensors}, export_with="jit")
+            annotate.output_tensors(
+                "func", {"outputA": output_tensors}, export_with="jit"
+            )
             leapp.stop()
             self.fail("Expected an exception")
         except Exception as e:
             self.assertIn("detected multiple TracedTensor contexts", str(e))
             self.assertIn("output_tensors() to finalize", str(e))
-    
+
     def test_passing_traced_tensor_to_method(self):
         try:
+
             @annotate.method()
             def inner_func(inputA: torch.Tensor):
                 return inputA + 5
+
             leapp.start(name=self.TEST_GRAPH_NAME)
-            tensors = annotate.input_tensors('func', {'inputA': torch.tensor([1.0, 2.0, 3.0])})
+            tensors = annotate.input_tensors(
+                "func", {"inputA": torch.tensor([1.0, 2.0, 3.0])}
+            )
             tensors += 100
             output_tensors = inner_func(tensors)
-            annotate.output_tensors('func', {'outputA': output_tensors}, export_with="jit")
+            annotate.output_tensors(
+                "func", {"outputA": output_tensors}, export_with="jit"
+            )
             leapp.stop()
             self.fail("Expected an exception")
         except Exception as e:
             self.assertIn("Mixing active contexts is not allowed", str(e))
-    
+
     def test_cross_context_traced_tensor_usage(self):
         """Basic test: addition of two TracedTensors from different contexts."""
         try:
             leapp.start(name=self.TEST_GRAPH_NAME)
-            tensor1 = annotate.input_tensors('func1', {'inputA': torch.tensor([1.0, 2.0, 3.0])})
-            tensor2 = annotate.input_tensors('func2', {'inputB': torch.tensor([1.0, 2.0, 3.0])})
+            tensor1 = annotate.input_tensors(
+                "func1", {"inputA": torch.tensor([1.0, 2.0, 3.0])}
+            )
+            tensor2 = annotate.input_tensors(
+                "func2", {"inputB": torch.tensor([1.0, 2.0, 3.0])}
+            )
             output_tensors = tensor1 + tensor2
-            annotate.output_tensors('func1', {'outputA': output_tensors}, export_with="jit")
+            annotate.output_tensors(
+                "func1", {"outputA": output_tensors}, export_with="jit"
+            )
             leapp.stop()
             self.fail("Expected an exception")
         except Exception as e:
@@ -430,8 +489,12 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         """Test torch.cat with a list containing TracedTensors from different contexts."""
         try:
             leapp.start(name=self.TEST_GRAPH_NAME)
-            tensor1 = annotate.input_tensors('func1', {'inputA': torch.tensor([1.0, 2.0, 3.0])})
-            tensor2 = annotate.input_tensors('func2', {'inputB': torch.tensor([4.0, 5.0, 6.0])})
+            tensor1 = annotate.input_tensors(
+                "func1", {"inputA": torch.tensor([1.0, 2.0, 3.0])}
+            )
+            tensor2 = annotate.input_tensors(
+                "func2", {"inputB": torch.tensor([4.0, 5.0, 6.0])}
+            )
             # torch.cat takes a list of tensors - should detect cross-context in the list
             output_tensors = torch.cat([tensor1, tensor2], dim=0)
             leapp.stop()
@@ -444,8 +507,12 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         """Test torch.stack with tensors from different contexts."""
         try:
             leapp.start(name=self.TEST_GRAPH_NAME)
-            tensor1 = annotate.input_tensors('func1', {'inputA': torch.tensor([1.0, 2.0, 3.0])})
-            tensor2 = annotate.input_tensors('func2', {'inputB': torch.tensor([4.0, 5.0, 6.0])})
+            tensor1 = annotate.input_tensors(
+                "func1", {"inputA": torch.tensor([1.0, 2.0, 3.0])}
+            )
+            tensor2 = annotate.input_tensors(
+                "func2", {"inputB": torch.tensor([4.0, 5.0, 6.0])}
+            )
             # torch.stack also takes a list
             output_tensors = torch.stack([tensor1, tensor2], dim=0)
             leapp.stop()
@@ -458,8 +525,12 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         """Test matrix multiplication with TracedTensors from different contexts."""
         try:
             leapp.start(name=self.TEST_GRAPH_NAME)
-            tensor1 = annotate.input_tensors('func1', {'inputA': torch.tensor([[1.0, 2.0], [3.0, 4.0]])})
-            tensor2 = annotate.input_tensors('func2', {'inputB': torch.tensor([[5.0, 6.0], [7.0, 8.0]])})
+            tensor1 = annotate.input_tensors(
+                "func1", {"inputA": torch.tensor([[1.0, 2.0], [3.0, 4.0]])}
+            )
+            tensor2 = annotate.input_tensors(
+                "func2", {"inputB": torch.tensor([[5.0, 6.0], [7.0, 8.0]])}
+            )
             # Matrix multiplication with two explicit args
             output_tensors = torch.matmul(tensor1, tensor2)
             leapp.stop()
@@ -472,8 +543,12 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         """Test torch.add with alpha kwarg - mixing contexts in positional args."""
         try:
             leapp.start(name=self.TEST_GRAPH_NAME)
-            tensor1 = annotate.input_tensors('func1', {'inputA': torch.tensor([1.0, 2.0, 3.0])})
-            tensor2 = annotate.input_tensors('func2', {'inputB': torch.tensor([4.0, 5.0, 6.0])})
+            tensor1 = annotate.input_tensors(
+                "func1", {"inputA": torch.tensor([1.0, 2.0, 3.0])}
+            )
+            tensor2 = annotate.input_tensors(
+                "func2", {"inputB": torch.tensor([4.0, 5.0, 6.0])}
+            )
             # torch.add(input, other, alpha=1) - tests kwargs handling
             output_tensors = torch.add(tensor1, tensor2, alpha=2.0)
             leapp.stop()
@@ -486,9 +561,15 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         """Test detection with three different contexts mixed together."""
         try:
             leapp.start(name=self.TEST_GRAPH_NAME)
-            tensor1 = annotate.input_tensors('func1', {'inputA': torch.tensor([1.0, 2.0, 3.0])})
-            tensor2 = annotate.input_tensors('func2', {'inputB': torch.tensor([4.0, 5.0, 6.0])})
-            tensor3 = annotate.input_tensors('func3', {'inputC': torch.tensor([7.0, 8.0, 9.0])})
+            tensor1 = annotate.input_tensors(
+                "func1", {"inputA": torch.tensor([1.0, 2.0, 3.0])}
+            )
+            tensor2 = annotate.input_tensors(
+                "func2", {"inputB": torch.tensor([4.0, 5.0, 6.0])}
+            )
+            tensor3 = annotate.input_tensors(
+                "func3", {"inputC": torch.tensor([7.0, 8.0, 9.0])}
+            )
             # Mix all three contexts
             output_tensors = torch.cat([tensor1, tensor2, tensor3], dim=0)
             leapp.stop()
@@ -502,9 +583,13 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         try:
             leapp.start(name=self.TEST_GRAPH_NAME)
             # condition from one context
-            cond_tensor = annotate.input_tensors('cond_ctx', {'cond': torch.tensor([True, False, True])})
+            cond_tensor = annotate.input_tensors(
+                "cond_ctx", {"cond": torch.tensor([True, False, True])}
+            )
             # x from another context
-            x_tensor = annotate.input_tensors('x_ctx', {'x': torch.tensor([1.0, 2.0, 3.0])})
+            x_tensor = annotate.input_tensors(
+                "x_ctx", {"x": torch.tensor([1.0, 2.0, 3.0])}
+            )
             # y is a regular tensor (should be fine)
             y_tensor = torch.tensor([10.0, 20.0, 30.0])
             # torch.where(condition, x, y) - two TracedTensors from different contexts
@@ -514,17 +599,21 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         except Exception as e:
             self.assertIn("detected multiple TracedTensor contexts", str(e))
             self.assertIn("output_tensors() to finalize", str(e))
-    
+
     def test_annotate_multiple_parallel_inputs_with_same_name(self):
         try:
             leapp.start(name=self.TEST_GRAPH_NAME)
             output_tensors = []
             for i in range(10):
-                tensor1 = annotate.input_tensors('func_combined', {'input': torch.tensor([1.0, 2.0, 3.0])})
+                tensor1 = annotate.input_tensors(
+                    "func_combined", {"input": torch.tensor([1.0, 2.0, 3.0])}
+                )
                 tensor1 += i
                 output_tensors.append(tensor1)
 
-            annotate.output_tensors('func_combined', {'outputs': output_tensors}, export_with="jit")
+            annotate.output_tensors(
+                "func_combined", {"outputs": output_tensors}, export_with="jit"
+            )
 
             leapp.stop()
             leapp.compile_graph(visualize=False)
@@ -532,64 +621,72 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
 
         except Exception as e:
             self.assertIn("Duplicate i/o name", str(e))
-            self.assertIn("Each input/output in the same node must have a unique name", str(e))
+            self.assertIn(
+                "Each input/output in the same node must have a unique name", str(e)
+            )
 
     def test_output_tensors_with_non_traced_tensor(self):
         """Test that passing non-TracedTensors to output_tensors raises the correct error.
-        
+
         This happens when the user doesn't use the returned TracedTensors from input_tensors()
         in their computations.
         """
         try:
             leapp.start(name=self.TEST_GRAPH_NAME)
-            
+
             # Get traced tensors but don't use them
-            traced_input = annotate.input_tensors('func', {'input': torch.tensor([1.0, 2.0, 3.0])})
-            
+            traced_input = annotate.input_tensors(
+                "func", {"input": torch.tensor([1.0, 2.0, 3.0])}
+            )
+
             # Create a completely new tensor (not derived from traced_input)
             # This is the user error - they should be using traced_input
             untraced_output = torch.tensor([4.0, 5.0, 6.0])
-            
+
             # This should fail because untraced_output is not a TracedTensor
-            annotate.output_tensors('func', {'output': untraced_output}, export_with="jit")
-            
+            annotate.output_tensors(
+                "func", {"output": untraced_output}, export_with="jit"
+            )
+
             leapp.stop()
             self.fail("Expected an exception")
-            
+
         except Exception as e:
             self.assertIn("non-traced tensors", str(e))
 
     def test_traced_tensor_as_static_output_fails(self):
         """Test that using a TracedTensor (derived from input) as a static output fails.
-        
+
         Static outputs should be constant tensors that are NOT derived from inputs.
         If a user accidentally marks a computed tensor as static, it should error.
         """
         try:
             leapp.start(name=self.TEST_GRAPH_NAME)
-            
+
             # Create input and trace it
             input_tensor = torch.tensor([1.0, 2.0, 3.0])
-            traced_input = annotate.input_tensors('func', {'input': input_tensor})
-            
+            traced_input = annotate.input_tensors("func", {"input": input_tensor})
+
             # Compute a tensor from the traced input
             computed_tensor = traced_input + 1.0  # This is a TracedTensor
-            
+
             # Create a proper output
             proper_output = traced_input * 2.0
-            
+
             # User error: trying to use a TracedTensor as a static output
             # This should fail because static outputs must be raw tensors
             annotate.output_tensors(
-                'func',
-                {'output': proper_output},
-                static_outputs={'bad_static': computed_tensor},  # Error: TracedTensor not allowed
-                export_with="jit"
+                "func",
+                {"output": proper_output},
+                static_outputs={
+                    "bad_static": computed_tensor
+                },  # Error: TracedTensor not allowed
+                export_with="jit",
             )
-            
+
             leapp.stop()
             self.fail("Expected an exception when using TracedTensor as static output")
-            
+
         except Exception as e:
             error_msg = str(e)
             self.assertIn("static output 'bad_static'", error_msg)
@@ -599,18 +696,25 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         """Test that calling input_tensors after output_tensors for the same node fails."""
         try:
             leapp.start(name=self.TEST_GRAPH_NAME)
-            traced = annotate.input_tensors('func', {'input': torch.tensor([1.0, 2.0, 3.0])})
+            traced = annotate.input_tensors(
+                "func", {"input": torch.tensor([1.0, 2.0, 3.0])}
+            )
             result = traced + 1.0
-            annotate.output_tensors('func', {'output': result}, export_with="jit")
-            annotate.input_tensors('func', {'input2': torch.tensor([4.0, 5.0, 6.0])})
+            annotate.output_tensors("func", {"output": result}, export_with="jit")
+            annotate.input_tensors("func", {"input2": torch.tensor([4.0, 5.0, 6.0])})
             leapp.stop()
-            self.fail("Expected an exception for input_tensors after output_tensors on same node")
+            self.fail(
+                "Expected an exception for input_tensors after output_tensors on same node"
+            )
         except Exception as e:
             leapp.stop()
-            self.assertIn("Cannot reuse a node name from a different call site.", str(e))
+            self.assertIn(
+                "Cannot reuse a node name from a different call site.", str(e)
+            )
 
     def test_input_tensors_after_method_same_name(self):
         """Test that calling input_tensors with a name already used by a method fails."""
+
         @annotate.method(export_with="jit")
         def funcA(inputA: torch.Tensor):
             return inputA + 1.0
@@ -618,30 +722,41 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         try:
             leapp.start(name=self.TEST_GRAPH_NAME)
             funcA(torch.tensor([1.0, 2.0, 3.0]))
-            annotate.input_tensors('funcA', {'input2': torch.tensor([4.0, 5.0, 6.0])})
+            annotate.input_tensors("funcA", {"input2": torch.tensor([4.0, 5.0, 6.0])})
             leapp.stop()
-            self.fail("Expected an exception for input_tensors reusing a method node name")
+            self.fail(
+                "Expected an exception for input_tensors reusing a method node name"
+            )
         except Exception as e:
             leapp.stop()
-            self.assertIn("Cannot reuse a node name from a different call site.", str(e))
+            self.assertIn(
+                "Cannot reuse a node name from a different call site.", str(e)
+            )
 
     def test_expected_fail_connection_shape_mismatch(self):
         """Shape mismatch should fail at compile_graph edge compatibility validation."""
         try:
             leapp.start(name=self.TEST_GRAPH_NAME)
 
-            source_input = annotate.input_tensors('source_node', {'x': torch.tensor([1.0, 2.0, 3.0])})
+            source_input = annotate.input_tensors(
+                "source_node", {"x": torch.tensor([1.0, 2.0, 3.0])}
+            )
             source_output = source_input + 1.0
-            annotate.output_tensors('source_node', {'y': source_output}, export_with="jit")
+            annotate.output_tensors(
+                "source_node", {"y": source_output}, export_with="jit"
+            )
 
             # mutate shape after output_tensors and before next input_tensors,
             # while keeping the source identity so the connection is still established
             mutated = _force_boundary_source(
-                source_output, source_output.clone().reshape(1, 3))
+                source_output, source_output.clone().reshape(1, 3)
+            )
 
-            target_input = annotate.input_tensors('target_node', {'y': mutated})
+            target_input = annotate.input_tensors("target_node", {"y": mutated})
             target_output = target_input + 2.0
-            annotate.output_tensors('target_node', {'z': target_output}, export_with="jit")
+            annotate.output_tensors(
+                "target_node", {"z": target_output}, export_with="jit"
+            )
 
             leapp.stop()
             leapp.compile_graph(visualize=False)
@@ -658,18 +773,25 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         try:
             leapp.start(name=self.TEST_GRAPH_NAME)
 
-            source_input = annotate.input_tensors('source_node', {'x': torch.tensor([1.0, 2.0, 3.0])})
+            source_input = annotate.input_tensors(
+                "source_node", {"x": torch.tensor([1.0, 2.0, 3.0])}
+            )
             source_output = source_input + 1.0
-            annotate.output_tensors('source_node', {'y': source_output}, export_with="jit")
+            annotate.output_tensors(
+                "source_node", {"y": source_output}, export_with="jit"
+            )
 
             # mutate dtype after output_tensors and before next input_tensors,
             # while keeping the source identity so the connection is still established
             mutated = _force_boundary_source(
-                source_output, source_output.clone().to(torch.int32))
+                source_output, source_output.clone().to(torch.int32)
+            )
 
-            target_input = annotate.input_tensors('target_node', {'y': mutated})
+            target_input = annotate.input_tensors("target_node", {"y": mutated})
             target_output = target_input + 2
-            annotate.output_tensors('target_node', {'z': target_output}, export_with="jit")
+            annotate.output_tensors(
+                "target_node", {"z": target_output}, export_with="jit"
+            )
 
             leapp.stop()
             leapp.compile_graph(visualize=False)
@@ -692,20 +814,23 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             # run twice from identical call sites to establish a feedback edge
             source_carrier = None
             for _ in range(2):
-                obs_traced, fb_traced = annotate.input_tensors('node_a', {'obs': obs, 'fb': feedback_next})
+                obs_traced, fb_traced = annotate.input_tensors(
+                    "node_a", {"obs": obs, "fb": feedback_next}
+                )
                 a_out = obs_traced + fb_traced
-                annotate.output_tensors('node_a', {'a_out': a_out}, export_with="jit")
+                annotate.output_tensors("node_a", {"a_out": a_out}, export_with="jit")
 
-                c_in = annotate.input_tensors('node_c', {'a_out': a_out})
+                c_in = annotate.input_tensors("node_c", {"a_out": a_out})
                 c_out = c_in.reshape(1, 3)  # source output descriptor shape is [1, 3]
-                annotate.output_tensors('node_c', {'fb_out': c_out}, export_with="jit")
+                annotate.output_tensors("node_c", {"fb_out": c_out}, export_with="jit")
 
                 # mutate value between output_tensors and next input_tensors
                 # keep the source identity to create a feedback connection into node_a/fb
                 if source_carrier is None:
                     source_carrier = c_out
                 feedback_next = _force_boundary_source(
-                    source_carrier, c_out.reshape(3).clone())
+                    source_carrier, c_out.reshape(3).clone()
+                )
 
             leapp.stop()
             leapp.compile_graph(visualize=False)
@@ -726,24 +851,26 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         should be detected as different call sites."""
         try:
             leapp.start(name=self.TEST_GRAPH_NAME)
-            inp = _helper_path_a('func', torch.tensor([1.0, 2.0, 3.0]))
+            inp = _helper_path_a("func", torch.tensor([1.0, 2.0, 3.0]))
             result = inp + 1.0
-            annotate.output_tensors('func', {'output': result}, export_with="onnx")
-            _helper_path_b('func', torch.tensor([4.0, 5.0, 6.0]))
+            annotate.output_tensors("func", {"output": result}, export_with="onnx")
+            _helper_path_b("func", torch.tensor([4.0, 5.0, 6.0]))
             leapp.stop()
             self.fail("Expected an exception for wrapper indirection")
         except Exception as e:
             leapp.stop()
-            self.assertIn("Cannot reuse a node name from a different call site.", str(e))
+            self.assertIn(
+                "Cannot reuse a node name from a different call site.", str(e)
+            )
 
     def test_caller_identity_same_helper_different_caller(self):
         """A single helper called from two different lines in user code
         should now be accepted because the helper itself is the origin."""
         leapp.start(name=self.TEST_GRAPH_NAME)
-        inp = _shared_helper('func', torch.tensor([1.0]))
+        inp = _shared_helper("func", torch.tensor([1.0]))
         result = inp + 1.0
-        annotate.output_tensors('func', {'output': result}, export_with="onnx")
-        _shared_helper('func', torch.tensor([2.0]))
+        annotate.output_tensors("func", {"output": result}, export_with="onnx")
+        _shared_helper("func", torch.tensor([2.0]))
         leapp.stop()
 
     def test_caller_identity_same_path_in_loop(self):
@@ -751,9 +878,9 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         accepted — the stack trace is identical on every iteration."""
         leapp.start(name=self.TEST_GRAPH_NAME)
         for i in range(3):
-            inp = _shared_helper('func', torch.tensor([float(i)]))
+            inp = _shared_helper("func", torch.tensor([float(i)]))
             result = inp + 1.0
-            annotate.output_tensors('func', {'output': result}, export_with="onnx")
+            annotate.output_tensors("func", {"output": result}, export_with="onnx")
         leapp.stop()
 
     def test_caller_identity_conditional_branching(self):
@@ -762,36 +889,40 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         try:
             leapp.start(name=self.TEST_GRAPH_NAME)
             if True:
-                inp = annotate.input_tensors('func', {'input': torch.tensor([1.0])})
+                inp = annotate.input_tensors("func", {"input": torch.tensor([1.0])})
             else:
-                inp = annotate.input_tensors('func', {'input': torch.tensor([1.0])})
+                inp = annotate.input_tensors("func", {"input": torch.tensor([1.0])})
             result = inp + 1.0
-            annotate.output_tensors('func', {'output': result}, export_with="onnx")
+            annotate.output_tensors("func", {"output": result}, export_with="onnx")
             if False:
-                annotate.input_tensors('func', {'input': torch.tensor([2.0])})
+                annotate.input_tensors("func", {"input": torch.tensor([2.0])})
             else:
-                annotate.input_tensors('func', {'input': torch.tensor([2.0])})
+                annotate.input_tensors("func", {"input": torch.tensor([2.0])})
             leapp.stop()
             self.fail("Expected an exception for conditional branching")
         except Exception as e:
             leapp.stop()
-            self.assertIn("Cannot reuse a node name from a different call site.", str(e))
+            self.assertIn(
+                "Cannot reuse a node name from a different call site.", str(e)
+            )
 
     def test_caller_identity_functools_partial(self):
         """A functools.partial binding called from two different lines
         should be detected as different call sites."""
         try:
             leapp.start(name=self.TEST_GRAPH_NAME)
-            input_func = functools.partial(annotate.input_tensors, 'func')
-            inp = input_func({'input': torch.tensor([1.0])})
+            input_func = functools.partial(annotate.input_tensors, "func")
+            inp = input_func({"input": torch.tensor([1.0])})
             result = inp + 1.0
-            annotate.output_tensors('func', {'output': result}, export_with="onnx")
-            input_func({'input': torch.tensor([2.0])})
+            annotate.output_tensors("func", {"output": result}, export_with="onnx")
+            input_func({"input": torch.tensor([2.0])})
             leapp.stop()
             self.fail("Expected an exception for functools.partial")
         except Exception as e:
             leapp.stop()
-            self.assertIn("Cannot reuse a node name from a different call site.", str(e))
+            self.assertIn(
+                "Cannot reuse a node name from a different call site.", str(e)
+            )
 
     def test_caller_identity_class_hierarchy(self):
         """A base-class method called through different subclass methods
@@ -801,7 +932,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         b = _PipelineB()
         inp = a.run(torch.tensor([1.0]))
         result = inp + 1.0
-        annotate.output_tensors('func', {'output': result}, export_with="onnx")
+        annotate.output_tensors("func", {"output": result}, export_with="onnx")
         b.run(torch.tensor([2.0]))
         leapp.stop()
 
@@ -811,7 +942,7 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         leapp.start(name=self.TEST_GRAPH_NAME)
         inp = _raw_annotate(torch.tensor([1.0]))
         result = inp + 1.0
-        annotate.output_tensors('func', {'output': result}, export_with="onnx")
+        annotate.output_tensors("func", {"output": result}, export_with="onnx")
         _decorated_annotate(torch.tensor([2.0]))
         leapp.stop()
 
@@ -820,17 +951,22 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         be detected as different call sites."""
         try:
             leapp.start(name=self.TEST_GRAPH_NAME)
-            inp = _shared_helper('func', torch.tensor([1.0]))
+            inp = _shared_helper("func", torch.tensor([1.0]))
             result = inp + 1.0
-            annotate.output_tensors('func', {'output': result}, export_with="onnx")
+            annotate.output_tensors("func", {"output": result}, export_with="onnx")
+
             def via_lambda(t):
-                return annotate.input_tensors('func', {'input': t})
+                return annotate.input_tensors("func", {"input": t})
+
             via_lambda(torch.tensor([2.0]))
             leapp.stop()
             self.fail("Expected an exception for lambda vs named function")
         except Exception as e:
             leapp.stop()
-            self.assertIn("Cannot reuse a node name from a different call site.", str(e))
+            self.assertIn(
+                "Cannot reuse a node name from a different call site.", str(e)
+            )
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main(verbosity=2)

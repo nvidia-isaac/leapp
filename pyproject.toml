@@ -21,7 +21,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "leapp"
-version = "0.7.2"
+version = "0.8.0"
 description = "LEAPP - Lightweight Export Annotations for Policy Pipelines: A Python package for tracing and exporting computational graphs from PyTorch code"
 readme = "README.md"
 license = "Apache-2.0"
@@ -49,7 +49,7 @@ classifiers = [
 # onnx>=1.19.0 requires python>=3.10
 requires-python = ">=3.10"
 dependencies = [
-    "torch>=2.6.0",
+    "torch>=2.7.0",
     "PyYAML>=6.0",
     "onnx>=1.19.0",
     "onnxruntime>=1.20.0,<1.24; python_version < '3.11'",
@@ -64,25 +64,35 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest",
-    "black",
+    "ruff==0.17.1",
     "flake8",
     "mypy",
 ]
 test = [
-    "warp-lang>=1.16",
+    "warp-lang>=1.18",
     "opencv-python-headless>=4.8",
 ]
 warp-cu12 = [
-    "warp-lang>=1.16",
+    "warp-lang>=1.18",
     "cupti-python>=12.8,<13; sys_platform == 'linux'",
     "onnxruntime-gpu[cuda,cudnn]>=1.20.0,<1.24; python_version < '3.11'",
     "onnxruntime-gpu[cuda,cudnn]>=1.20.0,<1.27; python_version >= '3.11'",
 ]
 warp-cu13 = [
-    "warp-lang>=1.16",
+    "warp-lang>=1.18",
     "cupti-python>=13,<14; sys_platform == 'linux'",
     "onnxruntime-gpu[cuda,cudnn]>=1.27.0; python_version >= '3.11'",
 ]
+
+[tool.ruff]
+required-version = "==0.17.1"
+target-version = "py310"
+line-length = 88
+include = ["*.py", "*.pyi", "*.ipynb", "scripts/leapp-build-warp-runtime"]
+force-exclude = true
+
+[tool.ruff.format]
+exclude = ["examples/**"]
 
 [tool.uv]
 conflicts = [
