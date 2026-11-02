@@ -11,9 +11,12 @@ These tests verify that:
 3. FX graphs compile and execute correctly with torch tensor I/O
 """
 
+import gc
 import unittest
+import weakref
 from unittest import mock
 import numpy as np
+import pytest
 import torch
 import warp as wp
 
@@ -22,6 +25,7 @@ from leapp.leapp_graph.datatypes import TracedTensor, TracedNpArray, TracedWpArr
 from leapp.leapp_graph.datatypes import patching as patching_module
 from leapp.export_manager import ExportManager
 from leapp.leapp_graph.datatypes.warp.patching import WarpPatchBackend
+from leapp.leapp_graph.datatypes.warp.traced_wp_array import _to_torch_dlpack
 
 
 def _install_patches():
@@ -411,6 +415,55 @@ class TestTracedTensorToWarp(unittest.TestCase):
         self.assertIsInstance(y, TracedWpArray)
         self.assertIs(y.proxy, x.proxy)
         self.assertTrue(torch.allclose(wp.to_torch(y), x.tensor))
+
+
+@pytest.mark.parametrize(
+    "dtype, strided, source_grad, requires_grad",
+    [
+        pytest.param(wp.float32, False, False, None, id="contiguous"),
+        pytest.param(wp.float32, True, False, None, id="strided"),
+        pytest.param(wp.vec3, False, False, None, id="compound"),
+        pytest.param(wp.float64, False, True, None, id="shared_gradient"),
+        pytest.param(wp.float32, False, True, False, id="disable_gradient"),
+        pytest.param(wp.float32, False, False, True, id="enable_gradient"),
+    ],
+)
+def test_cuda_warp_to_torch_storage_and_gradients(
+    dtype, strided, source_grad, requires_grad
+):
+    array = wp.ones(6, dtype=dtype, device="cuda", requires_grad=source_grad)
+    if strided:
+        array = array[1::2]
+    expected = wp.to_torch(array, requires_grad=requires_grad)
+    result = _to_torch_dlpack(array, requires_grad=requires_grad)
+
+    assert result.data_ptr() == array.ptr
+    assert result.shape == expected.shape
+    assert result.stride() == expected.stride()
+    assert result.dtype == expected.dtype
+    assert result.device == expected.device
+    assert result.requires_grad == expected.requires_grad
+    torch.testing.assert_close(result, expected, rtol=0, atol=0)
+    if expected.grad is None:
+        assert result.grad is None
+    else:
+        assert result.grad.data_ptr() == array.grad.ptr
+    with torch.no_grad():
+        result.add_(3)
+    torch.testing.assert_close(wp.to_torch(array), result, rtol=0, atol=0)
+
+
+def test_cuda_warp_to_torch_keeps_allocation_alive():
+    array = wp.ones(3, device="cuda")
+    owner = weakref.ref(array)
+    result = _to_torch_dlpack(array)
+    del array
+    gc.collect()
+    assert owner() is not None
+    torch.testing.assert_close(result, torch.ones_like(result), rtol=0, atol=0)
+    del result
+    gc.collect()
+    assert owner() is None
 
 
 class TestWarpToTracedTensor(unittest.TestCase):

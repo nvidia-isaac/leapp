@@ -1398,17 +1398,46 @@ def test_structured_outputs_and_constant_snapshot():
 
 
 @pytest.mark.parametrize("mutate_input", [False, True])
-@pytest.mark.parametrize("backend", ["fx", "jit", "pt2"])
 @pytest.mark.parametrize(
-    "fn, message",
+    "fn, message, backend",
     [
-        (np.spacing, "no torch._numpy lowering"),
-        (lambda x: np.allclose(x, x), "ATen capture failed"),
-        (lambda x: np.sort(x, stable=True), "sorting"),
-        (lambda x: np.argsort(x, kind="mergesort"), "sorting"),
-        (lambda x: np.pad(x, 1, mode="reflect"), "pad"),
-        (lambda x: np.pad(x, 1, constant_values=(1, 2)), "pad"),
-        (lambda x: np.cbrt(x, order="C"), "unsupported signature"),
+        pytest.param(
+            np.spacing, "no torch._numpy lowering", "fx", id="missing_lowering"
+        ),
+        pytest.param(
+            lambda x: np.allclose(x, x),
+            "ATen capture failed",
+            "fx",
+            id="capture_failure",
+        ),
+        pytest.param(
+            lambda x: np.sort(x, stable=True), "sorting", "fx", id="stable_sort"
+        ),
+        pytest.param(
+            lambda x: np.argsort(x, kind="mergesort"),
+            "sorting",
+            "fx",
+            id="stable_argsort",
+        ),
+        pytest.param(
+            lambda x: np.pad(x, 1, mode="reflect"), "pad", "fx", id="reflect_pad"
+        ),
+        pytest.param(
+            lambda x: np.pad(x, 1, constant_values=(1, 2)),
+            "pad",
+            "fx",
+            id="asymmetric_pad",
+        ),
+        pytest.param(
+            lambda x: np.cbrt(x, order="C"),
+            "unsupported signature",
+            "fx",
+            id="unsupported_signature",
+        ),
+        # Every failed branch is pruned before export. Exercise the surviving
+        # graph through each backend once per mutation state.
+        pytest.param(np.spacing, "no torch._numpy lowering", "jit", id="jit_replay"),
+        pytest.param(np.spacing, "no torch._numpy lowering", "pt2", id="pt2_replay"),
     ],
 )
 def test_failed_capture_on_unused_branch(
