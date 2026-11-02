@@ -29,6 +29,7 @@ from .utils.utils import get_system_info
 from .utils.tensor_description import GraphConfigs
 
 from .leapp_graph.leapp_graph import LeappGraph
+from leapp.utils.shape_contracts import get_shape_contract, get_shape_contract_version
 
 
 _MANAGER = ExportManager()
@@ -203,6 +204,18 @@ def compile_graph(
     _get_logger().info(f"- Total edges: {total_edges}")
 
     system_info = get_system_info()
+    if any(hasattr(n, "shape_program") for n in manager.get_nodes().values()):
+        system_info["system information"]["leapp config version"] = "1.4"
+
+        specs = [
+            get_shape_contract(d)
+            for n in manager.get_nodes().values()
+            for d in n.inputs + n.outputs
+        ]
+        system_info["system information"]["shape contract version"] = (
+            get_shape_contract_version(specs)
+        )
+
     with open(
         os.path.join(manager.get_save_path(), f"{manager.get_graph_name()}.yaml"), "w"
     ) as f:

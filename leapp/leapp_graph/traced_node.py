@@ -39,6 +39,7 @@ from leapp.utils.tensor_description import (
 from leapp.leapp_graph.custom_operator_registry import warp_operator
 import collections
 from dataclasses import replace
+from leapp.utils.shape_contracts import has_variable_inputs
 
 if TYPE_CHECKING:
     from leapp.leapp_graph.datatypes.warp import WarpSegment
@@ -678,10 +679,20 @@ class TracedTensorNode(LeappNode):
             self.graph.output(
                 output_nodes[0] if len(output_nodes) == 1 else tuple(output_nodes)
             )
+
+            dynamic_shapes = (
+                tuple(
+                    {i: torch.export.Dim.AUTO for i in range(len(desc.shape))}
+                    for desc in self.inputs
+                )
+                if has_variable_inputs(self)
+                else None
+            )
             self.tracer.root = functionalize_graph(
                 self.graph,
                 self.tracer.root,
                 [to_export_torch_tensor(desc.value) for desc in self.inputs],
+                dynamic_shapes=dynamic_shapes,
             )
             output_node = next(n for n in self.graph.nodes if n.op == "output")
             output_nodes = list(output_node.all_input_nodes)

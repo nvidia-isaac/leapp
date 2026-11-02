@@ -19,6 +19,7 @@ import collections.abc
 from dataclasses import dataclass, fields
 from typing import Optional, Any, Dict, Tuple, List
 
+import numpy as np
 import torch
 
 # Dtype mapping lives in a dependency-free module; re-exported here (explicit
@@ -52,6 +53,7 @@ from leapp.utils.yaml_utils import (
     CompactYamlList as CompactYamlList,
     CompactYamlDict as CompactYamlDict,
 )
+from leapp.utils.shape_contracts import serialize_shape_axes
 
 
 @dataclass
@@ -99,6 +101,8 @@ class TensorDescription:
         if isinstance(value, TracedData):
             source_node = value.context_obj
             port = value.output_port
+
+        self.dynamic_array_supported = isinstance(value, (torch.Tensor, np.ndarray))
 
         # unwrap TracedData to the underlying tensor
         if isinstance(value, TracedData):
@@ -189,6 +193,9 @@ class TensorDescription:
                 result[key] = value.value
             else:
                 result[key] = value
+        axes = serialize_shape_axes(self, result.get("axes", []))
+        if axes:
+            result["axes"] = axes
         return result
 
     def change_name(self, new_name: str):
@@ -224,7 +231,6 @@ class ParameterFormat:
     formatting: Any
 
     def get_format_string(self, data: Any) -> Tuple[bool, str]:
-
         if isinstance(data, collections.abc.Sequence) and not isinstance(
             data, (str, bytes, torch.Tensor)
         ):

@@ -7,10 +7,13 @@
 
 import functools
 
+from ..primitives.traced_int import find_recording_int
+
 import torch
 
 from .._attribute_patching import AttributePatchRegistry
 from ..proxy import conversion_proxy
+from leapp.utils.shape_values import suppress_dynamic_shape_tracing, trace_call
 
 
 class TorchPatchBackend:
@@ -38,6 +41,11 @@ class TorchPatchBackend:
                 original = getattr(module, name)
                 patched = self._create_patch(original)
                 self._patches.install(module, name, original, patched)
+            for name in ("reshape", "zeros", "ones", "full", "arange"):
+                original = getattr(torch, name)
+                self._patches.install(
+                    torch, name, original, self._shape_patch(original)
+                )
             torch.jit._state.disable()
         except Exception:
             self._patches.restore()
@@ -56,6 +64,7 @@ class TorchPatchBackend:
         """Create a patched version of a torch function that preserves tracing."""
 
         @functools.wraps(original_func)
+        @suppress_dynamic_shape_tracing
         def patched(data, *args, **kwargs):
             from leapp.leapp_graph.datatypes import (
                 TracedData,
@@ -110,6 +119,16 @@ class TorchPatchBackend:
                     return data.preserve_port(result)
 
             return result
+
+        return patched
+
+    @staticmethod
+    def _shape_patch(original):
+        @functools.wraps(original)
+        def patched(*args, **kwargs):
+            if (shape := find_recording_int((args, kwargs))) is not None:
+                return trace_call(original, args, kwargs, shape=shape)
+            return original(*args, **kwargs)
 
         return patched
 

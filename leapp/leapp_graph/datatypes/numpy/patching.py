@@ -7,9 +7,12 @@
 
 import functools
 
+from ..primitives.traced_int import find_recording_int
+
 import numpy as np
 
 from .._attribute_patching import AttributePatchRegistry
+from leapp.utils.shape_values import trace_numpy_factory
 
 
 class NumpyPatchBackend:
@@ -40,6 +43,9 @@ class NumpyPatchBackend:
                     copy_default=True if name == "array" else None,
                 )
                 self._patches.install(module, name, original, patched)
+            for name in ("zeros", "ones", "full", "arange"):
+                original = getattr(np, name)
+                self._patches.install(np, name, original, self._shape_patch(original))
         except Exception:
             self._patches.restore()
             raise
@@ -65,5 +71,15 @@ class NumpyPatchBackend:
             # dtype is the only positional argument np.array and np.asarray share.
             dtype = args[0] if args else kwargs.get("dtype")
             return data.__array__(dtype=dtype, copy=kwargs.get("copy", copy_default))
+
+        return patched
+
+    @staticmethod
+    def _shape_patch(original):
+        @functools.wraps(original)
+        def patched(*args, **kwargs):
+            if (shape := find_recording_int((args, kwargs))) is not None:
+                return trace_numpy_factory(original, args, kwargs, shape=shape)
+            return original(*args, **kwargs)
 
         return patched
