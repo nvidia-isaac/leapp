@@ -119,4 +119,6 @@ Deliver the full LEAPP bundle plus native-runtime setup information. Embedded ke
 
 ## Only when maintaining LEAPP itself
 
+Traced CUDA Warp-to-Torch conversions use zero-copy DLPack across supported PyTorch versions. CUDA graph allocation pointers are not device-queryable before the first graph launch, so older PyTorch's CUDA array-interface conversion cannot wrap them during capture. Preserve allocation ownership, gradient buffers, and stream ordering when changing this conversion.
+
 For internal changes, use the tracing-maintenance skill if available. Traced Torch operations (including views/indexing) must close a pending automatic Warp region **before eager execution or extracting FX argument proxies**. Closing only at FX insertion can preserve stale proxies; view operations may have no CUDA callback. Internal paused work and explicit owner-protected regions retain their lifecycle. In source checkouts, relevant regression coverage includes `tests/unit_tests/test_warp_torch_boundaries.py` and `test_torch_view_consumes_pending_warp_output` in the Warp functional suite. This is maintainer guidance, not an application rewrite requirement.

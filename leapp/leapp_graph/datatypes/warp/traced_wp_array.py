@@ -23,6 +23,19 @@ from leapp.utils.logging import _get_logger
 _MAX_PARAM_SCAN_DEPTH = 16
 
 
+def _to_torch_dlpack(a: wp.array, requires_grad: bool | None = None) -> torch.Tensor:
+    """Share CUDA storage without querying a graph allocation's device."""
+    if requires_grad is None:
+        requires_grad = a.requires_grad
+    tensor = torch.from_dlpack(wp.to_dlpack(a))
+    tensor.requires_grad = requires_grad
+    tensor._warp_array = a
+    if requires_grad and a.requires_grad:
+        tensor.grad = torch.from_dlpack(wp.to_dlpack(a.grad))
+        tensor.grad._warp_grad_array = a.grad
+    return tensor
+
+
 # Register the Warp dtype codec so leapp core can convert warp dtypes to common
 # name strings without importing warp itself. Mirrors the torch/numpy entries
 # and only runs when this (warp-gated) module is imported.
@@ -190,7 +203,14 @@ class TracedWpArray(wp.array, TracedData):
         call_args = TracedData.unwrap_traced_data(args)
         call_kwargs = TracedData.unwrap_traced_data(kwargs)
         with backend.pause_context():
-            raw = func(*call_args, **call_kwargs)
+            if (
+                func.__name__ == "to_torch"
+                and isinstance(src, cls)
+                and src.device.is_cuda
+            ):
+                raw = _to_torch_dlpack(*call_args, **call_kwargs)
+            else:
+                raw = func(*call_args, **call_kwargs)
 
         if raw is src.data:
             return True, src
