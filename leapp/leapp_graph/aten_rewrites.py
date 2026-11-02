@@ -24,7 +24,7 @@ def scriptable_sym_ite(condition: bool, if_true: int, if_false: int) -> int:
     return torch.sym_ite(condition, if_true, if_false)
 
 
-def functionalize_graph(graph, root, inputs):
+def functionalize_graph(graph, root, inputs, *, dynamic_shapes=None):
     """Import the functional user-output graph, retaining the recording graph ID.
 
     Use the ExportedProgram signature instead of ``module()``: the latter adds
@@ -40,7 +40,9 @@ def functionalize_graph(graph, root, inputs):
     with torch.inference_mode(False):
         samples = tuple(value.detach().clone() for value in inputs)
     try:
-        program = torch.export.export(raw, samples, strict=False).run_decompositions({})
+        program = torch.export.export(
+            raw, samples, strict=False, dynamic_shapes=dynamic_shapes
+        ).run_decompositions({})
     except GuardOnDataDependentSymNode:
         # Older exporters cannot normalize tensor-valued slice bounds. Retain
         # ordered native mutations for FX/TorchScript, cloning inputs/constants
@@ -207,10 +209,10 @@ def rewrite_aten_ops(graph: fx.Graph):
             continue
 
         # The legacy tracer freezes integer arguments to raw ATen calls. Keep
-        # both the size query and its expansion consumer as Tensor methods so
+        # the size queries and their expansion consumer as Tensor methods so
         # functionalized scalar assignments retain their runtime selection size.
-        if op_name == "sym_size":
-            _rewrite_as_method(node, "size")
+        if op_name in ("sym_size", "sym_numel"):
+            _rewrite_as_method(node, "size" if op_name == "sym_size" else "numel")
             rewritten.append(op_name)
             continue
 

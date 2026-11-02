@@ -11,6 +11,7 @@ from leapp.backends.export_backend import (
     SimplifiedONNXProgram,
 )
 from leapp.utils.logging import _get_logger
+from leapp.utils.shape_contracts import build_onnx_dynamic_axes
 from leapp.backends._onnxscript_compat import patch_onnxscript_matcher
 import os
 import onnx
@@ -323,6 +324,7 @@ class ONNXTorchScriptExportBackend(ONNXExportBackend):
             input_values,
             save_path,
             dynamo=False,
+            dynamic_axes=build_onnx_dynamic_axes(self.node_context),
             input_names=[tensor_desc.name for tensor_desc in self.node_context.inputs],
             output_names=[
                 tensor_desc.name for tensor_desc in self.node_context.outputs
@@ -529,8 +531,15 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
         self.opset_version = self.backend_params.get(
             "opset_version", _constants.ONNX_DEFAULT_OPSET
         )
+        program = getattr(self.node_context, "shape_program", None)
+        if program is not None and all(
+            n.op in {"placeholder", "output"} for n in program.graph.nodes
+        ):
+            raise ValueError(
+                "ONNX Dynamo identity-only variable graphs are unsupported by the tested exporter; use PT2 or a validated legacy/JIT backend"
+            )
         onnx_program = torch.onnx.export(
-            m,
+            program if program is not None else m,
             input_values,
             None,  # no need to save the model
             dynamo=True,

@@ -176,3 +176,41 @@ def graph_value(value):
     if isinstance(value, TracedInt):
         return value.proxy if value.is_recording else int(value)
     return value
+
+
+def _contains_traced_int(obj) -> bool:
+    found = False
+
+    def visit(item):
+        nonlocal found
+        found = found or isinstance(item, TracedInt)
+        return item
+
+    TracedData._map_structure(obj, visit)
+    return found
+
+
+def graph_sizes(obj):
+    """Prepare arguments holding traced integers for FX recording.
+
+    FX records a size as a proxy, which ``torch.Size`` cannot hold, so sizes
+    become tuples. A traced integer whose node stopped recording has no node in
+    the graph being built and becomes the plain integer it holds.
+    """
+    if not _contains_traced_int(obj):
+        return obj
+
+    def convert(item):
+        if isinstance(item, TracedInt):
+            return item if item.is_recording else int(item)
+        if isinstance(item, torch.Size):
+            return tuple(convert(size) for size in item)
+        if isinstance(item, slice):
+            return slice(convert(item.start), convert(item.stop), convert(item.step))
+        if isinstance(item, (list, tuple)) and not hasattr(item, "_fields"):
+            return type(item)(convert(value) for value in item)
+        if isinstance(item, dict):
+            return {name: convert(value) for name, value in item.items()}
+        return item
+
+    return convert(obj)

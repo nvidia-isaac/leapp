@@ -14,6 +14,8 @@ import numpy as np
 import torch
 import yaml
 
+from leapp import Axis, TensorSemantics, Variable
+
 from leapp.leapp_graph.datatypes import TracedData, TracedInt, TracedTensor
 from leapp.leapp_graph.traced_node import TracedTensorNode
 
@@ -71,6 +73,29 @@ class TestTracedIntType(unittest.TestCase):
 
 
 class TestTracedIntArithmetic(unittest.TestCase):
+    def test_declared_variable_shape_replays_with_new_length(self):
+        for library in (torch, np):
+            with self.subTest(library=library.__name__):
+                sample = library.arange(16).reshape(2, 8)
+                ctx = TracedTensorNode(name="pairs", node_index=0)
+                semantics = TensorSemantics(
+                    "x",
+                    sample,
+                    axes=[
+                        None,
+                        Axis(variable=Variable("length", min=4, max=32, multiple_of=2)),
+                    ],
+                )
+                x = ctx.create_input(sample, name="x", semantics=semantics)
+                n = x.size(1) if library is torch else x.shape[1]
+                pairs = n // 2
+                self.assertIs(type(n), TracedInt)
+                self.assertIs(type(pairs), TracedInt)
+                self.assertEqual(int(pairs), 4)
+                ctx.compile_trace({"y": x.reshape(2, pairs, 2)})
+                fresh = torch.arange(24).reshape(2, 12)
+                torch.testing.assert_close(ctx.m(fresh), fresh.reshape(2, 6, 2))
+
     def test_integer_arithmetic_is_recorded(self):
         ctx, n = _traced_count()
         cases = [
@@ -175,6 +200,25 @@ class TestTracedIntOutsideActiveTracing(unittest.TestCase):
         self.assertEqual(result, 5)
         self.assertEqual(result.proxy.node.args, (n.proxy.node, 3))
         self.assertIs(type(result.proxy.node.args[1]), int)
+
+    def test_inactive_integer_in_dynamic_numpy_operation(self):
+        for replaced in (False, True):
+            with self.subTest(replaced=replaced):
+                old, n = _traced_count()
+                if replaced:
+                    old.reset_trace_state()
+                else:
+                    old._model_captured = True
+                ctx = TracedTensorNode(name="numpy", node_index=1)
+                sample = np.ones(8, dtype=np.float32)
+                semantics = TensorSemantics(
+                    "x", sample, axes=[Axis(variable=Variable("length", min=4, max=32))]
+                )
+                x = ctx.create_input(sample, name="x", semantics=semantics)
+                ctx.compile_trace({"y": x + n})
+                torch.testing.assert_close(
+                    ctx.m(torch.ones(12)), torch.full((12,), 3.0)
+                )
 
     def test_operands_from_other_active_nodes_are_rejected(self):
         _, n = _traced_count(name="a")
