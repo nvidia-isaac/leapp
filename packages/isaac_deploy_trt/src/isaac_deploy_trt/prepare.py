@@ -111,6 +111,55 @@ def needs_tensorrt_rewrite(
     return False
 
 
+def external_data_locations(model: onnx.ModelProto) -> set[str]:
+    """Relative paths named by tensors stored outside the ONNX protobuf."""
+    tensors = list(model.graph.initializer) + list(model.graph.sparse_initializer)
+    for node in model.graph.node:
+        for attr in node.attribute:
+            if attr.HasField("t"):
+                tensors.append(attr.t)
+            tensors.extend(attr.tensors)
+    locations = set()
+    for tensor in tensors:
+        if tensor.data_location != onnx.TensorProto.EXTERNAL:
+            continue
+        for entry in tensor.external_data:
+            if entry.key == "location" and entry.value:
+                locations.add(entry.value)
+    return locations
+
+
+def copy_external_data(src_onnx: str, dst_onnx: str, model: Optional[onnx.ModelProto] = None) -> None:
+    """Copy external weight files referenced by ``src_onnx`` next to ``dst_onnx``.
+
+    GraphSurgeon loads the protobuf without those weights, and the rewritten
+    model keeps the same relative locations. The files have to travel with it.
+    """
+    if model is None:
+        model = onnx.load(src_onnx, load_external_data=False)
+    src_dir = os.path.dirname(os.path.abspath(src_onnx))
+    dst_dir = os.path.dirname(os.path.abspath(dst_onnx))
+    for location in sorted(external_data_locations(model)):
+        if os.path.isabs(location):
+            continue
+        src_path = os.path.abspath(os.path.join(src_dir, location))
+        if os.path.commonpath([src_dir, src_path]) != src_dir:
+            raise ValueError(
+                f"{os.path.basename(src_onnx)} external data location escapes "
+                f"its directory: {location}"
+            )
+        if not os.path.isfile(src_path):
+            raise FileNotFoundError(
+                f"{os.path.basename(src_onnx)} references external data "
+                f"{location!r}, but {src_path} is missing"
+            )
+        dst_path = os.path.abspath(os.path.join(dst_dir, location))
+        if src_path == dst_path:
+            continue
+        os.makedirs(os.path.dirname(dst_path) or ".", exist_ok=True)
+        shutil.copy2(src_path, dst_path)
+
+
 def _copy_with_sidecars(src_onnx: str, dst_onnx: str) -> None:
     shutil.copy2(src_onnx, dst_onnx)
     src_dir = os.path.dirname(os.path.abspath(src_onnx))
@@ -163,6 +212,7 @@ def rewrite_onnx_file(
     graph = load_graph(src)
     rewritten_nodes = apply_tensorrt_rewrites(graph, surgeon_ops=surgeon_ops)
     save_graph(graph, dst)
+    copy_external_data(src, dst, source_model)
     aligned = onnx.load(dst, load_external_data=False)
     aligned_io = graph_io_signature(aligned)
     if aligned_io != source_io:

@@ -23,7 +23,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from leapp.backends.tensorrt_leapp_bundle import align_leapp_export_for_tensorrt
+from isaac_deploy_trt.tensorrt_leapp_bundle import align_leapp_export_for_tensorrt
 
 
 def main(argv: list[str] | None = None) -> int:

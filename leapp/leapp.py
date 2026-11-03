@@ -201,7 +201,34 @@ def compile_graph(visualize=True, verbose=None, validate=True,
     return True
 
 
-def optimize_graph(trt_compatible=False):
+def _tensorrt_release(version):
+    """Normalize ``trt_version`` to the catalog release string."""
+    if version is None:
+        return None
+    if isinstance(version, bool) or not isinstance(version, (str, int, float)):
+        _get_logger().fatal(
+            "optimize_graph(trt_version=...) expects a TensorRT release such as '10.14'",
+            error_type=TypeError,
+        )
+    text = str(version).strip()
+    if text[:1] in "vV" and len(text) > 1 and text[1].isdigit():
+        text = text[1:]
+    if not text or not text[0].isdigit():
+        _get_logger().fatal(
+            f"Invalid TensorRT version {version!r}. Pass a release such as '10.14'.",
+            error_type=ValueError,
+        )
+    return text
+
+
+def optimize_graph(
+    trt_compatible=False,
+    trt_version=None,
+    validate=True,
+    rtol=1e-3,
+    atol=1e-5,
+    strict=True,
+):
     """Post-compile optimizations for the saved LEAPP graph.
 
     Call after ``compile_graph()``. Options can be combined as more passes are
@@ -210,9 +237,19 @@ def optimize_graph(trt_compatible=False):
     When ``trt_compatible=True``, LEAPP optimizes exported ONNX files in the
     graph output directory so TensorRT can parse them (UINT8 intermediate
     Casts, Resize ``antialias``, rank-9 Reshape) and updates YAML checksums
-    plus ``parameters.optimization`` and ``parameters.tensorrt_version``.
+    for files that changed. ``compile_graph()`` does not perform this rewrite.
+    ``trt_version`` selects the catalog, for example ``"10.14"``. With no
+    version, the minimal catalog is used. Compatibility is returned from this
+    call and is not stored on model parameters.
     Graph input/output names, dtypes,
-    and shapes are left unchanged. Requires ``isaac_deploy_trt``.
+    and shapes are left unchanged. When optimization changes an ONNX file,
+    it is re-run against the captured trace inputs and outputs. ``rtol``,
+    ``atol``, and ``strict`` have the same meanings as in ``compile_graph``;
+    pass ``validate=False`` to skip this check. Requires ``isaac_deploy_trt``.
+
+    The returned dict contains ``trt_compatible`` mapped to a list of release
+    labels, such as ``["10.14"]`` or ``["minimal"]``, when every ONNX model
+    is supported by the selected catalog. The key is omitted otherwise.
     """
     manager = _MANAGER
 
@@ -240,7 +277,7 @@ def optimize_graph(trt_compatible=False):
 
     if trt_compatible:
         try:
-            from leapp.backends.tensorrt_leapp_bundle import (
+            from isaac_deploy_trt.tensorrt_leapp_bundle import (
                 rewrite_leapp_export_for_tensorrt,
             )
         except ImportError as exc:
@@ -251,19 +288,39 @@ def optimize_graph(trt_compatible=False):
                 cause=exc,
             )
         _get_logger().section("Graph optimization: trt_compatible")
-        result = rewrite_leapp_export_for_tensorrt(save_path)
+        result = rewrite_leapp_export_for_tensorrt(
+            save_path,
+            tensorrt=_tensorrt_release(trt_version),
+        )
+        manager.record_rewritten_model_hashes(result.models)
         rewritten = [model.filename for model in result.models if model.rewritten]
         if rewritten:
             _get_logger().info(
                 f"Optimized ONNX for TensorRT: {', '.join(rewritten)}"
             )
+            if validate:
+                manager.validate_optimized_onnx_models(
+                    [os.path.join(save_path, filename) for filename in rewritten],
+                    rtol=rtol,
+                    atol=atol,
+                    strict=strict,
+                )
         else:
             _get_logger().info(
                 "No TensorRT GraphSurgeon optimizations were needed for exported ONNX"
             )
-        applied["trt_compatible"] = result
+        versions = []
+        for model in result.models:
+            if not model.optimization:
+                versions = []
+                break
+            version = model.tensorrt_version or "minimal"
+            if version not in versions:
+                versions.append(version)
+        if versions:
+            applied["trt_compatible"] = versions
 
-    if not applied:
+    if not trt_compatible:
         _get_logger().warning(
             "leapp.optimize_graph() ran with no optimization options enabled. "
             "Pass trt_compatible=True to optimize ONNX for TensorRT."

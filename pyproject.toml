@@ -87,7 +87,6 @@ graph-surgery = [
 ]
 
 [project.scripts]
-leapp = "leapp.cli:main"
 isaac_deploy_trt = "isaac_deploy_trt.cli:main"
 generate-tensorrt-supported-layers = "isaac_deploy_trt.generate_cmd:main"
 

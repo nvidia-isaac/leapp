@@ -9,11 +9,9 @@ TensorRT's ONNX parser looks up a registered plugin creator whose name matches
 the ONNX node ``op_type``. These helpers rewrite the graph (via GraphSurgeon)
 so a standard ONNX layer or tensor-bounded subgraph becomes that plugin node.
 
-Requires ``isaac_deploy_trt`` (``pip install -e ./packages/isaac_deploy_trt``).
-
 Example::
 
-    from leapp.backends.tensorrt_plugin_replace import (
+    from isaac_deploy_trt.tensorrt_plugin_replace import (
         TrtPluginSpec,
         replace_onnx_layer_with_trt_plugin,
     )
@@ -33,27 +31,19 @@ Example::
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 from onnx import ModelProto
 
-from leapp.utils.logging import _get_logger
+from isaac_deploy_trt import surgery as ogs
+
+logger = logging.getLogger(__name__)
 
 GraphLike = Any
 NodeLike = Any
 TensorLike = Any
-
-
-def _ogs():
-    try:
-        from isaac_deploy_trt import surgery as ogs
-    except ImportError as exc:
-        raise ImportError(
-            "isaac_deploy_trt is required for TensorRT plugin replacement. "
-            "Install with: pip install -e ./packages/isaac_deploy_trt"
-        ) from exc
-    return ogs
 
 
 @dataclass
@@ -111,15 +101,15 @@ def replace_layer_with_trt_plugin(
     elif new_name is None and not keep_node_name:
         new_name = f"{layer_name}_{spec.name}"
 
-    node = _ogs().replace_node_with_plugin(
+    node = ogs.replace_node_with_plugin(
         graph,
         layer_name,
         spec.name,
         attrs=spec.onnx_attrs(),
         new_name=new_name,
     )
-    _get_logger().info(
-        f"Replaced ONNX layer {layer_name!r} with TRT plugin {spec.name!r}"
+    logger.info(
+        "Replaced ONNX layer %r with TRT plugin %r", layer_name, spec.name
     )
     return node
 
@@ -143,7 +133,7 @@ def replace_layers_by_op_with_trt_plugin(
         List of replaced plugin nodes.
     """
     spec = _normalize_plugin(plugin)
-    matches = _ogs().find_nodes(graph, op=onnx_op, predicate=predicate)
+    matches = ogs.find_nodes(graph, op=onnx_op, predicate=predicate)
     replaced: List[NodeLike] = []
     for node in matches:
         # Names can be empty; fall back to object identity via current name
@@ -153,8 +143,11 @@ def replace_layers_by_op_with_trt_plugin(
         replaced.append(
             replace_layer_with_trt_plugin(graph, node.name, spec, keep_node_name=True)
         )
-    _get_logger().info(
-        f"Replaced {len(replaced)} ONNX '{onnx_op}' layer(s) with TRT plugin {spec.name!r}"
+    logger.info(
+        "Replaced %s ONNX %r layer(s) with TRT plugin %r",
+        len(replaced),
+        onnx_op,
+        spec.name,
     )
     return replaced
 
@@ -173,7 +166,7 @@ def replace_subgraph_with_trt_plugin(
     plugin node with those I/O tensors, then cleanup dangling nodes.
     """
     spec = _normalize_plugin(plugin)
-    node = _ogs().replace_subgraph(
+    node = ogs.replace_subgraph(
         graph,
         inputs=inputs,
         outputs=outputs,
@@ -182,10 +175,12 @@ def replace_subgraph_with_trt_plugin(
         name=spec.node_name or "",
     )
     if cleanup:
-        _ogs().cleanup_graph(graph)
-    _get_logger().info(
-        f"Replaced subgraph with TRT plugin {spec.name!r} "
-        f"(inputs={list(inputs)}, outputs={list(outputs)})"
+        ogs.cleanup_graph(graph)
+    logger.info(
+        "Replaced subgraph with TRT plugin %r (inputs=%s, outputs=%s)",
+        spec.name,
+        list(inputs),
+        list(outputs),
     )
     return node
 
@@ -233,7 +228,7 @@ def replace_onnx_layer_with_trt_plugin(
     if (input_tensors is None) ^ (output_tensors is None):
         raise ValueError("input_tensors and output_tensors must be provided together")
 
-    graph = _ogs().load_graph(model_or_path)
+    graph = ogs.load_graph(model_or_path)
     spec = _normalize_plugin(plugin)
 
     if layer_name is not None:
@@ -248,10 +243,10 @@ def replace_onnx_layer_with_trt_plugin(
             graph, input_tensors, output_tensors, spec, cleanup=True
         )
 
-    model = _ogs().export_model(graph, do_cleanup=True)
+    model = ogs.export_model(graph, do_cleanup=True)
     if output_path is not None:
         import onnx
 
         onnx.save(model, output_path)
-        _get_logger().info(f"Wrote TRT-plugin ONNX to {output_path}")
+        logger.info("Wrote TRT-plugin ONNX to %s", output_path)
     return model

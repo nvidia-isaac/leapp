@@ -21,6 +21,7 @@ import inspect
 import os
 import torch
 
+from leapp.backends.export_backend import SimplifiedONNXProgram
 from leapp.utils.logging import _get_logger
 from leapp.leapp_graph.leapp_node import LeappNode
 from leapp.leapp_graph.traced_node import TracedTensorNode
@@ -974,3 +975,94 @@ class ExportManager:
             _get_logger().fatal(message, error_type=Exception)
 
         return results
+
+    def validate_optimized_onnx_models(
+        self,
+        model_paths,
+        rtol: float = 1e-3,
+        atol: float = 1e-5,
+        strict: bool = True,
+    ):
+        """Validate rewritten ONNX models against the captured trace outputs.
+
+        ``compile_graph`` normally validates the export backend's in-memory
+        program. Optimization replaces the saved ONNX file, so this method
+        temporarily runs the rewritten file through the same node-level
+        validation and tolerance checks.
+        """
+        nodes_by_path = {
+            os.path.abspath(node.model_path): node
+            for node in self.nodes.values()
+            if node.model_path
+        }
+        results = {}
+        error_hints = []
+
+        _get_logger().section(f"Validating {len(model_paths)} optimized ONNX models")
+        for model_path in model_paths:
+            model_path = os.path.abspath(model_path)
+            node = nodes_by_path.get(model_path)
+            if node is None:
+                _get_logger().warning(
+                    f"Cannot validate optimized {os.path.basename(model_path)}: "
+                    "its captured trace inputs and outputs are unavailable."
+                )
+                continue
+
+            _get_logger().info(f"Validating optimized {node.name}...")
+            previous_model = node.export_backend.compiled_model
+            try:
+                node.export_backend.compiled_model = SimplifiedONNXProgram(model_path)
+                passed, error_hint = node.validate_compiled_model(rtol=rtol, atol=atol)
+                results[node.name] = passed
+                if error_hint is not None:
+                    error_hints.append(f"{node.name}: {error_hint}")
+            except Exception as exc:
+                _get_logger().error(
+                    f"{node.name}: Optimized ONNX validation failed with exception: {exc}"
+                )
+                results[node.name] = exc
+            finally:
+                node.export_backend.compiled_model = previous_model
+
+        failed_nodes = [name for name, result in results.items() if result is not True]
+        if strict and failed_nodes:
+            message = (
+                "Optimized ONNX validation failed for "
+                f"{len(failed_nodes)} node(s): {failed_nodes}"
+            )
+            if error_hints:
+                message += "\n\n" + "\n".join(error_hints)
+            _get_logger().fatal(message, error_type=Exception)
+
+        if results:
+            passed = sum(result is True for result in results.values())
+            _get_logger().info(
+                f"Optimized ONNX validation summary: {passed}/{len(results)} passed"
+            )
+        return results
+
+    def record_rewritten_model_hashes(self, models) -> None:
+        """Store checksums of ONNX files changed by graph optimization.
+
+        ``compile_graph`` records the hash of the ONNX file written by the
+        export backend. A later rewrite replaces that file, so the node and
+        the saved graph description need the new hash. TensorRT compatibility
+        stays on the ``optimize_graph`` result and is not written into model
+        parameters.
+        """
+        by_filename = {model.filename: model for model in models}
+        detected = getattr(self, "detected_nodes", {}) or {}
+        for node in self.nodes.values():
+            if not node.model_path:
+                continue
+            match = by_filename.get(os.path.basename(node.model_path))
+            if match is None or not match.rewritten:
+                continue
+            node.md5sum = match.md5sum
+            node.sha256sum = match.sha256sum
+            description = detected.get(node.name)
+            parameters = description.get("parameters") if isinstance(description, dict) else None
+            if isinstance(parameters, dict):
+                parameters["md5sum"] = match.md5sum
+                parameters["sha256sum"] = match.sha256sum

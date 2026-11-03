@@ -14,6 +14,7 @@ import unittest
 import numpy as np
 import onnx
 from onnx import TensorProto, helper, numpy_helper
+from onnx.external_data_helper import convert_model_to_external_data
 
 from isaac_deploy_trt import surgery as ogs
 from isaac_deploy_trt.prepare import needs_tensorrt_rewrite, rewrite_onnx_file
@@ -152,6 +153,53 @@ class TestSurgery(_GraphSurgeonTest):
             out = onnx.load(dst)
             self.assertEqual([i.name for i in out.graph.input], ["x"])
             self.assertEqual([o.name for o in out.graph.output], ["y"])
+
+    def test_rewrite_copies_external_data(self):
+        weight = numpy_helper.from_array(np.arange(4, dtype=np.float32), name="w")
+        scales = numpy_helper.from_array(np.array([1, 1, 2, 2], dtype=np.float32), name="scales")
+        resize = helper.make_node(
+            "Resize",
+            ["x", "", "", "scales"],
+            ["y"],
+            name="resize0",
+            mode="linear",
+            antialias=1,
+        )
+        graph = helper.make_graph(
+            nodes=[resize],
+            name="rz",
+            inputs=[helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, 1, 2, 2])],
+            outputs=[helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 1, 4, 4])],
+            initializer=[weight, scales],
+        )
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+        convert_model_to_external_data(
+            model,
+            all_tensors_to_one_file=True,
+            location="model.onnx.data",
+            size_threshold=0,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            src_dir = os.path.join(tmp, "input")
+            dst_dir = os.path.join(tmp, "output")
+            os.makedirs(src_dir)
+            src = os.path.join(src_dir, "model.onnx")
+            onnx.save(model, src)
+            self.assertTrue(os.path.isfile(os.path.join(src_dir, "model.onnx.data")))
+            dst = os.path.join(dst_dir, "model.onnx")
+            result = rewrite_onnx_file(src, dst)
+            self.assertTrue(result.rewritten)
+            copied = os.path.join(dst_dir, "model.onnx.data")
+            self.assertTrue(os.path.isfile(copied))
+            with open(os.path.join(src_dir, "model.onnx.data"), "rb") as handle:
+                source_bytes = handle.read()
+            with open(copied, "rb") as handle:
+                self.assertEqual(handle.read(), source_bytes)
+            loaded = onnx.load(dst, load_external_data=True)
+            scales_out = numpy_helper.to_array(
+                next(init for init in loaded.graph.initializer if init.name == "scales")
+            )
+            self.assertTrue(np.array_equal(scales_out, np.array([1, 1, 2, 2], dtype=np.float32)))
 
 
 class UnsupportedSurgeryTests(_GraphSurgeonTest):

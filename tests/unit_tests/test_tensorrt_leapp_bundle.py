@@ -17,7 +17,7 @@ import yaml
 
 try:
     from isaac_deploy_trt.surgery import graph_io_signature
-    from leapp.backends.tensorrt_leapp_bundle import (
+    from isaac_deploy_trt.tensorrt_leapp_bundle import (
         align_leapp_export_for_tensorrt,
         rewrite_leapp_export_for_tensorrt,
     )
@@ -25,10 +25,6 @@ except ImportError:
     graph_io_signature = None  # type: ignore[assignment]
     align_leapp_export_for_tensorrt = None  # type: ignore[assignment]
     rewrite_leapp_export_for_tensorrt = None  # type: ignore[assignment]
-
-from leapp.backends.onnx_export_backend import ONNXExportBackend
-from leapp.utils.logging import _get_logger
-
 
 def _write_abs_onnx(path: str) -> None:
     graph = helper.make_graph(
@@ -145,17 +141,11 @@ class TestTensorrtLeappBundle(unittest.TestCase):
             self.assertEqual(
                 out_spec["models"]["backbone"]["parameters"]["backend"], "onnx"
             )
-            self.assertTrue(
-                out_spec["models"]["backbone"]["parameters"]["optimization"]
-            )
-            self.assertTrue(
-                video_params["optimization"]
-            )
-            self.assertEqual(video_params["tensorrt_version"], "minimal")
             self.assertEqual(
-                out_spec["models"]["backbone"]["parameters"]["tensorrt_version"],
-                "minimal",
+                out_spec["models"]["backbone"]["parameters"]["sha256sum"], "old"
             )
+            self.assertNotIn("optimization", video_params)
+            self.assertNotIn("tensorrt_version", video_params)
             self.assertNotIn("tensorrt_compatible", video_params)
 
     def test_yaml_marks_unsupported_ops_not_tensorrt_compatible(self):
@@ -173,6 +163,8 @@ class TestTensorrtLeappBundle(unittest.TestCase):
                             "backend": "onnx",
                             "md5sum": "old",
                             "sha256sum": "old",
+                            "optimization": True,
+                            "tensorrt_version": "10.14",
                         }
                     }
                 }
@@ -183,13 +175,9 @@ class TestTensorrtLeappBundle(unittest.TestCase):
             align_leapp_export_for_tensorrt(src, dst)
             with open(os.path.join(dst, "exported_leapp.yaml"), encoding="utf-8") as handle:
                 out_spec = yaml.safe_load(handle)
-            self.assertFalse(
-                out_spec["models"]["head"]["parameters"]["optimization"]
-            )
-            self.assertEqual(
-                out_spec["models"]["head"]["parameters"]["tensorrt_version"],
-                "minimal",
-            )
+            head_params = out_spec["models"]["head"]["parameters"]
+            self.assertNotIn("optimization", head_params)
+            self.assertNotIn("tensorrt_version", head_params)
 
     def test_rewrite_leapp_export_for_tensorrt_inplace(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -232,38 +220,6 @@ class TestTensorrtLeappBundle(unittest.TestCase):
                 out_spec["models"]["preprocess_video"]["parameters"]["md5sum"],
                 "old",
             )
-
-    def test_onnx_export_backend_annotates_tensorrt_compatible(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            onnx_path = os.path.join(tmp, "abs.onnx")
-            _write_abs_onnx(onnx_path)
-            backend = ONNXExportBackend.__new__(ONNXExportBackend)
-            backend.backend_params = {}
-            backend._annotate_tensorrt_compatible(onnx_path)
-            self.assertTrue(backend.tensorrt_compatible)
-            self.assertTrue(backend.get_backend_metadata()["optimization"])
-            self.assertEqual(backend.get_backend_metadata()["tensorrt_version"], "minimal")
-
-            det_path = os.path.join(tmp, "det.onnx")
-            _write_det_onnx(det_path)
-            backend.tensorrt_compatible = None
-            log_dir = os.path.join(tmp, "logs")
-            os.makedirs(log_dir)
-            _get_logger().configure(log_dir, verbose=False)
-            backend._annotate_tensorrt_compatible(det_path)
-            self.assertFalse(backend.tensorrt_compatible)
-            self.assertNotIn("tensorrt_blockers", backend.get_backend_metadata())
-            for handler in _get_logger().logger.handlers:
-                handler.flush()
-            with open(os.path.join(log_dir, "log.txt"), encoding="utf-8") as handle:
-                log_text = handle.read()
-            self.assertIn("tensorrt_blockers det.onnx: Det", log_text)
-
-            backend.backend_params = {"annotate_tensorrt_compatible": False}
-            backend.tensorrt_compatible = None
-            backend._annotate_tensorrt_compatible(onnx_path)
-            self.assertIsNone(getattr(backend, "tensorrt_compatible", None))
-            self.assertNotIn("optimization", backend.get_backend_metadata())
 
 
 if __name__ == "__main__":

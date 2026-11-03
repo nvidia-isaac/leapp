@@ -14,6 +14,7 @@ Reshape) are rewritten; others are copied byte-for-byte.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import shutil
 import tempfile
@@ -23,20 +24,55 @@ from typing import Dict, List, Optional
 import onnx
 import yaml
 
-from isaac_deploy_trt.prepare import needs_tensorrt_rewrite, surgeon_ops_for_target
+from isaac_deploy_trt.prepare import (
+    copy_external_data,
+    needs_tensorrt_rewrite,
+    surgeon_ops_for_target,
+)
 from isaac_deploy_trt.surgery import (
     apply_tensorrt_rewrites,
-    export_model,
     graph_io_signature,
     load_graph,
     save_graph,
 )
 from isaac_deploy_trt.validate import check_onnx_ops_against_tensorrt
-from leapp.backends.onnx_export_backend import log_tensorrt_blockers
-from leapp.utils.logging import _get_logger
+
+logger = logging.getLogger(__name__)
 
 
 _SKIP_ONNX_SUFFIXES = ("_trt.onnx",)
+
+
+def _emit(level: str, message: str) -> None:
+    """Log through LEAPP when it is installed, otherwise the package logger."""
+    try:
+        from leapp.utils.logging import _get_logger
+    except ImportError:
+        getattr(logger, level)(message)
+        return
+    getattr(_get_logger(), level)(message)
+
+
+def log_tensorrt_blockers(onnx_path: str, result) -> None:
+    """Write TensorRT catalog failures to the log, not the YAML.
+
+    When LEAPP is installed, the message goes to its ``log.txt``. Otherwise it
+    uses this package's standard logger.
+    """
+    blockers = list(getattr(result, "unsupported_ops", []) or [])
+    blockers.extend(
+        f"unknown:{name}" for name in (getattr(result, "unknown_ops", []) or [])
+    )
+    for error in getattr(result, "errors", []) or []:
+        if str(error).startswith("ONNX ops not "):
+            continue
+        blockers.append(str(error))
+    if not blockers:
+        return
+    _emit(
+        "warning",
+        f"tensorrt_blockers {os.path.basename(onnx_path)}: {', '.join(blockers)}",
+    )
 
 
 @dataclass
@@ -48,6 +84,8 @@ class AlignedOnnxResult:
     rewritten_nodes: List[str] = field(default_factory=list)
     md5sum: str = ""
     sha256sum: str = ""
+    optimization: bool = False
+    tensorrt_version: str = "minimal"
 
 
 @dataclass
@@ -83,34 +121,14 @@ def _copy_with_external_data(src_onnx: str, dst_onnx: str) -> None:
         os.symlink(os.path.join(src_dir, name), dst_data)
 
 
-def _has_external_data(onnx_path: str) -> bool:
-    parent = os.path.dirname(onnx_path)
-    stem = os.path.basename(onnx_path)
-    return os.path.isfile(os.path.join(parent, stem + ".data"))
-
-
 def _save_rewritten(
     graph,
     src_onnx: str,
     dst_onnx: str,
 ) -> None:
-    if _has_external_data(src_onnx):
-        model = export_model(graph)
-        data_name = os.path.basename(dst_onnx) + ".data"
-        data_path = os.path.join(os.path.dirname(dst_onnx), data_name)
-        if os.path.exists(data_path):
-            os.remove(data_path)
-        onnx.save(
-            model,
-            dst_onnx,
-            save_as_external_data=True,
-            all_tensors_to_one_file=True,
-            location=data_name,
-            size_threshold=1024,
-            convert_attribute=True,
-        )
-        return
+    """Save a rewritten graph and copy any external weight files it still names."""
     save_graph(graph, dst_onnx)
+    copy_external_data(src_onnx, dst_onnx)
 
 
 def _yaml_model_files(export_dir: str) -> Optional[List[str]]:
@@ -157,21 +175,15 @@ def _update_yaml_parameters(
                 params["sha256sum"] = sha256sum
                 changed = True
         if filename in trt_compatible_by_filename:
-            flag, version = trt_compatible_by_filename[filename]
-            flag = bool(flag)
-            version = version or "minimal"
-            if "tensorrt_compatible" in params:
-                del params["tensorrt_compatible"]
-                changed = True
-            if "tensorrt_blockers" in params:
-                del params["tensorrt_blockers"]
-                changed = True
-            if params.get("optimization") != flag:
-                params["optimization"] = flag
-                changed = True
-            if params.get("tensorrt_version") != version:
-                params["tensorrt_version"] = version
-                changed = True
+            for key in (
+                "tensorrt_compatible",
+                "tensorrt_blockers",
+                "optimization",
+                "tensorrt_version",
+            ):
+                if key in params:
+                    del params[key]
+                    changed = True
     if not changed:
         return
     with open(yaml_path, "w", encoding="utf-8") as handle:
@@ -181,6 +193,8 @@ def _update_yaml_parameters(
 def align_leapp_export_for_tensorrt(
     export_dir: str,
     output_dir: str,
+    *,
+    tensorrt: Optional[str] = None,
 ) -> AlignedBundleResult:
     """Write a sibling LEAPP dir with TensorRT-legal ONNX and aligned YAML.
 
@@ -193,7 +207,6 @@ def align_leapp_export_for_tensorrt(
     if os.path.abspath(export_dir) == output_dir:
         raise ValueError("output_dir must be different from export_dir")
     os.makedirs(output_dir, exist_ok=True)
-    logger = _get_logger()
 
     yaml_names = _yaml_model_files(export_dir)
     if yaml_names is not None:
@@ -213,7 +226,7 @@ def align_leapp_export_for_tensorrt(
     result = AlignedBundleResult(output_dir=output_dir)
     hashes: Dict[str, tuple[str, str]] = {}
     trt_compatible: Dict[str, tuple[bool, str]] = {}
-    surgeon_ops, _catalog = surgeon_ops_for_target()
+    surgeon_ops, _catalog = surgeon_ops_for_target(tensorrt=tensorrt)
 
     for src in onnx_files:
         filename = os.path.basename(src)
@@ -223,7 +236,7 @@ def align_leapp_export_for_tensorrt(
 
         if not needs_tensorrt_rewrite(source_model, surgeon_ops=surgeon_ops):
             _copy_with_external_data(src, dst)
-            logger.info(f"Copied {filename} (already TensorRT-aligned I/O)")
+            _emit("info", f"Copied {filename} (already TensorRT-aligned I/O)")
             rewritten_nodes: List[str] = []
         else:
             graph = load_graph(src)
@@ -236,15 +249,18 @@ def align_leapp_export_for_tensorrt(
                     f"TensorRT rewrite changed graph I/O for {filename}: "
                     f"{source_io} -> {aligned_io}"
                 )
-            logger.info(
-                f"Rewrote {filename} for TensorRT ({len(rewritten_nodes)} node(s))"
+            _emit(
+                "info",
+                f"Rewrote {filename} for TensorRT ({len(rewritten_nodes)} node(s))",
             )
 
         md5sum, sha256sum = _file_hashes(dst)
-        hashes[filename] = (md5sum, sha256sum)
-        catalog = check_onnx_ops_against_tensorrt(dst)
+        if rewritten_nodes:
+            hashes[filename] = (md5sum, sha256sum)
+        catalog = check_onnx_ops_against_tensorrt(dst, tensorrt=tensorrt)
         log_tensorrt_blockers(dst, catalog)
-        trt_compatible[filename] = (bool(catalog.ok), catalog.tensorrt_version or "minimal")
+        version = catalog.tensorrt_version or "minimal"
+        trt_compatible[filename] = (bool(catalog.ok), version)
         result.models.append(
             AlignedOnnxResult(
                 filename=filename,
@@ -252,6 +268,8 @@ def align_leapp_export_for_tensorrt(
                 rewritten_nodes=rewritten_nodes,
                 md5sum=md5sum,
                 sha256sum=sha256sum,
+                optimization=bool(catalog.ok),
+                tensorrt_version=version,
             )
         )
 
@@ -267,7 +285,11 @@ def align_leapp_export_for_tensorrt(
     return result
 
 
-def rewrite_leapp_export_for_tensorrt(export_dir: str) -> AlignedBundleResult:
+def rewrite_leapp_export_for_tensorrt(
+    export_dir: str,
+    *,
+    tensorrt: Optional[str] = None,
+) -> AlignedBundleResult:
     """Apply TensorRT GraphSurgeon rewrites in place under ``export_dir``.
 
     Uses a temporary sibling directory so graph I/O and YAML checksums stay
@@ -277,7 +299,11 @@ def rewrite_leapp_export_for_tensorrt(export_dir: str) -> AlignedBundleResult:
     export_dir = os.path.abspath(export_dir)
     tmp_dir = tempfile.mkdtemp(prefix=".leapp_trt_opt_", dir=export_dir)
     try:
-        result = align_leapp_export_for_tensorrt(export_dir, tmp_dir)
+        result = align_leapp_export_for_tensorrt(
+            export_dir,
+            tmp_dir,
+            tensorrt=tensorrt,
+        )
         for name in os.listdir(tmp_dir):
             src = os.path.join(tmp_dir, name)
             dst = os.path.join(export_dir, name)

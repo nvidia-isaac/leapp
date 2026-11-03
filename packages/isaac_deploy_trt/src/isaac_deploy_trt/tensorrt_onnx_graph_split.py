@@ -12,11 +12,12 @@ parser ``supports_model`` API when ``tensorrt`` is installed, similar to
 
 For insert / remove / swap / rename / subgraph-replace edits (GraphSurgeon),
 see ``isaac_deploy_trt.surgery``. To rewrite an ONNX layer as a TensorRT
-plugin node, see ``leapp.backends.tensorrt_plugin_replace``.
+plugin node, see ``isaac_deploy_trt.tensorrt_plugin_replace``.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
@@ -24,7 +25,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 import onnx
 from onnx import ModelProto, TensorProto, ValueInfoProto, helper
 
-from leapp.utils.logging import _get_logger
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -309,11 +310,13 @@ def split_onnx_by_tensorrt_support(
     result.supported_paths = supported_paths
     result.unsupported_paths = unsupported_paths
 
-    logger = _get_logger()
     logger.info(
-        f"Split {onnx_path} into {len(segments)} segment(s) "
-        f"({len(result.supported_segments)} supported, "
-        f"{len(result.unsupported_segments)} unsupported) under {out_dir}"
+        "Split %s into %s segment(s) (%s supported, %s unsupported) under %s",
+        onnx_path,
+        len(segments),
+        len(result.supported_segments),
+        len(result.unsupported_segments),
+        out_dir,
     )
     return result
 

@@ -152,7 +152,8 @@ diff (`git diff origin/main...HEAD`) is the true delta.
 | `guides/export.rst` | Backends and `export_with` |
 | `guides/graph.rst` | State, `annotate.module`, feedback |
 | `guides/buffers.rst` | `static_outputs`, `mirror_leapp_tags` |
-| `guides/debugging.rst` | Validation, logs, dry_run, `non_traced`, TensorRT optimize |
+| `guides/debugging.rst` | Validation, logs, dry_run, `non_traced` |
+| `guides/optimization.rst` | TensorRT catalog check, `optimize_graph`, merge |
 | `leapp_runtime.rst` | `InferenceManager` |
 | `semantics/` | `TensorSemantics`, kinds, `TemporalAxis` |
 | `generated_configs.rst` | YAML shape |
@@ -163,9 +164,12 @@ User-facing integration recipes belong here, not in this file.
 TensorRT GraphSurgeon optimizations, op catalogs, and LEAPP DAG merge live in
 `packages/isaac_deploy_trt`. After `compile_graph()`,
 `optimize_graph(trt_compatible=True)` optimizes ONNX in the graph directory
-and updates YAML checksums / `parameters.optimization` /
-`parameters.tensorrt_version`. When
-`--tensorrt` is omitted, `check`, `optimize`, `merge-pipeline --optimize`,
+and updates YAML checksums for rewritten files. Compatibility is the return
+value `{"trt_compatible": ["10.14"]}`, not a model parameter.
+`compile_graph()` does not replace operators for TensorRT.
+`trt_version="10.14"` selects that release's catalog; when it is omitted,
+the optimize pass uses the minimal catalog.
+When `--tensorrt` is omitted, `check`, `optimize`, `merge-pipeline --optimize`,
 and that optimize pass use the minimal catalog
 (`tensorrt_catalogs/minimal/tensorrt_layers.json`): operators and native
 layers supported by every checked-in release and platform. Merge a DAG

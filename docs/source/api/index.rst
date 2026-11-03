@@ -223,6 +223,11 @@ Signature
 
    leapp.optimize_graph(
        trt_compatible: bool = False,
+       trt_version: str | None = None,
+       validate: bool = True,
+       rtol: float = 1e-3,
+       atol: float = 1e-5,
+       strict: bool = True,
    )
 
 Parameters
@@ -234,19 +239,38 @@ Parameters
   decomposes operators the minimal TensorRT catalog marks unsupported.
   That catalog is the intersection of every checked-in release and platform
   (``tensorrt_catalogs/minimal/tensorrt_layers.json``). Updates YAML
-  checksums, ``parameters.optimization``, and ``parameters.tensorrt_version``.
-  Graph I/O names, dtypes,
-  and shapes are unchanged. Requires ``isaac_deploy_trt``. Defaults to
-  ``False``.
+  checksums for files that changed. ``compile_graph()`` does not replace
+  operators for TensorRT. Graph I/O names, dtypes, and shapes are unchanged.
+  Requires ``isaac_deploy_trt``. Defaults to ``False``.
+* ``trt_version`` (str, optional): TensorRT release whose operator catalog
+  selects unsupported-operator optimizations. ``"10.14"`` and ``10.14`` both
+  select the 10.14 catalog. Defaults to ``None``, which uses the minimal
+  catalog. The selected release is returned in ``trt_compatible`` and is not
+  written into model parameters.
+* ``validate`` (bool, optional): Run each changed ONNX model using the
+  trace's captured inputs and compare its outputs against the captured
+  outputs. Defaults to ``True``. This requires that
+  ``optimize_graph()`` runs in the same Python process as
+  ``compile_graph()``.
+* ``rtol`` (float, optional): Relative output-comparison tolerance used by
+  optimization validation. Defaults to ``1e-3``.
+* ``atol`` (float, optional): Absolute output-comparison tolerance used by
+  optimization validation. Defaults to ``1e-5``.
+* ``strict`` (bool, optional): Raise when optimization validation finds a
+  mismatch or execution error. Defaults to ``True``.
 
 Behavior
 ~~~~~~~~
 
 * Requires ``stop()`` and ``compile_graph()`` first (the graph YAML must
   exist in the output directory).
+* Validates only ONNX files changed by an optimization pass. If captured
+  trace values are unavailable, logs a warning and skips that model.
 * With no options enabled, logs a warning and returns ``{}``.
-* Returns a dict of applied passes (for example
-  ``{"trt_compatible": <bundle result>}``).
+* When every optimized ONNX model is supported by the selected catalog,
+  returns ``{"trt_compatible": ["10.14"]}`` (or ``["minimal"]`` when no
+  release was selected). The ``trt_compatible`` key is omitted when any
+  model is not supported.
 
 ``GraphConfigs``
 ----------------
@@ -967,5 +991,6 @@ See also
 * :doc:`/guides/nodes` --- advanced node patterns
 * :doc:`/guides/graph` --- graph and feedback operations
 * :doc:`/guides/debugging` --- validation and debugging
+* :doc:`/guides/optimization` --- TensorRT catalog check and ONNX optimization
 * :doc:`/leapp_runtime` --- LEAPP Python runtime
 * :doc:`/semantics/usage` --- semantic data annotation

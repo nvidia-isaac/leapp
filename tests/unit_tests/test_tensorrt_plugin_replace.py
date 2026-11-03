@@ -19,7 +19,7 @@ try:
 except ImportError:
     ogs = None  # type: ignore[assignment]
 
-from leapp.backends.tensorrt_plugin_replace import (
+from isaac_deploy_trt.tensorrt_plugin_replace import (
     TrtPluginSpec,
     replace_layer_with_trt_plugin,
     replace_layers_by_op_with_trt_plugin,

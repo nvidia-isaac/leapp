@@ -42,7 +42,10 @@ def test_visualization_modules_are_shipped_with_leapp():
     root_pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     viz_src = ROOT / "packages" / "leapp-visualization" / "src" / "leapp_visualization"
 
-    assert 'where = [".", "packages/leapp-visualization/src"]' in root_pyproject
+    assert (
+        'where = [".", "packages/leapp-visualization/src", '
+        '"packages/isaac_deploy_trt/src"]'
+    ) in root_pyproject
     assert '"leapp_visualization*"' in root_pyproject
     assert "leapp-visualization==" not in root_pyproject
     assert "[tool.uv.sources]" not in root_pyproject

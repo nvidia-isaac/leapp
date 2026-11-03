@@ -14,7 +14,7 @@ import unittest
 import onnx
 from onnx import TensorProto, helper
 
-from leapp.backends.tensorrt_onnx_graph_split import (
+from isaac_deploy_trt.tensorrt_onnx_graph_split import (
     extract_onnx_subgraph,
     is_op_tensorrt_supported,
     partition_nodes_by_tensorrt_support,
