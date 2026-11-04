@@ -200,10 +200,7 @@ class InferenceManager:
                 "Integer shape formulas and divisibility require shape contract version 2"
             )
         if any("dimension_ranges" in d for d in specs):
-            if (
-                shape_version not in (1, 2)
-                or self.system_info.get("leapp config version") != "1.4"
-            ):
+            if self.system_info.get("leapp config version") != "1.4":
                 raise ValueError(
                     "Variable shape bundles require config 1.4 and shape contract version 1 or 2"
                 )

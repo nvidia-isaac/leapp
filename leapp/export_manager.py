@@ -54,7 +54,7 @@ from leapp.utils.utils import (
 )
 from contextlib import nullcontext
 from leapp.utils.shape_contracts import (
-    Variable,
+    validate_variable_declarations,
     prepare_shape_contracts,
     validate_reentry_variable_axes,
 )
@@ -707,6 +707,7 @@ class ExportManager:
 
     def method(self, **params):
         def decorator(func):
+
             name = params.get("node_name", func.__name__)
             export_with = params.get("export_with", None)
             backend_params = params.get("backend_params", {})
@@ -843,6 +844,7 @@ class ExportManager:
         """
 
         def decorator(func):
+
             if "node_name" in params:
                 name = params["node_name"]
             else:
@@ -960,20 +962,7 @@ class ExportManager:
     def compile_models(self):
         _get_logger().section(f"Discovered {len(self.nodes)} nodes")
 
-        declarations = {}
-        for node in self.nodes.values():
-            for desc in node.inputs + node.outputs:
-                for axis in getattr(desc.semantics, "axes", None) or []:
-                    variable = getattr(axis, "variable", None)
-                    if isinstance(variable, Variable):
-                        if (
-                            variable.name in declarations
-                            and declarations[variable.name] != variable
-                        ):
-                            raise ValueError(
-                                f"Conflicting bounds for shared variable {variable.name}"
-                            )
-                        declarations[variable.name] = variable
+        validate_variable_declarations(self.nodes.values())
         for node_context in sorted(self.nodes.values(), key=lambda n: n.node_index):
             _get_logger().section(f"Compiling {node_context.name}")
             prepare_shape_contracts(node_context)
