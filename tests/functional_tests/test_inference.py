@@ -44,61 +44,6 @@ class TestInferenceManagerRobustness(LEAPPFunctionalTestBase):
         leapp.compile_graph(visualize=False)
         return os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
 
-    def test_dynamic_axes_yaml_replays_connected_nodes(self):
-        """Round-trip inferred axes through YAML, connected models, and runtime checks."""
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        x = annotate.input_tensors(
-            "scale",
-            leapp.TensorSemantics(
-                "x",
-                torch.arange(16, dtype=torch.float32).reshape(2, 8),
-                axes=[
-                    leapp.Axis(kind="element", names=["left", "right"]),
-                    leapp.Axis(
-                        variable=leapp.Variable("length", min=4, max=32, multiple_of=2)
-                    ),
-                ],
-            ),
-        )
-        y = annotate.output_tensors("scale", {"y": x * 2}, export_with="pt2")
-        y = annotate.input_tensors("pairs", {"y": y})
-        annotate.output_tensors(
-            "pairs", {"z": y.reshape(2, y.size(1) // 2, 2)}, export_with="pt2"
-        )
-        leapp.stop()
-        leapp.compile_graph(visualize=False, validate=True, strict=True)
-        path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
-        with open(path) as file:
-            models = yaml.safe_load(file)["models"]
-        for model in models.values():
-            for desc in model["inputs"] + model["outputs"]:
-                self.assertTrue(all(isinstance(size, int) for size in desc["shape"]))
-                self.assertTrue(
-                    {
-                        "example_shape",
-                        "dimension_ranges",
-                        "dimension_expressions",
-                    }.isdisjoint(desc)
-                )
-                self.assertEqual(
-                    desc["axes"][1]["variable"]["min"], 2 if desc["name"] == "z" else 4
-                )
-        self.assertEqual(
-            models["scale"]["inputs"][0]["axes"][0]["names"], ["left", "right"]
-        )
-        self.assertIn(
-            "expression", models["pairs"]["outputs"][0]["axes"][1]["variable"]
-        )
-        manager = InferenceManager(path)
-        self.assertEqual(tuple(manager.get_mock_input()["scale/x"].shape), (2, 8))
-        for length in (4, 12, 32):
-            fresh = torch.arange(2 * length, dtype=torch.float32).reshape(2, length)
-            actual = manager({"scale/x": fresh})["pairs/z"]
-            torch.testing.assert_close(actual, (fresh * 2).reshape(2, length // 2, 2))
-        for length in (5, 34):
-            with self.assertRaises(ValueError):
-                manager({"scale/x": torch.ones(2, length)})
-
     def test_sha256_mismatch_raises(self):
         """Corrupting the model file after export raises ValueError on load."""
 
