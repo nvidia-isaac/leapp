@@ -60,26 +60,34 @@ release.
    including CPU/CUDA execution and the applicable ignored backend tests.
    Rebuild and test the Python and C++ bindings using their READMEs, and verify
    the installed C++ SDK with `bindings/cxx/tests/consumer`.
-   `LEAPP_ANALYSIS_ONLY=1` checks do not validate an SDK upgrade.
+   Type checking alone does not validate an SDK upgrade.
 
 ## Validation
 
-Run from this package on Linux with Triton 2.69.0, CUDA, and the backend libraries
-available. Set `TRITON_ROOT`, `CUDA_ROOT`, and `LD_LIBRARY_PATH` for the installation.
-Set `LEAPP_TRITON_BACKENDS` to the backend directory and `LEAPP_TEST_CUDA=1` for
-GPU integration coverage. Native memory tests require a GPU.
+Core builds and checks require no Triton or CUDA SDK. Run from this package:
 
 ```sh
-python tests/generators/generate_models.py --output target/triton-fixtures
 cargo check --locked --workspace --all-targets
 cargo clippy --locked --workspace --all-targets -- -D warnings
-cargo test --locked --workspace -- --test-threads=1
+cargo test --locked --test bundle --test dlpack --test binding_lifecycle
+cargo test --locked --lib engines::memory:: -- --test-threads=1
 RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --no-deps
 ```
 
-`LEAPP_TRITON_FIXTURES` can select another fixture directory. For editor checks on
-a machine without the SDKs, use `LEAPP_ANALYSIS_ONLY=1 cargo check --locked
---workspace --all-targets`; this cannot produce a runnable build.
+For execution coverage, install the selected runtimes and generate fixtures:
+
+```sh
+python tests/generators/generate_models.py --output target/triton-fixtures
+LEAPP_TEST_ENGINE=triton LEAPP_TEST_CUDA=1 cargo test --locked --workspace -- --test-threads=1
+LEAPP_TEST_ENGINE=native LEAPP_TEST_CUDA=1 cargo test --locked --workspace -- --test-threads=1
+```
+
+These suites require Triton 2.69.0, CUDA, ONNX Runtime, and a GPU. Configure
+`TRITON_ROOT`, `CUDA_ROOT`, `LEAPP_TRITON_BACKENDS`, and library search paths for
+the installation. `LEAPP_TRITON_FIXTURES` selects another fixture directory.
+CUDA memory tests run only with `LEAPP_TEST_CUDA=1`; native Triton callback tests
+run only with `LEAPP_TEST_ENGINE=triton`. Explicitly enabled tests must fail
+when their required libraries or devices are unavailable.
 
 Optional backend fixtures use `generate_pt2_models.py`,
 `generate_torchscript_models.py`, and `generate_tensorrt_models.py` under
@@ -114,8 +122,10 @@ failed-copy cleanup, independent peer caches, and CPU/pinned/CUDA behavior.
 
 Use isolated environments where unrelated model SDKs and libraries are absent,
 not just excluded from the backend directory. Build the core runtime and bindings
-with only Triton/CUDA and their system dependencies; reuse those exact binaries
-for ONNX-only, TensorRT-only, LibTorch-only, and LibTorch/NativeRT installations.
+without Triton or CUDA SDKs; reuse those exact binaries for CPU-only ONNX,
+GPU ONNX, TensorRT-only, LibTorch-only, and LibTorch/NativeRT installations.
+Native execution must work without Triton. CPU-only ONNX must work without CUDA,
+including after failed requests for Triton, GPU execution, and pinned allocation.
 Build each custom plugin inside its corresponding environment. Warp is optional
 and should be omitted from this matrix.
 
@@ -126,6 +136,7 @@ With the Python binding and NumPy installed, run for each engine:
 ```sh
 python tests/deployment/check_installation.py --backend onnx --engine native --cuda
 python tests/deployment/check_installation.py --backend onnx --engine triton --cuda
+python tests/deployment/check_installation.py --backend onnx --engine native --without-triton --without-cuda
 ```
 
 Replace `onnx` with `torchscript`, `nativert`, or `tensorrt` in their installations,
@@ -133,4 +144,7 @@ or `none` to check startup, inspection, and missing-backend errors without any
 model runtime. `--cuda` adds GPU execution and is required for TensorRT. The ONNX
 check includes convolution to exercise cuDNN on CUDA. Also run the applicable
 Rust integration tests and the installed C++ SDK checks. Audit
-shared-library dependencies and binary hashes to confirm isolation and reuse.
+shared-library dependencies, loaded-library maps, and binary hashes to confirm
+isolation and reuse. Use separate processes for loader cases: successful library
+loads remain cached for the process lifetime. The C++ runtime and CPU tests need
+no SDKs; `LEAPP_TEST_CUDA=ON` requires the CUDA SDK for its GPU test code only.
