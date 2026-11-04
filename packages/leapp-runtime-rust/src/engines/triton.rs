@@ -44,6 +44,7 @@ pub(super) fn open(
     graph: &crate::session::graph::Graph<'_>,
     options: &crate::SessionOptions,
 ) -> std::result::Result<std::sync::Arc<dyn crate::engines::Engine>, crate::RuntimeError> {
+    native::load()?;
     options.output_placement.validate()?;
     let installation = Options::default();
     let mut pipeline = convert::convert(bundle, options.device, graph)

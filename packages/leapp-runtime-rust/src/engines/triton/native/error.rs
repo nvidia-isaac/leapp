@@ -17,39 +17,45 @@ pub(crate) fn cstring(value: impl AsRef<[u8]>, phase: &'static str) -> Result<CS
 }
 
 // Consumes the error objects returned by the pinned Triton API.
-pub(crate) unsafe fn check(
-    error: *mut sys::TRITONSERVER_Error,
-    phase: &'static str,
-) -> Result<()> {
-    if error.is_null() {
-        return Ok(());
-    }
-    // SAFETY: callers transfer a live, owned Triton error. Copy its diagnostic before deletion.
-    unsafe {
-        let kind = match sys::TRITONSERVER_ErrorCode(error) {
-            sys::TRITONSERVER_ERROR_INVALID_ARG => ErrorKind::InvalidArgument,
-            sys::TRITONSERVER_ERROR_NOT_FOUND => ErrorKind::NotFound,
-            sys::TRITONSERVER_ERROR_UNSUPPORTED => ErrorKind::Unsupported,
-            _ => ErrorKind::Internal,
-        };
-        let message = CStr::from_ptr(sys::TRITONSERVER_ErrorMessage(error))
-            .to_string_lossy()
-            .into_owned();
-        sys::TRITONSERVER_ErrorDelete(error);
-        Err(Error::new(kind, phase, message))
+impl sys::TritonApi {
+    pub(crate) unsafe fn check(
+        &self,
+        error: *mut sys::TRITONSERVER_Error,
+        phase: &'static str,
+    ) -> Result<()> {
+        if error.is_null() {
+            return Ok(());
+        }
+        // SAFETY: callers transfer a live, owned Triton error. Copy its diagnostic before deletion.
+        unsafe {
+            let kind = match (self.TRITONSERVER_ErrorCode)(error) {
+                sys::TRITONSERVER_ERROR_INVALID_ARG => ErrorKind::InvalidArgument,
+                sys::TRITONSERVER_ERROR_NOT_FOUND => ErrorKind::NotFound,
+                sys::TRITONSERVER_ERROR_UNSUPPORTED => ErrorKind::Unsupported,
+                _ => ErrorKind::Internal,
+            };
+            let message = CStr::from_ptr((self.TRITONSERVER_ErrorMessage)(error))
+                .to_string_lossy()
+                .into_owned();
+            (self.TRITONSERVER_ErrorDelete)(error);
+            Err(Error::new(kind, phase, message))
+        }
     }
 }
 
 pub(crate) struct Handle<T> {
+    pub(crate) api: &'static sys::TritonApi,
     pub(crate) ptr: *mut T,
     delete: unsafe extern "C" fn(*mut T) -> *mut sys::TRITONSERVER_Error,
 }
 
 impl<T> Handle<T> {
     pub(crate) fn empty(
+        api: &'static sys::TritonApi,
         delete: unsafe extern "C" fn(*mut T) -> *mut sys::TRITONSERVER_Error,
     ) -> Self {
         Self {
+            api,
             ptr: std::ptr::null_mut(),
             delete,
         }
@@ -65,7 +71,7 @@ impl<T> Drop for Handle<T> {
         if !self.ptr.is_null() {
             // SAFETY: each handle owns one native object and its matching deleter.
             unsafe {
-                let _ = check((self.delete)(self.ptr), "release");
+                let _ = self.api.check((self.delete)(self.ptr), "release");
             }
         }
     }

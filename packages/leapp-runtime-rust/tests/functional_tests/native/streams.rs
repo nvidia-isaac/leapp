@@ -110,7 +110,7 @@ fn legacy_stream_and_rejected_thread_local_stream() {
     let error = Session::open(&bundle, options.clone()).err().unwrap();
     assert_eq!(error.code(), ErrorCode::InvalidArgument);
     assert!(error.to_string().contains("cudaStreamPerThread"));
-    {
+    if std::env::var("LEAPP_TEST_ENGINE").as_deref() == Ok("triton") {
         let mut session = Session::open(
             &bundle,
             SessionOptions {

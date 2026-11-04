@@ -4,11 +4,13 @@
 pub(super) mod error;
 mod request;
 pub(super) mod sys;
+mod triton_api;
 
 use crate::engines::triton::{BorrowedTensor, Error, ErrorKind, Result, SharedTensor};
 use crate::OutputPlacement;
-use error::{check, cstring, Handle};
+use error::{cstring, Handle};
 use std::{os::unix::ffi::OsStrExt, path::Path, ptr};
+pub(super) use triton_api::load;
 
 impl OutputPlacement {
     pub(super) fn validate(&self) -> Result<()> {
@@ -23,6 +25,7 @@ impl OutputPlacement {
 /// Owns an in-process Triton instance. Repository files must remain available.
 /// Inference is synchronous; each call has independent callback state.
 pub struct Server {
+    api: &'static sys::TritonApi,
     // Rust drops fields in declaration order: Triton stops before its allocator.
     server: Handle<sys::TRITONSERVER_Server>,
     allocator: Handle<sys::TRITONSERVER_ResponseAllocator>,
@@ -40,18 +43,23 @@ impl Server {
     /// Keep the repository and linked artifacts alive until this object is dropped.
     /// Every request uses caller buffers or fresh allocations retained by DLPack leases.
     pub fn open(repository: &Path, backend_directory: &Path) -> Result<Self> {
+        let api = load()?;
         let repository = cstring(repository.as_os_str().as_bytes(), "load")?;
         let backend = cstring(backend_directory.as_os_str().as_bytes(), "load")?;
-        let mut options = Handle::empty(sys::TRITONSERVER_ServerOptionsDelete);
+        let mut options = Handle::empty(api, api.TRITONSERVER_ServerOptionsDelete);
         let mut runtime = Self {
-            server: Handle::empty(sys::TRITONSERVER_ServerDelete),
-            allocator: Handle::empty(sys::TRITONSERVER_ResponseAllocatorDelete),
+            api,
+            server: Handle::empty(api, api.TRITONSERVER_ServerDelete),
+            allocator: Handle::empty(api, api.TRITONSERVER_ResponseAllocatorDelete),
         };
         // SAFETY: output pointers are live, strings outlive the calls, and each
         // created object immediately has an owning handle, including error paths.
         unsafe {
             let (mut major, mut minor) = (0, 0);
-            check(sys::TRITONSERVER_ApiVersion(&mut major, &mut minor), "load")?;
+            api.check(
+                (api.TRITONSERVER_ApiVersion)(&mut major, &mut minor),
+                "load",
+            )?;
             if major != sys::TRITONSERVER_API_VERSION_MAJOR
                 || minor < sys::TRITONSERVER_API_VERSION_MINOR
             {
@@ -61,45 +69,48 @@ impl Server {
                     format!("incompatible Triton C API {major}.{minor}"),
                 ));
             }
-            check(sys::TRITONSERVER_ServerOptionsNew(&mut options.ptr), "load")?;
-            check(
-                sys::TRITONSERVER_ServerOptionsSetModelRepositoryPath(
+            api.check(
+                (api.TRITONSERVER_ServerOptionsNew)(&mut options.ptr),
+                "load",
+            )?;
+            api.check(
+                (api.TRITONSERVER_ServerOptionsSetModelRepositoryPath)(
                     options.ptr,
                     repository.as_ptr(),
                 ),
                 "load",
             )?;
-            check(
-                sys::TRITONSERVER_ServerOptionsSetBackendDirectory(options.ptr, backend.as_ptr()),
+            api.check(
+                (api.TRITONSERVER_ServerOptionsSetBackendDirectory)(options.ptr, backend.as_ptr()),
                 "load",
             )?;
-            check(
-                sys::TRITONSERVER_ServerOptionsSetModelControlMode(
+            api.check(
+                (api.TRITONSERVER_ServerOptionsSetModelControlMode)(
                     options.ptr,
                     sys::TRITONSERVER_MODEL_CONTROL_NONE,
                 ),
                 "load",
             )?;
-            check(
-                sys::TRITONSERVER_ServerOptionsSetStrictModelConfig(options.ptr, true),
+            api.check(
+                (api.TRITONSERVER_ServerOptionsSetStrictModelConfig)(options.ptr, true),
                 "load",
             )?;
-            check(
-                sys::TRITONSERVER_ServerOptionsSetModelLoadRetryCount(options.ptr, 0),
+            api.check(
+                (api.TRITONSERVER_ServerOptionsSetModelLoadRetryCount)(options.ptr, 0),
                 "load",
             )?;
             // Retain failed model status long enough to report the underlying
             // loader error. Readiness below still rejects partial repositories.
-            check(
-                sys::TRITONSERVER_ServerOptionsSetExitOnError(options.ptr, false),
+            api.check(
+                (api.TRITONSERVER_ServerOptionsSetExitOnError)(options.ptr, false),
                 "load",
             )?;
-            check(
-                sys::TRITONSERVER_ServerOptionsSetLogInfo(options.ptr, false),
+            api.check(
+                (api.TRITONSERVER_ServerOptionsSetLogInfo)(options.ptr, false),
                 "load",
             )?;
-            check(
-                sys::TRITONSERVER_ResponseAllocatorNew(
+            api.check(
+                (api.TRITONSERVER_ResponseAllocatorNew)(
                     &mut runtime.allocator.ptr,
                     Some(request::allocate),
                     Some(request::release_buffer),
@@ -107,45 +118,45 @@ impl Server {
                 ),
                 "load",
             )?;
-            check(
-                sys::TRITONSERVER_ResponseAllocatorSetQueryFunction(
+            api.check(
+                (api.TRITONSERVER_ResponseAllocatorSetQueryFunction)(
                     runtime.allocator.ptr,
                     Some(request::query),
                 ),
                 "load",
             )?;
-            check(
-                sys::TRITONSERVER_ServerNew(&mut runtime.server.ptr, options.ptr),
+            api.check(
+                (api.TRITONSERVER_ServerNew)(&mut runtime.server.ptr, options.ptr),
                 "load",
             )?;
             // The C API version alone does not identify a Triton release.
-            let mut metadata = Handle::empty(sys::TRITONSERVER_MessageDelete);
-            check(
-                sys::TRITONSERVER_ServerMetadata(runtime.server.ptr, &mut metadata.ptr),
+            let mut metadata = Handle::empty(api, api.TRITONSERVER_MessageDelete);
+            api.check(
+                (api.TRITONSERVER_ServerMetadata)(runtime.server.ptr, &mut metadata.ptr),
                 "load",
             )?;
             let mut json = ptr::null();
             let mut size = 0;
-            check(
-                sys::TRITONSERVER_MessageSerializeToJson(metadata.ptr, &mut json, &mut size),
+            api.check(
+                (api.TRITONSERVER_MessageSerializeToJson)(metadata.ptr, &mut json, &mut size),
                 "load",
             )?;
             // Triton owns these bytes until the metadata handle is dropped.
             validate_server_version(std::slice::from_raw_parts(json.cast::<u8>(), size))?;
             let mut ready = false;
-            check(
-                sys::TRITONSERVER_ServerIsReady(runtime.server.ptr, &mut ready),
+            api.check(
+                (api.TRITONSERVER_ServerIsReady)(runtime.server.ptr, &mut ready),
                 "load",
             )?;
             if !ready {
-                let mut index = Handle::empty(sys::TRITONSERVER_MessageDelete);
+                let mut index = Handle::empty(api, api.TRITONSERVER_MessageDelete);
                 // Zero flags includes unavailable models and their load reasons.
-                check(
-                    sys::TRITONSERVER_ServerModelIndex(runtime.server.ptr, 0, &mut index.ptr),
+                api.check(
+                    (api.TRITONSERVER_ServerModelIndex)(runtime.server.ptr, 0, &mut index.ptr),
                     "load",
                 )?;
-                check(
-                    sys::TRITONSERVER_MessageSerializeToJson(index.ptr, &mut json, &mut size),
+                api.check(
+                    (api.TRITONSERVER_MessageSerializeToJson)(index.ptr, &mut json, &mut size),
                     "load",
                 )?;
                 let diagnostic =
@@ -171,12 +182,13 @@ impl Server {
         placement: &OutputPlacement,
         buffers: &mut std::collections::HashMap<&str, crate::dlpack::OutputBuffer<'_>>,
     ) -> Result<Vec<(String, SharedTensor)>> {
+        let api = self.api;
         let model = cstring(model_name, "execute")?;
         let names = inputs
             .iter()
             .map(|(name, _)| cstring(name, "execute"))
             .collect::<Result<Vec<_>>>()?;
-        let mut request = Handle::empty(sys::TRITONSERVER_InferenceRequestDelete);
+        let mut request = Handle::empty(api, api.TRITONSERVER_InferenceRequestDelete);
         // CUDA ordinals are contiguous: checking the largest validates every
         // supplied device with one query, independent of the output count.
         if let Some(device_id) = buffers
@@ -191,7 +203,7 @@ impl Server {
         }
         // Callback state borrows the original DLPack views through synchronous
         // completion; no duplicate output descriptors or shape/name copies.
-        let state = Box::new(request::State::new(placement, buffers));
+        let state = Box::new(request::State::new(api, placement, buffers));
         let userp = (&*state as *const request::State).cast_mut().cast();
 
         const SELECTED_VERSION: i64 = -1;
@@ -200,8 +212,8 @@ impl Server {
         // completion, and the boxed callback state has a stable address.
         unsafe {
             let mut flags = 0;
-            check(
-                sys::TRITONSERVER_ServerModelTransactionProperties(
+            api.check(
+                (api.TRITONSERVER_ServerModelTransactionProperties)(
                     self.server.ptr,
                     model.as_ptr(),
                     SELECTED_VERSION,
@@ -217,8 +229,8 @@ impl Server {
                     "decoupled models are not supported",
                 ));
             }
-            check(
-                sys::TRITONSERVER_InferenceRequestNew(
+            api.check(
+                (api.TRITONSERVER_InferenceRequestNew)(
                     &mut request.ptr,
                     self.server.ptr,
                     model.as_ptr(),
@@ -228,6 +240,7 @@ impl Server {
             )?;
             for ((_, input), name) in inputs.iter().zip(&names) {
                 let len = crate::engines::triton::memory::dlpack::append_input(
+                    api,
                     request.ptr,
                     name.as_ptr(),
                     *input,
@@ -250,16 +263,16 @@ impl Server {
                     }
                 }
             }
-            check(
-                sys::TRITONSERVER_InferenceRequestSetReleaseCallback(
+            api.check(
+                (api.TRITONSERVER_InferenceRequestSetReleaseCallback)(
                     request.ptr,
                     Some(request::release_request),
                     userp,
                 ),
                 "execute",
             )?;
-            check(
-                sys::TRITONSERVER_InferenceRequestSetResponseCallback(
+            api.check(
+                (api.TRITONSERVER_InferenceRequestSetResponseCallback)(
                     request.ptr,
                     self.allocator.ptr,
                     userp,
@@ -271,8 +284,8 @@ impl Server {
             // Callbacks can finish during submission. Transfer our request owner
             // first, reclaiming it only when submission fails to take ownership.
             let raw = request.release();
-            if let Err(error) = check(
-                sys::TRITONSERVER_ServerInferAsync(self.server.ptr, raw, ptr::null_mut()),
+            if let Err(error) = api.check(
+                (api.TRITONSERVER_ServerInferAsync)(self.server.ptr, raw, ptr::null_mut()),
                 "execute",
             ) {
                 request.ptr = raw;
