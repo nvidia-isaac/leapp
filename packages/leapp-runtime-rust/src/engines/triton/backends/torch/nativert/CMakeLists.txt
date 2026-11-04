@@ -63,3 +63,7 @@ target_link_libraries(leapp_nativert PRIVATE
   "${TORCH_ROOT}/lib/libtorch_cpu.so"
   "${TORCH_ROOT}/lib/libc10.so" Threads::Threads ${CMAKE_DL_LIBS})
 target_link_options(leapp_nativert PRIVATE "LINKER:--no-undefined")
+
+include(GNUInstallDirs)
+set_target_properties(leapp_nativert PROPERTIES INSTALL_RPATH "$ORIGIN")
+install(TARGETS leapp_nativert LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")

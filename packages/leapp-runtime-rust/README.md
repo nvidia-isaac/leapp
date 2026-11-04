@@ -12,6 +12,10 @@ the same bundle inspection and synchronous Session API.
 
 ## Installation
 
+For selective binary installations with Pixi, see the
+[packaging guide](packaging/README.md). The local packages include both engines
+and let applications install only their required backends.
+
 Build on Linux with Rust 1.88 or newer. Building the core runtime does not
 require the Triton or CUDA SDKs.
 
