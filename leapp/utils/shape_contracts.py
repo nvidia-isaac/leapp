@@ -8,9 +8,48 @@ import json
 import itertools
 import operator
 import re
+from typing import Literal, TypedDict
 
 import sympy
 import torch
+
+
+class _DimensionBounds(TypedDict):
+    min: int
+    max: int
+
+
+class DimensionRange(_DimensionBounds, total=False):
+    multiple_of: int
+
+
+class AffineExpression(TypedDict):
+    terms: dict[str, int]
+    offset: int
+
+
+class FormulaOperation(TypedDict):
+    op: Literal["add", "mul", "floordiv", "mod"]
+    args: list["ShapeFormula"]
+
+
+ShapeFormula = int | str | FormulaOperation
+
+
+class FormulaExpression(TypedDict):
+    formula: ShapeFormula
+
+
+DimensionExpression = AffineExpression | FormulaExpression
+
+
+class _TensorShape(TypedDict):
+    shape: list[int | str | None]
+
+
+class ShapeContract(_TensorShape, total=False):
+    dimension_ranges: dict[str, DimensionRange]
+    dimension_expressions: dict[str, DimensionExpression]
 
 
 @dataclass(frozen=True)
@@ -74,7 +113,7 @@ def has_variable_inputs(node, seen=None):
     )
 
 
-def get_shape_contract(desc):
+def get_shape_contract(desc) -> ShapeContract:
     if hasattr(desc, "shape_contract"):
         return desc.shape_contract
     return {"shape": list(desc.shape)}
@@ -106,9 +145,10 @@ def serialize_shape_axes(desc, axes):
     return axes
 
 
-def parse_shape_contract(description):
+def parse_shape_contract(description) -> ShapeContract:
     shape = list(get_capture_shape(description))
-    ranges, expressions = {}, {}
+    ranges: dict[str, DimensionRange] = {}
+    expressions: dict[str, DimensionExpression] = {}
     for index, axis in enumerate(description.get("axes") or []):
         variable = (axis or {}).get("variable")
         if not isinstance(variable, dict):
@@ -126,7 +166,7 @@ def parse_shape_contract(description):
             ranges[root] = domain
         if "expression" in variable:
             expressions[symbol] = variable["expression"]
-    result = {"shape": shape}
+    result: ShapeContract = {"shape": shape}
     if ranges:
         result["dimension_ranges"] = ranges
     if expressions:
@@ -134,7 +174,7 @@ def parse_shape_contract(description):
     return result
 
 
-def iter_root_dimension_ranges(specification):
+def iter_root_dimension_ranges(specification: ShapeContract):
     derived = specification.get("dimension_expressions", {})
     return (
         (symbol, bounds)
@@ -143,7 +183,7 @@ def iter_root_dimension_ranges(specification):
     )
 
 
-def get_shape_contract_version(specifications):
+def get_shape_contract_version(specifications: list[ShapeContract]) -> int:
     return (
         2
         if any(
@@ -155,9 +195,9 @@ def get_shape_contract_version(specifications):
     )
 
 
-def build_declared_shape_contract(desc, prefix):
+def build_declared_shape_contract(desc, prefix: str) -> ShapeContract:
     shape = list(desc.shape)
-    ranges = {}
+    ranges: dict[str, DimensionRange] = {}
     for i, axis in enumerate(getattr(desc.semantics, "axes", None) or []):
         if axis is None or axis.variable is None or axis.variable is False:
             continue
@@ -176,7 +216,7 @@ def build_declared_shape_contract(desc, prefix):
         shape[i] = symbol
     if not ranges:
         return {"shape": shape}
-    result = {
+    result: ShapeContract = {
         "shape": shape,
         "dimension_ranges": ranges,
     }
@@ -184,7 +224,9 @@ def build_declared_shape_contract(desc, prefix):
     return result
 
 
-def get_dimension_expression(symbol, specification):
+def get_dimension_expression(
+    symbol: str, specification: ShapeContract
+) -> DimensionExpression:
     return specification.get("dimension_expressions", {}).get(
         symbol, {"terms": {symbol: 1}, "offset": 0}
     )
@@ -198,7 +240,7 @@ _FORMULA_OPERATORS = {
 }
 
 
-def _encode_shape_formula(expr):
+def _encode_shape_formula(expr) -> ShapeFormula:
     if isinstance(expr, sympy.Symbol):
         return str(expr)
     if expr.is_Integer:
@@ -224,7 +266,7 @@ def _encode_shape_formula(expr):
     raise ValueError(f"Unsupported runtime output shape formula: {expr}")
 
 
-def _collect_formula_symbols(formula):
+def _collect_formula_symbols(formula: ShapeFormula) -> set[str]:
     if isinstance(formula, str):
         return {formula}
     if isinstance(formula, int):
@@ -232,7 +274,7 @@ def _collect_formula_symbols(formula):
     return set().union(*(_collect_formula_symbols(a) for a in formula["args"]))
 
 
-def _evaluate_formula(formula, bindings):
+def _evaluate_formula(formula: ShapeFormula, bindings: dict[str, int]) -> int:
     if isinstance(formula, str):
         return bindings[formula]
     if isinstance(formula, int):
@@ -242,7 +284,9 @@ def _evaluate_formula(formula, bindings):
     )
 
 
-def _compute_formula_bounds(formula, ranges):
+def _compute_formula_bounds(
+    formula: ShapeFormula, ranges: dict[str, DimensionRange]
+) -> tuple[int, int]:
     if isinstance(formula, str):
         return ranges[formula]["min"], ranges[formula]["max"]
     if isinstance(formula, int):
@@ -259,13 +303,55 @@ def _compute_formula_bounds(formula, ranges):
     return min(values), max(values)
 
 
-def evaluate_dimension_expression(expr, bindings):
+def evaluate_dimension_expression(
+    expr: DimensionExpression, bindings: dict[str, int]
+) -> int:
     if "formula" in expr:
         return _evaluate_formula(expr["formula"], bindings)
     return expr["offset"] + sum(c * bindings[s] for s, c in expr["terms"].items())
 
 
-def validate_shape_contract(specification, actual, bindings=None, *, name="tensor"):
+def _resolve_expression_roots(
+    expression: DimensionExpression,
+    specification: ShapeContract,
+    expected,
+    size,
+    bindings,
+    name,
+):
+    if "formula" in expression:
+        formula = expression["formula"]
+        missing = _collect_formula_symbols(formula) - bindings.keys()
+        if missing:
+            raise ValueError(
+                f"{name}: cannot resolve shape formula roots {sorted(missing)}"
+            )
+    else:
+        expr = expression
+        missing = [s for s in expr["terms"] if s not in bindings]
+        if len(missing) == 1:
+            symbol = missing[0]
+            rest = expr["offset"] + sum(
+                c * bindings[s] for s, c in expr["terms"].items() if s in bindings
+            )
+            coefficient = expr["terms"][symbol]
+            if (size - rest) % coefficient:
+                raise ValueError(
+                    f"{name}: size {size} violates derived dimension {expected}"
+                )
+            bindings[symbol] = (size - rest) // coefficient
+            root = specification["dimension_ranges"][symbol]
+            if not root["min"] <= bindings[symbol] <= root["max"] or bindings[
+                symbol
+            ] % root.get("multiple_of", 1):
+                raise ValueError(f"{name}: root dimension {symbol} outside bounds")
+        elif missing:
+            raise ValueError(f"{name}: cannot resolve derived dimensions {missing}")
+
+
+def validate_shape_contract(
+    specification: ShapeContract, actual, bindings=None, *, name="tensor"
+):
     bindings = {} if bindings is None else bindings
     if len(actual) != len(specification["shape"]):
         raise ValueError(
@@ -290,35 +376,10 @@ def validate_shape_contract(specification, actual, bindings=None, *, name="tenso
             raise ValueError(
                 f"{name}: {expected} must be a multiple of {bounds['multiple_of']}"
             )
-        if expected in expressions and "formula" in expressions[expected]:
-            formula = expressions[expected]["formula"]
-            missing = _collect_formula_symbols(formula) - bindings.keys()
-            if missing:
-                raise ValueError(
-                    f"{name}: cannot resolve shape formula roots {sorted(missing)}"
-                )
-        elif expected in expressions:
-            expr = expressions[expected]
-            missing = [s for s in expr["terms"] if s not in bindings]
-            if len(missing) == 1:
-                symbol = missing[0]
-                rest = expr["offset"] + sum(
-                    c * bindings[s] for s, c in expr["terms"].items() if s in bindings
-                )
-                coefficient = expr["terms"][symbol]
-                if (size - rest) % coefficient:
-                    raise ValueError(
-                        f"{name}: size {size} violates derived dimension {expected}"
-                    )
-                bindings[symbol] = (size - rest) // coefficient
-                root = specification["dimension_ranges"][symbol]
-                if not root["min"] <= bindings[symbol] <= root["max"] or bindings[
-                    symbol
-                ] % root.get("multiple_of", 1):
-                    raise ValueError(f"{name}: root dimension {symbol} outside bounds")
-            elif missing:
-                raise ValueError(f"{name}: cannot resolve derived dimensions {missing}")
         if expected in expressions:
+            _resolve_expression_roots(
+                expressions[expected], specification, expected, size, bindings, name
+            )
             predicted = evaluate_dimension_expression(expressions[expected], bindings)
             if predicted != size:
                 raise ValueError(
@@ -421,7 +482,7 @@ def build_onnx_dynamic_axes(node):
     return axes or None
 
 
-def export_and_infer_shape_contracts(node):
+def _export_shape_program(node) -> torch.export.ExportedProgram:
     if any(not d.dynamic_array_supported for d in node.inputs + node.outputs):
         raise TypeError(
             "Dynamic Warp ports are unsupported: the APIC runner uses fixed buffers and launch dimensions"
@@ -448,12 +509,15 @@ def export_and_infer_shape_contracts(node):
         raise ValueError(
             f"{node.name}: cannot honor requested variable-axis domain; use a nondegenerate example and inspect compiler constraints: {exc}"
         ) from exc
-    node.shape_program = program
-    by_name = {n.name: n for n in program.graph.nodes}
+    return program
+
+
+def _map_input_dimensions(node, program, by_name):
     user_specs = [
         s for s in program.graph_signature.input_specs if s.kind.name == "USER_INPUT"
     ]
-    substitutions, ranges = {}, {}
+    substitutions = {}
+    ranges: dict[str, DimensionRange] = {}
     for desc, input_spec in zip(node.inputs, user_specs):
         spec = get_shape_contract(desc)
         for symbol, bounds in spec.get("dimension_ranges", {}).items():
@@ -483,98 +547,105 @@ def export_and_infer_shape_contracts(node):
                 ):
                     raise ValueError("Compiler tied independently declared dimensions")
                 substitutions[root] = solved[0]
-    output_specs = [
-        s for s in program.graph_signature.output_specs if s.kind.name == "USER_OUTPUT"
-    ]
-    if len(output_specs) != len(node.outputs):
-        raise ValueError("Exported user-output count does not match node ports")
-    for desc, out in zip(node.outputs, output_specs):
-        value = by_name[out.arg.name].meta.get("val")
-        if not isinstance(value, torch.Tensor):
+    return substitutions, ranges
+
+
+def _infer_output_contract(
+    node_name: str, desc, value, substitutions, ranges: dict[str, DimensionRange]
+) -> ShapeContract:
+    if not isinstance(value, torch.Tensor):
+        raise ValueError(
+            "Unknown output rank/type is unsupported in the current variable-shape subset"
+        )
+    shape: list[int | str | None] = []
+    derived: dict[str, DimensionExpression] = {}
+    output_ranges: dict[str, DimensionRange] = {}
+    for axis, size in enumerate(value.shape):
+        if not isinstance(size, torch.SymInt):
+            shape.append(int(size))
+            continue
+        expr = sympy.expand(size.node.expr.subs(substitutions))
+        if expr.is_Integer:
+            shape.append(int(expr))
+            continue
+        if any(str(s) not in ranges for s in expr.free_symbols):
             raise ValueError(
-                "Unknown output rank/type is unsupported in the current variable-shape subset"
+                "Data-dependent/unknown output dimensions require an explicit supported extension"
             )
-        shape, derived = [], {}
-        output_ranges = {}
-        for axis, size in enumerate(value.shape):
-            if not isinstance(size, torch.SymInt):
-                shape.append(int(size))
-                continue
-            expr = sympy.expand(size.node.expr.subs(substitutions))
-            if expr.is_Integer:
-                shape.append(int(expr))
-                continue
-            if any(str(s) not in ranges for s in expr.free_symbols):
-                raise ValueError(
-                    "Data-dependent/unknown output dimensions require an explicit supported extension"
-                )
-            output_ranges.update(
-                (str(s), copy.deepcopy(ranges[str(s)])) for s in expr.free_symbols
+        output_ranges.update(
+            (str(s), copy.deepcopy(ranges[str(s)])) for s in expr.free_symbols
+        )
+        if isinstance(expr, sympy.Symbol):
+            shape.append(str(expr))
+            continue
+        coefficients = {str(s): expr.coeff(s) for s in expr.free_symbols}
+        offset = expr.subs({s: 0 for s in expr.free_symbols})
+        is_affine = (
+            offset.is_Integer
+            and all(c.is_Integer and c > 0 for c in coefficients.values())
+            and sympy.expand(
+                expr
+                - offset
+                - sum(sympy.Symbol(s) * c for s, c in coefficients.items())
             )
-            if isinstance(expr, sympy.Symbol):
-                shape.append(str(expr))
-                continue
-            coefficients = {str(s): expr.coeff(s) for s in expr.free_symbols}
-            offset = expr.subs({s: 0 for s in expr.free_symbols})
-            affine = not (
-                not offset.is_Integer
-                or any(not c.is_Integer or c <= 0 for c in coefficients.values())
-                or sympy.expand(
-                    expr
-                    - offset
-                    - sum(sympy.Symbol(s) * c for s, c in coefficients.items())
-                )
-                != 0
+            == 0
+        )
+        symbol = f"__leapp_derived_{node_name.encode().hex()}_{desc.name.encode().hex()}_{axis}"
+        while symbol in output_ranges:
+            symbol += "_"
+        if is_affine:
+            terms = {s: int(c) for s, c in coefficients.items()}
+            derived[symbol] = {"terms": terms, "offset": int(offset)}
+            output_ranges[symbol] = {
+                k: int(offset) + sum(c * ranges[s][k] for s, c in terms.items())
+                for k in ("min", "max")
+            }
+        else:
+            formula = _encode_shape_formula(expr)
+            lower, upper = _compute_formula_bounds(formula, ranges)
+            if lower < 0:
+                raise ValueError(f"Cannot prove nonnegative output shape: {expr}")
+            derived[symbol] = {"formula": formula}
+            output_ranges[symbol] = {"min": lower, "max": upper}
+        shape.append(symbol)
+    inferred: ShapeContract = {
+        "shape": shape,
+        "dimension_ranges": output_ranges,
+    }
+    if derived:
+        inferred["dimension_expressions"] = derived
+    if not any(isinstance(s, str) for s in shape):
+        inferred = {"shape": shape}
+    return inferred
+
+
+def _validate_output_contract(node_name: str, desc, inferred: ShapeContract):
+    requested = build_declared_shape_contract(desc, node_name)
+    for i, axis in enumerate(getattr(desc.semantics, "axes", None) or []):
+        if axis is None:
+            continue
+        actual, wanted = inferred["shape"][i], requested["shape"][i]
+        if isinstance(actual, str) and axis.names is not None:
+            raise ValueError(
+                "Inferred variable output axis cannot have fixed exhaustive names"
             )
-            symbol = f"__leapp_derived_{node.name.encode().hex()}_{desc.name.encode().hex()}_{axis}"
-            while symbol in output_ranges:
-                symbol += "_"
-            if affine:
-                terms = {s: int(c) for s, c in coefficients.items()}
-                derived[symbol] = {"terms": terms, "offset": int(offset)}
-                output_ranges[symbol] = {
-                    k: int(offset) + sum(c * ranges[s][k] for s, c in terms.items())
-                    for k in ("min", "max")
-                }
-            else:
-                formula = _encode_shape_formula(expr)
-                lower, upper = _compute_formula_bounds(formula, ranges)
-                if lower < 0:
-                    raise ValueError(f"Cannot prove nonnegative output shape: {expr}")
-                derived[symbol] = {"formula": formula}
-                output_ranges[symbol] = {"min": lower, "max": upper}
-            shape.append(symbol)
-        inferred = {
-            "shape": shape,
-            "dimension_ranges": output_ranges,
-        }
-        if derived:
-            inferred["dimension_expressions"] = derived
-        if not any(isinstance(s, str) for s in shape):
-            inferred = {"shape": shape}
-        requested = build_declared_shape_contract(desc, node.name)
-        for i, axis in enumerate(getattr(desc.semantics, "axes", None) or []):
-            if axis is None:
-                continue
-            actual, wanted = shape[i], requested["shape"][i]
-            if isinstance(actual, str) and axis.names is not None:
-                raise ValueError(
-                    "Inferred variable output axis cannot have fixed exhaustive names"
-                )
-            if axis.variable is False and isinstance(actual, str):
-                raise ValueError(
-                    "Explicit static output axis conflicts with inferred variability"
-                )
-            if axis.variable is True and not isinstance(actual, str):
-                raise ValueError("Requested variable output became static")
-            if isinstance(axis.variable, Variable) and (
-                actual != wanted
-                or output_ranges.get(actual) != requested["dimension_ranges"][wanted]
-            ):
-                raise ValueError(
-                    f"{desc.name}: explicit output axis conflicts with inferred contract"
-                )
-        desc.shape_contract = inferred
+        if axis.variable is False and isinstance(actual, str):
+            raise ValueError(
+                "Explicit static output axis conflicts with inferred variability"
+            )
+        if axis.variable is True and not isinstance(actual, str):
+            raise ValueError("Requested variable output became static")
+        if isinstance(axis.variable, Variable) and (
+            actual != wanted
+            or inferred.get("dimension_ranges", {}).get(actual)
+            != requested["dimension_ranges"][wanted]
+        ):
+            raise ValueError(
+                f"{desc.name}: explicit output axis conflicts with inferred contract"
+            )
+
+
+def _validate_cached_shapes(node):
     for _, inputs, outputs in node._build_validation_examples():
         bindings = {}
         for desc, tensor in zip(
@@ -586,6 +657,24 @@ def export_and_infer_shape_contracts(node):
                 bindings,
                 name=f"{node.name}/{desc.name}",
             )
+
+
+def export_and_infer_shape_contracts(node):
+    program = _export_shape_program(node)
+    node.shape_program = program
+    by_name = {n.name: n for n in program.graph.nodes}
+    substitutions, ranges = _map_input_dimensions(node, program, by_name)
+    output_specs = [
+        s for s in program.graph_signature.output_specs if s.kind.name == "USER_OUTPUT"
+    ]
+    if len(output_specs) != len(node.outputs):
+        raise ValueError("Exported user-output count does not match node ports")
+    for desc, out in zip(node.outputs, output_specs):
+        value = by_name[out.arg.name].meta.get("val")
+        inferred = _infer_output_contract(node.name, desc, value, substitutions, ranges)
+        _validate_output_contract(node.name, desc, inferred)
+        desc.shape_contract = inferred
+    _validate_cached_shapes(node)
 
 
 def prepare_shape_contracts(node):
@@ -631,3 +720,20 @@ def validate_reentry_variable_axes(metadata, descriptions):
             raise ValueError(
                 f"{desc.name}: variable declarations changed on re-entry; recapture the node"
             )
+
+
+def validate_variable_declarations(nodes):
+    declarations = {}
+    for node in nodes:
+        for desc in node.inputs + node.outputs:
+            for axis in getattr(desc.semantics, "axes", None) or []:
+                variable = getattr(axis, "variable", None)
+                if isinstance(variable, Variable):
+                    if (
+                        variable.name in declarations
+                        and declarations[variable.name] != variable
+                    ):
+                        raise ValueError(
+                            f"Conflicting bounds for shared variable {variable.name}"
+                        )
+                    declarations[variable.name] = variable

@@ -156,8 +156,7 @@ def _shape_tensor(
 def _capture_numpy_call(source, func, args, kwargs, implementation, label):
     inputs = []
     TracedData._map_structure(
-        (args, kwargs),
-        lambda x: inputs.append(x) if isinstance(x, TracedData) else x,
+        (args, kwargs), lambda x: inputs.append(x) if isinstance(x, TracedData) else x
     )
 
     scalar_dtype = None
@@ -227,7 +226,9 @@ def _capture_numpy_call(source, func, args, kwargs, implementation, label):
             if node.op not in ("placeholder", "get_attr", "call_function", "output"):
                 raise ValueError(f"unsupported graph node: {node.op}")
             if node.op == "call_function" and node.target is not operator.getitem:
-                if not isinstance(node.target, torch._ops.OpOverload) and not (
+                is_supported_target = isinstance(
+                    node.target, torch._ops.OpOverload
+                ) or (
                     mode == "symbolic"
                     and node.target
                     in (
@@ -237,7 +238,8 @@ def _capture_numpy_call(source, func, args, kwargs, implementation, label):
                         operator.floordiv,
                         operator.mod,
                     )
-                ):
+                )
+                if not is_supported_target:
                     raise ValueError(f"non-ATen operation: {node.target}")
 
     except _NumpyMutationError:

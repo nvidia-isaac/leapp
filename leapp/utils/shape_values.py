@@ -57,6 +57,14 @@ def numel(tensor):
     return TracedInt(tensor.tensor.numel(), proxy.node.name, tensor.context_obj, proxy)
 
 
+def _convert_shape_value(value, owner, proxy):
+    if isinstance(value, TracedInt):
+        if value.is_recording and value.context_obj is not owner.context_obj:
+            raise ValueError("Shape expressions belong to different nodes")
+        return graph_value(value) if proxy else int(value)
+    return value
+
+
 @suppress_dynamic_shape_tracing
 def trace_call(function, args, kwargs, *, shape, method=False):
     from leapp.leapp_graph.datatypes.torch.traced_tensor import TracedTensor
@@ -74,9 +82,7 @@ def trace_call(function, args, kwargs, *, shape, method=False):
 
     def leaf(item, proxy):
         if isinstance(item, TracedInt):
-            if item.is_recording and item.context_obj is not owner.context_obj:
-                raise ValueError("Shape expressions belong to different nodes")
-            return graph_value(item) if proxy else int(item)
+            return _convert_shape_value(item, owner, proxy)
         if isinstance(item, TracedData):
             if item.context_obj is not owner.context_obj:
                 raise ValueError(
@@ -116,6 +122,30 @@ def trace_call(function, args, kwargs, *, shape, method=False):
     return as_traced(value, proxy.node.name, owner.context_obj, proxy)
 
 
+def _normalize_numpy_factory_args(function, proxy_args, proxy_kwargs, dtype):
+    if set(proxy_kwargs) - {"dtype", "shape", "start", "stop", "step", "fill_value"}:
+        raise TypeError("Unsupported NumPy factory keyword")
+    # NumPy and Torch have different factory defaults; retain NumPy's dtype.
+    proxy_kwargs["dtype"] = torch.from_numpy(np.empty((), dtype=dtype)).dtype
+    if "shape" in proxy_kwargs:
+        proxy_kwargs["size"] = proxy_kwargs.pop("shape")
+    if "stop" in proxy_kwargs:
+        proxy_kwargs["end"] = proxy_kwargs.pop("stop")
+    if function.__name__ in {"zeros", "ones", "full"}:
+        data_arguments = 2 if function.__name__ == "full" else 1
+        # Optional positional dtype is represented by the result dtype above.
+        if len(proxy_args) > data_arguments + 1:
+            raise TypeError("Unsupported NumPy factory positional arguments")
+        proxy_args = proxy_args[:data_arguments]
+        if proxy_args and not isinstance(proxy_args[0], (tuple, list)):
+            proxy_args = ((proxy_args[0],),) + proxy_args[1:]
+    elif len(proxy_args) == 4:
+        proxy_args = proxy_args[:3]  # arange(start, stop, step, dtype)
+    if "size" in proxy_kwargs and not isinstance(proxy_kwargs["size"], (tuple, list)):
+        proxy_kwargs["size"] = (proxy_kwargs["size"],)
+    return proxy_args, proxy_kwargs
+
+
 @suppress_dynamic_shape_tracing
 def trace_numpy_factory(function, args, kwargs, shape):
     """Execute NumPy factories on concrete sizes and record Torch equivalents."""
@@ -123,41 +153,23 @@ def trace_numpy_factory(function, args, kwargs, shape):
 
     owner = shape
 
-    def convert(value, proxy):
-        if isinstance(value, TracedInt):
-            if value.is_recording and value.context_obj is not owner.context_obj:
-                raise ValueError("Shape expressions belong to different nodes")
-            return graph_value(value) if proxy else int(value)
-        return value
-
-    real_args = TracedData._map_structure(args, lambda v: convert(v, False))
-    real_kwargs = TracedData._map_structure(kwargs, lambda v: convert(v, False))
+    real_args = TracedData._map_structure(
+        args, lambda v: _convert_shape_value(v, owner, False)
+    )
+    real_kwargs = TracedData._map_structure(
+        kwargs, lambda v: _convert_shape_value(v, owner, False)
+    )
     result = function(*real_args, **real_kwargs)
-    proxy_args = TracedData._map_structure(args, lambda v: convert(v, True))
-    proxy_kwargs = TracedData._map_structure(kwargs, lambda v: convert(v, True))
+    proxy_args = TracedData._map_structure(
+        args, lambda v: _convert_shape_value(v, owner, True)
+    )
+    proxy_kwargs = TracedData._map_structure(
+        kwargs, lambda v: _convert_shape_value(v, owner, True)
+    )
     try:
-        if set(kwargs) - {"dtype", "shape", "start", "stop", "step", "fill_value"}:
-            raise TypeError("Unsupported NumPy factory keyword")
-        # NumPy and Torch have different factory defaults; retain NumPy's dtype.
-        proxy_kwargs["dtype"] = torch.from_numpy(np.empty((), dtype=result.dtype)).dtype
-        if "shape" in proxy_kwargs:
-            proxy_kwargs["size"] = proxy_kwargs.pop("shape")
-        if "stop" in proxy_kwargs:
-            proxy_kwargs["end"] = proxy_kwargs.pop("stop")
-        if function.__name__ in {"zeros", "ones", "full"}:
-            data_arguments = 2 if function.__name__ == "full" else 1
-            # Optional positional dtype is represented by the result dtype above.
-            if len(proxy_args) > data_arguments + 1:
-                raise TypeError("Unsupported NumPy factory positional arguments")
-            proxy_args = proxy_args[:data_arguments]
-            if proxy_args and not isinstance(proxy_args[0], (tuple, list)):
-                proxy_args = ((proxy_args[0],),) + proxy_args[1:]
-        elif len(proxy_args) == 4:
-            proxy_args = proxy_args[:3]  # arange(start, stop, step, dtype)
-        if "size" in proxy_kwargs and not isinstance(
-            proxy_kwargs["size"], (tuple, list)
-        ):
-            proxy_kwargs["size"] = (proxy_kwargs["size"],)
+        proxy_args, proxy_kwargs = _normalize_numpy_factory_args(
+            function, proxy_args, proxy_kwargs, result.dtype
+        )
         proxy = owner.context_obj.tracer.create_proxy(
             "call_function", getattr(torch, function.__name__), proxy_args, proxy_kwargs
         )

@@ -231,6 +231,7 @@ class ParameterFormat:
     formatting: Any
 
     def get_format_string(self, data: Any) -> Tuple[bool, str]:
+
         if isinstance(data, collections.abc.Sequence) and not isinstance(
             data, (str, bytes, torch.Tensor)
         ):
