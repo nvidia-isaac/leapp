@@ -13,7 +13,7 @@ import torch
 import yaml
 
 import leapp
-from leapp import annotate, InferenceManager, Axis, TensorSemantics, Variable
+from leapp import Axis, InferenceManager, TensorSemantics, Variable, annotate
 from leapp.export_manager import ExportManager
 from leapp.leapp import _MANAGER
 from tests.functional_tests.base import LEAPPFunctionalTestBase
@@ -92,17 +92,20 @@ def dynamic_session(tmp_path):
 @pytest.mark.parametrize(
     "backend", ["pt2", "onnx-dynamo", "onnx-torchscript", "jit-script", "jit-trace"]
 )
-def test_dynamic_exports_match_original(dynamic_session, backend):
+@pytest.mark.parametrize("library", [torch, np], ids=["torch", "numpy"])
+def test_exported_models_accept_different_input_shapes(
+    dynamic_session, backend, library
+):
     """Check saved backend artifacts on sizes never used for capture."""
 
     def pair_tokens(x):
-        return x.reshape(2, x.size(1) // 2, 2)
+        return x.reshape(2, x.shape[1] // 2, 2)
 
     x = annotate.input_tensors(
         "pairs",
         TensorSemantics(
             "x",
-            torch.arange(16, dtype=torch.float32).reshape(2, 8),
+            library.arange(16, dtype=library.float32).reshape(2, 8),
             axes=[
                 None,
                 Axis(variable=Variable("length", min=4, max=32, multiple_of=2)),
@@ -114,26 +117,28 @@ def test_dynamic_exports_match_original(dynamic_session, backend):
     leapp.compile_graph(visualize=False, validate=True, strict=True)
     manager = InferenceManager(str(dynamic_session))
     for length in (4, 12, 32):
-        fresh = torch.arange(2 * length, dtype=torch.float32).reshape(2, length)
+        fresh = library.arange(2 * length, dtype=library.float32).reshape(2, length)
         torch.testing.assert_close(
-            manager({"pairs/x": fresh})["pairs/y"], pair_tokens(fresh)
+            manager({"pairs/x": torch.as_tensor(fresh)})["pairs/y"],
+            torch.as_tensor(pair_tokens(fresh)),
         )
 
 
 @pytest.mark.parametrize("factory_name", ["zeros", "ones", "full", "arange"])
-def test_numpy_factories_use_runtime_shape(dynamic_session, factory_name):
-    """Check exported factory values, shapes, and NumPy default dtypes."""
+@pytest.mark.parametrize("library", [torch, np], ids=["torch", "numpy"])
+def test_factories_use_runtime_shape(dynamic_session, factory_name, library):
+    """Check factory capture and each library's output values, shapes, and dtypes."""
 
     def factory(length):
         if factory_name == "full":
-            return np.full(length, 3)
-        return getattr(np, factory_name)(length)
+            return library.full((length,), 3)
+        return getattr(library, factory_name)(length)
 
     x = annotate.input_tensors(
         "factory",
         TensorSemantics(
             "x",
-            np.ones(8, dtype=np.float32),
+            library.ones(8, dtype=library.float32),
             axes=[Axis(variable=Variable("length", min=4, max=32))],
         ),
     )
@@ -143,7 +148,7 @@ def test_numpy_factories_use_runtime_shape(dynamic_session, factory_name):
     manager = InferenceManager(str(dynamic_session))
     for length in (4, 12, 32):
         actual = manager({"factory/x": torch.ones(length)})["factory/y"]
-        torch.testing.assert_close(actual, torch.from_numpy(factory(length)))
+        torch.testing.assert_close(actual, torch.as_tensor(factory(length)))
 
 
 @pytest.mark.parametrize(
@@ -169,3 +174,93 @@ def test_conflicting_axis_declarations_are_rejected(dynamic_session, other):
         ValueError, match="Conflicting bounds for shared variable length"
     ):
         leapp.compile_graph(visualize=False, validate=True, strict=True)
+
+
+def _export_two_input_model(function, inputs, path):
+    left, right = annotate.input_tensors("combine", inputs)
+    annotate.output_tensors("combine", {"y": function(left, right)}, export_with="pt2")
+    leapp.stop()
+    leapp.compile_graph(visualize=False, validate=True, strict=True)
+    return InferenceManager(str(path))
+
+
+def test_inputs_share_a_dynamic_dimension(dynamic_session):
+    """Reloaded models enforce the same runtime length across both inputs."""
+    axis = Axis(variable=Variable("length", min=4, max=32))
+    manager = _export_two_input_model(
+        torch.mul,
+        [
+            TensorSemantics("left", torch.ones(2, 8, 3), axes=[None, axis, None]),
+            TensorSemantics("right", torch.ones(2, 8, 3), axes=[None, axis, None]),
+        ],
+        dynamic_session,
+    )
+    for length in (4, 12, 32):
+        left = torch.arange(6 * length, dtype=torch.float32).reshape(2, length, 3)
+        right = left + 1
+        actual = manager({"combine/left": left, "combine/right": right})["combine/y"]
+        torch.testing.assert_close(actual, left * right)
+    with pytest.raises(ValueError, match="shared dimension length"):
+        manager(
+            {"combine/left": torch.ones(2, 12, 3), "combine/right": torch.ones(2, 8, 3)}
+        )
+
+
+def test_inputs_have_independent_dynamic_dimensions(dynamic_session):
+    """Reloaded models derive output length from independently varying inputs."""
+
+    def concatenate(left, right):
+        return torch.cat((left, right), dim=1)
+
+    manager = _export_two_input_model(
+        concatenate,
+        [
+            TensorSemantics(
+                "left",
+                torch.ones(2, 8, 3),
+                axes=[None, Axis(variable=Variable("length", min=4, max=32)), None],
+            ),
+            TensorSemantics(
+                "right",
+                torch.ones(2, 8, 3),
+                axes=[
+                    None,
+                    Axis(variable=Variable("right_length", min=4, max=32)),
+                    None,
+                ],
+            ),
+        ],
+        dynamic_session,
+    )
+    for left_length, right_length in ((4, 8), (12, 8), (12, 32)):
+        left = torch.arange(6 * left_length, dtype=torch.float32).reshape(
+            2, left_length, 3
+        )
+        right = torch.arange(6 * right_length, dtype=torch.float32).reshape(
+            2, right_length, 3
+        )
+        actual = manager({"combine/left": left, "combine/right": right})["combine/y"]
+        torch.testing.assert_close(actual, concatenate(left, right))
+
+
+def test_dynamic_input_with_static_input(dynamic_session):
+    """Reloaded models allow variable lengths while enforcing the static bias shape."""
+    bias = torch.arange(3, dtype=torch.float32)
+    manager = _export_two_input_model(
+        torch.add,
+        [
+            TensorSemantics(
+                "left",
+                torch.ones(2, 8, 3),
+                axes=[None, Axis(variable=Variable("length", min=4, max=32)), None],
+            ),
+            TensorSemantics("right", bias, axes=[None]),
+        ],
+        dynamic_session,
+    )
+    for length in (4, 12, 32):
+        left = torch.arange(6 * length, dtype=torch.float32).reshape(2, length, 3)
+        actual = manager({"combine/left": left, "combine/right": bias})["combine/y"]
+        torch.testing.assert_close(actual, left + bias)
+    with pytest.raises(ValueError, match="expected fixed dimension 3"):
+        manager({"combine/left": torch.ones(2, 12, 3), "combine/right": torch.ones(4)})
