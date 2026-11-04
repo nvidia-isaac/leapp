@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# channel.py supplies an inspected, checksummed payload and exact dependencies.
+# Compilation is a separate task: every consumer receives these same binaries.
+package:
+  name: ${{ name }}
+  version: ${{ version }}
+source:
+  target_directory: payload
+  url: ${{ payload_url }}
+  sha256: ${{ payload_sha256 }}
+build:
+  string: ${{ build_string }}
+  script: cp -a payload/. "$PREFIX/"
+  # channel.py has already set and checked relative RPATHs. Do not rewrite them
+  # to the temporary build prefix or infer dependencies from a developer SDK.
+  dynamic_linking:
+    binary_relocation: false
+  prefix_detection:
+    ignore: true
+requirements:
+  run: []  # Filled from the inspected dependency graph.
+about:
+  homepage: https://github.com/nvidia-isaac/leapp
+  summary: ${{ summary }}
+  license: ${{ license }}
+  license_file: payload/share/licenses/${{ name }}/*
