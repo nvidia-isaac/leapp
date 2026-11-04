@@ -7,7 +7,8 @@ use std::{sync::mpsc, thread, time::Duration};
 #[test]
 fn completion_requires_both_callbacks_in_either_order() {
     for release_first in [false, true] {
-        let state = Arc::new(test_state());
+        let Some(state) = test_state() else { return };
+        let state = Arc::new(state);
         let (sender, receiver) = mpsc::channel();
         let worker_state = state.clone();
         let worker = thread::spawn(move || {
@@ -41,7 +42,7 @@ fn completion_requires_both_callbacks_in_either_order() {
 
 #[test]
 fn callbacks_can_finish_before_the_wait_begins() {
-    let state = test_state();
+    let Some(state) = test_state() else { return };
     state.released(Ok(()));
     // SAFETY: state is live, and null is allowed for the final response.
     unsafe {
@@ -56,21 +57,23 @@ fn callbacks_can_finish_before_the_wait_begins() {
 
 #[test]
 fn allocation_panics_become_native_errors() {
-    let error = callback(|| panic!("simulated allocator panic"));
+    let Some(state) = test_state() else { return };
+    let error = callback(state.api, || panic!("simulated allocator panic"));
     // SAFETY: callback returns an owned C error.
-    let error = unsafe { check(error, "execute") }.unwrap_err();
+    let error = unsafe { state.api.check(error, "execute") }.unwrap_err();
     assert!(error
         .to_string()
         .contains("panic in Triton allocation callback"));
 }
 
-struct Allocation {
+struct TestAllocation {
+    api: &'static sys::TritonApi,
     data: *mut c_void,
     owner: *mut c_void,
     len: usize,
 }
 
-impl Allocation {
+impl TestAllocation {
     fn new(state: &State, len: usize) -> Result<Self> {
         let mut data = ptr::NonNull::<u8>::dangling().as_ptr().cast();
         let mut owner = data;
@@ -78,7 +81,7 @@ impl Allocation {
         // SAFETY: state, name, and output parameters remain live throughout
         // the callback; its boxed owner is released exactly once by Drop.
         let result = unsafe {
-            check(
+            state.api.check(
                 allocate(
                     ptr::null_mut(),
                     c"output".as_ptr(),
@@ -103,59 +106,69 @@ impl Allocation {
             (memory, device),
             state.placement.location("output").native()
         );
-        Ok(Self { data, owner, len })
+        Ok(Self {
+            api: state.api,
+            data,
+            owner,
+            len,
+        })
     }
 
     fn buffer(&self) -> Arc<Buffer> {
         assert!(!self.owner.is_null());
-        unsafe { Arc::clone(&*self.owner.cast::<Arc<Buffer>>()) }
+        unsafe { Arc::clone(&(*self.owner.cast::<super::Allocation>()).buffer) }
     }
 }
 
-impl Drop for Allocation {
+impl Drop for TestAllocation {
     fn drop(&mut self) {
         // SAFETY: allocate supplied this owner, which has not been released.
         unsafe {
-            check(
-                release_buffer(
-                    ptr::null_mut(),
-                    self.data,
-                    self.owner,
-                    self.len,
-                    sys::TRITONSERVER_MEMORY_CPU,
-                    0,
-                ),
-                "release",
-            )
-            .unwrap();
+            self.api
+                .check(
+                    release_buffer(
+                        ptr::null_mut(),
+                        self.data,
+                        self.owner,
+                        self.len,
+                        sys::TRITONSERVER_MEMORY_CPU,
+                        0,
+                    ),
+                    "release",
+                )
+                .unwrap();
         }
     }
 }
 
-fn test_state() -> State {
-    State::new(
+fn test_state() -> Option<State> {
+    if std::env::var("LEAPP_TEST_ENGINE").as_deref() != Ok("triton") {
+        return None;
+    }
+    Some(State::new(
+        crate::engines::triton::native::load().unwrap(),
         OutputPlacement::default(),
         Arc::new(OutputPool::new(crate::OutputPoolOptions::default(), 0)),
-    )
+    ))
 }
 
 #[test]
 fn callback_release_preserves_retained_storage() {
-    let state = test_state();
-    let first = Allocation::new(&state, 16).unwrap();
+    let Some(state) = test_state() else { return };
+    let first = TestAllocation::new(&state, 16).unwrap();
     let pointer = first.data;
     let retained = first.buffer();
     drop(first);
-    let second = Allocation::new(&state, 16).unwrap();
+    let second = TestAllocation::new(&state, 16).unwrap();
     assert_ne!(second.data, pointer);
     drop(retained);
-    assert_eq!(Allocation::new(&state, 16).unwrap().data, pointer);
+    assert_eq!(TestAllocation::new(&state, 16).unwrap().data, pointer);
 }
 
 #[test]
 fn failed_and_empty_allocations_leave_callbacks_usable() {
-    let state = test_state();
-    assert!(Allocation::new(&state, usize::MAX).is_err());
-    drop(Allocation::new(&state, 0).unwrap());
-    drop(Allocation::new(&state, 16).unwrap());
+    let Some(state) = test_state() else { return };
+    assert!(TestAllocation::new(&state, usize::MAX).is_err());
+    drop(TestAllocation::new(&state, 0).unwrap());
+    drop(TestAllocation::new(&state, 16).unwrap());
 }

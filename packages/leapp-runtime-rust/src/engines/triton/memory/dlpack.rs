@@ -3,7 +3,7 @@
 
 //! Triton tensor types and request inputs.
 use crate::dlpack::{BorrowedTensor, DLDataType};
-use crate::engines::triton::native::{error::check, sys};
+use crate::engines::triton::native::sys;
 use crate::engines::{
     error::{Error, ErrorKind, Result},
     memory::dlpack::{layout, location},
@@ -61,6 +61,7 @@ pub(crate) fn dtype_from_native(d: u32) -> Result<DLDataType> {
 }
 
 pub(crate) unsafe fn append_input(
+    api: &sys::TritonApi,
     request: *mut sys::TRITONSERVER_InferenceRequest,
     name: *const c_char,
     input: BorrowedTensor<'_>,
@@ -70,8 +71,8 @@ pub(crate) unsafe fn append_input(
     let (memory, device) = location(t.device)?.native();
     // SAFETY: caller owns request/name; the input borrow retains ready storage until request release.
     unsafe {
-        check(
-            sys::TRITONSERVER_InferenceRequestAddInput(
+        api.check(
+            (api.TRITONSERVER_InferenceRequestAddInput)(
                 request,
                 name,
                 dtype_to_native(t.dtype)?,
@@ -80,8 +81,8 @@ pub(crate) unsafe fn append_input(
             ),
             "execute",
         )?;
-        check(
-            sys::TRITONSERVER_InferenceRequestAppendInputData(
+        api.check(
+            (api.TRITONSERVER_InferenceRequestAppendInputData)(
                 request,
                 name,
                 t.data

@@ -1,10 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use super::{
-    error::{check, Handle},
-    sys,
-};
+use super::{error::Handle, sys};
 use crate::engines::memory::{Buffer, OutputPool};
 use crate::engines::triton::{Error, ErrorKind, OutputPlacement, Result, SharedTensor};
 use std::{
@@ -29,6 +26,7 @@ struct Completion {
 }
 
 pub(crate) struct State {
+    api: &'static sys::TritonApi,
     placement: OutputPlacement,
     pool: Arc<OutputPool>,
     completion: Mutex<Completion>,
@@ -36,8 +34,13 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub(crate) fn new(placement: OutputPlacement, pool: Arc<OutputPool>) -> Self {
+    pub(crate) fn new(
+        api: &'static sys::TritonApi,
+        placement: OutputPlacement,
+        pool: Arc<OutputPool>,
+    ) -> Self {
         Self {
+            api,
             placement,
             pool,
             completion: Mutex::new(Completion::default()),
@@ -82,6 +85,7 @@ fn internal(message: &str) -> Error {
 
 // Convert callback failures to owned C errors; no Rust unwind crosses the ABI.
 fn callback(
+    api: &sys::TritonApi,
     operation: impl FnOnce() -> Result<()> + UnwindSafe,
 ) -> *mut sys::TRITONSERVER_Error {
     let error = match catch_unwind(operation) {
@@ -91,7 +95,7 @@ fn callback(
     };
     let message = CString::new(error.to_string().replace('\0', "\\0")).expect("NULs escaped");
     // SAFETY: Triton copies the diagnostic before CString is dropped.
-    unsafe { sys::TRITONSERVER_ErrorNew(sys::TRITONSERVER_ERROR_INTERNAL, message.as_ptr()) }
+    unsafe { (api.TRITONSERVER_ErrorNew)(sys::TRITONSERVER_ERROR_INTERNAL, message.as_ptr()) }
 }
 
 pub(crate) unsafe extern "C" fn query(
@@ -102,10 +106,11 @@ pub(crate) unsafe extern "C" fn query(
     memory: *mut u32,
     device: *mut i64,
 ) -> *mut sys::TRITONSERVER_Error {
-    callback(|| {
+    // SAFETY: Triton retains the request state through its final callbacks.
+    let state = unsafe { &*userp.cast::<State>() };
+    callback(state.api, || {
         // SAFETY: Triton supplies our live State and writable ABI output parameters.
         unsafe {
-            let state = &*userp.cast::<State>();
             let name = if name.is_null() {
                 ""
             } else {
@@ -131,13 +136,14 @@ pub(crate) unsafe extern "C" fn allocate(
     memory: *mut u32,
     device: *mut i64,
 ) -> *mut sys::TRITONSERVER_Error {
-    callback(|| {
+    // SAFETY: Triton retains the request state through its final callbacks.
+    let state = unsafe { &*userp.cast::<State>() };
+    callback(state.api, || {
         // SAFETY: Triton supplies our live State, a NUL-terminated name and
-        // writable output parameters. The boxed Arc lives until release_buffer.
+        // writable output parameters. The allocation owner lives until release_buffer.
         unsafe {
             *data = ptr::null_mut();
             *owner = ptr::null_mut();
-            let state = &*userp.cast::<State>();
             let name = CStr::from_ptr(name)
                 .to_str()
                 .map_err(|_| internal("output name is not UTF-8"))?;
@@ -147,11 +153,20 @@ pub(crate) unsafe extern "C" fn allocate(
             if len != 0 {
                 let buffer = state.pool.allocate(len, location)?;
                 *data = buffer.ptr.as_ptr().cast();
-                *owner = Box::into_raw(Box::new(buffer)).cast();
+                *owner = Box::into_raw(Box::new(Allocation {
+                    buffer,
+                    api: state.api,
+                }))
+                .cast();
             }
         }
         Ok(())
     })
+}
+
+struct Allocation {
+    buffer: Arc<Buffer>,
+    api: &'static sys::TritonApi,
 }
 
 pub(crate) unsafe extern "C" fn release_buffer(
@@ -162,13 +177,14 @@ pub(crate) unsafe extern "C" fn release_buffer(
     _: u32,
     _: i64,
 ) -> *mut sys::TRITONSERVER_Error {
-    callback(|| {
-        if !owner.is_null() {
-            // SAFETY: allocate transferred this box exactly once to Triton.
-            unsafe {
-                drop(Box::from_raw(owner.cast::<Arc<Buffer>>()));
-            }
-        }
+    if owner.is_null() {
+        return ptr::null_mut();
+    }
+    // SAFETY: allocate transferred this box exactly once to Triton. The API
+    // remains loaded after the allocation and its session have been released.
+    let allocation = unsafe { Box::from_raw(owner.cast::<Allocation>()) };
+    callback(allocation.api, || {
+        drop(allocation);
         Ok(())
     })
 }
@@ -184,13 +200,14 @@ pub(crate) unsafe extern "C" fn release_request(
     // SAFETY: RELEASE_ALL transfers ownership and guarantees no more input access.
     // State remains alive until both completion flags have been observed.
     unsafe {
-        let result = catch_unwind(|| {
-            check(sys::TRITONSERVER_InferenceRequestDelete(request), "release")
-        });
         let state = &*userp.cast::<State>();
-        state.released(
-            result.unwrap_or_else(|_| Err(internal("panic releasing Triton request"))),
-        );
+        let result = catch_unwind(|| {
+            state.api.check(
+                (state.api.TRITONSERVER_InferenceRequestDelete)(request),
+                "release",
+            )
+        });
+        state.released(result.unwrap_or_else(|_| Err(internal("panic releasing Triton request"))));
     }
 }
 
@@ -203,7 +220,7 @@ pub(crate) unsafe extern "C" fn receive_response(
     // alive until completion is signaled after the last callback access.
     unsafe {
         let state = &*userp.cast::<State>();
-        let mut handle = Handle::empty(sys::TRITONSERVER_InferenceResponseDelete);
+        let mut handle = Handle::empty(state.api, state.api.TRITONSERVER_InferenceResponseDelete);
         handle.ptr = response;
         let result = catch_unwind(|| {
             if !response.is_null() {
@@ -230,27 +247,28 @@ pub(crate) fn outputs(
     response: &Response,
     placement: &OutputPlacement,
 ) -> Result<Vec<(String, SharedTensor)>> {
+    let api = response.0.api;
     let mut result = Vec::new();
     // SAFETY: the response is owned and complete; metadata and allocator userp
     // remain live until it is dropped after all output owners are retained.
     unsafe {
         // Triton r26.05 returns a newly allocated status error here (the shipped
         // header's borrowed-error comment differs from its implementation).
-        check(
-            sys::TRITONSERVER_InferenceResponseError(response.0.ptr),
+        api.check(
+            (api.TRITONSERVER_InferenceResponseError)(response.0.ptr),
             "execute",
         )?;
         let mut count = 0;
-        check(
-            sys::TRITONSERVER_InferenceResponseOutputCount(response.0.ptr, &mut count),
+        api.check(
+            (api.TRITONSERVER_InferenceResponseOutputCount)(response.0.ptr, &mut count),
             "execute",
         )?;
         for index in 0..count {
             let (mut name, mut shape, mut data) = (ptr::null(), ptr::null(), ptr::null());
             let (mut dtype, mut dimensions, mut len, mut memory, mut device) = (0, 0, 0, 0, 0);
             let mut owner = ptr::null_mut();
-            check(
-                sys::TRITONSERVER_InferenceResponseOutput(
+            api.check(
+                (api.TRITONSERVER_InferenceResponseOutput)(
                     response.0.ptr,
                     index,
                     &mut name,
@@ -293,7 +311,7 @@ pub(crate) fn outputs(
                 if owner.is_null() {
                     return Err(internal("output has no allocation owner"));
                 }
-                let buffer = &*owner.cast::<Arc<Buffer>>();
+                let buffer = &(*owner.cast::<Allocation>()).buffer;
                 if buffer.ptr.as_ptr().cast::<c_void>() != data.cast_mut()
                     || buffer.len != len
                     || buffer.location != location

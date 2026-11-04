@@ -46,6 +46,7 @@ pub(super) fn open(
     graph: &crate::session::graph::Graph<'_>,
     options: &crate::SessionOptions,
 ) -> std::result::Result<std::sync::Arc<dyn crate::engines::Engine>, crate::RuntimeError> {
+    native::load()?;
     options.output_placement.default_location.validate()?;
     for location in options.output_placement.overrides.values() {
         location.validate()?;
