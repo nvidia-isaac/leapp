@@ -79,6 +79,32 @@ def execute(backend, engine, device):
         print(f"PASS {engine}/{backend}/{device}: convolution")
 
 
+def check_unloaded(without_triton, without_cuda):
+    libraries = []
+    if without_triton:
+        libraries.append("libtritonserver.so")
+    if without_cuda:
+        libraries.extend(["libcuda.so", "libcudart.so"])
+    if libraries:
+        mappings = Path("/proc/self/maps").read_text()
+        for library in libraries:
+            assert library not in mappings, f"unexpectedly loaded {library}"
+
+
+def missing_dependency(options, library, run=False):
+    try:
+        with lrt.Session.open(fixture("onnx"), options) as session:
+            if run:
+                session.run(
+                    {"accumulator/observation": np.arange(1, 5, dtype=np.float32)}
+                )
+            raise AssertionError(f"unexpectedly succeeded without {library}")
+    except lrt.RuntimeError as error:
+        assert error.code == lrt.ErrorCode.UNSUPPORTED, str(error)
+        assert library in str(error), str(error)
+    print(f"PASS missing {library}: requested operation returns a dependency error")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -88,12 +114,33 @@ def main():
     )
     parser.add_argument("--engine", choices=["native", "triton"], required=True)
     parser.add_argument("--cuda", action="store_true")
+    parser.add_argument("--without-triton", action="store_true")
+    parser.add_argument("--without-cuda", action="store_true")
     args = parser.parse_args()
     if args.backend == "tensorrt":
         if args.engine != "triton":
             parser.error("precompiled TensorRT engines require --engine triton")
         if not args.cuda:
             parser.error("TensorRT execution requires --cuda")
+    if args.without_triton and args.engine != "native":
+        parser.error("--without-triton requires --engine native")
+    if args.without_cuda and (
+        args.cuda or args.engine != "native" or args.backend != "onnx"
+    ):
+        parser.error("--without-cuda requires native CPU ONNX")
+
+    check_unloaded(args.without_triton, args.without_cuda)
+    if args.without_triton:
+        missing_dependency(lrt.SessionOptions(engine="triton"), "libtritonserver.so")
+    if args.without_cuda:
+        missing_dependency(
+            lrt.SessionOptions(engine="native", device="cuda:0"), "libcudart.so"
+        )
+        missing_dependency(
+            lrt.SessionOptions(engine="native", output_device="pinned"),
+            "libcudart.so",
+            run=True,
+        )
 
     # Even absent backends must permit bundle inspection. A CPU session would
     # reject TensorRT placement before reaching its loader, so use CUDA there.
@@ -121,6 +168,7 @@ def main():
             devices.append("cuda:0")
         for device in devices:
             execute(args.backend, args.engine, device)
+    check_unloaded(args.without_triton, args.without_cuda)
 
 
 if __name__ == "__main__":

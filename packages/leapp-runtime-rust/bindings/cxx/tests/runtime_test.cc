@@ -18,7 +18,9 @@
 #include <type_traits>
 #include <vector>
 
+#ifdef LEAPP_TEST_CUDA
 #include <cuda_runtime_api.h>
+#endif
 
 namespace {
 void Check(bool condition, const char* expression, int line) {
@@ -39,8 +41,8 @@ void Ok(lrt::Status status) {
 
 lrt::EngineKind TestEngine() {
   const char* engine = std::getenv("LEAPP_TEST_ENGINE");
-  return engine && std::string_view(engine) == "native"
-      ? lrt::EngineKind::kNative : lrt::EngineKind::kTriton;
+  return engine && std::string_view(engine) == "triton"
+      ? lrt::EngineKind::kTriton : lrt::EngineKind::kNative;
 }
 
 lrt::Session Open(const std::filesystem::path& fixtures,
@@ -98,7 +100,11 @@ std::vector<float> Values(const lrt::ManagedTensor& tensor) {
   if (size != 0) {
     auto* data = static_cast<const std::byte*>(t.data) + t.byte_offset;
     if (t.device.device_type == kDLCUDA) {
+#ifdef LEAPP_TEST_CUDA
       CHECK(cudaMemcpy(result.data(), data, size * sizeof(float), cudaMemcpyDeviceToHost) == cudaSuccess);
+#else
+      CHECK(false && "CUDA tests were not enabled at build time");
+#endif
     } else {
       std::memcpy(result.data(), data, size * sizeof(float));
     }
@@ -320,6 +326,7 @@ void ConcurrentSessions(const std::filesystem::path& fixtures) {
   Expect(Step(runtime), 1);
 }
 
+#ifdef LEAPP_TEST_CUDA
 void CudaBuffers(const std::filesystem::path& fixtures) {
   const std::array<float, 4> data = {1, 2, 3, 4};
   void* device = nullptr;
@@ -363,6 +370,7 @@ void CudaBuffers(const std::filesystem::path& fixtures) {
   CHECK(cudaFreeHost(pinned) == cudaSuccess);
   CHECK(Values(retained) == std::vector<float>(data.begin(), data.end()));
 }
+#endif
 
 }  // namespace
 
@@ -377,8 +385,12 @@ int main(int argc, char** argv) {
   InvalidInputs(fixtures);
   ConcurrentSessions(fixtures);
   if (std::string_view(argv[2]) == "ON") {
+#ifdef LEAPP_TEST_CUDA
     DefaultEngine(fixtures, true);
     CudaBuffers(fixtures);
+#else
+    CHECK(false && "CUDA tests were not enabled at build time");
+#endif
   }
   std::cout << "C++ binding integration checks passed\n";
 }

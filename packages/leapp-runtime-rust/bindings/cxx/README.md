@@ -11,25 +11,25 @@ inspection values; it does not implement another runtime.
 
 ## Build and install
 
-Linux x86-64 requires Rust 1.88 or newer, CMake 3.22 or newer, a C++20 compiler,
-the CUDA SDK, and the Triton SDK. Run from `packages/leapp-runtime-rust`:
+Building on Linux requires Rust 1.88 or newer, CMake 3.22 or newer, and a C++20
+compiler. The Triton and CUDA SDKs are not required. Run from
+`packages/leapp-runtime-rust`:
 
 ```sh
 cmake -S bindings/cxx -B target/cxx-build \
   -DCMAKE_BUILD_TYPE=Release \
-  -DTRITON_ROOT=/opt/tritonserver \
-  -DCUDA_ROOT=/usr/local/cuda \
   -DBUILD_TESTING=OFF
 cmake --build target/cxx-build -j
 cmake --install target/cxx-build --prefix /your/sdk
 ```
 
 Both engines are included in the same library. Install the model backends
-you need as described in the [native engine guide](../../README.md#native-engine).
+you need as described in the [model support guide](../../README.md#model-support).
 
-CPU, pinned-host, and CUDA buffers are supported by every build. Native backend
-and SDK libraries remain external dependencies; configure the loader search path
-(`LD_LIBRARY_PATH`) for your deployment.
+CPU, pinned-host, and CUDA buffers are supported by every build. Triton and CUDA
+libraries load only when needed; native CPU ONNX with CPU I/O can run without
+either. Configure library discovery as described in the
+[runtime installation guide](../../README.md#installation).
 
 Consume the installed SDK with:
 
@@ -144,7 +144,9 @@ use CUDA or a consuming framework for copies and device transfers.
 Generate fixtures with `tests/generators/generate_models.py`. Configure with
 `BUILD_TESTING=ON`, `LEAPP_FIXTURES` pointing to the generated directory, and
 `LEAPP_TEST_BACKENDS` pointing to the installed backends. Set
-`LEAPP_TEST_CUDA=ON` to include CUDA input/output combinations, then run:
+`LEAPP_TEST_CUDA=ON` to compile CUDA input/output tests with the CUDA SDK.
+Tests default to native execution; set `LEAPP_TEST_ENGINE=triton` to exercise
+Triton. Then run:
 
 ```sh
 cmake --build target/cxx-build -j

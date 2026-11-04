@@ -13,8 +13,9 @@ Close reports the lock error after cleanup; subsequent close calls succeed.
 Normal run/reset operations still fail on poisoned locks.
 
 The `leapp-runtime-bindings` crate compiles these wrappers against the core
-runtime. It requires Linux and the Triton and CUDA runtime SDKs. Both engines
-are included; `SessionOptions.engine` selects one when opening a session.
+runtime on Linux. Both engines are included; `SessionOptions.engine` selects one
+when opening a session. Triton and CUDA libraries load only when required by
+execution; building these wrappers requires neither SDK.
 Language bindings use these handles to share closure and session serialization.
 
 The root Cargo test target includes `session.rs` against a small session API
