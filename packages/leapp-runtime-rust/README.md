@@ -191,7 +191,8 @@ session; bundle inspection still accepts custom backend names.
 The runtime configures PT2 artifacts for an externally installed `leapp_pt2`
 Triton backend. Set `LEAPP_TRITON_BACKENDS` to a directory containing
 `leapp_pt2/libtriton_leapp_pt2.so` and any other backends used by the bundle.
-Backend implementations and their dependencies are installed separately.
+Backend implementations and their dependencies are installed separately. See
+the [plugin build guide](src/engines/triton/backends/README.md) to build `leapp_pt2` from source.
 
 PT2 inputs and outputs follow exported-program order. Archive devices must match
 the selected model instance. The runtime supplies feedback, default inputs, and
@@ -202,7 +203,8 @@ output placement through the same session API used for ONNX models.
 The runtime configures scripted and traced artifacts for an externally installed
 `leapp_torchscript` Triton backend. Install
 `leapp_torchscript/libtriton_leapp_torchscript.so` beneath the runtime's backend
-directory, with its dependencies discoverable by the dynamic loader.
+directory, with its dependencies discoverable by the dynamic loader. See the
+[plugin build guide](src/engines/triton/backends/README.md#torchscript) for source builds.
 
 Models accept positional tensor arguments and return a tensor or a flat tuple
 of tensors. Conversion maps YAML port order to `INPUT__0`, `INPUT__1`, and

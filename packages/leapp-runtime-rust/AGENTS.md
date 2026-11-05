@@ -90,6 +90,7 @@ Set `LEAPP_PT2_FIXTURES`, `LEAPP_TORCHSCRIPT_FIXTURES`, or
 
 ```sh
 cargo test --locked public_pt2 -- --ignored --test-threads=1
+cargo test --locked engines::triton::tests::nativert -- --ignored --test-threads=1
 cargo test --locked engines::triton::tests::torchscript -- --ignored --test-threads=1
 cargo test --locked engines::triton::tests::tensorrt -- --ignored --test-threads=1
 ```
