@@ -509,9 +509,10 @@ def test_predefined_semantics_do_not_register_ports_or_disable_later_checks(
         leapp.annotate.set_semantics(
             "policy", outputs=[TensorSemantics("action", kind=Kind.JOINT_POSITION)]
         )
-    assert not annotate.nodes
-    _capture_semantic_policy()
     node = annotate.nodes["policy"]
+    assert not node.inputs and not node.outputs
+    _capture_semantic_policy()
+    assert annotate.nodes["policy"] is node
     assert node.outputs[0].get_semantics() == {"kind": Kind.JOINT_EFFORT}
     leapp.annotate.set_semantics(
         "policy", outputs=[TensorSemantics("action", kind=Kind.JOINT_POSITION)]
@@ -542,7 +543,8 @@ def test_set_semantics_before_compilation(semantic_session, when):
 
     if when == "before":
         set_metadata()
-        assert not annotate.nodes  # A declaration alone creates no graph computation.
+        node = annotate.nodes["policy"]
+        assert not node.inputs and not node.outputs
     x = leapp.annotate.input_tensors("policy", {"state": torch.tensor([1.0, 2.0])})
     if when == "registered":
         set_metadata()
@@ -923,6 +925,49 @@ def test_set_semantics_on_method_node(semantic_session):
     assert leapp.compile_graph(visualize=False)
     description = yaml.safe_load((semantic_session / "semantics.yaml").read_text())
     assert description["models"]["policy"]["outputs"][0]["kind"] == "joint/effort"
+
+
+def test_empty_semantic_update_does_not_create_a_node(semantic_session):
+    leapp.annotate.set_semantics("policy", inputs=[], outputs=[], states=[])
+    assert not annotate.nodes
+
+
+def test_unregistered_semantics_on_empty_node_fail_compilation(semantic_session):
+    leapp.annotate.set_semantics(
+        "policy", outputs=[TensorSemantics("action")], allow_unregistered_ports=True
+    )
+    leapp.stop()
+    with pytest.raises(ValueError, match="Unresolved outputs.*action"):
+        leapp.compile_graph(visualize=False)
+    assert not (semantic_session / "semantics.yaml").exists()
+
+
+def test_predefined_semantics_work_with_legacy_method_node(semantic_session):
+    leapp.annotate.set_semantics(
+        "policy",
+        inputs=[TensorSemantics("state", kind=Kind.JOINT_POSITION)],
+        outputs=[TensorSemantics("action", kind=Kind.JOINT_EFFORT)],
+        allow_unregistered_ports=True,
+    )
+
+    @leapp.annotate._method(node_name="policy", export_with="jit")
+    def policy(state):
+        action = state * 2
+        return action
+
+    for value in (1.0, 3.0):
+        policy(torch.full((2,), value))
+    leapp.stop()
+    assert leapp.compile_graph(visualize=False)
+    path = semantic_session / "semantics.yaml"
+    description = yaml.safe_load(path.read_text())["models"]["policy"]
+    assert description["inputs"][0]["kind"] == "joint/position"
+    assert description["outputs"][0]["kind"] == "joint/effort"
+    runtime = leapp.InferenceManager(str(path))
+    fresh = torch.tensor([-2.0, 7.0])
+    torch.testing.assert_close(
+        runtime({"policy/state": fresh})["policy/action"], fresh * 2
+    )
 
 
 class TestSemanticExport(LEAPPFunctionalTestBase):

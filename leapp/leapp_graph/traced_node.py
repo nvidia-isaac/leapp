@@ -587,7 +587,7 @@ class TracedTensorNode(LeappNode):
             surviving = self.get_io_description_by_name(declared.name, self.inputs)
             if name not in surviving.aliases:
                 surviving.aliases.append(name)
-            self._semantics._bind("inputs", surviving, semantics)
+            self._apply_semantics_to_descriptions([surviving], semantics, "inputs")
             if isinstance(data, TracedData):
                 # Rebind the object the caller holds rather than returning a new
                 # carrier. A buffer promoted in place stays the same object on

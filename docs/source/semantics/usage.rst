@@ -104,7 +104,9 @@ Names come from ``TensorSemantics.name``. No placeholder, tensor reference, or
 separate node-selection call is needed.
 By default, the named ports must already be registered in the specified
 direction. Pass ``allow_unregistered_ports=True`` to predefine descriptions
-before their ports exist. The option applies to that call only and defers port
+before their ports exist. This creates the named node if needed; tensor
+annotations reuse it when concrete values become available.
+The option applies to that call only and defers port
 existence checks until registration and compilation. Semantic fields and known
 shapes still validate immediately.
 

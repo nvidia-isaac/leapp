@@ -15,8 +15,9 @@
 # limitations under the License.
 #
 import functools
+from copy import copy, deepcopy
 import torch
-from leapp.utils.node_semantics import NodeSemantics
+from leapp.utils.semantics import TensorSemantics
 from leapp.utils.tensor_description import (
     describe_io,
     flatten_io_structure,
@@ -93,7 +94,7 @@ class LeappNode:
         # i/o settings
         self.inputs = []
         self.outputs = []
-        self._semantics = NodeSemantics(name)
+        self._pending_semantics = {"inputs": {}, "outputs": {}}
         self.input_formats = []
         self.output_formats = []
         # trimmed inputs are inputs that are not used in the computation or directly returned as output
@@ -356,17 +357,85 @@ class LeappNode:
     def set_semantics(
         self, *, inputs=None, outputs=None, states=None, allow_unregistered_ports=False
     ):
-        """Replace metadata on this node before compilation begins."""
-        self._semantics.set_semantics(
-            inputs=inputs,
-            outputs=outputs,
-            states=states,
-            allow_unregistered_ports=allow_unregistered_ports,
-        )
+        """Atomically replace port metadata, or retain pending declarations."""
+        if not isinstance(allow_unregistered_ports, bool):
+            raise TypeError("allow_unregistered_ports must be a boolean")
+        if states is not None and not isinstance(states, (list, tuple)):
+            raise TypeError("states must be a list of TensorSemantics")
+        updates = []
+        for direction, descriptions in (("inputs", inputs), ("outputs", outputs)):
+            if descriptions is None:
+                descriptions = []
+            if not isinstance(descriptions, (list, tuple)):
+                raise TypeError(f"{direction} must be a list of TensorSemantics")
+            seen = set()
+            for semantics in [*descriptions, *(states or [])]:
+                if not isinstance(semantics, TensorSemantics):
+                    raise TypeError(f"{direction} must contain only TensorSemantics")
+                name = semantics.name
+                if not isinstance(name, str) or not name.strip():
+                    raise ValueError("TensorSemantics requires a non-empty port name")
+                port = self.get_io_description_by_name(name, getattr(self, direction))
+                if not allow_unregistered_ports and port is None:
+                    raise ValueError(
+                        f"Invalid {direction[:-1]} port name {name!r} for node {self.name!r}. "
+                        "To predefine semantics, pass allow_unregistered_ports=True."
+                    )
+                name = port.name if port is not None else name
+                if name in seen:
+                    raise ValueError(f"Duplicate {direction} semantics for '{name}'")
+                seen.add(name)
+                snapshot = self._prepare_semantics(
+                    semantics,
+                    name,
+                    direction,
+                    shape=port.shape if port is not None else None,
+                )
+                updates.append((direction, name, port, snapshot))
+        for direction, name, port, semantics in updates:
+            if port is None:
+                self._pending_semantics[direction][name] = semantics
+            else:
+                port.init_semantics(semantics)
+
+    @staticmethod
+    def _prepare_semantics(semantics, name, direction, shape=None):
+        # Drop ref before copying to avoid retaining a tensor or traced graph.
+        snapshot = copy(semantics)
+        snapshot.ref = None
+        snapshot = deepcopy(snapshot)
+        snapshot.name = name
+        snapshot.__post_init__()
+        if direction == "outputs" and snapshot.is_setpoint:
+            raise ValueError("is_setpoint=True applies only to inputs")
+        if set(snapshot.to_dict()) & {"name", "dtype", "shape", "type"}:
+            raise ValueError("Semantic metadata cannot replace port structure")
+        if shape is not None:
+            snapshot.validate_shape(shape)
+        return snapshot
 
     def _apply_semantics_to_descriptions(self, io_descriptions, semantics, direction):
+        pending = self._pending_semantics[direction]
+        updates = []
         for desc in io_descriptions:
-            self._semantics._bind(direction, desc, semantics)
+            declaration = semantics if semantics is not None else pending.get(desc.name)
+            if declaration is not None:
+                snapshot = self._prepare_semantics(
+                    declaration, desc.name, direction, shape=desc.shape
+                )
+                updates.append((desc, snapshot))
+        for desc, snapshot in updates:
+            desc.init_semantics(snapshot)
+            pending.pop(desc.name, None)
+        for desc in io_descriptions:
+            desc._semantic_owner = (self, direction)
+
+    def validate_semantics(self):
+        for direction, pending in self._pending_semantics.items():
+            if pending:
+                raise ValueError(
+                    f"Unresolved {direction} semantics in '{self.name}': {sorted(pending)}"
+                )
 
     def add_output(self, output_name, raw_output_name, output_value, semantics=None):
         io_descriptions, output_format = describe_io(

@@ -16,7 +16,7 @@
 #
 
 import collections.abc
-from copy import copy, deepcopy
+from copy import deepcopy
 from dataclasses import dataclass, fields
 from typing import Optional, Any, Dict, Tuple, List
 
@@ -145,32 +145,9 @@ class TensorDescription:
 
     # --- Semantic field access ---
 
-    @property
-    def semantics(self):
-        store = getattr(self, "_semantic_store", None)
-        if store is not None:
-            return store._entries[self._semantic_direction].get(self._semantic_name)
-        return self._semantics
-
-    @semantics.setter
-    def semantics(self, semantics):
-        store = getattr(self, "_semantic_store", None)
-        if store is not None:
-            if semantics is None:
-                semantics = TensorSemantics(name=self._semantic_name)
-            named = copy(semantics)
-            named.name = self._semantic_name
-            store.set_semantics(**{self._semantic_direction: [named]})
-        else:
-            self._semantics = semantics
-
     def init_semantics(self, semantics: Optional[TensorSemantics]):
         self.semantics = semantics
-        if (
-            getattr(self, "_semantic_store", None) is None
-            and semantics is not None
-            and semantics.name is not None
-        ):
+        if semantics is not None and semantics.name is not None:
             self.change_name(semantics.name)
 
     def get_semantics(self) -> Dict[str, Any]:
@@ -186,7 +163,12 @@ class TensorDescription:
         else:
             semantics = TensorSemantics(name=self.name, ref=self.value)
         semantics.update(values)
-        self.init_semantics(semantics)
+        owner = getattr(self, "_semantic_owner", None)
+        if owner is not None:
+            node, direction = owner
+            node.set_semantics(**{direction: [semantics]})
+        else:
+            self.init_semantics(semantics)
 
     # --- Core methods ---
 
@@ -218,10 +200,7 @@ class TensorDescription:
     def change_name(self, new_name: str):
         """Change the name of the tensor description."""
         self.name = new_name
-        if (
-            self.semantics is not None
-            and getattr(self, "_semantic_store", None) is None
-        ):
+        if self.semantics is not None:
             self.semantics.name = new_name
 
     @property
