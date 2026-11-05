@@ -431,10 +431,10 @@ Each valid call replaces the complete description for every supplied port;
 omitted fields are cleared and other ports remain unchanged. Missing names,
 duplicate names in a direction, incompatible layouts, and setpoint outputs
 raise errors without changing prior metadata. Shape checks wait until a port
-exists. Unresolved names fail compilation. Starting ``compile_graph()`` freezes
-semantic registration and overrides; later updates raise ``RuntimeError``.
-Start a new capture to change them. Existing inline tensor annotations use the
-same store and replacement rules.
+exists. Unresolved names fail compilation. Set semantics before calling
+``compile_graph()``, which may rename ports. Later changes do not update saved
+artifacts. A new ``start()`` creates a fresh semantic store. Existing inline
+tensor annotations use the same store and replacement rules.
 
 ``annotate.input_tensors()``
 ----------------------------

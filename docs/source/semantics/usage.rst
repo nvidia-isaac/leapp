@@ -120,10 +120,8 @@ Omitted fields are cleared; other ports retain their descriptions. Validation
 is atomic across the entire call. Shape-independent rules are checked at once;
 layout checks run when tensor shapes become known. Unmatched names fail
 immediately by default. Unresolved predefinitions fail at compilation.
-Starting ``compile_graph()`` freezes semantic
-registration and overrides, including updates to existing descriptions. Later
-updates raise ``RuntimeError``. A new ``start()`` creates a fresh session with
-fresh metadata.
+Set semantics before calling ``compile_graph()``. Later changes do not update
+saved artifacts. A new ``start()`` creates a fresh session with fresh metadata.
 
 During compilation, an exporter may rename ports. Their attached descriptions
 carry the registered semantics into the generated YAML. Changing the metadata

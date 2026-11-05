@@ -141,8 +141,7 @@ def compile_graph(
 ):
     """Compile and save the computational graph from traced nodes.
 
-    Register semantics before this call. Semantic updates are frozen before
-    backend compilation, which may rename ports.
+    Register semantics before this call. Backend compilation may rename ports.
 
     Dry run is declared once via ``leapp.start(dry_run=True)``; when it is
     active this call skips compile, save, and validation.
@@ -164,7 +163,6 @@ def compile_graph(
         _get_logger().set_verbose(verbose)
 
     manager.validate_nodes_ready_for_compile()
-    manager.freeze_semantics()
 
     if not manager.is_dry_run():
         manager.compile_models()

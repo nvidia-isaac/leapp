@@ -731,10 +731,6 @@ def test_state_only_node_and_state_metadata_replacements(semantic_session):
     assert leapp.compile_graph(visualize=False)
     path = semantic_session / "semantics.yaml"
     runtime = leapp.InferenceManager(str(path))
-    with pytest.raises(RuntimeError, match="before calling compile_graph"):
-        leapp.annotate.set_semantics(
-            "policy", states=[TensorSemantics("memory", kind=Kind.JOINT_EFFORT)]
-        )
     description = yaml.safe_load(path.read_text())
     assert description["models"]["policy"]["inputs"][0]["kind"] == "joint/velocity"
     assert description["models"]["policy"]["outputs"][0]["kind"] == "joint/velocity"
@@ -772,61 +768,44 @@ def test_input_output_names_are_separate_namespaces(semantic_session):
     )
 
 
-def test_semantics_cannot_change_after_compilation(semantic_session):
+def test_new_session_resets_semantics_after_compilation(semantic_session):
+    """Reusing a node name in a new session must not inherit prior metadata."""
     leapp.annotate.set_semantics(
         "policy",
+        inputs=[TensorSemantics("state", kind=Kind.JOINT_POSITION)],
         outputs=[TensorSemantics("action", kind=Kind.JOINT_EFFORT)],
         allow_unregistered_ports=True,
     )
     _capture_semantic_policy()
-    node = annotate.nodes["policy"]
     leapp.stop()
     assert leapp.compile_graph(visualize=False)
     path = semantic_session / "semantics.yaml"
     original = path.read_bytes()
-    description = node.get_description()
-    replacement = [TensorSemantics("action", kind=Kind.JOINT_POSITION)]
-    updates = [
-        lambda: leapp.annotate.set_semantics("policy", outputs=replacement),
-        lambda: leapp.annotate.set_semantics(
-            "policy", outputs=replacement, allow_unregistered_ports=True
-        ),
-        lambda: leapp.annotate.set_semantics("uncaptured", outputs=replacement),
-        lambda: node.set_semantics(outputs=replacement),
-        lambda: node.set_semantics(outputs=replacement, allow_unregistered_ports=True),
-        lambda: node.outputs[0].update_semantics({"kind": Kind.JOINT_POSITION}),
-    ]
-    for update in updates:
-        with pytest.raises(RuntimeError, match="before calling compile_graph"):
-            update()
-    assert node.get_description() == description
-    assert path.read_bytes() == original
+    assert (
+        yaml.safe_load(original)["models"]["policy"]["outputs"][0]["kind"]
+        == "joint/effort"
+    )
 
-    leapp.start("semantics", save_path=str(semantic_session.parent))
+    leapp.start("second_semantics", save_path=str(semantic_session.parent))
     leapp.annotate.set_semantics(
-        "policy", outputs=replacement, allow_unregistered_ports=True
+        "policy",
+        outputs=[TensorSemantics("action", kind=Kind.JOINT_VELOCITY)],
+        allow_unregistered_ports=True,
     )
     _capture_semantic_policy()
+    node = annotate.nodes["policy"]
+    assert node.inputs[0].get_semantics() == {}
+    assert node.outputs[0].get_semantics() == {"kind": Kind.JOINT_VELOCITY}
     leapp.stop()
     assert leapp.compile_graph(visualize=False)
+    second_path = semantic_session.parent / "second_semantics" / "second_semantics.yaml"
     assert (
-        yaml.safe_load(path.read_text())["models"]["policy"]["outputs"][0]["kind"]
-        == "joint/position"
+        yaml.safe_load(second_path.read_text())["models"]["policy"]["outputs"][0][
+            "kind"
+        ]
+        == "joint/velocity"
     )
-
-
-def test_semantics_freeze_before_backend_compilation(semantic_session, monkeypatch):
-    _capture_semantic_policy()
-    leapp.stop()
-
-    def compile_backend():
-        with pytest.raises(RuntimeError, match="before calling compile_graph"):
-            leapp.annotate.set_semantics("policy", outputs=[TensorSemantics("action")])
-        raise ValueError("backend failed")
-
-    monkeypatch.setattr(annotate, "compile_models", compile_backend)
-    with pytest.raises(ValueError, match="backend failed"):
-        leapp.compile_graph(visualize=False)
+    assert path.read_bytes() == original
 
 
 def test_precompiled_semantics_load_in_fresh_process(semantic_session):

@@ -16,7 +16,6 @@ class NodeSemantics:
         self.name = name
         self._entries = {"inputs": {}, "outputs": {}}
         self._ports = {"inputs": {}, "outputs": {}}
-        self._frozen = False
 
     def set_semantics(
         self, *, inputs=None, outputs=None, states=None, allow_unregistered_ports=False
@@ -26,10 +25,6 @@ class NodeSemantics:
         Names come from ``TensorSemantics.name``. Omitted fields are cleared;
         other ports are unchanged. No tensor reference is retained.
         """
-        if self._frozen:
-            raise RuntimeError(
-                "Set semantics before calling compile_graph(); start a new capture to change them"
-            )
         if not isinstance(allow_unregistered_ports, bool):
             raise TypeError("allow_unregistered_ports must be a boolean")
         if states is not None and not isinstance(states, (list, tuple)):
