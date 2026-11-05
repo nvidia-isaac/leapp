@@ -7,7 +7,7 @@ use crate::{
 };
 use leapp_runtime_bindings::{Error, SessionHandle};
 use lrt::dlpack::BorrowedTensor;
-use lrt::{ExecutionDevice, RunResult, SessionOptions};
+use lrt::{EngineKind, ExecutionDevice, RunResult, SessionOptions};
 use pyo3::{
     exceptions::{PyKeyError, PyTypeError, PyValueError},
     prelude::*,
@@ -45,6 +45,16 @@ impl PySession {
                 .getattr("output_pool")?
                 .getattr("max_entries")?
                 .extract()?;
+            let engine: String = options.getattr("engine")?.extract()?;
+            opts.engine = match engine.as_str() {
+                "triton" => EngineKind::Triton,
+                "native" => EngineKind::Native,
+                _ => {
+                    return Err(PyValueError::new_err(format!(
+                        "unknown engine '{engine}'; expected 'triton' or 'native'"
+                    )))
+                }
+            };
             let device: String = options.getattr("device")?.extract()?;
             opts.device = match crate::location(&device)? {
                 lrt::MemoryLocation::Cpu => ExecutionDevice::Cpu,

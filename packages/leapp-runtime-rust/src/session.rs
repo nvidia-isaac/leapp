@@ -11,7 +11,7 @@ mod tests;
 use crate::{
     dlpack::{BorrowedTensor, SharedTensor},
     engines::{self, memory::OutputPool, Engine},
-    Bundle, ExecutionDevice, MemoryLocation, RuntimeError,
+    Bundle, EngineKind, ExecutionDevice, MemoryLocation, RuntimeError,
 };
 use anyhow::{ensure, Context};
 use indexmap::{IndexMap, IndexSet};
@@ -66,6 +66,13 @@ pub struct SessionOptions {
     pub output_placement: OutputPlacement,
     /// Each session has its own cache; peers inherit this policy, not its buffers.
     pub output_pool: OutputPoolOptions,
+    /// Select the engine once at initialization; new sessions inherit that selection.
+    /// Defaults to native.
+    pub engine: EngineKind,
+    /// Caller-owned streams by CUDA device ID, used by native GPU execution and
+    /// transfers. Missing devices use internal streams. Triton ignores this map.
+    /// Peers inherit the same handles; keep them alive through every peer's close.
+    pub cuda_streams: HashMap<u32, crate::CudaStream>,
 }
 
 /// Managed DLPack public outputs in bundle declaration order, independent of the session.
@@ -90,7 +97,8 @@ impl RunResult {
 }
 
 /// Independent feedback state sharing loaded models with sessions from `new_session`.
-/// Separate sessions can execute concurrently. Model-internal state remains shared.
+/// Separate sessions may be called concurrently; an engine may serialize execution.
+/// Model-internal state sharing depends on the backend.
 pub struct Session {
     engine: Option<Arc<dyn Engine>>,
     bundle: Bundle,
@@ -101,7 +109,7 @@ pub struct Session {
     inputs: IndexMap<String, SharedTensor>,
     feedback: IndexMap<String, String>,
     placement: OutputPlacement,
-    state_location: MemoryLocation,
+    engine_placement: OutputPlacement,
 }
 
 impl Session {
@@ -136,16 +144,13 @@ impl Session {
             .values()
             .filter(|spec| spec.shape.iter().all(|&dim| dim >= 0))
             .map(|spec| {
-                engines::memory::dlpack::byte_size(
-                    initial_state::dl_dtype(spec.dtype),
-                    &spec.shape,
-                )
+                engines::memory::dlpack::byte_size(initial_state::dl_dtype(spec.dtype), &spec.shape)
             })
             .try_fold(0, |largest, size| size.map(|size| largest.max(size)))?;
         let output_pool = Arc::new(OutputPool::new(options.output_pool, largest_output));
         let initial_inputs =
             initial_state::initial_inputs(bundle, graph, state_location, engine.as_ref())?;
-        let feedback = bundle
+        let feedback: IndexMap<String, String> = bundle
             .0
             .description
             .pipeline
@@ -157,17 +162,31 @@ impl Session {
                     .map(move |target| (target.name(), source.name()))
             })
             .collect();
+        let public_outputs: IndexSet<String> =
+            bundle.pipeline_outputs().iter().map(|p| p.name()).collect();
+        // SessionOptions and graph routing are immutable after initialization.
+        let mut engine_placement = OutputPlacement::default();
+        for name in &public_outputs {
+            engine_placement
+                .overrides
+                .insert(name.clone(), options.output_placement.location(name));
+        }
+        for source in feedback.values() {
+            engine_placement
+                .overrides
+                .insert(source.clone(), state_location);
+        }
         Ok(Self {
             engine: Some(engine),
             bundle: bundle.clone(),
             output_pool,
             public_inputs: bundle.pipeline_inputs().iter().map(|p| p.name()).collect(),
-            public_outputs: bundle.pipeline_outputs().iter().map(|p| p.name()).collect(),
+            public_outputs,
             inputs: initial_inputs.clone(),
             initial_inputs,
             feedback,
             placement: options.output_placement,
-            state_location,
+            engine_placement,
         })
     }
 
@@ -190,7 +209,7 @@ impl Session {
     /// Configuration and captured initial values are inherited; current feedback is not.
     pub fn new_session(&self) -> Result<Self, RuntimeError> {
         Ok(Self {
-            engine: Some(self.engine()?.clone()),
+            engine: Some(self.engine()?.clone().new_session()?),
             bundle: self.bundle.clone(),
             output_pool: Arc::new(self.output_pool.fresh()),
             public_inputs: self.public_inputs.clone(),
@@ -199,7 +218,7 @@ impl Session {
             inputs: self.initial_inputs.clone(),
             feedback: self.feedback.clone(),
             placement: self.placement.clone(),
-            state_location: self.state_location,
+            engine_placement: self.engine_placement.clone(),
         })
     }
 
@@ -248,10 +267,7 @@ impl Session {
             })
     }
 
-    fn execute(
-        &mut self,
-        inputs: &HashMap<&str, BorrowedTensor<'_>>,
-    ) -> anyhow::Result<RunResult> {
+    fn execute(&mut self, inputs: &HashMap<&str, BorrowedTensor<'_>>) -> anyhow::Result<RunResult> {
         let engine = self.engine()?;
         for name in inputs.keys() {
             ensure!(
@@ -277,19 +293,7 @@ impl Session {
                 .iter()
                 .map(|(name, tensor)| (name.as_str(), unsafe { tensor.borrow() })),
         );
-        // Public placement applies only to public outputs. Private terminals use the default.
-        let mut placement = OutputPlacement::default();
-        for name in &self.public_outputs {
-            placement
-                .overrides
-                .insert(name.clone(), self.placement.location(name));
-        }
-        for source in self.feedback.values() {
-            placement
-                .overrides
-                .insert(source.clone(), self.state_location);
-        }
-        let outputs = engine.run(&values, &placement, &self.output_pool)?;
+        let outputs = engine.run(&values, &self.engine_placement, &self.output_pool)?;
         let output = |name: &str| -> anyhow::Result<SharedTensor> {
             outputs.get(name).cloned().ok_or_else(|| {
                 crate::error::Internal(format!("missing engine output {name}")).into()
@@ -326,5 +330,5 @@ impl Session {
 }
 
 #[cfg(test)]
-#[path = "../tests/functional_tests/triton/state.rs"]
+#[path = "../tests/functional_tests/session/state.rs"]
 mod native_tests;

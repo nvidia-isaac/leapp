@@ -161,6 +161,11 @@ extern "C" {
         server: *mut TRITONSERVER_Server,
         server_metadata: *mut *mut TRITONSERVER_Message,
     ) -> *mut TRITONSERVER_Error;
+    pub fn TRITONSERVER_ServerModelIndex(
+        server: *mut TRITONSERVER_Server,
+        flags: u32,
+        model_index: *mut *mut TRITONSERVER_Message,
+    ) -> *mut TRITONSERVER_Error;
     pub fn TRITONSERVER_MessageSerializeToJson(
         message: *mut TRITONSERVER_Message,
         base: *mut *const std::ffi::c_char,

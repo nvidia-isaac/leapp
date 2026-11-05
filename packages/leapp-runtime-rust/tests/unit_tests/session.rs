@@ -39,6 +39,10 @@ fn tensor(values: Vec<f32>) -> SharedTensor {
 }
 
 impl Engine for CpuEngine {
+    fn new_session(self: Arc<Self>) -> Result<Arc<dyn Engine>, RuntimeError> {
+        Ok(self)
+    }
+
     fn run(
         &self,
         inputs: &[(&str, BorrowedTensor<'_>)],
@@ -96,8 +100,7 @@ fn copy_failure_preserves_feedback() {
     let graph = graph::Graph::new(&bundle).unwrap();
     let engine = Arc::new(CpuEngine::default());
     let mut session =
-        Session::initialize(&bundle, SessionOptions::default(), &graph, engine.clone())
-            .unwrap();
+        Session::initialize(&bundle, SessionOptions::default(), &graph, engine.clone()).unwrap();
     let step = |session: &mut Session| {
         session
             .run(&std::collections::HashMap::from([(
@@ -134,17 +137,39 @@ fn peer_caches_inherit_policy_and_close_independently() {
     for max_entries in [0, 1] {
         let options = SessionOptions {
             output_pool: OutputPoolOptions { max_entries },
+            output_placement: OutputPlacement {
+                default_location: MemoryLocation::PinnedCpu,
+                overrides: HashMap::from([(
+                    "a_policy/next_state".into(),
+                    MemoryLocation::Cuda { device_id: 0 },
+                )]),
+            },
             ..Default::default()
         };
         let mut session =
-            Session::initialize(&bundle, options, &graph, Arc::new(CpuEngine::default()))
-                .unwrap();
+            Session::initialize(&bundle, options, &graph, Arc::new(CpuEngine::default())).unwrap();
         let source = session
             .output_pool
             .allocate(12, MemoryLocation::Cpu)
             .unwrap();
         assert_eq!(Arc::strong_count(&source), 1 + max_entries);
         let mut peer = session.new_session().unwrap();
+        // Effective engine placement preserves private state independently of
+        // public overrides, and peers inherit the immutable routing metadata.
+        for current in [&session, &peer] {
+            assert_eq!(
+                current.engine_placement.location("a_policy/next_state"),
+                MemoryLocation::Cpu
+            );
+            assert_eq!(
+                current.engine_placement.location("a_policy/actions"),
+                MemoryLocation::PinnedCpu
+            );
+            assert_eq!(
+                current.placement.location("a_policy/next_state"),
+                MemoryLocation::Cuda { device_id: 0 }
+            );
+        }
         let retained = peer.output_pool.allocate(12, MemoryLocation::Cpu).unwrap();
         assert_eq!(Arc::strong_count(&retained), 1 + max_entries);
         assert_ne!(source.ptr, retained.ptr);

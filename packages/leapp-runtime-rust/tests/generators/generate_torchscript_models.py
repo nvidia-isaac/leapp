@@ -65,6 +65,22 @@ class Integer(torch.nn.Module):
         return values + 1
 
 
+class Identity(torch.nn.Module):
+    def forward(self, values):
+        return values
+
+
+class Retaining(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.register_buffer("previous", torch.zeros(4))
+
+    def forward(self, values):
+        previous = self.previous
+        self.previous = values
+        return previous
+
+
 def bundle(model, node="model"):
     return {
         "system information": {"leapp config version": "1.3"},
@@ -117,6 +133,11 @@ def generate(root):
         ("dynamic", Reshape(), "float32", [-1], [-1, 2]),
         ("integer", Integer(), "int64", [4], [4]),
         ("forked", Forked(), "float32", [4], [4]),
+        ("scalar", Identity(), "float32", [], []),
+        ("empty", Identity(), "float32", [0], [0]),
+        ("double", Identity(), "float64", [4], [4]),
+        ("short", Identity(), "int16", [4], [4]),
+        ("retaining", Retaining(), "float32", [4], [4]),
     ]:
         source = dict(port("values", input_shape), dtype=dtype)
         target = dict(port("result", output_shape), dtype=dtype)
