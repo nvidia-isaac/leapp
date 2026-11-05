@@ -57,6 +57,15 @@ jobs:
       - name: Install package and test dependencies
         run: python -m pip install -e ".[dev,test,warp-cu12]" cmake ninja
 
+      - name: Select GPU ONNX Runtime
+        run: |
+          # The base CPU dependency and Warp GPU extra share package files.
+          # Keep the CUDA-compatible version resolved by the Warp extra.
+          ort_gpu_version=$(python -c "from importlib.metadata import version; print(version('onnxruntime-gpu'))")
+          python -m pip uninstall -y onnxruntime
+          python -m pip install --force-reinstall --no-deps "onnxruntime-gpu==$ort_gpu_version"
+          python -c "import onnxruntime as ort; assert 'CUDAExecutionProvider' in ort.get_available_providers(), ort.get_available_providers()"
+
       - name: Build Warp runtime
         run: leapp-build-warp-runtime
 

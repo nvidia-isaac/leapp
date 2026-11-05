@@ -95,6 +95,14 @@ cargo test --locked engines::triton::tests::torchscript -- --ignored --test-thre
 cargo test --locked engines::triton::tests::tensorrt -- --ignored --test-threads=1
 ```
 
+For Warp, install the adapters as described in `src/engines/triton/backends/README.md`.
+Generate `tests/generators/generate_warp_models.py` fixtures, set
+`LEAPP_WARP_FIXTURES` and an empty `WARP_APIC_TMPDIR`, then run
+`cargo test --locked engines::triton::tests::warp -- --ignored --test-threads=1`.
+This covers ONNX/PT2 CPU and GPU instances, CPU/pinned/CUDA output placement,
+pool limits 0/1/64, changed inputs, retained results, peer sessions, and unload.
+Warp replay requires CUDA even with CPU model instances.
+
 The Python and C++ binding READMEs describe building and testing each adapter.
 Also verify the installed C++ SDK with `bindings/cxx/tests/consumer` so installed
 headers and CMake targets work without generated bridge headers or Rust sources.

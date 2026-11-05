@@ -10,6 +10,8 @@
 #include <mutex>
 #include <string>
 
+#include <cuda_runtime_api.h>
+
 #include "apic.h"
 
 namespace leapp::warp_runtime {
@@ -29,6 +31,7 @@ class WarpApicRunner {
 
  private:
     void EnsureCudaInitialized();
+    void ValidateTensor(const TensorView& tensor) const;
     void ValidateInput(const TensorView& tensor, const InputSpec& spec) const;
     void ValidateOutput(const TensorView& tensor, const OutputSpec& spec) const;
 
@@ -38,6 +41,7 @@ class WarpApicRunner {
     std::mutex run_mutex_;
     void* cuda_context_ = nullptr;
     APICGraph* graph_ = nullptr;
+    cudaEvent_t completed_ = nullptr;
 };
 
 }  // namespace leapp::warp_runtime

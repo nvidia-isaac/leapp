@@ -4,15 +4,18 @@
 #
 
 import contextlib
+import json
 import os
 import sys
 import tempfile
 import types
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import leapp
 import numpy as np
+import onnxruntime as ort
 import torch
 import warp as wp
 from leapp.leapp import _MANAGER as annotate
@@ -78,7 +81,7 @@ class TestWarpOp(WarpTestCase, LEAPPFunctionalTestBase):
         leapp.stop()
         return node
 
-    def test_single_warp_op_two_pass_compiles(self):
+    def _compile_copy_node(self):
         leapp.start(name=self.TEST_GRAPH_NAME)
         source = wp.array([1.0, 2.0, 3.0], dtype=wp.float32, device=self.DEVICE)
 
@@ -92,13 +95,109 @@ class TestWarpOp(WarpTestCase, LEAPPFunctionalTestBase):
         node = annotate.get_nodes()["node_a"]
         leapp.stop()
         leapp.compile_graph(visualize=False)
+        return node
 
+    def test_single_warp_op_two_pass_compiles(self):
+        node = self._compile_copy_node()
         self.assertFalse(node.has_pending_warp_segments)
         self.verify_node_io(node, inputs=1, outputs=1)
         self.assertEqual(len(node.warp_segments), 1)
         self.assertEqual(node.warp_segments[0].runner_name, "warp_segment_0")
         self.assertIsNotNone(node.warp_segments[0].apic_graph)
         self.verify_all_models_exist("node_a")
+
+        # GPU I/O must keep the Warp node on CUDA without ORT host-copy nodes.
+        for stream in (torch.cuda.default_stream(), torch.cuda.Stream()):
+            with self.subTest(stream=stream.cuda_stream):
+                options = ort.SessionOptions()
+                options.enable_profiling = True
+                options.profile_file_prefix = str(Path(self.TEST_GRAPH_NAME) / "warp")
+                options.register_custom_ops_library(
+                    os.environ["LEAPP_WARP_ONNX_CUSTOM_OP_LIBRARY"]
+                )
+                session = ort.InferenceSession(
+                    str(Path(self.TEST_GRAPH_NAME) / "node_a.onnx"),
+                    options,
+                    providers=[
+                        (
+                            "CUDAExecutionProvider",
+                            {"user_compute_stream": str(stream.cuda_stream)},
+                        )
+                    ],
+                )
+                binding = session.io_binding()
+                binding.bind_output(session.get_outputs()[0].name, "cuda", 0)
+                for values in ([10.0, 20.0, 30.0], [7.0, -2.0, 5.0]):
+                    expected = np.array(values, dtype=np.float32)
+                    tensor = ort.OrtValue.ortvalue_from_numpy(expected, "cuda", 0)
+                    binding.bind_ortvalue_input(session.get_inputs()[0].name, tensor)
+                    session.run_with_iobinding(binding)
+                    binding.synchronize_outputs()
+                    np.testing.assert_array_equal(
+                        binding.get_outputs()[0].numpy(), expected
+                    )
+                events = json.loads(Path(session.end_profiling()).read_text())
+                nodes = [event["args"] for event in events if event["cat"] == "Node"]
+                warp_nodes = [
+                    node for node in nodes if node.get("op_name") == "WrpRunner"
+                ]
+                self.assertTrue(warp_nodes)
+                self.assertTrue(
+                    all(
+                        node["provider"] == "CUDAExecutionProvider"
+                        for node in warp_nodes
+                    )
+                )
+                self.assertFalse(
+                    any("Memcpy" in node.get("op_name", "") for node in nodes)
+                )
+
+    def test_native_torch_strides_and_stream_ordering(self):
+        import onnx
+
+        self._compile_copy_node()
+        model = onnx.load(Path(self.TEST_GRAPH_NAME) / "node_a.onnx")
+        op = next(node for node in model.graph.node if node.op_type == "WrpRunner")
+        metadata = next(
+            a.s.decode() for a in op.attribute if a.name == "runtime_metadata"
+        )
+        archive = next(t for t in model.graph.initializer if t.name == op.input[-1])
+        bundle = torch.tensor(onnx.numpy_helper.to_array(archive), dtype=torch.uint8)
+        torch.ops.load_library(os.environ["LEAPP_WARP_PT2_CUSTOM_OP_LIBRARY"])
+
+        output_index = next(
+            i for i, spec in enumerate(json.loads(metadata)["outputs"]) if spec["mask"]
+        )
+
+        def replay(values):
+            return torch.ops.leapp.warp_runner([values], metadata, bundle)[output_index]
+
+        for location in ("cpu", "pinned", "cuda"):
+            with self.subTest(location=location):
+                values = torch.arange(6, dtype=torch.float32, device="cpu")
+                values = (
+                    values.pin_memory() if location == "pinned" else values.to(location)
+                )
+                values = values[::2]
+                self.assertFalse(values.is_contiguous())
+                torch.testing.assert_close(replay(values), values)
+
+        # Warm before overlapping submissions: first-use graph capture is serial.
+        replay(torch.zeros(3, device="cuda"))
+        torch.cuda.synchronize()
+        streams = [torch.cuda.Stream(), torch.cuda.Stream()]
+        values = [torch.full((3,), float(i), device="cuda") for i in range(16)]
+        for stream in streams:
+            stream.wait_stream(torch.cuda.current_stream())
+        outputs = []
+        for i, value in enumerate(values):
+            with torch.cuda.stream(streams[i % 2]):
+                if i == 0:
+                    torch.cuda._sleep(100_000_000)
+                outputs.append(replay(value))
+        torch.cuda.synchronize()
+        for actual, expected in zip(outputs, values):
+            torch.testing.assert_close(actual, expected)
 
     def test_warp_write_to_plain_torch_alias_is_traced(self):
         leapp.start(name=self.TEST_GRAPH_NAME)

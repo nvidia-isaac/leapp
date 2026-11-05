@@ -12,7 +12,8 @@
 
 namespace leapp::internal {
 
-Status ReadModelConfig(TRITONBACKEND_Model* model, ModelConfig* state) {
+Status ReadModelConfig(TRITONBACKEND_Model* model, ModelConfig* state,
+                       std::filesystem::path* custom_op_library) {
   constexpr uint32_t kConfigVersion = 1;
 
   TRITONSERVER_Message* message = nullptr;
@@ -32,6 +33,11 @@ Status ReadModelConfig(TRITONBACKEND_Model* model, ModelConfig* state) {
     return status;
   }
   const auto config = nlohmann::json::parse(json, json + size);
+  if (custom_op_library != nullptr) {
+    *custom_op_library = config.value("parameters", nlohmann::json::object())
+                            .value("custom_op_library", nlohmann::json::object())
+                            .value("string_value", "");
+  }
   if (config.value("max_batch_size", 0) != 0 ||
       config.value("model_transaction_policy", nlohmann::json::object())
           .value("decoupled", false)) {
