@@ -381,13 +381,13 @@ a dict or mixed with raw tensors. See :doc:`/semantics/usage` for examples.
 .. code-block:: python
 
    Axis(kind=None, names=None, period_ms=None)
-   joint_position(name, ref=None, *, axes=None, is_setpoint=None)
-   joint_acceleration(name, ref=None, *, axes=None, is_setpoint=None)
-   point_cloud(name, ref=None, *, reference=None, axes=None, is_setpoint=None)
-   frame_pose(name, ref=None, *, axes=None, is_setpoint=None, reference=None)
-   frame_twist(name, ref=None, *, axes=None, is_setpoint=None,
+   joint_position(name, ref, *, axes=None, is_setpoint=None)
+   joint_acceleration(name, ref, *, axes=None, is_setpoint=None)
+   point_cloud(name, ref, *, reference=None, axes=None, is_setpoint=None)
+   frame_pose(name, ref, *, axes=None, is_setpoint=None, reference=None)
+   frame_twist(name, ref, *, axes=None, is_setpoint=None,
                reference=None, expressed_in=None)
-   frame_wrench(name, ref=None, *, axes=None, is_setpoint=None, expressed_in=None)
+   frame_wrench(name, ref, *, axes=None, is_setpoint=None, expressed_in=None)
 
 ``AxisKind`` defines ``SYSTEM``, ``ELEMENT``, ``COMPONENT``, and ``TIME``.
 Axis kinds also accept custom strings. Time axes require a finite, positive

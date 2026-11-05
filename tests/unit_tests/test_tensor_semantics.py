@@ -223,6 +223,11 @@ def test_pose_component_order_is_preserved():
 @pytest.mark.parametrize("kind", list(Kind))
 def test_all_kinds_have_public_helpers(kind):
     helper = getattr(leapp, kind.name.lower())
+    assert (
+        inspect.signature(helper).parameters["ref"].default is inspect.Parameter.empty
+    )
+    with pytest.raises(TypeError, match="ref"):
+        helper("value")
     kwargs = (
         {"reference": "base"}
         if "reference" in inspect.signature(helper).parameters
@@ -444,24 +449,29 @@ def _capture_semantic_policy(backend="jit"):
 
 
 def test_metadata_without_values_validates_intrinsic_rules():
-    for helper in [TensorSemantics, *[getattr(leapp, k.name.lower()) for k in Kind]]:
-        assert helper("value").ref is None
+    assert TensorSemantics("value").ref is None
     with pytest.raises(TypeError, match="traceable"):
         TensorSemantics("value", ref=[1, 2])
     with pytest.raises(ValueError, match="at most one time"):
         TensorSemantics("value", axes=[Axis("time", period_ms=1)] * 2)
     with pytest.raises(TypeError, match="Axis or None"):
         TensorSemantics("value", axes=[{}])
-    with pytest.raises(ValueError, match="components"):
-        leapp.frame_pose("pose", axes=[Axis("component", names=["x"])])
 
 
 @pytest.mark.parametrize(
     "when", ["before", "registered", "captured", "stopped", "compiled"]
 )
 def test_set_semantics_at_any_capture_stage(semantic_session, when):
-    inputs = [leapp.joint_position("state", axes=[Axis("element", names=["a", "b"])])]
-    outputs = [leapp.joint_effort("action", axes=[Axis("element", names=["a", "b"])])]
+    inputs = [
+        TensorSemantics(
+            "state", kind=Kind.JOINT_POSITION, axes=[Axis("element", names=["a", "b"])]
+        )
+    ]
+    outputs = [
+        TensorSemantics(
+            "action", kind=Kind.JOINT_EFFORT, axes=[Axis("element", names=["a", "b"])]
+        )
+    ]
 
     def set_metadata():
         leapp.annotate.set_semantics("policy", inputs=inputs, outputs=outputs)
@@ -503,7 +513,7 @@ def test_set_semantics_at_any_capture_stage(semantic_session, when):
 def test_replacement_is_atomic_and_preserves_other_ports(semantic_session):
     leapp.annotate.set_semantics(
         "policy",
-        inputs=[leapp.joint_position("state")],
+        inputs=[TensorSemantics("state", kind=Kind.JOINT_POSITION)],
         outputs=[
             TensorSemantics("action", kind=Kind.JOINT_EFFORT, extra={"units": "Nm"})
         ],
@@ -514,11 +524,17 @@ def test_replacement_is_atomic_and_preserves_other_ports(semantic_session):
     with pytest.raises(ValueError, match="label count"):
         leapp.annotate.set_semantics(
             "policy",
-            inputs=[leapp.joint_velocity("state")],
-            outputs=[leapp.joint_position("action", axes=[Axis(names=["wrong"])])],
+            inputs=[TensorSemantics("state", kind=Kind.JOINT_VELOCITY)],
+            outputs=[
+                TensorSemantics(
+                    "action", kind=Kind.JOINT_POSITION, axes=[Axis(names=["wrong"])]
+                )
+            ],
         )
     assert node.get_description() == original
-    leapp.annotate.set_semantics("policy", outputs=[leapp.joint_position("action")])
+    leapp.annotate.set_semantics(
+        "policy", outputs=[TensorSemantics("action", kind=Kind.JOINT_POSITION)]
+    )
     assert node.inputs[0].get_semantics() == {"kind": Kind.JOINT_POSITION}
     assert node.outputs[0].get_semantics() == {"kind": Kind.JOINT_POSITION}
     # Replacement clears omitted fields, including a formerly declared kind.
@@ -535,7 +551,9 @@ def test_saving_semantics_requires_current_session_compilation(semantic_session)
     path = semantic_session / "semantics.yaml"
     original = path.read_bytes()
     leapp.start("semantics", save_path=str(semantic_session.parent))
-    leapp.annotate.set_semantics("policy", outputs=[leapp.joint_position("action")])
+    leapp.annotate.set_semantics(
+        "policy", outputs=[TensorSemantics("action", kind=Kind.JOINT_POSITION)]
+    )
     with pytest.raises(ValueError, match="Compile the graph"):
         leapp.save_semantics()
     assert path.read_bytes() == original
@@ -547,13 +565,19 @@ def test_saving_semantics_requires_current_session_compilation(semantic_session)
         {"outputs": [TensorSemantics()]},
         {"outputs": [TensorSemantics(" ")]},
         {"outputs": [TensorSemantics("action"), TensorSemantics("action")]},
-        {"outputs": [leapp.joint_position("action", is_setpoint=True)]},
+        {
+            "outputs": [
+                TensorSemantics("action", kind=Kind.JOINT_POSITION, is_setpoint=True)
+            ]
+        },
         {"outputs": [TensorSemantics("action", extra={"shape": [99]})]},
         {"inputs": [TensorSemantics("state")], "states": [TensorSemantics("state")]},
     ],
 )
 def test_invalid_named_semantics_leave_store_unchanged(semantic_session, bad):
-    leapp.annotate.set_semantics("policy", outputs=[leapp.joint_effort("action")])
+    leapp.annotate.set_semantics(
+        "policy", outputs=[TensorSemantics("action", kind=Kind.JOINT_EFFORT)]
+    )
     with pytest.raises(ValueError):
         leapp.annotate.set_semantics("policy", **bad)
     _capture_semantic_policy()
@@ -568,7 +592,9 @@ def test_deferred_shape_validation_and_unresolved_names(semantic_session):
     )
     with pytest.raises(ValueError, match="label count"):
         leapp.annotate.input_tensors("policy", {"state": torch.zeros(2)})
-    leapp.annotate.set_semantics("policy", inputs=[leapp.joint_position("state")])
+    leapp.annotate.set_semantics(
+        "policy", inputs=[TensorSemantics("state", kind=Kind.JOINT_POSITION)]
+    )
     _capture_semantic_policy()
     leapp.annotate.set_semantics("policy", outputs=[TensorSemantics("typo")])
     leapp.stop()
@@ -586,14 +612,18 @@ def test_bound_wrappers_share_store_without_retaining_refs(semantic_session):
     description = annotate.nodes["policy"].inputs[0]
     assert description.semantics.ref is None
     assert description.semantics.axes[0].names == ["a", "b"]
-    leapp.annotate.set_semantics("policy", outputs=[leapp.joint_position("action")])
+    leapp.annotate.set_semantics(
+        "policy", outputs=[TensorSemantics("action", kind=Kind.JOINT_POSITION)]
+    )
     leapp.annotate.output_tensors(
         "policy", leapp.joint_effort("action", x + 1), export_with="jit"
     )
     assert annotate.nodes["policy"].outputs[0].get_semantics() == {
         "kind": Kind.JOINT_EFFORT
     }
-    leapp.annotate.set_semantics("policy", outputs=[leapp.joint_velocity("action")])
+    leapp.annotate.set_semantics(
+        "policy", outputs=[TensorSemantics("action", kind=Kind.JOINT_VELOCITY)]
+    )
     assert annotate.nodes["policy"].outputs[0].get_semantics() == {
         "kind": Kind.JOINT_VELOCITY
     }
@@ -603,7 +633,7 @@ def test_raw_reentry_preserves_explicit_replacements(semantic_session):
     for index in range(2):
         if index:
             leapp.annotate.set_semantics(
-                "policy", outputs=[leapp.joint_velocity("action")]
+                "policy", outputs=[TensorSemantics("action", kind=Kind.JOINT_VELOCITY)]
             )
         x = leapp.annotate.input_tensors("policy", {"state": torch.ones(2) * index})
         leapp.annotate.output_tensors("policy", {"action": x * 2}, export_with="jit")
@@ -613,7 +643,9 @@ def test_raw_reentry_preserves_explicit_replacements(semantic_session):
 
 
 def test_state_only_node_and_state_metadata_replacements(semantic_session):
-    leapp.annotate.set_semantics("policy", states=[leapp.joint_position("memory")])
+    leapp.annotate.set_semantics(
+        "policy", states=[TensorSemantics("memory", kind=Kind.JOINT_POSITION)]
+    )
     for index in range(2):
         memory = leapp.annotate.state_tensors(
             "policy", {"memory": torch.ones(2) * index}
@@ -626,7 +658,9 @@ def test_state_only_node_and_state_metadata_replacements(semantic_session):
         == node.outputs[0].get_semantics()
         == {"kind": Kind.JOINT_POSITION}
     )
-    leapp.annotate.set_semantics("policy", states=[leapp.joint_velocity("memory")])
+    leapp.annotate.set_semantics(
+        "policy", states=[TensorSemantics("memory", kind=Kind.JOINT_VELOCITY)]
+    )
     assert (
         node.inputs[0].get_semantics()
         == node.outputs[0].get_semantics()
@@ -636,7 +670,9 @@ def test_state_only_node_and_state_metadata_replacements(semantic_session):
     assert leapp.compile_graph(visualize=False)
     path = semantic_session / "semantics.yaml"
     runtime = leapp.InferenceManager(str(path))
-    runtime.nodes["policy"].set_semantics(states=[leapp.joint_effort("memory")])
+    runtime.nodes["policy"].set_semantics(
+        states=[TensorSemantics("memory", kind=Kind.JOINT_EFFORT)]
+    )
     runtime.save_semantics()
     description = yaml.safe_load(path.read_text())
     assert description["models"]["policy"]["inputs"][0]["kind"] == "joint/effort"
@@ -662,7 +698,9 @@ def test_state_annotations_support_bound_semantics(semantic_session):
 
 def test_input_output_names_are_separate_namespaces(semantic_session):
     leapp.annotate.set_semantics(
-        "policy", inputs=[leapp.joint_position("q")], outputs=[leapp.joint_effort("q")]
+        "policy",
+        inputs=[TensorSemantics("q", kind=Kind.JOINT_POSITION)],
+        outputs=[TensorSemantics("q", kind=Kind.JOINT_EFFORT)],
     )
     x = leapp.annotate.input_tensors("policy", {"q": torch.ones(2)})
     leapp.annotate.output_tensors("policy", {"q": x * 2}, export_with="jit")
@@ -689,8 +727,8 @@ import sys
 import leapp
 runtime = leapp.InferenceManager(sys.argv[1])
 runtime.nodes['policy'].set_semantics(
-    inputs=[leapp.joint_position('state')],
-    outputs=[leapp.frame_twist('action', reference='base', expressed_in=leapp.ExpressionFrame.SELF)],
+    inputs=[leapp.TensorSemantics('state', kind=leapp.Kind.JOINT_POSITION)],
+    outputs=[leapp.TensorSemantics('action', kind=leapp.Kind.FRAME_TWIST, reference='base', expressed_in=leapp.ExpressionFrame.SELF)],
 )
 runtime.save_semantics()
 """,
@@ -713,11 +751,12 @@ runtime.save_semantics()
     before = path.read_bytes()
     with pytest.raises(ValueError, match="Unknown outputs"):
         node.set_semantics(
-            inputs=[leapp.joint_velocity("state")], outputs=[TensorSemantics("typo")]
+            inputs=[TensorSemantics("state", kind=Kind.JOINT_VELOCITY)],
+            outputs=[TensorSemantics("typo")],
         )
     assert node.input_descriptions[0]["kind"] == "joint/position"
     assert path.read_bytes() == before
-    node.set_semantics(outputs=[leapp.joint_effort("action")])
+    node.set_semantics(outputs=[TensorSemantics("action", kind=Kind.JOINT_EFFORT)])
     runtime.save_semantics()
     loaded = leapp.InferenceManager(str(path))
     assert loaded.nodes["policy"].output_descriptions[0]["kind"] == "joint/effort"
@@ -739,7 +778,7 @@ def test_pt2_metadata_roundtrip_in_fresh_process(tmp_path):
             """
 import pathlib, sys, torch, leapp
 leapp.start('pt2_semantics', save_path=sys.argv[1], global_patching=False)
-leapp.annotate.set_semantics('policy', outputs=[leapp.joint_position('action')])
+leapp.annotate.set_semantics('policy', outputs=[leapp.TensorSemantics('action', kind=leapp.Kind.JOINT_POSITION)])
 x = leapp.annotate.input_tensors('policy', {'state': torch.ones(2)})
 leapp.annotate.output_tensors('policy', {'action': x * 2}, export_with='pt2')
 leapp.stop()
@@ -748,7 +787,7 @@ directory = pathlib.Path(sys.argv[1]) / 'pt2_semantics'
 model = directory / 'policy.pt2'
 original = model.read_bytes()
 runtime = leapp.InferenceManager(str(directory / 'pt2_semantics.yaml'))
-runtime.nodes['policy'].set_semantics(outputs=[leapp.joint_effort('action')])
+runtime.nodes['policy'].set_semantics(outputs=[leapp.TensorSemantics('action', kind=leapp.Kind.JOINT_EFFORT)])
 runtime.save_semantics()
 assert model.read_bytes() == original
 fresh = torch.tensor([7., -3.])
@@ -765,8 +804,10 @@ torch.testing.assert_close(runtime({'policy/state': fresh})['policy/action'], fr
     "annotation",
     [
         TensorSemantics("value", kind=Kind.FRAME_TWIST),
-        leapp.frame_twist("value", expressed_in=ExpressionFrame.SELF),
-        leapp.frame_pose("value", reference="base"),
+        TensorSemantics(
+            "value", kind=Kind.FRAME_TWIST, expressed_in=ExpressionFrame.SELF
+        ),
+        TensorSemantics("value", kind=Kind.FRAME_POSE, reference="base"),
         TensorSemantics("value", kind="custom", extra={"spatial": {"custom": True}}),
         TensorSemantics(
             "value",
@@ -803,8 +844,8 @@ def test_semantic_aliases_survive_backend_renames_and_reload(semantic_session):
     node.change_output_name("action", "backend_action")
     leapp.annotate.set_semantics(
         "policy",
-        inputs=[leapp.joint_position("state")],
-        outputs=[leapp.joint_effort("backend_action")],
+        inputs=[TensorSemantics("state", kind=Kind.JOINT_POSITION)],
+        outputs=[TensorSemantics("backend_action", kind=Kind.JOINT_EFFORT)],
     )
     assert node.inputs[0].get_semantics() == {"kind": Kind.JOINT_POSITION}
     # Backend renaming changes external names, not the canonical semantic port.
@@ -814,7 +855,7 @@ def test_semantic_aliases_survive_backend_renames_and_reload(semantic_session):
     store._load_ports("inputs", metadata["inputs"])
     store._load_ports("outputs", metadata["outputs"])
     store._sealed = True
-    store.set_semantics(outputs=[leapp.joint_velocity("action")])
+    store.set_semantics(outputs=[TensorSemantics("action", kind=Kind.JOINT_VELOCITY)])
     store._update_descriptions("outputs", metadata["outputs"])
     assert metadata["outputs"][0]["kind"] == "joint/velocity"
 
@@ -827,8 +868,8 @@ def test_set_semantics_on_method_node(semantic_session):
 
     leapp.annotate.set_semantics(
         "policy",
-        inputs=[leapp.joint_position("state")],
-        outputs=[leapp.joint_effort("action")],
+        inputs=[TensorSemantics("state", kind=Kind.JOINT_POSITION)],
+        outputs=[TensorSemantics("action", kind=Kind.JOINT_EFFORT)],
     )
     policy(torch.ones(2))
     leapp.stop()
