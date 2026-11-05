@@ -24,7 +24,7 @@ leapp.start(
 
 Implement the same computation with supported traced Torch/NumPy operations. Preserve the signature used by the application, accepted argument combinations, output structure, shapes, dtype, device, layout, and numerical semantics (including relevant clipping, interpolation endpoints, or rounding).
 
-Adapters must be **pure**: mutation, `dst=`/out buffers, input/output aliasing, and calling the patched function from its own replacement are unsupported. Reject unsupported modes explicitly rather than silently approximating them. A patch is not an escape hatch for file I/O, simulator side effects, or stateful native code.
+A replacement must not call the patched function. Reject unsupported modes explicitly rather than silently approximating them. A patch is not an escape hatch for file I/O, simulator side effects, or stateful native code.
 
 Keep genuinely dynamic values as traced data; do not extract them into Python scalars or copy raw buffers. Do not call the original unsupported operation on traced inputs and then attach metadata to its result: that still loses the computation.
 

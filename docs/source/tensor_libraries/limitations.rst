@@ -94,8 +94,8 @@ a reason a NumPy call fails: functions such as ``np.linalg.inv`` and supported
 When a faithful replacement can be expressed in supported operations, use
 :doc:`../guides/patching` to register it for the unsupported module-level
 function. Existing helpers can keep their calls to that function; the adapter's
-operations become part of the exported model. Replacements must be pure and
-match the behavior used by the application. Validate them against the original
+operations become part of the exported model. Replacements must match the
+behavior used by the application. Validate them against the original
 function on fresh inputs.
 
 If a faithful function patch is not practical, split the node:
