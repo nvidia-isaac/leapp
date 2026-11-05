@@ -17,6 +17,7 @@ from leapp.utils.tensor_description import (
     validate_connection_compatibility,
 )
 from leapp.utils.logging import _get_logger
+from leapp.utils.node_semantics import NodeSemantics, save_node_semantics
 
 from leapp.backends.torch_export_backend import TorchExportBackend
 from leapp.backends.onnx_export_backend import ONNXExportBackend
@@ -29,12 +30,22 @@ class NodeManager:
         self.model_path = model_path
         self.input_descriptions = inputs
         self.output_descriptions = outputs
+        self._semantics = NodeSemantics(name)
+        self._semantics._load_ports("inputs", inputs)
+        self._semantics._load_ports("outputs", outputs)
+        self._semantics._sealed = True
 
         backend = self._create_backend(parameters["backend"])
         backend.load(model_path, parameters["sha256sum"])
         self.model = backend.compiled_model
 
         self.device = backend.runtime_device
+
+    def set_semantics(self, *, inputs=None, outputs=None, states=None):
+        """Replace metadata on existing ports without changing the loaded model."""
+        self._semantics.set_semantics(inputs=inputs, outputs=outputs, states=states)
+        self._semantics._update_descriptions("inputs", self.input_descriptions)
+        self._semantics._update_descriptions("outputs", self.output_descriptions)
 
     @property
     def input_names(self):
@@ -180,6 +191,13 @@ class InferenceManager:
         self.models = self.leapp_description["models"]
         self.pipeline = self.leapp_description["pipeline"]
         self.system_info = self.leapp_description["system information"]
+
+    def save_semantics(self):
+        """Persist current port metadata to the loaded YAML without re-export."""
+        save_node_semantics(
+            self.model_path,
+            {name: node._semantics for name, node in self.nodes.items()},
+        )
 
     def _create_nodes(self):
         nodes = {}

@@ -532,15 +532,14 @@ class TestStateTensors(LEAPPFunctionalTestBase):
 class TestStateTensorErrors(LEAPPFunctionalTestBase):
     """Tests for error handling in state tensor API."""
 
-    def test_state_tensor_without_input_tensors_raises(self):
-        """Test that state_tensors raises error if input_tensors wasn't called first."""
+    def test_state_tensor_creates_node_without_input_tensors(self):
+        """A state-only computation does not need a dummy input annotation."""
         leapp.start(name=self.TEST_GRAPH_NAME)
-
-        with self.assertRaises(Exception):
-            # Should fail because no node "policy" exists yet
-            annotate.state_tensors("policy", {"state": torch.zeros(3)})
-
+        state = annotate.state_tensors("policy", {"state": torch.zeros(3)})
+        annotate.update_state("policy", {"state": state + 1})
+        annotate.output_tensors("policy", {}, export_with="jit")
         leapp.stop()
+        self.assertTrue(leapp.compile_graph(visualize=False))
 
     def test_nested_state_tensor_raises(self):
         """Nested state payloads should be rejected with a clear error."""

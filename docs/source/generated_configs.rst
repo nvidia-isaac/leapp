@@ -31,6 +31,11 @@ For ``leapp.start(name="sample_pipeline")``, the output directory looks like:
      sample_pipeline.png
      sample_pipeline_initial_values.safetensors
 
+Schema 1.4 adds optional ``aliases`` on tensor descriptions. These preserve
+declared port names when a backend renames a port or multiple declarations
+share one input. Semantic setters accept the exported name or an alias.
+Existing descriptions without aliases remain valid.
+
 The PNG is only present when visualization is enabled and supported. The
 ``*_initial_values.safetensors`` file is only present when the graph has
 feedback state.

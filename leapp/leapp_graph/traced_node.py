@@ -38,7 +38,6 @@ from leapp.utils.tensor_description import (
 # and exposes ``get_op``/``QUALIFIED_NAME`` used when emitting segment nodes.
 from leapp.leapp_graph.custom_operator_registry import warp_operator
 import collections
-from dataclasses import replace
 
 if TYPE_CHECKING:
     from leapp.leapp_graph.datatypes.warp import WarpSegment
@@ -588,8 +587,7 @@ class TracedTensorNode(LeappNode):
             surviving = self.get_io_description_by_name(declared.name, self.inputs)
             if name not in surviving.aliases:
                 surviving.aliases.append(name)
-            if semantics is not None and surviving.semantics is None:
-                surviving.init_semantics(replace(semantics, name=None))
+            self._semantics._bind("inputs", surviving, semantics)
             if isinstance(data, TracedData):
                 # Rebind the object the caller holds rather than returning a new
                 # carrier. A buffer promoted in place stays the same object on

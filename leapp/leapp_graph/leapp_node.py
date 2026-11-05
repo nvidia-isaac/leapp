@@ -16,7 +16,7 @@
 #
 import functools
 import torch
-from leapp.utils.semantics import TensorSemantics
+from leapp.utils.node_semantics import NodeSemantics
 from leapp.utils.tensor_description import (
     describe_io,
     flatten_io_structure,
@@ -93,6 +93,7 @@ class LeappNode:
         # i/o settings
         self.inputs = []
         self.outputs = []
+        self._semantics = NodeSemantics(name)
         self.input_formats = []
         self.output_formats = []
         # trimmed inputs are inputs that are not used in the computation or directly returned as output
@@ -352,29 +353,19 @@ class LeappNode:
             existing_names.add(description.name_str)
             current_io_list.append(description)
 
-    @staticmethod
-    def _apply_semantics_to_descriptions(io_descriptions, semantics):
-        if semantics is None:
-            return
-        if len(io_descriptions) == 1:
-            io_descriptions[0].init_semantics(semantics)
-            return
+    def set_semantics(self, *, inputs=None, outputs=None, states=None):
+        """Replace metadata on this node without changing its computation."""
+        self._semantics.set_semantics(inputs=inputs, outputs=outputs, states=states)
 
-        semantic_fields = semantics.to_dict()
+    def _apply_semantics_to_descriptions(self, io_descriptions, semantics, direction):
         for desc in io_descriptions:
-            desc.init_semantics(
-                TensorSemantics(
-                    name=desc.name,
-                    ref=desc.value,
-                    **semantic_fields,
-                )
-            )
+            self._semantics._bind(direction, desc, semantics)
 
     def add_output(self, output_name, raw_output_name, output_value, semantics=None):
         io_descriptions, output_format = describe_io(
             output_name, raw_output_name, output_value
         )
-        self._apply_semantics_to_descriptions(io_descriptions, semantics)
+        self._apply_semantics_to_descriptions(io_descriptions, semantics, "outputs")
         for desc in io_descriptions:
             desc.cached_values = [
                 torch.zeros_like(desc.value) for _ in range(self._max_cached_io)
@@ -393,7 +384,7 @@ class LeappNode:
         io_descriptions, input_format = describe_io(
             input_name, raw_input_name, input_value
         )
-        self._apply_semantics_to_descriptions(io_descriptions, semantics)
+        self._apply_semantics_to_descriptions(io_descriptions, semantics, "inputs")
         for desc in io_descriptions:
             desc.cached_values = [
                 torch.zeros_like(desc.value) for _ in range(self._max_cached_io)
@@ -716,6 +707,7 @@ class LeappNode:
         for input in self.inputs:
             if input.name_str == old_name:
                 input.change_name(new_name)
+                self._semantics._bind("inputs", input)
 
     def change_output_name(self, old_name, new_name):
         _get_logger().debug(
@@ -733,6 +725,7 @@ class LeappNode:
         for output in self.outputs:
             if output.name_str == old_name:
                 output.change_name(new_name)
+                self._semantics._bind("outputs", output)
 
     def compile_trace(self, *args):
         raise NotImplementedError(

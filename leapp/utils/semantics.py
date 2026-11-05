@@ -97,6 +97,9 @@ class Axis:
 class TensorSemantics:
     """User-facing semantic metadata for a tensor.
 
+    ``ref`` is optional for value-independent ``annotate.set_semantics()`` calls.
+    Layout validation is deferred until a tensor or port shape is available.
+
     ``axes``, ``is_setpoint``, ``reference``, and ``expressed_in`` are
     experimental keyword-only fields. Existing kinds and element names retain
     their original behavior.
@@ -141,7 +144,7 @@ class TensorSemantics:
         """error checking, auto conditioning"""
         existing_period_ms = self.temporal_period_ms
         self.temporal_period_ms = None
-        if not is_tracable_tensor_type(
+        if self.ref is not None and not is_tracable_tensor_type(
             self.ref
         ):  # this checks for both base types and traced types
             _get_logger().fatal(
@@ -211,18 +214,26 @@ class TensorSemantics:
         if self.axes is not None:
             if not isinstance(self.axes, list):
                 raise TypeError("axes must be a list or None")
-            _, shape = value_to_name_and_shape(self.ref)
-            if len(self.axes) != len(shape):
-                raise ValueError("axes must have one entry per tensor dimension")
-            for size, axis in zip(shape, self.axes):
+            for axis in self.axes:
                 if axis is None:
                     continue
                 if not isinstance(axis, Axis):
                     raise TypeError("axes entries must be Axis or None")
-                if axis.names is not None and len(axis.names) != size:
-                    raise ValueError("Axis label count must match its tensor dimension")
             if sum(a is not None and a.kind == AxisKind.TIME for a in self.axes) > 1:
                 raise ValueError("A tensor may contain at most one time axis")
+            if self.ref is not None:
+                _, shape = value_to_name_and_shape(self.ref)
+                self.validate_shape(shape)
+
+    def validate_shape(self, shape):
+        """Validate layout when a tensor or compiled port shape becomes available."""
+        if self.axes is None:
+            return
+        if len(self.axes) != len(shape):
+            raise ValueError("axes must have one entry per tensor dimension")
+        for size, axis in zip(shape, self.axes):
+            if axis is not None and axis.names is not None and len(axis.names) != size:
+                raise ValueError("Axis label count must match its tensor dimension")
 
     def to_dict(self) -> Dict[str, Any]:
         """Return all non-None semantic fields, excluding internal fields.
@@ -400,25 +411,25 @@ def _annotate(kind, name, ref, *, axes, is_setpoint, **spatial):
 
 
 def joint_position(
-    name, ref, *, axes=None, is_setpoint: bool | None = None
+    name, ref=None, *, axes=None, is_setpoint: bool | None = None
 ) -> TensorSemantics:
     return _annotate(Kind.JOINT_POSITION, name, ref, axes=axes, is_setpoint=is_setpoint)
 
 
 def joint_velocity(
-    name, ref, *, axes=None, is_setpoint: bool | None = None
+    name, ref=None, *, axes=None, is_setpoint: bool | None = None
 ) -> TensorSemantics:
     return _annotate(Kind.JOINT_VELOCITY, name, ref, axes=axes, is_setpoint=is_setpoint)
 
 
 def joint_effort(
-    name, ref, *, axes=None, is_setpoint: bool | None = None
+    name, ref=None, *, axes=None, is_setpoint: bool | None = None
 ) -> TensorSemantics:
     return _annotate(Kind.JOINT_EFFORT, name, ref, axes=axes, is_setpoint=is_setpoint)
 
 
 def joint_acceleration(
-    name, ref, *, axes=None, is_setpoint: bool | None = None
+    name, ref=None, *, axes=None, is_setpoint: bool | None = None
 ) -> TensorSemantics:
     return _annotate(
         Kind.JOINT_ACCELERATION, name, ref, axes=axes, is_setpoint=is_setpoint
@@ -426,25 +437,31 @@ def joint_acceleration(
 
 
 def vector3d(
-    name, ref, *, axes=None, is_setpoint: bool | None = None
+    name, ref=None, *, axes=None, is_setpoint: bool | None = None
 ) -> TensorSemantics:
     return _annotate(Kind.VECTOR3D, name, ref, axes=axes, is_setpoint=is_setpoint)
 
 
-def kp(name, ref, *, axes=None, is_setpoint: bool | None = None) -> TensorSemantics:
+def kp(
+    name, ref=None, *, axes=None, is_setpoint: bool | None = None
+) -> TensorSemantics:
     return _annotate(Kind.KP, name, ref, axes=axes, is_setpoint=is_setpoint)
 
 
-def kd(name, ref, *, axes=None, is_setpoint: bool | None = None) -> TensorSemantics:
+def kd(
+    name, ref=None, *, axes=None, is_setpoint: bool | None = None
+) -> TensorSemantics:
     return _annotate(Kind.KD, name, ref, axes=axes, is_setpoint=is_setpoint)
 
 
-def image(name, ref, *, axes=None, is_setpoint: bool | None = None) -> TensorSemantics:
+def image(
+    name, ref=None, *, axes=None, is_setpoint: bool | None = None
+) -> TensorSemantics:
     return _annotate(Kind.IMAGE, name, ref, axes=axes, is_setpoint=is_setpoint)
 
 
 def point_cloud(
-    name, ref, *, reference=None, axes=None, is_setpoint: bool | None = None
+    name, ref=None, *, reference=None, axes=None, is_setpoint: bool | None = None
 ) -> TensorSemantics:
     """Annotate Cartesian XYZ points in meters relative to a coordinate frame."""
     return _annotate(
@@ -458,7 +475,7 @@ def point_cloud(
 
 
 def frame_pose(
-    name, ref, *, reference=None, axes=None, is_setpoint: bool | None = None
+    name, ref=None, *, reference=None, axes=None, is_setpoint: bool | None = None
 ) -> TensorSemantics:
     return _annotate(
         Kind.FRAME_POSE,
@@ -471,7 +488,7 @@ def frame_pose(
 
 
 def frame_position(
-    name, ref, *, reference=None, axes=None, is_setpoint: bool | None = None
+    name, ref=None, *, reference=None, axes=None, is_setpoint: bool | None = None
 ) -> TensorSemantics:
     return _annotate(
         Kind.FRAME_POSITION,
@@ -484,7 +501,7 @@ def frame_position(
 
 
 def frame_orientation(
-    name, ref, *, reference=None, axes=None, is_setpoint: bool | None = None
+    name, ref=None, *, reference=None, axes=None, is_setpoint: bool | None = None
 ) -> TensorSemantics:
     return _annotate(
         Kind.FRAME_ORIENTATION,
@@ -498,7 +515,7 @@ def frame_orientation(
 
 def frame_twist(
     name,
-    ref,
+    ref=None,
     *,
     reference=None,
     expressed_in=None,
@@ -518,7 +535,7 @@ def frame_twist(
 
 def frame_linear_velocity(
     name,
-    ref,
+    ref=None,
     *,
     reference=None,
     expressed_in=None,
@@ -538,7 +555,7 @@ def frame_linear_velocity(
 
 def frame_angular_velocity(
     name,
-    ref,
+    ref=None,
     *,
     reference=None,
     expressed_in=None,
@@ -558,7 +575,7 @@ def frame_angular_velocity(
 
 def frame_acceleration(
     name,
-    ref,
+    ref=None,
     *,
     reference=None,
     expressed_in=None,
@@ -578,7 +595,7 @@ def frame_acceleration(
 
 def frame_linear_acceleration(
     name,
-    ref,
+    ref=None,
     *,
     reference=None,
     expressed_in=None,
@@ -598,7 +615,7 @@ def frame_linear_acceleration(
 
 def frame_angular_acceleration(
     name,
-    ref,
+    ref=None,
     *,
     reference=None,
     expressed_in=None,
@@ -617,7 +634,7 @@ def frame_angular_acceleration(
 
 
 def frame_wrench(
-    name, ref, *, expressed_in=None, axes=None, is_setpoint: bool | None = None
+    name, ref=None, *, expressed_in=None, axes=None, is_setpoint: bool | None = None
 ) -> TensorSemantics:
     return _annotate(
         Kind.FRAME_WRENCH,
@@ -630,7 +647,7 @@ def frame_wrench(
 
 
 def force_application_position(
-    name, ref, *, expressed_in=None, axes=None, is_setpoint: bool | None = None
+    name, ref=None, *, expressed_in=None, axes=None, is_setpoint: bool | None = None
 ) -> TensorSemantics:
     """Position where a force acts, paired by element name with its wrench."""
     return _annotate(

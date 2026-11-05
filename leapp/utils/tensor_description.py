@@ -16,6 +16,7 @@
 #
 
 import collections.abc
+from copy import copy, deepcopy
 from dataclasses import dataclass, fields
 from typing import Optional, Any, Dict, Tuple, List
 
@@ -144,9 +145,32 @@ class TensorDescription:
 
     # --- Semantic field access ---
 
+    @property
+    def semantics(self):
+        store = getattr(self, "_semantic_store", None)
+        if store is not None:
+            return store._entries[self._semantic_direction].get(self._semantic_name)
+        return self._semantics
+
+    @semantics.setter
+    def semantics(self, semantics):
+        store = getattr(self, "_semantic_store", None)
+        if store is not None:
+            if semantics is None:
+                semantics = TensorSemantics(name=self._semantic_name)
+            named = copy(semantics)
+            named.name = self._semantic_name
+            store.set_semantics(**{self._semantic_direction: [named]})
+        else:
+            self._semantics = semantics
+
     def init_semantics(self, semantics: Optional[TensorSemantics]):
         self.semantics = semantics
-        if semantics is not None and semantics.name is not None:
+        if (
+            getattr(self, "_semantic_store", None) is None
+            and semantics is not None
+            and semantics.name is not None
+        ):
             self.change_name(semantics.name)
 
     def get_semantics(self) -> Dict[str, Any]:
@@ -158,7 +182,7 @@ class TensorDescription:
     def update_semantics(self, values: Dict[str, Any]):
         """Set semantic fields from a dict."""
         if self.semantics is not None:
-            semantics = self.semantics
+            semantics = deepcopy(self.semantics)
         else:
             semantics = TensorSemantics(name=self.name, ref=self.value)
         semantics.update(values)
@@ -181,6 +205,9 @@ class TensorDescription:
             "shape": self.shape,
             "type": self.type,
         }
+        aliases = [name for name in self.aliases if name != self.name]
+        if aliases:
+            result["aliases"] = aliases
         if self.value is not None and not ignore_value:
             result["value"] = self.value
         # Merge in all non-None semantic fields
@@ -194,7 +221,10 @@ class TensorDescription:
     def change_name(self, new_name: str):
         """Change the name of the tensor description."""
         self.name = new_name
-        if self.semantics is not None:
+        if (
+            self.semantics is not None
+            and getattr(self, "_semantic_store", None) is None
+        ):
             self.semantics.name = new_name
 
     @property
@@ -205,7 +235,9 @@ class TensorDescription:
     @name.setter
     def name(self, new_name: str):
         """Rename the canonical name while preserving aliases."""
-        self._aliases[0] = new_name
+        self._aliases = [new_name] + [
+            name for name in self._aliases if name != new_name
+        ]
 
     @property
     def aliases(self) -> List[str]:
@@ -548,6 +580,10 @@ def unwrap_tensor_semantics(data):
     tensors = {}
     semantics_map = {}
     for sem in data:
+        if sem.ref is None:
+            raise TypeError(
+                "Tensor annotations require ref; use annotate.set_semantics() for metadata only"
+            )
         tensors[sem.name] = sem.ref
         semantics_map[sem.name] = sem
 

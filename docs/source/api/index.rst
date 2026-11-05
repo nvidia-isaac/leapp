@@ -344,7 +344,8 @@ Semantic metadata
                    *, axes=None, is_setpoint=None, reference=None,
                    expressed_in=None)
 
-* ``name`` and ``ref`` supply the port name and tensor value.
+* ``name`` supplies the port name. ``ref`` supplies the tensor value for tensor
+  annotations; omit it when using ``annotate.set_semantics()``.
 * ``kind`` accepts ``Kind``, ``InputKindEnum``, ``OutputKindEnum``,
   custom strings, or ``None``. The legacy input/output enums are deprecated
   and emit ``FutureWarning`` when used in an annotation.
@@ -380,13 +381,13 @@ a dict or mixed with raw tensors. See :doc:`/semantics/usage` for examples.
 .. code-block:: python
 
    Axis(kind=None, names=None, period_ms=None)
-   joint_position(name, ref, *, axes=None, is_setpoint=None)
-   joint_acceleration(name, ref, *, axes=None, is_setpoint=None)
-   point_cloud(name, ref, *, reference=None, axes=None, is_setpoint=None)
-   frame_pose(name, ref, *, axes=None, is_setpoint=None, reference=None)
-   frame_twist(name, ref, *, axes=None, is_setpoint=None,
+   joint_position(name, ref=None, *, axes=None, is_setpoint=None)
+   joint_acceleration(name, ref=None, *, axes=None, is_setpoint=None)
+   point_cloud(name, ref=None, *, reference=None, axes=None, is_setpoint=None)
+   frame_pose(name, ref=None, *, axes=None, is_setpoint=None, reference=None)
+   frame_twist(name, ref=None, *, axes=None, is_setpoint=None,
                reference=None, expressed_in=None)
-   frame_wrench(name, ref, *, axes=None, is_setpoint=None, expressed_in=None)
+   frame_wrench(name, ref=None, *, axes=None, is_setpoint=None, expressed_in=None)
 
 ``AxisKind`` defines ``SYSTEM``, ``ELEMENT``, ``COMPONENT``, and ``TIME``.
 Axis kinds also accept custom strings. Time axes require a finite, positive
@@ -399,6 +400,45 @@ See :doc:`/semantics/kind_element_names` for the ``Kind`` catalog,
 
 Annotations
 ===========
+
+``annotate.set_semantics()``
+----------------------------
+
+.. code-block:: python
+
+   annotate.set_semantics(node_name, *, inputs=None, outputs=None, states=None)
+
+Declare or replace node metadata independently of tensor values. Call after
+``leapp.start()`` to select the current session, before or after tensor
+registration, or after compilation. A declaration creates the node's metadata
+entry without adding executable graph ports. Subsequent tensor annotations
+create the computation and associate its ports with that entry.
+
+Each argument accepts a list or tuple of named ``TensorSemantics`` descriptors.
+Names come from the descriptors; no dictionary keys or tensor references are
+required. Inputs and outputs have separate namespaces. ``states`` applies each
+descriptor to both the matching input and output; it does not create feedback
+connections. Declare those with ``state_tensors()`` and ``update_state()``.
+
+Each valid call replaces the complete description for every supplied port;
+omitted fields are cleared and other ports remain unchanged. Missing names,
+duplicate names in a direction, incompatible layouts, and setpoint outputs
+raise errors without changing prior metadata. Shape checks wait until a port
+exists. Unresolved names fail compilation. Compiled nodes reject unknown ports.
+Existing inline tensor annotations use the same store and replacement rules.
+
+``leapp.save_semantics()`` and loaded nodes
+-------------------------------------------
+
+After compilation, ``leapp.save_semantics()`` saves current semantics to the
+existing graph YAML without recompiling or rewriting model artifacts.
+
+In a later process, select a node from ``InferenceManager.nodes`` and call its
+``set_semantics(inputs=None, outputs=None, states=None)`` method with the same
+keyword arguments. ``manager.save_semantics()`` persists the updated metadata
+to the loaded YAML. These calls change metadata only; they do not convert tensor
+values, change shapes, or alter graph connections. See
+:doc:`/semantics/usage` for an example.
 
 ``annotate.input_tensors()``
 ----------------------------
@@ -543,15 +583,15 @@ Signature
 
 .. code-block:: python
 
-   annotate.state_tensors(node_name: str,
-                          tensors: dict[str, torch.Tensor])
+   annotate.state_tensors(node_name: str, tensors)
 
 Parameters
 ~~~~~~~~~~
 
-* ``node_name`` (str, required): Existing traced node.
-* ``tensors`` (dict, required): Map of state names to initial tensor
-  values.
+* ``node_name`` (str, required): Traced node identifier; created if necessary.
+* ``tensors`` (required): A dict of state names to initial tensors, or named
+  ``TensorSemantics`` descriptors with ``ref`` values. Bound descriptions apply
+  to both the input and output state ports.
 
 Returns
 ~~~~~~~
@@ -579,15 +619,15 @@ Signature
 
 .. code-block:: python
 
-   annotate.update_state(node_name: str,
-                         tensors: dict[str, TracedTensor])
+   annotate.update_state(node_name: str, tensors)
 
 Parameters
 ~~~~~~~~~~
 
 * ``node_name`` (str, required): Existing traced node.
-* ``tensors`` (dict, required): Map from declared state names to their
-  updated traced values.
+* ``tensors`` (required): A dict from declared state names to updated traced
+  values, or named ``TensorSemantics`` descriptors with updated traced ``ref``
+  values. Their descriptions replace output metadata only.
 
 Returns
 ~~~~~~~
