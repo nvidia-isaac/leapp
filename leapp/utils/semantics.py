@@ -247,7 +247,7 @@ class TensorSemantics:
         if (
             self._uses_experimental_semantics
             and isinstance(self.kind, str)
-            and self.kind.startswith("frame/")
+            and (self.kind.startswith("frame/") or self.kind == Kind.POINT_CLOUD)
         ):
             if self.kind not in (Kind.FRAME_WRENCH, Kind.FORCE_APPLICATION_POSITION):
                 spatial["reference"] = self.reference
@@ -255,6 +255,7 @@ class TensorSemantics:
                 Kind.FRAME_POSE,
                 Kind.FRAME_POSITION,
                 Kind.FRAME_ORIENTATION,
+                Kind.POINT_CLOUD,
             ):
                 spatial["expressed_in"] = None
         # Preserve supplied metadata regardless of the quantity's conventions.
@@ -366,6 +367,7 @@ class TensorSemantics:
 
 
 _COMPONENTS = {
+    Kind.POINT_CLOUD: ("x", "y", "z"),
     Kind.FORCE_APPLICATION_POSITION: ("x", "y", "z"),
     Kind.FRAME_POSE: ("x", "y", "z", "qx", "qy", "qz", "qw"),
     Kind.FRAME_POSITION: ("x", "y", "z"),
@@ -415,6 +417,14 @@ def joint_effort(
     return _annotate(Kind.JOINT_EFFORT, name, ref, axes=axes, is_setpoint=is_setpoint)
 
 
+def joint_acceleration(
+    name, ref, *, axes=None, is_setpoint: bool | None = None
+) -> TensorSemantics:
+    return _annotate(
+        Kind.JOINT_ACCELERATION, name, ref, axes=axes, is_setpoint=is_setpoint
+    )
+
+
 def vector3d(
     name, ref, *, axes=None, is_setpoint: bool | None = None
 ) -> TensorSemantics:
@@ -431,6 +441,20 @@ def kd(name, ref, *, axes=None, is_setpoint: bool | None = None) -> TensorSemant
 
 def image(name, ref, *, axes=None, is_setpoint: bool | None = None) -> TensorSemantics:
     return _annotate(Kind.IMAGE, name, ref, axes=axes, is_setpoint=is_setpoint)
+
+
+def point_cloud(
+    name, ref, *, reference=None, axes=None, is_setpoint: bool | None = None
+) -> TensorSemantics:
+    """Annotate Cartesian XYZ points in meters relative to a coordinate frame."""
+    return _annotate(
+        Kind.POINT_CLOUD,
+        name,
+        ref,
+        reference=reference,
+        axes=axes,
+        is_setpoint=is_setpoint,
+    )
 
 
 def frame_pose(

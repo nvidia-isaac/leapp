@@ -61,6 +61,8 @@ Both measured and desired joint positions use ``Kind.JOINT_POSITION``.
      - ``joint/position``
    * - ``JOINT_VELOCITY``
      - ``joint/velocity``
+   * - ``JOINT_ACCELERATION``
+     - ``joint/acceleration``
    * - ``JOINT_EFFORT``
      - ``joint/effort``
    * - ``FRAME_POSE``
@@ -93,6 +95,8 @@ Both measured and desired joint positions use ``Kind.JOINT_POSITION``.
      - ``kd``
    * - ``IMAGE``
      - ``image``
+   * - ``POINT_CLOUD``
+     - ``point_cloud``
 
 .. _semantics-axes:
 .. _semantics-time-axes:

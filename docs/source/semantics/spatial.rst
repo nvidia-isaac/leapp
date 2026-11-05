@@ -98,7 +98,7 @@ following fields even when their values use the global default:
    * - Helper family
      - Fields emitted under ``spatial``
      - Default values
-   * - Pose, position, orientation
+   * - Pose, position, orientation, point cloud
      - ``reference``
      - ``null``
    * - Twist, linear/angular velocity, acceleration

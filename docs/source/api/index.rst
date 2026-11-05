@@ -354,7 +354,8 @@ Semantic metadata
   ``True`` marks an incoming desired value. Outputs accept ``False`` or ``None``
   but reject ``True``. Explicit boolean values are written to YAML; ``None``
   leaves the field unspecified and omitted.
-* ``reference`` names the frame against which pose or motion is measured.
+* ``reference`` names the frame against which pose or motion is measured,
+  or the coordinate frame for a point cloud.
 * ``expressed_in`` accepts a literal frame name, ``ExpressionFrame.SELF``,
   ``ExpressionFrame.REFERENCE``, or ``None`` (global).
 * ``extra`` is a dictionary flattened into the tensor YAML entry. Use it only
@@ -380,6 +381,8 @@ a dict or mixed with raw tensors. See :doc:`/semantics/usage` for examples.
 
    Axis(kind=None, names=None, period_ms=None)
    joint_position(name, ref, *, axes=None, is_setpoint=None)
+   joint_acceleration(name, ref, *, axes=None, is_setpoint=None)
+   point_cloud(name, ref, *, reference=None, axes=None, is_setpoint=None)
    frame_pose(name, ref, *, axes=None, is_setpoint=None, reference=None)
    frame_twist(name, ref, *, axes=None, is_setpoint=None,
                reference=None, expressed_in=None)

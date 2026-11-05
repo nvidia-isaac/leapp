@@ -26,8 +26,9 @@ annotation it creates.
 
    * - Helpers
      - Use for
-   * - ``joint_position``, ``joint_velocity``, ``joint_effort``
-     - Joint quantities, including torque represented as joint effort.
+   * - ``joint_position``, ``joint_velocity``, ``joint_acceleration``, ``joint_effort``
+     - Joint quantities, including acceleration in radians/s² or meters/s²
+       according to joint type, and torque represented as joint effort.
    * - ``frame_pose``, ``frame_position``, ``frame_orientation``
      - A frame's pose, position, or orientation relative to a reference frame.
    * - ``frame_twist``, ``frame_linear_velocity``, ``frame_angular_velocity``
@@ -42,6 +43,8 @@ annotation it creates.
      - Proportional and derivative gains.
    * - ``image``
      - Image data with layout and encoding agreed with the consumer.
+   * - ``point_cloud``
+     - Cartesian XYZ point coordinates in meters relative to a reference frame.
 
 For example, construct annotations for measured joint positions and a desired
 position input using the same helper:
@@ -103,7 +106,7 @@ values they accept:
    * - Helpers
      - ``reference``
      - ``expressed_in``
-   * - Pose, position, orientation
+   * - Pose, position, orientation, point cloud
      - Frame name or ``None``
      - Not accepted, always expressed in the same frame as ``reference``
    * - Twist, linear/angular velocity, and acceleration
@@ -141,6 +144,8 @@ export successfully.
    * - ``frame_orientation``
      - ``qx, qy, qz, qw``
    * - ``frame_position``, ``force_application_position``
+     - ``x, y, z``
+   * - ``point_cloud``
      - ``x, y, z``
    * - ``frame_twist``
      - ``vx, vy, vz, wx, wy, wz``
@@ -224,3 +229,35 @@ metadata. For joint positions, the helper is equivalent to:
 
 The generic constructor validates metadata structure without the helper-specific
 component-name checks. 
+
+Point clouds
+============
+
+``point_cloud`` describes XYZ coordinates relative to ``reference``.
+The coordinates use that frame's origin and axes. An omitted ``reference``
+means global, matching ``frame_position``.
+
+For an unordered cloud shaped ``[point, component]``:
+
+.. code-block:: python
+
+   import torch
+   from leapp import Axis, AxisKind, point_cloud
+
+   points = torch.zeros(1024, 3)
+   annotation = point_cloud(
+       "points", points,
+       reference="camera",
+       axes=[
+           Axis("point"),
+           Axis(AxisKind.COMPONENT, names=["x", "y", "z"]),
+       ],
+   )
+
+This emits ``kind: point_cloud`` and ``spatial: {reference: camera}``.
+``"point"`` is a custom axis kind. Batched ``[batch, point, component]`` and
+organized ``[height, width, component]`` layouts can use additional axes.
+Supplied component names must be a permutation of ``x, y, z``.
+Keep colors and other attributes in separate tensors with an agreed point order.
+The helper preserves the tensor's values, shape, and dtype. Point-count
+variability depends on the exported model's shape support.
