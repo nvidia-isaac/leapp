@@ -354,7 +354,7 @@ class LeappNode:
             current_io_list.append(description)
 
     def set_semantics(self, *, inputs=None, outputs=None, states=None):
-        """Replace metadata on this node without changing its computation."""
+        """Replace metadata on this node before compilation begins."""
         self._semantics.set_semantics(inputs=inputs, outputs=outputs, states=states)
 
     def _apply_semantics_to_descriptions(self, io_descriptions, semantics, direction):
@@ -707,7 +707,6 @@ class LeappNode:
         for input in self.inputs:
             if input.name_str == old_name:
                 input.change_name(new_name)
-                self._semantics._bind("inputs", input)
 
     def change_output_name(self, old_name, new_name):
         _get_logger().debug(
@@ -725,7 +724,6 @@ class LeappNode:
         for output in self.outputs:
             if output.name_str == old_name:
                 output.change_name(new_name)
-                self._semantics._bind("outputs", output)
 
     def compile_trace(self, *args):
         raise NotImplementedError(

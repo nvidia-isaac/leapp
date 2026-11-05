@@ -17,10 +17,8 @@
 
 import inspect
 import os
-import hashlib
 import subprocess
 import sys
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -41,7 +39,6 @@ from leapp.leapp import _MANAGER as annotate
 from leapp.utils.enums import InputKindEnum, OutputKindEnum
 from tests.functional_tests.base import LEAPPFunctionalTestBase
 from leapp.utils.tensor_description import TensorDescription
-from leapp.utils.node_semantics import NodeSemantics
 
 
 @pytest.mark.parametrize("axis_kind", [AxisKind.SYSTEM, "system"])
@@ -458,10 +455,8 @@ def test_metadata_without_values_validates_intrinsic_rules():
         TensorSemantics("value", axes=[{}])
 
 
-@pytest.mark.parametrize(
-    "when", ["before", "registered", "captured", "stopped", "compiled"]
-)
-def test_set_semantics_at_any_capture_stage(semantic_session, when):
+@pytest.mark.parametrize("when", ["before", "registered", "captured", "stopped"])
+def test_set_semantics_before_compilation(semantic_session, when):
     inputs = [
         TensorSemantics(
             "state", kind=Kind.JOINT_POSITION, axes=[Axis("element", names=["a", "b"])]
@@ -489,12 +484,6 @@ def test_set_semantics_at_any_capture_stage(semantic_session, when):
     if when == "stopped":
         set_metadata()
     assert leapp.compile_graph(visualize=False)
-    model = next(semantic_session.glob("policy.*"))
-    original_model = model.read_bytes()
-    if when == "compiled":
-        set_metadata()
-        leapp.save_semantics()
-        assert model.read_bytes() == original_model
     path = semantic_session / "semantics.yaml"
     description = yaml.safe_load(path.read_text())["models"]["policy"]
     assert description["inputs"][0]["kind"] == "joint/position"
@@ -542,21 +531,6 @@ def test_replacement_is_atomic_and_preserves_other_ports(semantic_session):
     assert node.outputs[0].get_semantics() == {}
     leapp.annotate.set_semantics("policy", inputs=[], outputs=[])
     assert node.inputs[0].get_semantics() == {"kind": Kind.JOINT_POSITION}
-
-
-def test_saving_semantics_requires_current_session_compilation(semantic_session):
-    _capture_semantic_policy()
-    leapp.stop()
-    assert leapp.compile_graph(visualize=False)
-    path = semantic_session / "semantics.yaml"
-    original = path.read_bytes()
-    leapp.start("semantics", save_path=str(semantic_session.parent))
-    leapp.annotate.set_semantics(
-        "policy", outputs=[TensorSemantics("action", kind=Kind.JOINT_POSITION)]
-    )
-    with pytest.raises(ValueError, match="Compile the graph"):
-        leapp.save_semantics()
-    assert path.read_bytes() == original
 
 
 @pytest.mark.parametrize(
@@ -670,13 +644,13 @@ def test_state_only_node_and_state_metadata_replacements(semantic_session):
     assert leapp.compile_graph(visualize=False)
     path = semantic_session / "semantics.yaml"
     runtime = leapp.InferenceManager(str(path))
-    runtime.nodes["policy"].set_semantics(
-        states=[TensorSemantics("memory", kind=Kind.JOINT_EFFORT)]
-    )
-    runtime.save_semantics()
+    with pytest.raises(RuntimeError, match="before calling compile_graph"):
+        leapp.annotate.set_semantics(
+            "policy", states=[TensorSemantics("memory", kind=Kind.JOINT_EFFORT)]
+        )
     description = yaml.safe_load(path.read_text())
-    assert description["models"]["policy"]["inputs"][0]["kind"] == "joint/effort"
-    assert description["models"]["policy"]["outputs"][0]["kind"] == "joint/effort"
+    assert description["models"]["policy"]["inputs"][0]["kind"] == "joint/velocity"
+    assert description["models"]["policy"]["outputs"][0]["kind"] == "joint/velocity"
     assert description["pipeline"]["feedback_flow"] == {
         "policy/memory": ["policy/memory"]
     }
@@ -710,62 +684,120 @@ def test_input_output_names_are_separate_namespaces(semantic_session):
     )
 
 
-def test_loaded_enrichment_in_fresh_process_preserves_models(semantic_session):
+def test_semantics_cannot_change_after_compilation(semantic_session):
+    leapp.annotate.set_semantics(
+        "policy", outputs=[TensorSemantics("action", kind=Kind.JOINT_EFFORT)]
+    )
+    _capture_semantic_policy()
+    node = annotate.nodes["policy"]
+    leapp.stop()
+    assert leapp.compile_graph(visualize=False)
+    path = semantic_session / "semantics.yaml"
+    original = path.read_bytes()
+    description = node.get_description()
+    replacement = [TensorSemantics("action", kind=Kind.JOINT_POSITION)]
+    updates = [
+        lambda: leapp.annotate.set_semantics("policy", outputs=replacement),
+        lambda: leapp.annotate.set_semantics("uncaptured", outputs=replacement),
+        lambda: node.set_semantics(outputs=replacement),
+        lambda: node.outputs[0].update_semantics({"kind": Kind.JOINT_POSITION}),
+    ]
+    for update in updates:
+        with pytest.raises(RuntimeError, match="before calling compile_graph"):
+            update()
+    assert node.get_description() == description
+    assert path.read_bytes() == original
+
+    leapp.start("semantics", save_path=str(semantic_session.parent))
+    leapp.annotate.set_semantics("policy", outputs=replacement)
+    _capture_semantic_policy()
+    leapp.stop()
+    assert leapp.compile_graph(visualize=False)
+    assert (
+        yaml.safe_load(path.read_text())["models"]["policy"]["outputs"][0]["kind"]
+        == "joint/position"
+    )
+
+
+def test_semantics_freeze_before_backend_compilation(semantic_session, monkeypatch):
+    _capture_semantic_policy()
+    leapp.stop()
+
+    def compile_backend():
+        with pytest.raises(RuntimeError, match="before calling compile_graph"):
+            leapp.annotate.set_semantics("policy", outputs=[TensorSemantics("action")])
+        raise ValueError("backend failed")
+
+    monkeypatch.setattr(annotate, "compile_models", compile_backend)
+    with pytest.raises(ValueError, match="backend failed"):
+        leapp.compile_graph(visualize=False)
+
+
+def test_precompiled_semantics_load_in_fresh_process(semantic_session):
+    leapp.annotate.set_semantics(
+        "policy",
+        inputs=[TensorSemantics("state", kind=Kind.JOINT_POSITION)],
+        outputs=[
+            TensorSemantics(
+                "action",
+                kind=Kind.FRAME_TWIST,
+                reference="base",
+                expressed_in=ExpressionFrame.SELF,
+            )
+        ],
+    )
     _capture_semantic_policy()
     leapp.stop()
     assert leapp.compile_graph(visualize=False)
     path = semantic_session / "semantics.yaml"
-    original = yaml.safe_load(path.read_text())
     model = semantic_session / "policy.pt"
-    digest = hashlib.sha256(model.read_bytes()).hexdigest()
+    original_yaml, original_model = path.read_bytes(), model.read_bytes()
     subprocess.run(
         [
             sys.executable,
             "-c",
             """
-import sys
-import leapp
+import sys, torch, leapp
 runtime = leapp.InferenceManager(sys.argv[1])
-runtime.nodes['policy'].set_semantics(
-    inputs=[leapp.TensorSemantics('state', kind=leapp.Kind.JOINT_POSITION)],
-    outputs=[leapp.TensorSemantics('action', kind=leapp.Kind.FRAME_TWIST, reference='base', expressed_in=leapp.ExpressionFrame.SELF)],
-)
-runtime.save_semantics()
+node = runtime.nodes['policy']
+assert node.input_descriptions[0]['kind'] == 'joint/position'
+assert node.output_descriptions[0]['spatial'] == {'reference': 'base', 'expressed_in': {'selector': 'self'}}
+fresh = torch.tensor([11., -3.])
+torch.testing.assert_close(runtime({'policy/state': fresh})['policy/action'], fresh * 2)
 """,
             str(path),
         ],
         check=True,
     )
-    enriched = yaml.safe_load(path.read_text())
-    assert enriched["pipeline"] == original["pipeline"]
-    assert (
-        enriched["models"]["policy"]["parameters"]
-        == original["models"]["policy"]["parameters"]
+    assert path.read_bytes() == original_yaml
+    assert model.read_bytes() == original_model
+
+
+def test_precompiled_semantics_survive_onnx_port_renaming(semantic_session):
+    leapp.annotate.set_semantics(
+        "policy",
+        inputs=[TensorSemantics("q", kind=Kind.JOINT_POSITION)],
+        outputs=[TensorSemantics("q", kind=Kind.JOINT_EFFORT)],
     )
+    q = leapp.annotate.input_tensors("policy", {"q": torch.ones(2)})
+    leapp.annotate.output_tensors(
+        "policy", {"q": q * 2}, export_with="onnx-torchscript"
+    )
+    leapp.stop()
+    assert leapp.compile_graph(visualize=False)
+    path = semantic_session / "semantics.yaml"
+    description = yaml.safe_load(path.read_text())["models"]["policy"]
+    assert description["inputs"][0]["name"] == "q_in"
+    assert description["inputs"][0]["kind"] == "joint/position"
+    assert description["outputs"][0]["name"] == "q_out"
+    assert description["outputs"][0]["kind"] == "joint/effort"
+    assert "aliases" not in description["inputs"][0]
+    assert "aliases" not in description["outputs"][0]
     runtime = leapp.InferenceManager(str(path))
-    node = runtime.nodes["policy"]
-    assert node.output_descriptions[0]["spatial"] == {
-        "reference": "base",
-        "expressed_in": {"selector": "self"},
-    }
-    before = path.read_bytes()
-    with pytest.raises(ValueError, match="Unknown outputs"):
-        node.set_semantics(
-            inputs=[TensorSemantics("state", kind=Kind.JOINT_VELOCITY)],
-            outputs=[TensorSemantics("typo")],
-        )
-    assert node.input_descriptions[0]["kind"] == "joint/position"
-    assert path.read_bytes() == before
-    node.set_semantics(outputs=[TensorSemantics("action", kind=Kind.JOINT_EFFORT)])
-    runtime.save_semantics()
-    loaded = leapp.InferenceManager(str(path))
-    assert loaded.nodes["policy"].output_descriptions[0]["kind"] == "joint/effort"
-    assert "spatial" not in loaded.nodes["policy"].output_descriptions[0]
-    fresh = torch.tensor([11.0, -3.0])
+    fresh = torch.tensor([7.0, -3.0])
     torch.testing.assert_close(
-        loaded({"policy/state": fresh})["policy/action"], fresh * 2
+        runtime({"policy/q_in": fresh})["policy/q_out"], fresh * 2
     )
-    assert hashlib.sha256(model.read_bytes()).hexdigest() == digest
 
 
 def test_pt2_metadata_roundtrip_in_fresh_process(tmp_path):
@@ -782,14 +814,11 @@ leapp.annotate.set_semantics('policy', outputs=[leapp.TensorSemantics('action', 
 x = leapp.annotate.input_tensors('policy', {'state': torch.ones(2)})
 leapp.annotate.output_tensors('policy', {'action': x * 2}, export_with='pt2')
 leapp.stop()
+leapp.annotate.set_semantics('policy', outputs=[leapp.TensorSemantics('action', kind=leapp.Kind.JOINT_EFFORT)])
 assert leapp.compile_graph(visualize=False)
 directory = pathlib.Path(sys.argv[1]) / 'pt2_semantics'
-model = directory / 'policy.pt2'
-original = model.read_bytes()
 runtime = leapp.InferenceManager(str(directory / 'pt2_semantics.yaml'))
-runtime.nodes['policy'].set_semantics(outputs=[leapp.TensorSemantics('action', kind=leapp.Kind.JOINT_EFFORT)])
-runtime.save_semantics()
-assert model.read_bytes() == original
+assert runtime.nodes['policy'].output_descriptions[0]['kind'] == 'joint/effort'
 fresh = torch.tensor([7., -3.])
 torch.testing.assert_close(runtime({'policy/state': fresh})['policy/action'], fresh * 2)
 """,
@@ -798,66 +827,6 @@ torch.testing.assert_close(runtime({'policy/state': fresh})['policy/action'], fr
         check=True,
         env={**os.environ, "CUDA_VISIBLE_DEVICES": ""},
     )
-
-
-@pytest.mark.parametrize(
-    "annotation",
-    [
-        TensorSemantics("value", kind=Kind.FRAME_TWIST),
-        TensorSemantics(
-            "value", kind=Kind.FRAME_TWIST, expressed_in=ExpressionFrame.SELF
-        ),
-        TensorSemantics("value", kind=Kind.FRAME_POSE, reference="base"),
-        TensorSemantics("value", kind="custom", extra={"spatial": {"custom": True}}),
-        TensorSemantics(
-            "value",
-            kind="frame/twist",
-            extra={
-                "axes": "custom",
-                "spatial": {"reference": "base"},
-                "is_setpoint": True,
-            },
-        ),
-        TensorSemantics("value", element_names=[leapp.TemporalAxis(20), ["a", "b"]]),
-    ],
-)
-def test_persisted_semantics_restore_exact_metadata(annotation):
-    metadata = {
-        "name": "value",
-        "dtype": "float32",
-        "shape": [2],
-        "type": "tensor",
-        **annotation.to_dict(),
-    }
-    store = NodeSemantics("policy")
-    store._load_ports("outputs", [metadata])
-    original = metadata.copy()
-    store._update_descriptions("outputs", [metadata])
-    assert metadata == original
-    assert store._entries["outputs"]["value"].ref is None
-
-
-def test_semantic_aliases_survive_backend_renames_and_reload(semantic_session):
-    _capture_semantic_policy()
-    node = annotate.nodes["policy"]
-    node.change_input_name("state", "backend_state")
-    node.change_output_name("action", "backend_action")
-    leapp.annotate.set_semantics(
-        "policy",
-        inputs=[TensorSemantics("state", kind=Kind.JOINT_POSITION)],
-        outputs=[TensorSemantics("backend_action", kind=Kind.JOINT_EFFORT)],
-    )
-    assert node.inputs[0].get_semantics() == {"kind": Kind.JOINT_POSITION}
-    # Backend renaming changes external names, not the canonical semantic port.
-    metadata = node.get_description()
-    assert metadata["inputs"][0]["aliases"] == ["state"]
-    store = node._semantics.__class__("policy")
-    store._load_ports("inputs", metadata["inputs"])
-    store._load_ports("outputs", metadata["outputs"])
-    store._sealed = True
-    store.set_semantics(outputs=[TensorSemantics("action", kind=Kind.JOINT_VELOCITY)])
-    store._update_descriptions("outputs", metadata["outputs"])
-    assert metadata["outputs"][0]["kind"] == "joint/velocity"
 
 
 def test_set_semantics_on_method_node(semantic_session):

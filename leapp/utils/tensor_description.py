@@ -205,9 +205,6 @@ class TensorDescription:
             "shape": self.shape,
             "type": self.type,
         }
-        aliases = [name for name in self.aliases if name != self.name]
-        if aliases:
-            result["aliases"] = aliases
         if self.value is not None and not ignore_value:
             result["value"] = self.value
         # Merge in all non-None semantic fields
@@ -235,9 +232,7 @@ class TensorDescription:
     @name.setter
     def name(self, new_name: str):
         """Rename the canonical name while preserving aliases."""
-        self._aliases = [new_name] + [
-            name for name in self._aliases if name != new_name
-        ]
+        self._aliases[0] = new_name
 
     @property
     def aliases(self) -> List[str]:

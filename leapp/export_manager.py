@@ -36,7 +36,7 @@ from leapp.leapp_graph.datatypes.patching import (
     warn_if_script_functions_in_scope,
 )
 from leapp.utils.semantics import TensorSemantics
-from leapp.utils.node_semantics import NodeSemantics, save_node_semantics
+from leapp.utils.node_semantics import NodeSemantics
 from leapp.utils.tensor_description import (
     verify_data_exact_match,
     flatten_io_structure,
@@ -88,7 +88,7 @@ class ExportManager:
             # tracetime variables
             self.nodes = {}
             self._semantics = {}
-            self._compiled = False
+            self._semantics_frozen = False
             self._next_completed_node_index = 0
 
             ExportManager._initialized = True
@@ -133,7 +133,7 @@ class ExportManager:
     def reset_nodes(self):
         self.nodes = {}
         self._semantics = {}
-        self._compiled = False
+        self._semantics_frozen = False
         self._next_completed_node_index = 0
 
     def get_nodes(self):
@@ -147,16 +147,19 @@ class ExportManager:
         return self._semantics[node_name]
 
     def set_semantics(self, node_name: str, *, inputs=None, outputs=None, states=None):
-        """Declare or replace a node's metadata before or after tensor capture."""
+        """Declare or replace node metadata before compilation begins."""
+        if self._semantics_frozen:
+            raise RuntimeError(
+                "Set semantics before calling compile_graph(); start a new capture to change them"
+            )
         self._get_semantics(node_name).set_semantics(
             inputs=inputs, outputs=outputs, states=states
         )
 
-    def save_semantics(self):
-        if not self._compiled or not os.path.isfile(self.config_path):
-            raise ValueError("Compile the graph before saving its semantics")
-        self.validate_nodes_ready_for_compile()
-        save_node_semantics(self.config_path, self._semantics)
+    def freeze_semantics(self):
+        self._semantics_frozen = True
+        for semantics in self._semantics.values():
+            semantics._frozen = True
 
     @classmethod
     def set_interpret_graph(cls, is_enabled: bool):
@@ -177,7 +180,6 @@ class ExportManager:
     def set_detected_graph(self, models: dict, pipeline: dict):
         self.detected_nodes = models["models"]
         self.detected_pipeline = pipeline["pipeline"]
-        self._compiled = True
 
     #########################################################
     # node setup
@@ -225,7 +227,7 @@ class ExportManager:
                 error_type=Exception,
             )
         for node in self.nodes.values():
-            node._semantics._seal(node.inputs, node.outputs)
+            node._semantics._validate_ports()
 
     def _setup_new_node(self, name, node_class: LeappNode, **kwargs):
         if name in self.nodes:

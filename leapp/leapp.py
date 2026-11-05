@@ -130,11 +130,6 @@ def stop():
         manager.patcher.uninstall()
 
 
-def save_semantics():
-    """Save current compiled-node metadata without compiling numerical models."""
-    _MANAGER.save_semantics()
-
-
 def compile_graph(
     visualize=True,
     verbose=None,
@@ -145,6 +140,9 @@ def compile_graph(
     graph_configs=None,
 ):
     """Compile and save the computational graph from traced nodes.
+
+    Register semantics before this call. Semantic updates are frozen before
+    backend compilation, which may rename ports.
 
     Dry run is declared once via ``leapp.start(dry_run=True)``; when it is
     active this call skips compile, save, and validation.
@@ -166,6 +164,7 @@ def compile_graph(
         _get_logger().set_verbose(verbose)
 
     manager.validate_nodes_ready_for_compile()
+    manager.freeze_semantics()
 
     if not manager.is_dry_run():
         manager.compile_models()

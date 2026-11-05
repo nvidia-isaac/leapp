@@ -75,7 +75,7 @@ Independent descriptions and overrides
 ======================================
 
 Semantics belong to a node's named ports. You can register them before tensors
-exist, during capture, after stopping capture, or after compilation:
+exist, during capture, or after stopping capture, before compilation begins:
 
 .. code-block:: python
 
@@ -92,13 +92,12 @@ exist, during capture, after stopping capture, or after compilation:
    q = annotate.input_tensors("policy", {"q": torch.zeros(2)})
    annotate.output_tensors("policy", {"action": q * 2}, export_with="jit")
    leapp.stop()
-   leapp.compile_graph(visualize=False)
 
-   # Replace this port's description after compilation.
+   # Replace this port's description before compilation.
    annotate.set_semantics(
        "policy", outputs=[TensorSemantics("action", kind=Kind.JOINT_POSITION)]
    )
-   leapp.save_semantics()
+   leapp.compile_graph(visualize=False)
 
 Names come from ``TensorSemantics.name``. No placeholder, tensor reference, or
 separate node-selection call is needed.
@@ -112,22 +111,14 @@ Every explicit valid call replaces the full description of the supplied ports.
 Omitted fields are cleared; other ports retain their descriptions. Validation
 is atomic across the entire call. Shape-independent rules are checked at once;
 layout checks run when tensor shapes become known. Descriptions for nonexistent
-ports fail at compilation, or immediately on a compiled node. A new
-``start()`` creates a fresh session with fresh metadata.
+ports fail at compilation. Starting ``compile_graph()`` freezes semantic
+registration and overrides, including updates to existing descriptions. Later
+updates raise ``RuntimeError``. A new ``start()`` creates a fresh session with
+fresh metadata.
 
-For a saved artifact, use the same setter on its loaded node:
-
-.. code-block:: python
-
-   runtime = leapp.InferenceManager("policy_graph/policy_graph.yaml")
-   runtime.nodes["policy"].set_semantics(
-       outputs=[TensorSemantics("action", kind=Kind.JOINT_EFFORT)]
-   )
-   runtime.save_semantics()
-
-Saving updates the existing YAML. Model files, numerical results, and graph
-connections are unchanged. Changing a description of units or a frame does not
-convert the underlying values.
+During compilation, an exporter may rename ports. Their attached descriptions
+carry the registered semantics into the generated YAML. Changing the metadata
+requires a new capture with the revised descriptions before compilation.
 
 General Usage
 =============
