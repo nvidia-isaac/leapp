@@ -146,14 +146,25 @@ class ExportManager:
             self._semantics[node_name] = NodeSemantics(node_name)
         return self._semantics[node_name]
 
-    def set_semantics(self, node_name: str, *, inputs=None, outputs=None, states=None):
+    def set_semantics(
+        self,
+        node_name: str,
+        *,
+        inputs=None,
+        outputs=None,
+        states=None,
+        allow_unregistered_ports=False,
+    ):
         """Declare or replace node metadata before compilation begins."""
         if self._semantics_frozen:
             raise RuntimeError(
                 "Set semantics before calling compile_graph(); start a new capture to change them"
             )
         self._get_semantics(node_name).set_semantics(
-            inputs=inputs, outputs=outputs, states=states
+            inputs=inputs,
+            outputs=outputs,
+            states=states,
+            allow_unregistered_ports=allow_unregistered_ports,
         )
 
     def freeze_semantics(self):
@@ -645,7 +656,9 @@ class ExportManager:
             _get_logger().fatal(msg, error_type=Exception)
 
         self._validate_flat_state_payload("state_tensors", node_name, tensors)
-        traced_node.set_semantics(states=list(metadata.values()))
+        traced_node.set_semantics(
+            states=list(metadata.values()), allow_unregistered_ports=True
+        )
 
         if not traced_node.is_tracing:
             traced_node.reentry_validate_inputs(tensors)
@@ -684,7 +697,9 @@ class ExportManager:
             _get_logger().fatal(msg, error_type=Exception)
 
         self._validate_flat_state_payload("update_state", node_name, tensors)
-        traced_node.set_semantics(outputs=list(metadata.values()))
+        traced_node.set_semantics(
+            outputs=list(metadata.values()), allow_unregistered_ports=True
+        )
 
         if not traced_node.is_tracing:
             traced_node.reentry_validate_state_update(tensors)

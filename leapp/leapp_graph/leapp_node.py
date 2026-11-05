@@ -353,9 +353,16 @@ class LeappNode:
             existing_names.add(description.name_str)
             current_io_list.append(description)
 
-    def set_semantics(self, *, inputs=None, outputs=None, states=None):
+    def set_semantics(
+        self, *, inputs=None, outputs=None, states=None, allow_unregistered_ports=False
+    ):
         """Replace metadata on this node before compilation begins."""
-        self._semantics.set_semantics(inputs=inputs, outputs=outputs, states=states)
+        self._semantics.set_semantics(
+            inputs=inputs,
+            outputs=outputs,
+            states=states,
+            allow_unregistered_ports=allow_unregistered_ports,
+        )
 
     def _apply_semantics_to_descriptions(self, io_descriptions, semantics, direction):
         for desc in io_descriptions:

@@ -455,6 +455,70 @@ def test_metadata_without_values_validates_intrinsic_rules():
         TensorSemantics("value", axes=[{}])
 
 
+@pytest.mark.parametrize(
+    "direction,name",
+    [
+        ("inputs", "typo"),
+        ("outputs", "typo"),
+        ("states", "typo"),
+        ("inputs", "action"),
+        ("outputs", "state"),
+        ("states", "state"),
+    ],
+)
+def test_semantics_require_registered_ports_by_default(
+    semantic_session, direction, name
+):
+    _capture_semantic_policy()
+    node = annotate.nodes["policy"]
+    original = node.get_description()
+    with pytest.raises(
+        ValueError,
+        match="Invalid (input|output) port name.*allow_unregistered_ports=True",
+    ):
+        leapp.annotate.set_semantics(
+            "policy", **{direction: [TensorSemantics(name, kind=Kind.JOINT_VELOCITY)]}
+        )
+    assert node.get_description() == original
+
+
+def test_semantics_require_a_registered_node_by_default(semantic_session):
+    with pytest.raises(
+        ValueError,
+        match="Invalid output port name 'action'.*'policy'.*allow_unregistered_ports=True",
+    ):
+        leapp.annotate.set_semantics("policy", outputs=[TensorSemantics("action")])
+    assert not annotate.nodes
+
+
+@pytest.mark.parametrize("value", [None, 0, 1, "true", "false"])
+def test_allow_unregistered_ports_requires_boolean(semantic_session, value):
+    with pytest.raises(TypeError, match="allow_unregistered_ports must be a boolean"):
+        leapp.annotate.set_semantics("policy", allow_unregistered_ports=value)
+
+
+def test_predefined_semantics_do_not_register_ports_or_disable_later_checks(
+    semantic_session,
+):
+    leapp.annotate.set_semantics(
+        "policy",
+        outputs=[TensorSemantics("action", kind=Kind.JOINT_EFFORT)],
+        allow_unregistered_ports=True,
+    )
+    with pytest.raises(ValueError, match="Invalid output port name"):
+        leapp.annotate.set_semantics(
+            "policy", outputs=[TensorSemantics("action", kind=Kind.JOINT_POSITION)]
+        )
+    assert not annotate.nodes
+    _capture_semantic_policy()
+    node = annotate.nodes["policy"]
+    assert node.outputs[0].get_semantics() == {"kind": Kind.JOINT_EFFORT}
+    leapp.annotate.set_semantics(
+        "policy", outputs=[TensorSemantics("action", kind=Kind.JOINT_POSITION)]
+    )
+    assert node.outputs[0].get_semantics() == {"kind": Kind.JOINT_POSITION}
+
+
 @pytest.mark.parametrize("when", ["before", "registered", "captured", "stopped"])
 def test_set_semantics_before_compilation(semantic_session, when):
     inputs = [
@@ -469,7 +533,12 @@ def test_set_semantics_before_compilation(semantic_session, when):
     ]
 
     def set_metadata():
-        leapp.annotate.set_semantics("policy", inputs=inputs, outputs=outputs)
+        leapp.annotate.set_semantics(
+            "policy",
+            inputs=inputs,
+            outputs=outputs,
+            allow_unregistered_ports=when in ("before", "registered"),
+        )
 
     if when == "before":
         set_metadata()
@@ -499,13 +568,17 @@ def test_set_semantics_before_compilation(semantic_session, when):
     )
 
 
-def test_replacement_is_atomic_and_preserves_other_ports(semantic_session):
+@pytest.mark.parametrize("allow_unregistered_ports", [False, True])
+def test_replacement_is_atomic_and_preserves_other_ports(
+    semantic_session, allow_unregistered_ports
+):
     leapp.annotate.set_semantics(
         "policy",
         inputs=[TensorSemantics("state", kind=Kind.JOINT_POSITION)],
         outputs=[
             TensorSemantics("action", kind=Kind.JOINT_EFFORT, extra={"units": "Nm"})
         ],
+        allow_unregistered_ports=True,
     )
     _capture_semantic_policy()
     node = annotate.nodes["policy"]
@@ -519,6 +592,7 @@ def test_replacement_is_atomic_and_preserves_other_ports(semantic_session):
                     "action", kind=Kind.JOINT_POSITION, axes=[Axis(names=["wrong"])]
                 )
             ],
+            allow_unregistered_ports=allow_unregistered_ports,
         )
     assert node.get_description() == original
     leapp.annotate.set_semantics(
@@ -550,10 +624,12 @@ def test_replacement_is_atomic_and_preserves_other_ports(semantic_session):
 )
 def test_invalid_named_semantics_leave_store_unchanged(semantic_session, bad):
     leapp.annotate.set_semantics(
-        "policy", outputs=[TensorSemantics("action", kind=Kind.JOINT_EFFORT)]
+        "policy",
+        outputs=[TensorSemantics("action", kind=Kind.JOINT_EFFORT)],
+        allow_unregistered_ports=True,
     )
     with pytest.raises(ValueError):
-        leapp.annotate.set_semantics("policy", **bad)
+        leapp.annotate.set_semantics("policy", **bad, allow_unregistered_ports=True)
     _capture_semantic_policy()
     assert annotate.nodes["policy"].outputs[0].get_semantics() == {
         "kind": Kind.JOINT_EFFORT
@@ -562,15 +638,21 @@ def test_invalid_named_semantics_leave_store_unchanged(semantic_session, bad):
 
 def test_deferred_shape_validation_and_unresolved_names(semantic_session):
     leapp.annotate.set_semantics(
-        "policy", inputs=[TensorSemantics("state", axes=[Axis(names=["wrong"])])]
+        "policy",
+        inputs=[TensorSemantics("state", axes=[Axis(names=["wrong"])])],
+        allow_unregistered_ports=True,
     )
     with pytest.raises(ValueError, match="label count"):
         leapp.annotate.input_tensors("policy", {"state": torch.zeros(2)})
     leapp.annotate.set_semantics(
-        "policy", inputs=[TensorSemantics("state", kind=Kind.JOINT_POSITION)]
+        "policy",
+        inputs=[TensorSemantics("state", kind=Kind.JOINT_POSITION)],
+        allow_unregistered_ports=True,
     )
     _capture_semantic_policy()
-    leapp.annotate.set_semantics("policy", outputs=[TensorSemantics("typo")])
+    leapp.annotate.set_semantics(
+        "policy", outputs=[TensorSemantics("typo")], allow_unregistered_ports=True
+    )
     leapp.stop()
     with pytest.raises(ValueError, match="Unresolved outputs.*typo"):
         leapp.compile_graph(visualize=False)
@@ -580,14 +662,17 @@ def test_bound_wrappers_share_store_without_retaining_refs(semantic_session):
     annotation = leapp.joint_position(
         "state", torch.zeros(2), axes=[Axis(names=["a", "b"])]
     )
-    leapp.annotate.set_semantics("policy", inputs=[annotation])
+    leapp.annotate.set_semantics(
+        "policy", inputs=[annotation], allow_unregistered_ports=True
+    )
     annotation.axes[0].names[0] = "mutated"
     x = leapp.annotate.input_tensors("policy", {"state": torch.ones(2)})
     description = annotate.nodes["policy"].inputs[0]
     assert description.semantics.ref is None
     assert description.semantics.axes[0].names == ["a", "b"]
-    leapp.annotate.set_semantics(
-        "policy", outputs=[TensorSemantics("action", kind=Kind.JOINT_POSITION)]
+    annotate.nodes["policy"].set_semantics(
+        outputs=[TensorSemantics("action", kind=Kind.JOINT_POSITION)],
+        allow_unregistered_ports=True,
     )
     leapp.annotate.output_tensors(
         "policy", leapp.joint_effort("action", x + 1), export_with="jit"
@@ -618,7 +703,9 @@ def test_raw_reentry_preserves_explicit_replacements(semantic_session):
 
 def test_state_only_node_and_state_metadata_replacements(semantic_session):
     leapp.annotate.set_semantics(
-        "policy", states=[TensorSemantics("memory", kind=Kind.JOINT_POSITION)]
+        "policy",
+        states=[TensorSemantics("memory", kind=Kind.JOINT_POSITION)],
+        allow_unregistered_ports=True,
     )
     for index in range(2):
         memory = leapp.annotate.state_tensors(
@@ -675,6 +762,7 @@ def test_input_output_names_are_separate_namespaces(semantic_session):
         "policy",
         inputs=[TensorSemantics("q", kind=Kind.JOINT_POSITION)],
         outputs=[TensorSemantics("q", kind=Kind.JOINT_EFFORT)],
+        allow_unregistered_ports=True,
     )
     x = leapp.annotate.input_tensors("policy", {"q": torch.ones(2)})
     leapp.annotate.output_tensors("policy", {"q": x * 2}, export_with="jit")
@@ -686,7 +774,9 @@ def test_input_output_names_are_separate_namespaces(semantic_session):
 
 def test_semantics_cannot_change_after_compilation(semantic_session):
     leapp.annotate.set_semantics(
-        "policy", outputs=[TensorSemantics("action", kind=Kind.JOINT_EFFORT)]
+        "policy",
+        outputs=[TensorSemantics("action", kind=Kind.JOINT_EFFORT)],
+        allow_unregistered_ports=True,
     )
     _capture_semantic_policy()
     node = annotate.nodes["policy"]
@@ -698,8 +788,12 @@ def test_semantics_cannot_change_after_compilation(semantic_session):
     replacement = [TensorSemantics("action", kind=Kind.JOINT_POSITION)]
     updates = [
         lambda: leapp.annotate.set_semantics("policy", outputs=replacement),
+        lambda: leapp.annotate.set_semantics(
+            "policy", outputs=replacement, allow_unregistered_ports=True
+        ),
         lambda: leapp.annotate.set_semantics("uncaptured", outputs=replacement),
         lambda: node.set_semantics(outputs=replacement),
+        lambda: node.set_semantics(outputs=replacement, allow_unregistered_ports=True),
         lambda: node.outputs[0].update_semantics({"kind": Kind.JOINT_POSITION}),
     ]
     for update in updates:
@@ -709,7 +803,9 @@ def test_semantics_cannot_change_after_compilation(semantic_session):
     assert path.read_bytes() == original
 
     leapp.start("semantics", save_path=str(semantic_session.parent))
-    leapp.annotate.set_semantics("policy", outputs=replacement)
+    leapp.annotate.set_semantics(
+        "policy", outputs=replacement, allow_unregistered_ports=True
+    )
     _capture_semantic_policy()
     leapp.stop()
     assert leapp.compile_graph(visualize=False)
@@ -745,6 +841,7 @@ def test_precompiled_semantics_load_in_fresh_process(semantic_session):
                 expressed_in=ExpressionFrame.SELF,
             )
         ],
+        allow_unregistered_ports=True,
     )
     _capture_semantic_policy()
     leapp.stop()
@@ -778,6 +875,7 @@ def test_precompiled_semantics_survive_onnx_port_renaming(semantic_session):
         "policy",
         inputs=[TensorSemantics("q", kind=Kind.JOINT_POSITION)],
         outputs=[TensorSemantics("q", kind=Kind.JOINT_EFFORT)],
+        allow_unregistered_ports=True,
     )
     q = leapp.annotate.input_tensors("policy", {"q": torch.ones(2)})
     leapp.annotate.output_tensors(
@@ -810,7 +908,7 @@ def test_pt2_metadata_roundtrip_in_fresh_process(tmp_path):
             """
 import pathlib, sys, torch, leapp
 leapp.start('pt2_semantics', save_path=sys.argv[1], global_patching=False)
-leapp.annotate.set_semantics('policy', outputs=[leapp.TensorSemantics('action', kind=leapp.Kind.JOINT_POSITION)])
+leapp.annotate.set_semantics('policy', outputs=[leapp.TensorSemantics('action', kind=leapp.Kind.JOINT_POSITION)], allow_unregistered_ports=True)
 x = leapp.annotate.input_tensors('policy', {'state': torch.ones(2)})
 leapp.annotate.output_tensors('policy', {'action': x * 2}, export_with='pt2')
 leapp.stop()
@@ -839,6 +937,7 @@ def test_set_semantics_on_method_node(semantic_session):
         "policy",
         inputs=[TensorSemantics("state", kind=Kind.JOINT_POSITION)],
         outputs=[TensorSemantics("action", kind=Kind.JOINT_EFFORT)],
+        allow_unregistered_ports=True,
     )
     policy(torch.ones(2))
     leapp.stop()
