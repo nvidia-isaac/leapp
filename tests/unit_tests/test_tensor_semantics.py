@@ -703,6 +703,38 @@ def test_raw_reentry_preserves_explicit_replacements(semantic_session):
     }
 
 
+def test_semantic_reentry_skips_pruned_inputs(semantic_session):
+    for index, kind in enumerate((Kind.JOINT_POSITION, Kind.JOINT_VELOCITY)):
+        state, unused = leapp.annotate.input_tensors(
+            "policy",
+            [
+                TensorSemantics("state", torch.full((2,), float(index)), kind=kind),
+                TensorSemantics("unused", torch.zeros(2), kind=Kind.JOINT_POSITION),
+            ],
+        )
+        leapp.annotate.output_tensors(
+            "policy", {"action": state * 2}, export_with="jit"
+        )
+
+    node = annotate.nodes["policy"]
+    assert [port.name for port in node.inputs] == ["state"]
+    assert node.inputs[0].get_semantics() == {"kind": Kind.JOINT_VELOCITY}
+    with pytest.raises(ValueError, match="Invalid input port name 'unused'"):
+        leapp.annotate.set_semantics("policy", inputs=[TensorSemantics("unused")])
+    leapp.stop()
+    assert leapp.compile_graph(visualize=False)
+    path = semantic_session / "semantics.yaml"
+    inputs = yaml.safe_load(path.read_text())["models"]["policy"]["inputs"]
+    assert [(port["name"], port["kind"]) for port in inputs] == [
+        ("state", "joint/velocity")
+    ]
+    runtime = leapp.InferenceManager(str(path))
+    fresh = torch.tensor([7.0, -4.0])
+    torch.testing.assert_close(
+        runtime({"policy/state": fresh})["policy/action"], fresh * 2
+    )
+
+
 def test_state_only_node_and_state_metadata_replacements(semantic_session):
     leapp.annotate.set_semantics(
         "policy",

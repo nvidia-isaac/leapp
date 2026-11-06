@@ -336,7 +336,13 @@ class ExportManager:
         # if the node is not tracing, we validate the inputs only and return the raw tensors
         # the node is not tracing if it is already compiled.
         if not traced_tensors_node.is_tracing:
-            traced_tensors_node.set_semantics(inputs=list(metadata.values()))
+            traced_tensors_node.set_semantics(
+                inputs=[
+                    semantics
+                    for name, semantics in metadata.items()
+                    if name not in traced_tensors_node.trimmed_inputs
+                ]
+            )
             matching_origin = next(
                 (
                     identity
