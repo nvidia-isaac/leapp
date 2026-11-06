@@ -6,6 +6,8 @@
 cmake_minimum_required(VERSION 3.24)
 project(leapp_nativert LANGUAGES CXX)
 
+find_package(Threads REQUIRED)
+
 set(PYTORCH_SOURCE "" CACHE PATH "PyTorch v2.12.1 source with its submodules")
 set(TORCH_ROOT "" CACHE PATH "Matching torch package or LibTorch SDK root")
 set(CMAKE_CXX_STANDARD 20)
@@ -59,5 +61,5 @@ target_include_directories(leapp_nativert PRIVATE
 target_link_libraries(leapp_nativert PRIVATE
   "${TORCH_ROOT}/lib/libtorch.so"
   "${TORCH_ROOT}/lib/libtorch_cpu.so"
-  "${TORCH_ROOT}/lib/libc10.so" ${CMAKE_DL_LIBS})
+  "${TORCH_ROOT}/lib/libc10.so" Threads::Threads ${CMAKE_DL_LIBS})
 target_link_options(leapp_nativert PRIVATE "LINKER:--no-undefined")
