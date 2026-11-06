@@ -23,9 +23,7 @@ fn devices() -> Vec<ExecutionDevice> {
 fn pipeline(name: &str, device: ExecutionDevice) -> TritonPipeline {
     let fixtures = env::var_os("LEAPP_TRITON_FIXTURES")
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("target/triton-fixtures")
-        });
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("target/triton-fixtures"));
     let bundle = Bundle::open(fixtures.join(format!("{name}.yaml")))
         .expect("generate ONNX fixtures with tests/generators/generate_models.py first");
     convert_bundle(&bundle, device).unwrap()

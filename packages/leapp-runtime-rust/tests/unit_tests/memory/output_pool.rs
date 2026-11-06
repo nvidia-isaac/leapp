@@ -6,11 +6,14 @@ use crate::dlpack::{DLDataType, SharedTensor};
 use std::collections::HashSet;
 
 fn locations() -> Vec<MemoryLocation> {
-    vec![
-        MemoryLocation::Cpu,
-        MemoryLocation::PinnedCpu,
-        MemoryLocation::Cuda { device_id: 0 },
-    ]
+    let mut locations = vec![MemoryLocation::Cpu];
+    if std::env::var("LEAPP_TEST_CUDA").as_deref() == Ok("1") {
+        locations.extend([
+            MemoryLocation::PinnedCpu,
+            MemoryLocation::Cuda { device_id: 0 },
+        ]);
+    }
+    locations
 }
 
 fn lease(buffer: Arc<Buffer>) -> SharedTensor {
@@ -71,7 +74,8 @@ fn reuse_matches_byte_size_location_and_available_cuda_device_ids() {
     let pool = OutputPool::new(crate::OutputPoolOptions::default(), 0);
     let mut locations = locations();
     let second_device = MemoryLocation::Cuda { device_id: 1 };
-    let second_device_available = second_device.validate().is_ok();
+    let cuda = std::env::var("LEAPP_TEST_CUDA").as_deref() == Ok("1");
+    let second_device_available = cuda && second_device.validate().is_ok();
     if second_device_available {
         locations.push(second_device);
     }
@@ -88,7 +92,7 @@ fn reuse_matches_byte_size_location_and_available_cuda_device_ids() {
         saved.push((location, identity));
         drop(buffer);
     }
-    if !second_device_available {
+    if cuda && !second_device_available {
         assert!(pool.allocate(16, second_device).is_err());
     }
     for (location, identity) in saved {
@@ -162,8 +166,7 @@ fn configurable_limits_allow_large_and_dynamic_buffers() {
         assert_eq!(fresh.state.lock().unwrap().largest_buffer, 128);
         assert!(fresh.state.lock().unwrap().entries.is_empty());
 
-        let disabled =
-            OutputPool::new(crate::OutputPoolOptions { max_entries: 0 }, image_bytes);
+        let disabled = OutputPool::new(crate::OutputPoolOptions { max_entries: 0 }, image_bytes);
         assert_eq!(
             Arc::strong_count(&disabled.allocate(16, location).unwrap()),
             1
