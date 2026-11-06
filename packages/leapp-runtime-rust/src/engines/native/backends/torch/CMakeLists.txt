@@ -21,7 +21,13 @@ target_include_directories(leapp_native_torch SYSTEM INTERFACE
 foreach(name IN ITEMS torch torch_cpu torch_cuda c10 c10_cuda)
   find_library(LEAPP_${name}_LIBRARY NAMES ${name}
     PATHS "${TORCH_ROOT}/lib" NO_DEFAULT_PATH REQUIRED)
-  target_link_libraries(leapp_native_torch INTERFACE "${LEAPP_${name}_LIBRARY}")
+  if(name STREQUAL "torch_cuda")
+    # Loading libtorch_cuda registers CUDA hooks and kernels.
+    target_link_libraries(leapp_native_torch INTERFACE
+      "-Wl,--push-state,--no-as-needed" "${LEAPP_${name}_LIBRARY}" "-Wl,--pop-state")
+  else()
+    target_link_libraries(leapp_native_torch INTERFACE "${LEAPP_${name}_LIBRARY}")
+  endif()
 endforeach()
 target_link_libraries(leapp_native_torch INTERFACE CUDA::cudart)
 target_sources(leapp_native_torch INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/engine.cc")
