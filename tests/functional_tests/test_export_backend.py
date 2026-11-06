@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
+import importlib.util
 import os
 import unittest
 import tempfile
@@ -27,6 +28,8 @@ from leapp import TensorSemantics, InputKindEnum, OutputKindEnum
 from leapp.backends.export_backend import SimplifiedONNXProgram
 from .base import LEAPPFunctionalTestBase
 import pytest
+
+HAS_EXECUTORCH = importlib.util.find_spec("executorch") is not None
 
 
 class TestOnnxProviderSelection(unittest.TestCase):
@@ -194,6 +197,8 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
             ("exported-program", {}),
             ("jit-script", {}),
             ("jit-trace", {}),
+            # Last, since pytest 8 skips the cases after a skipTest in a subTest.
+            ("executorch", {}),
         ]
         for backend, params in cases:
             for global_patching in (False, True):
@@ -203,6 +208,8 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
                     ),
                     tempfile.TemporaryDirectory() as tmp,
                 ):
+                    if backend == "executorch" and not HAS_EXECUTORCH:
+                        self.skipTest("ExecuTorch is not installed")
                     leapp.start("graph", save_path=tmp, global_patching=global_patching)
                     try:
                         with torch.no_grad():
@@ -1395,6 +1402,217 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         self.assertEqual(
             yaml_data["models"][funcA.__name__]["parameters"]["backend"], "pt2"
         )
+
+    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    def test_executorch_backend(self):
+        """Covers the ExecuTorch delegates, which lower and run the graph outside
+        PyTorch, so validation and the InferenceManager run the ``.pte`` file."""
+        # Wide enough that TF32 rounding would fail validation.
+        generator = torch.Generator().manual_seed(0)
+        weight = (torch.rand(512, 512, generator=generator) - 0.5) / 16
+        # (delegate, device_io, device the inputs and outputs live on)
+        cases = []
+        if torch.cuda.is_available():
+            cases += [
+                ("cuda", True, "cuda"),
+                ("cuda", False, "cpu"),
+            ]
+        # Last, so the folder still holds the .ptd a CUDA case wrote.
+        cases.append(("xnnpack", True, "cpu"))
+        for delegate, device_io, device in cases:
+            with self.subTest(delegate=delegate, device_io=device_io):
+                backend_params = {"delegate": delegate}
+                if not device_io:
+                    backend_params["device_io"] = False
+
+                @annotate.method(
+                    export_with="executorch", backend_params=backend_params
+                )
+                def funcA(inputA: torch.Tensor):
+                    return inputA @ weight
+
+                leapp.start(name=self.TEST_GRAPH_NAME)
+                funcA(torch.linspace(-1, 1, 64 * 512).reshape(64, 512))
+                leapp.stop()
+                self.assertEqual(
+                    leapp.compile_graph(visualize=False, validate=True),
+                    {funcA.__name__: True},
+                )
+
+                with open(
+                    os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+                ) as f:
+                    parameters = yaml.safe_load(f)["models"][funcA.__name__][
+                        "parameters"
+                    ]
+                self.assertEqual(parameters["backend"], "pte")
+                self.assertEqual(parameters["delegate"], delegate)
+                # Only the CUDA backend writes a .ptd, so an earlier case's file
+                # must not be recorded.
+                self.assertEqual("data_path" in parameters, delegate == "cuda")
+
+                manager = leapp.InferenceManager(
+                    os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+                )
+                self.assertEqual(
+                    torch.device(manager.nodes[funcA.__name__].device).type, device
+                )
+                fresh = torch.rand(64, 512, generator=generator)
+                (output_key,) = manager.outputs
+                actual = manager.run_policy(
+                    {f"{funcA.__name__}/inputA": fresh.to(device)}
+                )[output_key]
+                self.assertEqual(actual.device.type, device)
+                torch.testing.assert_close(
+                    actual.cpu(), fresh @ weight, rtol=1e-4, atol=1e-5
+                )
+
+    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    @unittest.skipUnless(torch.cuda.is_available(), "Needs a CUDA GPU")
+    def test_executorch_backend_devices(self):
+        """Covers nodes on different devices: a GPU node that returns an input
+        unchanged, a GPU node traced on the GPU, and an XNNPACK node on the CPU
+        feeding a TorchScript node."""
+
+        yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+        ones = torch.ones(3, device="cuda")
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        a, b = annotate.input_tensors("funcE", {"a": torch.ones(3), "b": torch.ones(3)})
+        annotate.output_tensors(
+            "funcE",
+            {"same": a, "doubled": b * 2},
+            export_with="executorch",
+            backend_params={"delegate": "cuda"},
+        )
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+        outputs = leapp.InferenceManager(yaml_path).run_policy(
+            {"funcE/a": ones, "funcE/b": ones}
+        )
+        self.assertEqual({value.device.type for value in outputs.values()}, {"cuda"})
+
+        # Traced on the GPU, with a cast that torch.export records with its device.
+        @annotate.method(export_with="executorch", backend_params={"delegate": "cuda"})
+        def funcH(inputH: torch.Tensor):
+            return inputH.float() / 255
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        funcH(torch.arange(3, dtype=torch.uint8, device="cuda"))
+        leapp.stop()
+        self.assertEqual(
+            leapp.compile_graph(visualize=False, validate=True),
+            {funcH.__name__: True},
+        )
+
+        weight = torch.tensor([1.0, 2.0, 3.0])
+
+        @annotate.method(export_with="executorch")
+        def funcF(inputF: torch.Tensor):
+            return inputF + 1
+
+        @annotate.method(export_with="jit")
+        def funcG(inputG: torch.Tensor):
+            return inputG * weight
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        funcG(funcF(torch.ones(3)))
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+        (actual,) = (
+            leapp.InferenceManager(yaml_path)
+            .run_policy({f"{funcF.__name__}/inputF": torch.ones(3, device="cuda")})
+            .values()
+        )
+        torch.testing.assert_close(actual.cpu(), 2 * weight)
+
+    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    def test_executorch_backend_errors(self):
+        """Covers the error paths, checksums of both files, and weights captured on
+        another device than the delegate's."""
+        from leapp.backends.executorch_backend import ExecuTorchExportBackend
+
+        with self.assertRaises(ValueError):
+            ExecuTorchExportBackend(None, {"delegate": "unknown"})
+        node = mock.Mock()
+        node.name = "never_compiled"
+        with self.assertRaises(RuntimeError):
+            ExecuTorchExportBackend(node).save(self.TEST_GRAPH_NAME)
+
+        @annotate.method(export_with="executorch")
+        def funcB(inputB: torch.Tensor):
+            return inputB * 2
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        funcB(torch.ones(3))
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+        with open(
+            os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+        ) as f:
+            sha256sum = yaml.safe_load(f)["models"][funcB.__name__]["parameters"][
+                "sha256sum"
+            ]
+        model = os.path.join(self.TEST_GRAPH_NAME, f"{funcB.__name__}.pte")
+        with self.assertRaises(ValueError):
+            ExecuTorchExportBackend(None).load(model, "0" * 64)
+        with mock.patch.dict("sys.modules", {"executorch.runtime": None}):
+            with self.assertRaises(ImportError):
+                ExecuTorchExportBackend(None).load(model, sha256sum)
+        ExecuTorchExportBackend(None).load(model, sha256sum)
+
+        if not torch.cuda.is_available():
+            return
+
+        # XNNPACK runs on the CPU, so a weight captured on the GPU must move.
+        weight = torch.tensor([1.0, 2.0, 3.0], device="cuda")
+
+        @annotate.method(export_with="executorch")
+        def funcD(inputD: torch.Tensor):
+            return inputD * weight + 1
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        funcD(torch.ones(3, device="cuda"))
+        leapp.stop()
+        self.assertEqual(
+            leapp.compile_graph(visualize=False, validate=True),
+            {funcD.__name__: True},
+        )
+
+        # A traced module's weights come in as buffers that require grad.
+        linear = torch.jit.trace(torch.nn.Linear(3, 3), torch.ones(2, 3))
+
+        @annotate.method(
+            export_with="executorch",
+            backend_params={"delegate": "cuda"},
+            environment_constants=["linear"],
+        )
+        def funcC(inputC: torch.Tensor):
+            return linear(inputC)
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        funcC(torch.ones(2, 3))
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+        yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+        with open(yaml_path) as f:
+            parameters = yaml.safe_load(f)["models"][funcC.__name__]["parameters"]
+        self.assertIn("data_sha256sum", parameters)
+        leapp.InferenceManager(yaml_path)
+        # Loading reads the file the YAML names.
+        data_path = os.path.join(self.TEST_GRAPH_NAME, "renamed.ptd")
+        os.rename(
+            os.path.join(self.TEST_GRAPH_NAME, parameters["data_path"]), data_path
+        )
+        with open(yaml_path) as f:
+            config = yaml.safe_load(f)
+        config["models"][funcC.__name__]["parameters"]["data_path"] = "renamed.ptd"
+        with open(yaml_path, "w") as f:
+            yaml.safe_dump(config, f, sort_keys=False)
+        leapp.InferenceManager(yaml_path)
+        with open(data_path, "ab") as f:
+            f.write(b"\x00")
+        with self.assertRaises(ValueError):
+            leapp.InferenceManager(yaml_path)
 
     # -----------------------------------------------------------------
     # Complex math operations

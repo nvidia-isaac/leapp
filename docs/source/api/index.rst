@@ -473,8 +473,8 @@ Parameters
   * ``export_with`` (str | None): Export backend. Common values
     ``"jit"``, ``"onnx"``, and ``"exported-program"`` (alias ``"pt2"``).
     Other variants are ``"jit-script"``, ``"jit-trace"``,
-    ``"onnx-dynamo"``, and ``"onnx-torchscript"``. See
-    :doc:`/guides/export`.
+    ``"onnx-dynamo"``, and ``"onnx-torchscript"``. ``"executorch"``
+    writes an ExecuTorch ``.pte`` program. See :doc:`/guides/export`.
   * ``backend_params`` (dict): Backend-specific parameters.
 
 Behavior

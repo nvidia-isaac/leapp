@@ -71,6 +71,9 @@ pytest
 fx
 CMake
 nvcc
+ExecuTorch
+XNNPACK
+libtorch
 
 # Code identifiers used in prose
 str

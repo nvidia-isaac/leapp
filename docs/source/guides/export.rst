@@ -41,6 +41,9 @@ LEAPP supports these public backend names:
    * - ``"pt2"``
      - ``exported-program``
      - ``torch.export`` ``.pt2``
+   * - ``"executorch"``
+     - ``executorch``
+     - ExecuTorch ``.pte``
    * - ``None``
      - ``NoneExportBackend``
      - No compilation
@@ -130,6 +133,77 @@ Example:
            "strict": True,
        },
    )
+
+
+ExecuTorch export
+=================
+
+``"executorch"`` exports each node with :func:`torch.export.export`, lowers
+it with `ExecuTorch <https://pytorch.org/executorch/>`_, and saves a ``.pte``
+program. The YAML ``backend`` field is written as ``pte``. Validation and
+:class:`~leapp.InferenceManager` run the ``.pte`` file through ExecuTorch's
+runtime, so they check the program a deployment runs. ExecuTorch programs
+also run from C++ without Python or libtorch.
+
+Install the ``executorch`` extra first (Python 3.11 or newer, since ExecuTorch
+1.6 has no Python 3.10 wheels). It needs PyTorch 2.15, whose PyPI wheels use CUDA
+13, so pair it with ``warp-cu13`` rather than ``warp-cu12``:
+
+.. code-block:: bash
+
+   pip install "leapp[executorch]"
+
+.. code-block:: python
+
+   annotate.output_tensors(
+       "policy",
+       {"action": action},
+       export_with="executorch",
+       backend_params={"delegate": "cuda"},
+   )
+
+ExecuTorch backend parameters
+-----------------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 15 65
+
+   * - Parameter
+     - Default
+     - Description
+   * - ``delegate``
+     - ``"xnnpack"``
+     - ``"xnnpack"`` runs on the CPU (x86 and Arm). ``"cuda"`` runs on an
+       NVIDIA GPU with ExecuTorch's CUDA backend, which needs ``nvcc`` at
+       export. CUDA programs are compiled for the exporting GPU, so export on
+       the target device.
+   * - ``device_io``
+     - ``True``
+     - ``"cuda"`` only. The program reads and writes GPU memory, so a
+       pipeline fed CUDA tensors passes them between nodes without host
+       copies. An input the node returns unchanged is the exception and
+       stays in host memory. ``False`` makes the program read and write CPU
+       memory. Either way, outputs come back on the device of the inputs.
+   * - ``strict``
+     - PyTorch default
+     - Passed through to :func:`torch.export.export`
+
+The CUDA backend writes the node's weights and compiled kernels to
+``<node>.ptd`` beside the ``.pte``; keep the two files together. The YAML
+records its checksum as ``data_sha256sum``, and loading checks it the same way
+as the ``.pte``.
+
+The CUDA backend compiles with the matrix multiply precision PyTorch has at
+export, so keep ``torch.backends.cuda.matmul.allow_tf32`` at its default,
+``False``, when exporting with it. On a GPU, PyTorch runs float32 convolutions in TF32 by
+default, so the outputs LEAPP captures there can differ from the program by
+about 1e-3. Set ``torch.backends.cudnn.allow_tf32 = False`` before
+``leapp.start()``, or pass a larger ``atol`` to ``compile_graph()``.
+
+XNNPACK and the CUDA backend do not run operators whose output shape depends
+on the data, such as ``nonzero`` or boolean masks. Export such a node with
+another backend.
 
 
 ONNX export
