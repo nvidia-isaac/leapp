@@ -1,0 +1,19 @@
+models:
+  policy:
+    inputs:
+      - {name: state, dtype: float32, shape: [2], type: tensor}
+    outputs:
+      - {name: next_state, dtype: float32, shape: [2], type: tensor}
+    parameters:
+      backend: pt2
+      model_path: artifacts/policy.pt2
+pipeline:
+  data_flow: {}
+  feedback_flow:
+    policy/next_state: [policy/state]
+  inputs: {}
+  outputs:
+    policy: [next_state]
+  initial_values: state.safetensors
+system information:
+  leapp config version: '1.3'

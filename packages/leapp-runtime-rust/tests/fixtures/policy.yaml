@@ -1,0 +1,49 @@
+models:
+  policy:
+    inputs:
+      - {name: z_features, dtype: float32, shape: [4], type: tensor}
+      - {name: a_bias, dtype: float32, shape: [4], type: tensor}
+    outputs:
+      - {name: action, dtype: float32, shape: [4], type: tensor}
+    parameters:
+      backend: pt2
+      model_path: artifacts/policy.pt2
+      sha256sum: "5a3949ca84f738f57e5005ddb999bd80bbcded1eef362fcf31a8ff6e21a63915"
+      md5sum: "eea00da3830d6875a43cdcd6e6cae801"
+      torch_version: '2.12.1'
+    description: {purpose: controller}
+  preprocess:
+    inputs:
+      - name: observation
+        dtype: float32
+        shape: '[4]'
+        type: tensor
+        element_names: [first, second, third, fourth]
+    outputs:
+      - {name: features, dtype: float32, shape: [4], type: tensor}
+    parameters:
+      backend: onnx
+      model_path: artifacts/preprocess.onnx
+pipeline:
+  data_flow:
+    preprocess/features: [policy/z_features]
+  feedback_flow: {}
+  inputs:
+    preprocess: [observation]
+    policy: [a_bias]
+  outputs:
+    policy: [action]
+  configs:
+    frequency: 50
+    enabled: true
+    gain: 0.5
+    label: "42"
+    optional: null
+    large: 18446744073709551615
+    nested: {entries: [1, false, "3"]}
+  description: command pipeline
+system information:
+  leapp config version: '1.3'
+  leapp version: '999.0'
+  torch version: '2.12.1'
+project: {name: robotics}
