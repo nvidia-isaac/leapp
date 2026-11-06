@@ -15,7 +15,7 @@ find_library(TENSORRT_LIBRARY nvinfer HINTS "${TENSORRT_ROOT}"
   PATH_SUFFIXES lib lib64 "lib/${CMAKE_LIBRARY_ARCHITECTURE}" REQUIRED)
 find_library(TENSORRT_PLUGIN_LIBRARY nvinfer_plugin HINTS "${TENSORRT_ROOT}"
   PATH_SUFFIXES lib lib64 "lib/${CMAKE_LIBRARY_ARCHITECTURE}" REQUIRED)
-find_library(CUDA_LIBRARY cudart PATHS "${CUDA_ROOT}/lib64" NO_DEFAULT_PATH REQUIRED)
+find_library(CUDA_LIBRARY cudart PATHS "${CUDA_ROOT}/lib64" "${CUDA_ROOT}/lib" NO_DEFAULT_PATH REQUIRED)
 
 add_library(leapp_tensorrt SHARED backend.cc)
 target_compile_features(leapp_tensorrt PRIVATE cxx_std_20)
