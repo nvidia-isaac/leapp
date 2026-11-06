@@ -170,18 +170,18 @@ def main():
         # Import only after process startup; each engine gets a fresh loader.
         import check_installation
 
-        sys.argv = [
-            str(Path(check_installation.__file__)),
+        arguments = [
             "--backend",
             *(args.backends or ["none"]),
             "--engine",
             args.engine,
+            "--installed-only",
         ]
         if args.cuda:
-            sys.argv.append("--cuda")
+            arguments.append("--cuda")
         mapped = set()
         inspect = lambda: mapped.update(loaded_libraries(prefix))
-        check_installation.main(inspect)
+        check_installation.main(inspect, argv=arguments)
         if "onnx" in args.backends and args.cuda and not args.onnx_tensorrt:
             import lrt
 

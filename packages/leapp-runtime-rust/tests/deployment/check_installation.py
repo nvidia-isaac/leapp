@@ -55,6 +55,8 @@ def execute(backend, engine, device, inspect):
         peer = session.new_session()
         retained = np.from_dlpack(session.run(inputs)[output])
         np.testing.assert_array_equal(retained, expected)
+        if backend == "onnx" and engine == "native":
+            assert "libonnxruntime" in Path("/proc/self/maps").read_text()
         inspect()
     with peer:
         np.testing.assert_array_equal(
@@ -82,6 +84,10 @@ def execute(backend, engine, device, inspect):
 
 
 def execute_mixed(engine, inspect):
+    xp = np
+    if engine == "native":
+        import cupy as xp
+
     root = Path(os.environ.get("LEAPP_TENSORRT_FIXTURES", "target/tensorrt-fixtures"))
     with lrt.Session.open(
         lrt.Bundle.open(root / "mixed.yaml"),
@@ -89,8 +95,8 @@ def execute_mixed(engine, inspect):
     ) as session:
         result = session.run(
             {
-                "preprocess/observation": np.arange(1, 5, dtype=np.float32),
-                "policy/bias": np.arange(10, 50, 10, dtype=np.float32),
+                "preprocess/observation": xp.arange(1, 5, dtype=xp.float32),
+                "policy/bias": xp.arange(10, 50, 10, dtype=xp.float32),
             }
         )
         np.testing.assert_array_equal(
@@ -148,7 +154,7 @@ def missing_dependency(options, library, run=False):
     print(f"PASS missing {library}: requested operation returns a dependency error")
 
 
-def main(inspect=lambda: None):
+def main(inspect=lambda: None, argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--backend",
@@ -160,12 +166,18 @@ def main(inspect=lambda: None):
     parser.add_argument("--cuda", action="store_true")
     parser.add_argument("--without-triton", action="store_true")
     parser.add_argument("--without-cuda", action="store_true")
-    args = parser.parse_args()
+    parser.add_argument(
+        "--installed-only",
+        action="store_true",
+        help="Only require fixtures for selected backends; skip missing-backend checks.",
+    )
+    args = parser.parse_args(argv)
     if "tensorrt" in args.backend:
         if args.engine != "triton":
             parser.error("precompiled TensorRT engines require --engine triton")
         if not args.cuda:
             parser.error("TensorRT execution requires --cuda")
+
     if args.without_triton and args.engine != "native":
         parser.error("--without-triton requires --engine native")
     if args.without_cuda and (
@@ -189,6 +201,8 @@ def main(inspect=lambda: None):
     # Even absent backends must permit bundle inspection. A CPU session would
     # reject TensorRT placement before reaching its loader, so use CUDA there.
     for backend in ["onnx", "torchscript", "nativert", "tensorrt"]:
+        if args.installed_only and backend not in args.backend:
+            continue
         bundle = fixture(backend)
         assert bundle.model_names(), backend
         if backend in args.backend or (

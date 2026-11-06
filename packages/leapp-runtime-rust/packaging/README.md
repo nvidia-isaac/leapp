@@ -183,8 +183,9 @@ separate work.
 
 ## Validate deployment
 
-Generate the existing ONNX, TorchScript, NativeRT and TensorRT fixtures in the SDK
-build environment first. TensorRT plans must be generated on the target GPU.
+For a package smoke check, generate fixtures only for the selected backends in
+the SDK build environment. Core-only checks need no model fixtures. TensorRT
+plans must be generated on the target GPU.
 Copy the fixtures and `tests/deployment/` into a clean runtime container, without
 mounting the source SDK or producer environment. Set the existing fixture variables
 from [AGENTS.md](../AGENTS.md#minimal-backend-installations).
@@ -199,8 +200,10 @@ pixi run --manifest-path /app/pixi.toml python /tests/check_packages.py \
 The audit executes the selected backends with the selected engines,
 rejects build tools and unselected runtimes,
 verifies package file hashes, and records loaded library paths and package sizes.
-It checks missing-backend errors, retains loaded-library isolation checks, and
-checks optional Warp adapters where applicable.
+It retains loaded-library isolation checks and checks optional Warp
+adapters where applicable. Missing-backend execution checks belong to the full
+minimal-installation matrix in [AGENTS.md](../AGENTS.md#minimal-backend-installations);
+the package smoke check uses its `--installed-only` mode.
 
 For release validation, repeat for core only (omit `--backends`), each individual
 backend, ONNX + TensorRT, and TorchScript + NativeRT. Compare the core hashes
