@@ -144,8 +144,10 @@ python tests/deployment/check_installation.py --backend onnx --engine native --w
 Replace `onnx` with `torchscript`, `nativert`, or `tensorrt` in their installations,
 or `none` to check startup, inspection, and missing-backend errors without any
 model runtime. TensorRT installations require `--engine triton --cuda`.
-`--cuda` adds GPU execution for the other backends. The ONNX
-check includes convolution to exercise cuDNN on CUDA. Also run the applicable
+`--cuda` adds GPU execution for the other backends. The ONNX check includes
+convolution to exercise cuDNN on CUDA. Package smoke tests can use
+`--installed-only` with fixtures for just the selected backends; the full matrix
+should omit it to retain missing-backend checks. Also run the applicable
 Rust integration tests and the installed C++ SDK checks. Audit
 shared-library dependencies, loaded-library maps, and binary hashes to confirm
 isolation and reuse. Use separate processes for loader cases: successful library
