@@ -237,8 +237,9 @@ The ``models`` mapping is deterministically ordered. LEAPP guarantees:
 
    ``backend``
       Selects the runtime loader. For example, ``jit`` loads a TorchScript
-      ``.pt`` file, ``pt2`` loads a ``torch.export`` ``.pt2`` file, and ONNX
-      backends load ``.onnx`` files.
+      ``.pt`` file, ``pt2`` loads a ``torch.export`` ``.pt2`` file, ``pte``
+      loads an ExecuTorch ``.pte`` file, and ONNX backends load ``.onnx``
+      files.
 
    ``model_path``
       Names the compiled artifact relative to the YAML file.
@@ -247,6 +248,16 @@ The ``models`` mapping is deterministically ordered. LEAPP guarantees:
       Hashes of the compiled artifact LEAPP wrote. A deployment library can
       use these fields to verify that the model file has not changed since
       export.
+
+   ``data_path`` and ``data_sha256sum``
+      Present for a ``pte`` node whose program keeps data in a separate
+      ``.ptd`` file. They give that file's name, relative to the ``.pte``
+      file, and its hash. A deployment library passes the file to
+      ExecuTorch with the program.
+
+   ``delegate``
+      For a ``pte`` node, what runs the program: ``xnnpack`` (CPU) or
+      ``cuda``. A ``cuda`` program runs on the first visible GPU.
 
 ``pipeline``
 ------------

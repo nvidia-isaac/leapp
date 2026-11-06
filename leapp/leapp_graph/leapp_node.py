@@ -203,6 +203,7 @@ class LeappNode:
             "onnx-dynamo",
             "onnx-torchscript",
             "exported-program",
+            "executorch",
         ]
         if backend is None:
             self.backend = "None"
@@ -236,6 +237,11 @@ class LeappNode:
             )
 
             self.export_backend = ExportedProgramExportBackend(self, backend_params)
+        elif backend == "executorch":
+            self.backend = "executorch"
+            from leapp.backends.executorch_backend import ExecuTorchExportBackend
+
+            self.export_backend = ExecuTorchExportBackend(self, backend_params)
         elif backend == "cpp":
             _get_logger().fatal("C++ backend not implemented", error_type=Exception)
         elif backend == "py":
