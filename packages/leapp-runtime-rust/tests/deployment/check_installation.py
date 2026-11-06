@@ -50,6 +50,8 @@ def execute(backend, engine, device, inspect):
         peer = session.new_session()
         retained = np.from_dlpack(session.run(inputs)[output])
         np.testing.assert_array_equal(retained, expected)
+        if backend == "onnx" and engine == "native":
+            assert "libonnxruntime" in Path("/proc/self/maps").read_text()
         inspect()
     with peer:
         np.testing.assert_array_equal(
@@ -153,6 +155,11 @@ def main(inspect=lambda: None):
     parser.add_argument("--cuda", action="store_true")
     parser.add_argument("--without-triton", action="store_true")
     parser.add_argument("--without-cuda", action="store_true")
+    parser.add_argument(
+        "--installed-only",
+        action="store_true",
+        help="Only require fixtures for selected backends; skip missing-backend checks.",
+    )
     args = parser.parse_args()
     if "tensorrt" in args.backend and not args.cuda:
         parser.error("TensorRT execution requires --cuda")
@@ -180,6 +187,8 @@ def main(inspect=lambda: None):
     # Even absent backends must permit bundle inspection. A CPU session would
     # reject TensorRT placement before reaching its loader, so use CUDA there.
     for backend in ["onnx", "torchscript", "nativert", "tensorrt"]:
+        if args.installed_only and backend not in args.backend:
+            continue
         bundle = fixture(backend)
         assert bundle.model_names(), backend
         if backend in args.backend or (backend == "tensorrt" and not args.cuda):
