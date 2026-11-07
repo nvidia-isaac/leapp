@@ -927,11 +927,99 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
                 f"Buffer '{name}' should be a torch.Tensor after restore",
             )
 
+    def test_model_exports_after_tracing(self):
+        """After a session, the user's model keeps its buffers and still exports."""
+
+        class Normalizer(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.scale = nn.Parameter(torch.ones(4))
+                # A view of a parameter, so the gradient flows through it.
+                self.register_buffer("mean", self.scale.view(1, 4))
+                self.register_buffer("steps", torch.zeros(1))
+                # The same tensor in a submodule, which keeps it when forward
+                # replaces steps.
+                self.history = nn.Module()
+                self.history.register_buffer("steps", self.steps)
+
+            def forward(self, obs):
+                self.steps = self.steps + 1
+                return obs - self.mean
+
+        model = Normalizer().eval()
+        mean, steps = model.mean, model.steps
+        obs = torch.ones(1, 4)
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        obs_traced = annotate.input_tensors("policy", {"obs": obs})
+        annotate.module("policy", model)
+        annotate.output_tensors(
+            "policy", {"result": model(obs_traced)}, export_with="jit"
+        )
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        # Not assertIs: its failure message would print a leftover TracedTensor,
+        # whose repr does not return.
+        self.assertTrue(model.mean is mean)
+        self.assertTrue(model.history.steps is steps)
+
+        class Reader(nn.Module):
+            # Reads every buffer without reassigning one, which torch 2.7 cannot export.
+            def __init__(self, model):
+                super().__init__()
+                self.model = model
+
+            def forward(self, obs):
+                model = self.model
+                return obs - model.mean + model.steps + model.history.steps
+
+        # A new input, since tracing promoted obs itself. Export before running
+        # the model, which would replace the restored steps buffer.
+        fresh = torch.ones(1, 4)
+        reader = Reader(model)
+        program = torch.export.export(reader, (fresh,))
+        torch.testing.assert_close(program.module()(fresh), reader(fresh))
+        model(fresh).sum().backward()
+        self.assertIsNotNone(model.scale.grad)
+
+    def test_buffer_holding_another_nodes_output_keeps_its_edge(self):
+        """A buffer holding another node's output exports and keeps that edge."""
+
+        class Offset(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.register_buffer("ref", torch.zeros(3))
+
+            def forward(self, z):
+                return z + self.ref
+
+        model = Offset().eval()
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        x = annotate.input_tensors("a", {"x": torch.ones(3)})
+        y = annotate.output_tensors("a", {"y": x * 2}, export_with="jit")
+        model.ref = y
+        z = annotate.input_tensors("b", {"z": torch.ones(3)})
+        annotate.module("b", model)
+        annotate.output_tensors("b", {"o": model(z)}, export_with="exported-program")
+        c_in = annotate.input_tensors("c", {"y": y})
+        annotate.output_tensors("c", {"w": c_in + 1}, export_with="jit")
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        data_flow = {
+            str(source): [str(target) for target in targets]
+            for source, targets in annotate.detected_pipeline["data_flow"].items()
+        }
+        self.assertIn("c/y", data_flow.get("a/y", []))
+
     def test_non_mutated_buffers_baked_as_constants(self):
         """Non-mutated buffers should be baked into the model, not dynamic inputs.
 
         Verifies that the exported model produces correct output using the
-        baked buffer values (scale=2, bias=1) without needing them as inputs.
+        baked buffer values (scale=2, bias=1) without needing them as inputs,
+        both through TorchScript and through torch.export, which cannot take
+        a traced tensor as a constant.
         """
 
         class ScaleBiasModel(nn.Module):
@@ -943,36 +1031,43 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
             def forward(self, obs):
                 return obs * self.scale + self.bias
 
-        model = ScaleBiasModel()
-        model.eval()
         obs = torch.tensor([[1.0, 2.0, 3.0, 4.0]])
-
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        obs_traced = annotate.input_tensors("policy", {"obs": obs})
-
-        annotate.module("policy", model)
-        result = model(obs_traced)
-
-        annotate.output_tensors("policy", {"result": result}, export_with="jit")
-        leapp.stop()
-        leapp.compile_graph(visualize=False)
-
-        # Only 1 input (obs) — scale and bias baked as constants
-        self.verify_num_connections(
-            annotate,
-            nodes=1,
-            inputs=1,
-            outputs=1,
-            internal_connections=0,
-            feedback_connections=0,
-        )
-
-        # Load exported model and verify it produces correct values
         # Expected: obs * 2.0 + 1.0 = [3.0, 5.0, 7.0, 9.0]
         expected = obs * 2.0 + 1.0
-        self.verify_single_torchscript_model_expected_value(
-            inputs=[obs], expected_outputs=[expected], model_name="policy"
-        )
+        for export_with in ("jit", "exported-program"):
+            with self.subTest(export_with=export_with):
+                model = ScaleBiasModel()
+                model.eval()
+
+                leapp.start(name=self.TEST_GRAPH_NAME)
+                obs_traced = annotate.input_tensors("policy", {"obs": obs})
+
+                annotate.module("policy", model)
+                result = model(obs_traced)
+
+                annotate.output_tensors(
+                    "policy", {"result": result}, export_with=export_with
+                )
+                leapp.stop()
+                leapp.compile_graph(visualize=False)
+
+                # Only 1 input (obs) — scale and bias baked as constants
+                self.verify_num_connections(
+                    annotate,
+                    nodes=1,
+                    inputs=1,
+                    outputs=1,
+                    internal_connections=0,
+                    feedback_connections=0,
+                )
+
+                verify = {
+                    "jit": self.verify_single_torchscript_model_expected_value,
+                    "exported-program": (
+                        self.verify_single_exported_program_model_expected_value
+                    ),
+                }[export_with]
+                verify(inputs=[obs], expected_outputs=[expected], model_name="policy")
 
     def test_not_tracing_noop(self):
         """When not tracing, module() is a complete no-op."""
