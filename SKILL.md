@@ -112,6 +112,7 @@ Select per node through `export_with` on `output_tensors()` or `method()`. LEAPP
 | `"jit"`, `"jit-script"` | TorchScript scripting → `.pt` | A TorchScript target or an alternative when ONNX lowering is unsupported. Both names select the same backend. |
 | `"jit-trace"` | TorchScript tracing → `.pt` | Scripting cannot handle the captured graph; requires representative input and execution-path coverage. |
 | `"pt2"`, `"exported-program"` | `torch.export` → `.pt2` | A requested ExportedProgram target or a compatible modern PyTorch runtime; supports Warp with its runtime adapter. Both names select the same backend. |
+| `"executorch"` | `torch.export` and ExecuTorch → `.pte` (the CUDA backend adds a `.ptd`) | Deployment without Python or libtorch, on the CPU (XNNPACK) or an NVIDIA GPU (CUDA backend). Needs the `executorch` extra. |
 | `None` | No compilation; optionally reference an existing model | Deliberate external/prebuilt model integration or an explicitly incomplete placeholder. Not an export-success fallback. |
 
 When the first export fails:

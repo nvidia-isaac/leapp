@@ -40,7 +40,7 @@ leapp/                      # installable package
   leapp.py                  # start / stop / compile_graph / annotate facade
   export_manager.py         # annotate.* implementations
   inference_manager.py      # runtime loader for exported YAML
-  backends/                 # jit, onnx-dynamo, onnx-torchscript, pt2, none
+  backends/                 # jit, onnx-dynamo, onnx-torchscript, pt2, executorch, none
   leapp_graph/
     traced_node.py          # per-node FX capture and compile
     leapp_graph.py          # pipeline wiring, feedback, visualize hook

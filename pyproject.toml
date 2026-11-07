@@ -72,6 +72,10 @@ test = [
     "warp-lang>=1.18",
     "opencv-python-headless>=4.8",
 ]
+# ExecuTorch 1.6 ships wheels for Python 3.11 and newer only.
+executorch = [
+    "executorch>=1.6.0; python_version >= '3.11'",
+]
 warp-cu12 = [
     "warp-lang>=1.18",
     "cupti-python>=12.8,<13; sys_platform == 'linux'",
@@ -99,6 +103,11 @@ conflicts = [
     [
         { extra = "warp-cu12" },
         { extra = "warp-cu13" },
+    ],
+    # ExecuTorch needs torch 2.15, whose CUDA 13 bindings rule out cupti-python 12.
+    [
+        { extra = "executorch" },
+        { extra = "warp-cu12" },
     ],
 ]
 
