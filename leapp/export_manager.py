@@ -163,7 +163,7 @@ class ExportManager:
             if created:
                 del self.nodes[node_name]
             raise
-        if created and not any(node._pending_semantics.values()):
+        if created and not any(node._semantics.values()):
             del self.nodes[node_name]
 
     @classmethod
@@ -232,7 +232,7 @@ class ExportManager:
             existing.inputs
             or existing.outputs
             or existing.captured
-            or not any(existing._pending_semantics.values())
+            or not any(existing._semantics.values())
         ):
             _get_logger().fatal(
                 f"Error: node '{name}' already exists. "
@@ -261,7 +261,7 @@ class ExportManager:
 
         node._max_cached_io = self._max_cached_io
         if existing is not None:
-            node._pending_semantics = existing._pending_semantics
+            node._semantics = existing._semantics
         self.nodes[name] = node
         return node
 

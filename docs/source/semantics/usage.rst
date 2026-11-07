@@ -125,9 +125,14 @@ immediately by default. Unresolved predefinitions fail at compilation.
 Set semantics before calling ``compile_graph()``. Later changes do not update
 saved artifacts. A new ``start()`` creates a fresh session with fresh metadata.
 
-During compilation, an exporter may rename ports. Their attached descriptions
-carry the registered semantics into the generated YAML. Changing the metadata
-requires a new capture with the revised descriptions before compilation.
+Semantics remain in the node's map, keyed by direction and declared port name.
+Tensor registration does not consume the entries or copy them onto ports.
+YAML generation looks up the current metadata for each surviving port.
+Pruned inputs retain their metadata in the map but do not appear in YAML.
+Capture-time aliases resolve to the same executable port. Multiple predefinitions
+that resolve to one port are rejected.
+During compilation, an exporter may rename ports. Lookup retains the declared
+identity so the generated YAML uses the exported name and the current semantics.
 
 General Usage
 =============

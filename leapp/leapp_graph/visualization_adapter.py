@@ -183,13 +183,22 @@ def _build_node(node: Any) -> VisualNode:
         id=visual_id("node", node.name),
         title=node.name,
         backend=backend,
-        inputs=tuple(_build_port(node.name, "input", desc) for desc in node.inputs),
-        outputs=tuple(_build_port(node.name, "output", desc) for desc in node.outputs),
+        inputs=tuple(_build_port(node, "input", desc) for desc in node.inputs),
+        outputs=tuple(_build_port(node, "output", desc) for desc in node.outputs),
     )
 
 
-def _build_port(node_name: str, side: str, desc: Any) -> VisualPort:
-    kind = _kind_to_string(desc)
+def _build_port(node: Any, side: str, desc: Any) -> VisualPort:
+    node_name = node.name
+    if hasattr(node, "get_port_semantics"):
+        semantics = node.get_port_semantics(f"{side}s", desc)
+    elif hasattr(desc, "get_semantics"):
+        semantics = desc.get_semantics()
+    else:
+        semantics = {}
+    kind = semantics.get("kind")
+    if kind is not None:
+        kind = kind.value if hasattr(kind, "value") else str(kind)
     return VisualPort(
         id=visual_id("port", node_name, side, desc.name_str),
         node_id=visual_id("node", node_name),
@@ -209,14 +218,6 @@ def _shape_to_tuple(shape: Any) -> tuple[str, ...]:
     if isinstance(shape, Sequence) and not isinstance(shape, (str, bytes)):
         return tuple(str(dim) for dim in shape)
     return (str(shape),)
-
-
-def _kind_to_string(desc: Any) -> str | None:
-    semantics = desc.get_semantics() if hasattr(desc, "get_semantics") else {}
-    kind = semantics.get("kind")
-    if kind is None:
-        return None
-    return kind.value if hasattr(kind, "value") else str(kind)
 
 
 def _find_port_id(node: Any, side: str, port_name: str) -> str:

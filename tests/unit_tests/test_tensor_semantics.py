@@ -36,6 +36,7 @@ from leapp import (
     TemporalAxis,
 )
 from leapp.leapp import _MANAGER as annotate
+from leapp.leapp_graph.leapp_node import LeappNode
 from leapp.utils.enums import InputKindEnum, OutputKindEnum
 from tests.functional_tests.base import LEAPPFunctionalTestBase
 from leapp.utils.tensor_description import TensorDescription
@@ -429,6 +430,15 @@ def test_existing_enums_can_use_experimental_axes():
     assert entry["axes"] == [{"kind": "element", "names": ["joint"]}]
 
 
+def _node_port_semantics(node, direction, index=0):
+    port = node.get_description()[direction][index]
+    return {
+        key: value
+        for key, value in port.items()
+        if key not in {"name", "dtype", "shape", "type"}
+    }
+
+
 @pytest.fixture
 def semantic_session(tmp_path):
     leapp.start("semantics", save_path=str(tmp_path))
@@ -511,13 +521,21 @@ def test_predefined_semantics_do_not_register_ports_or_disable_later_checks(
         )
     node = annotate.nodes["policy"]
     assert not node.inputs and not node.outputs
+    entries = node._semantics["outputs"]
+    original = entries["action"]
     _capture_semantic_policy()
     assert annotate.nodes["policy"] is node
-    assert node.outputs[0].get_semantics() == {"kind": Kind.JOINT_EFFORT}
+    assert node._semantics["outputs"] is entries
+    assert entries["action"] is original
+    assert node.outputs[0].semantics is None
+    assert _node_port_semantics(node, "outputs") == {"kind": Kind.JOINT_EFFORT}
+    earlier_description = node.get_description()
     leapp.annotate.set_semantics(
         "policy", outputs=[TensorSemantics("action", kind=Kind.JOINT_POSITION)]
     )
-    assert node.outputs[0].get_semantics() == {"kind": Kind.JOINT_POSITION}
+    assert _node_port_semantics(node, "outputs") == {"kind": Kind.JOINT_POSITION}
+    assert earlier_description["outputs"][0]["kind"] == "joint/effort"
+    assert node.outputs[0].semantics is None
 
 
 @pytest.mark.parametrize("when", ["before", "registered", "captured", "stopped"])
@@ -600,13 +618,13 @@ def test_replacement_is_atomic_and_preserves_other_ports(
     leapp.annotate.set_semantics(
         "policy", outputs=[TensorSemantics("action", kind=Kind.JOINT_POSITION)]
     )
-    assert node.inputs[0].get_semantics() == {"kind": Kind.JOINT_POSITION}
-    assert node.outputs[0].get_semantics() == {"kind": Kind.JOINT_POSITION}
+    assert _node_port_semantics(node, "inputs") == {"kind": Kind.JOINT_POSITION}
+    assert _node_port_semantics(node, "outputs") == {"kind": Kind.JOINT_POSITION}
     # Replacement clears omitted fields, including a formerly declared kind.
     leapp.annotate.set_semantics("policy", outputs=[TensorSemantics("action")])
-    assert node.outputs[0].get_semantics() == {}
+    assert _node_port_semantics(node, "outputs") == {}
     leapp.annotate.set_semantics("policy", inputs=[], outputs=[])
-    assert node.inputs[0].get_semantics() == {"kind": Kind.JOINT_POSITION}
+    assert _node_port_semantics(node, "inputs") == {"kind": Kind.JOINT_POSITION}
 
 
 @pytest.mark.parametrize(
@@ -633,7 +651,7 @@ def test_invalid_named_semantics_leave_store_unchanged(semantic_session, bad):
     with pytest.raises(ValueError):
         leapp.annotate.set_semantics("policy", **bad, allow_unregistered_ports=True)
     _capture_semantic_policy()
-    assert annotate.nodes["policy"].outputs[0].get_semantics() == {
+    assert _node_port_semantics(annotate.nodes["policy"], "outputs") == {
         "kind": Kind.JOINT_EFFORT
     }
 
@@ -669,9 +687,10 @@ def test_bound_wrappers_share_store_without_retaining_refs(semantic_session):
     )
     annotation.axes[0].names[0] = "mutated"
     x = leapp.annotate.input_tensors("policy", {"state": torch.ones(2)})
-    description = annotate.nodes["policy"].inputs[0]
-    assert description.semantics.ref is None
-    assert description.semantics.axes[0].names == ["a", "b"]
+    node = annotate.nodes["policy"]
+    assert node.inputs[0].semantics is None
+    assert node._semantics["inputs"]["state"].ref is None
+    assert node._semantics["inputs"]["state"].axes[0].names == ["a", "b"]
     annotate.nodes["policy"].set_semantics(
         outputs=[TensorSemantics("action", kind=Kind.JOINT_POSITION)],
         allow_unregistered_ports=True,
@@ -679,13 +698,13 @@ def test_bound_wrappers_share_store_without_retaining_refs(semantic_session):
     leapp.annotate.output_tensors(
         "policy", leapp.joint_effort("action", x + 1), export_with="jit"
     )
-    assert annotate.nodes["policy"].outputs[0].get_semantics() == {
+    assert _node_port_semantics(annotate.nodes["policy"], "outputs") == {
         "kind": Kind.JOINT_EFFORT
     }
     leapp.annotate.set_semantics(
         "policy", outputs=[TensorSemantics("action", kind=Kind.JOINT_VELOCITY)]
     )
-    assert annotate.nodes["policy"].outputs[0].get_semantics() == {
+    assert _node_port_semantics(annotate.nodes["policy"], "outputs") == {
         "kind": Kind.JOINT_VELOCITY
     }
 
@@ -698,9 +717,124 @@ def test_raw_reentry_preserves_explicit_replacements(semantic_session):
             )
         x = leapp.annotate.input_tensors("policy", {"state": torch.ones(2) * index})
         leapp.annotate.output_tensors("policy", {"action": x * 2}, export_with="jit")
-    assert annotate.nodes["policy"].outputs[0].get_semantics() == {
+    assert _node_port_semantics(annotate.nodes["policy"], "outputs") == {
         "kind": Kind.JOINT_VELOCITY
     }
+
+
+@pytest.mark.parametrize("when", ["before", "registered"])
+def test_semantics_resolve_adopted_input_names(semantic_session, when):
+    data = torch.tensor([1.0, 2.0])
+    alias = data.detach()
+    annotation = TensorSemantics("alias", kind=Kind.JOINT_POSITION)
+    if when == "before":
+        leapp.annotate.set_semantics(
+            "policy", inputs=[annotation], allow_unregistered_ports=True
+        )
+    traced = leapp.annotate.input_tensors("policy", {"buffer": data})
+    leapp.annotate.input_tensors("policy", {"alias": alias})
+    if when == "registered":
+        leapp.annotate.set_semantics("policy", inputs=[annotation])
+    leapp.annotate.output_tensors("policy", {"action": traced * 2}, export_with="jit")
+    node = annotate.nodes["policy"]
+    assert [port.name for port in node.inputs] == ["buffer"]
+    assert node.inputs[0].semantics is None
+    assert _node_port_semantics(node, "inputs") == {"kind": Kind.JOINT_POSITION}
+    if when == "before":
+        assert set(node._semantics["inputs"]) == {"alias"}
+    leapp.annotate.set_semantics(
+        "policy", inputs=[TensorSemantics("buffer", kind=Kind.JOINT_VELOCITY)]
+    )
+    assert set(node._semantics["inputs"]) == {"buffer"}
+    leapp.stop()
+    assert leapp.compile_graph(visualize=False)
+    path = semantic_session / "semantics.yaml"
+    port = yaml.safe_load(path.read_text())["models"]["policy"]["inputs"][0]
+    assert port["name"] == "buffer" and port["kind"] == "joint/velocity"
+    runtime = leapp.InferenceManager(str(path))
+    fresh = torch.tensor([7.0, -4.0])
+    torch.testing.assert_close(
+        runtime({"policy/buffer": fresh})["policy/action"], fresh * 2
+    )
+
+
+def test_duplicate_predefinitions_for_adopted_names_are_rejected(semantic_session):
+    data = torch.ones(2)
+    alias = data.detach()
+    leapp.annotate.set_semantics(
+        "policy",
+        inputs=[TensorSemantics("buffer"), TensorSemantics("alias")],
+        allow_unregistered_ports=True,
+    )
+    leapp.annotate.input_tensors("policy", {"buffer": data})
+    with pytest.raises(ValueError, match="Duplicate semantics for port 'buffer'"):
+        leapp.annotate.input_tensors("policy", {"alias": alias})
+
+
+def test_live_semantics_use_declared_names_after_export_renaming():
+    node = LeappNode("policy")
+    node.add_input("a", "a", torch.zeros(2))
+    node.add_input("b", "b", torch.ones(2))
+    node.set_semantics(
+        inputs=[
+            TensorSemantics("a", kind=Kind.JOINT_POSITION),
+            TensorSemantics("b", kind=Kind.JOINT_VELOCITY),
+        ]
+    )
+    node.inputs[0].change_name("b")
+    node.inputs[1].change_name("c")
+    descriptions = node.get_description()["inputs"]
+    assert [(port["name"], port["kind"]) for port in descriptions] == [
+        ("b", "joint/position"),
+        ("c", "joint/velocity"),
+    ]
+    assert set(node._semantics["inputs"]) == {"a", "b"}
+    assert all(port.semantics is None for port in node.inputs)
+
+
+def test_visualization_reads_current_node_semantics():
+    pytest.importorskip("leapp_visualization")
+    from leapp.leapp_graph.visualization_adapter import build_visual_graph
+
+    node = LeappNode("policy")
+    node.add_input("state", "state", torch.ones(2))
+    for kind in (Kind.JOINT_POSITION, Kind.JOINT_VELOCITY):
+        node.set_semantics(inputs=[TensorSemantics("state", kind=kind)])
+        visual = build_visual_graph({"policy": node}, [], [], [], [])
+        assert visual.nodes[0].inputs[0].kind == kind.value
+    assert node.inputs[0].semantics is None
+
+
+def test_semantics_for_baked_module_buffers_remain_in_store(semantic_session):
+    class Normalizer(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.register_buffer("mean", torch.tensor([1.0, 2.0]))
+
+        def forward(self, observation):
+            return observation - self.mean
+
+    model = Normalizer()
+    observation = leapp.annotate.input_tensors("policy", {"obs": torch.ones(2)})
+    leapp.annotate.module("policy", model)
+    leapp.annotate.set_semantics(
+        "policy", inputs=[TensorSemantics("mean", kind=Kind.JOINT_POSITION)]
+    )
+    node = annotate.nodes["policy"]
+    original = node._semantics["inputs"]["mean"]
+    leapp.annotate.output_tensors(
+        "policy", {"action": model(observation)}, export_with="jit"
+    )
+    assert node._semantics["inputs"]["mean"] is original
+    assert [port.name for port in node.inputs] == ["obs"]
+    leapp.stop()
+    assert leapp.compile_graph(visualize=False)
+    path = semantic_session / "semantics.yaml"
+    inputs = yaml.safe_load(path.read_text())["models"]["policy"]["inputs"]
+    assert [port["name"] for port in inputs] == ["obs"]
+    runtime = torch.jit.load(str(semantic_session / "policy.pt"), map_location="cpu")
+    fresh = torch.tensor([7.0, -4.0])
+    torch.testing.assert_close(runtime(fresh), fresh - model.mean)
 
 
 def test_semantic_reentry_skips_pruned_inputs(semantic_session):
@@ -718,7 +852,8 @@ def test_semantic_reentry_skips_pruned_inputs(semantic_session):
 
     node = annotate.nodes["policy"]
     assert [port.name for port in node.inputs] == ["state"]
-    assert node.inputs[0].get_semantics() == {"kind": Kind.JOINT_VELOCITY}
+    assert set(node._semantics["inputs"]) == {"state", "unused"}
+    assert _node_port_semantics(node, "inputs") == {"kind": Kind.JOINT_VELOCITY}
     with pytest.raises(ValueError, match="Invalid input port name 'unused'"):
         leapp.annotate.set_semantics("policy", inputs=[TensorSemantics("unused")])
     leapp.stop()
@@ -749,16 +884,16 @@ def test_state_only_node_and_state_metadata_replacements(semantic_session):
         leapp.annotate.output_tensors("policy", {}, export_with="jit")
     node = annotate.nodes["policy"]
     assert (
-        node.inputs[0].get_semantics()
-        == node.outputs[0].get_semantics()
+        _node_port_semantics(node, "inputs")
+        == _node_port_semantics(node, "outputs")
         == {"kind": Kind.JOINT_POSITION}
     )
     leapp.annotate.set_semantics(
         "policy", states=[TensorSemantics("memory", kind=Kind.JOINT_VELOCITY)]
     )
     assert (
-        node.inputs[0].get_semantics()
-        == node.outputs[0].get_semantics()
+        _node_port_semantics(node, "inputs")
+        == _node_port_semantics(node, "outputs")
         == {"kind": Kind.JOINT_VELOCITY}
     )
     leapp.stop()
@@ -783,8 +918,8 @@ def test_state_annotations_support_bound_semantics(semantic_session):
     leapp.annotate.update_state("policy", leapp.joint_velocity("memory", memory + 1))
     leapp.annotate.output_tensors("policy", {}, export_with="jit")
     node = annotate.nodes["policy"]
-    assert node.inputs[0].get_semantics() == {"kind": Kind.JOINT_POSITION}
-    assert node.outputs[0].get_semantics() == {"kind": Kind.JOINT_VELOCITY}
+    assert _node_port_semantics(node, "inputs") == {"kind": Kind.JOINT_POSITION}
+    assert _node_port_semantics(node, "outputs") == {"kind": Kind.JOINT_VELOCITY}
 
 
 def test_input_output_names_are_separate_namespaces(semantic_session):
@@ -796,10 +931,9 @@ def test_input_output_names_are_separate_namespaces(semantic_session):
     )
     x = leapp.annotate.input_tensors("policy", {"q": torch.ones(2)})
     leapp.annotate.output_tensors("policy", {"q": x * 2}, export_with="jit")
-    assert (
-        annotate.nodes["policy"].inputs[0].get_semantics()
-        != annotate.nodes["policy"].outputs[0].get_semantics()
-    )
+    assert _node_port_semantics(
+        annotate.nodes["policy"], "inputs"
+    ) != _node_port_semantics(annotate.nodes["policy"], "outputs")
 
 
 def test_new_session_resets_semantics_after_compilation(semantic_session):
@@ -828,8 +962,8 @@ def test_new_session_resets_semantics_after_compilation(semantic_session):
     )
     _capture_semantic_policy()
     node = annotate.nodes["policy"]
-    assert node.inputs[0].get_semantics() == {}
-    assert node.outputs[0].get_semantics() == {"kind": Kind.JOINT_VELOCITY}
+    assert _node_port_semantics(node, "inputs") == {}
+    assert _node_port_semantics(node, "outputs") == {"kind": Kind.JOINT_VELOCITY}
     leapp.stop()
     assert leapp.compile_graph(visualize=False)
     second_path = semantic_session.parent / "second_semantics" / "second_semantics.yaml"
@@ -1572,10 +1706,9 @@ class TestSemanticExport(LEAPPFunctionalTestBase):
     def test_adopted_declaration_supplies_semantics_the_port_lacks(self):
         """The surviving port keeps its name but gains a description it lacked.
 
-        Adoption bypasses the registration that normally attaches semantics, so
-        a kind written on the second declaration would otherwise be dropped even
-        though exactly one port exists to carry it. The name is not adopted with
-        it, because the first declaration already decided the interface.
+        The second declaration updates the node's semantic map. Serialization
+        finds that description for the one surviving port without changing the
+        interface name chosen by the first declaration.
         """
         buffer = torch.tensor([1.0, 2.0, 3.0])
         alias = buffer.detach()
@@ -1599,8 +1732,8 @@ class TestSemanticExport(LEAPPFunctionalTestBase):
         ports = [description.name_str for description in node.inputs]
         self.assertEqual(ports, ["buffer"], "adoption changed the exported port")
         self.assertEqual(
-            node.inputs[0].semantics.kind,
-            InputKindEnum.JOINT_POSITION,
+            _node_port_semantics(node, "inputs")["kind"],
+            InputKindEnum.JOINT_POSITION.value,
             "the adopted declaration's semantics were dropped",
         )
 
