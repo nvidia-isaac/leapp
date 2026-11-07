@@ -40,6 +40,23 @@ _HIDDEN_STATE_HINT = (
     "annotate.state_tensors() and annotate.update_state()."
 )
 
+_TF32_HINT = (
+    "The captured outputs are on a CUDA GPU. If TF32 was enabled during capture "
+    "(torch.backends.cudnn.allow_tf32, on by default, or "
+    "torch.backends.cuda.matmul.allow_tf32), they carry TF32 rounding of float32 "
+    "convolutions and matrix multiplications, and a model that computes in full "
+    "float32 can differ by about 1e-3. If the logged differences are that small, "
+    "turn TF32 off before leapp.start(), or pass a larger atol to compile_graph()."
+)
+
+
+def _captured_on_cuda(examples) -> bool:
+    return any(
+        isinstance(output, torch.Tensor) and output.is_cuda
+        for _, _, outputs in examples
+        for output in outputs
+    )
+
 
 class LeappNode:
     def __init_subclass__(cls, **kwargs):
@@ -648,6 +665,9 @@ class LeappNode:
             ):
                 all_match = False
                 error_hint = _HIDDEN_STATE_HINT
+
+        if not all_match and error_hint is None and _captured_on_cuda(examples):
+            error_hint = _TF32_HINT
 
         if error_hint is not None:
             _get_logger().warning(f"  {self.name}: {error_hint}")

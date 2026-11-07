@@ -197,6 +197,25 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         self.assertIn("inlined as a constant", message)
         self.assertIn("annotate.input_tensors()", message)
 
+    def test_validation_tf32_hint_only_for_cuda_outputs(self):
+        """A failed validation mentions TF32 only for outputs captured on a CUDA GPU."""
+        devices = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
+        for device in devices:
+            with self.subTest(device=device):
+                leapp.start(name=self.TEST_GRAPH_NAME)
+                traced = annotate.input_tensors(
+                    "func", {"input": torch.ones(3, device=device)}
+                )
+                annotate.output_tensors(
+                    "func", {"output": traced + 1.0}, export_with="jit"
+                )
+                leapp.stop()
+                annotate.nodes["func"].outputs[0].value.data.add_(10.0)
+
+                with self.assertRaises(Exception) as exc:
+                    leapp.compile_graph(visualize=False, validate=True)
+                self.assertEqual("TF32" in str(exc.exception), device == "cuda")
+
     def test_output_tensors_without_prior_input_tensors(self):
         """Calling output_tensors before input_tensors should raise a clear error."""
         leapp.start(name=self.TEST_GRAPH_NAME)
