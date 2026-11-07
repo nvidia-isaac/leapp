@@ -189,6 +189,9 @@ class _LeappLogger:
     def fatal(self, msg, error_type=RuntimeError, *, cause=None):
         """Log a fatal message, then raise it as ``error_type``.
 
+        When ``error_type`` cannot be built from the message alone, or does not
+        keep the message as an argument, the error is raised as ``RuntimeError``.
+
         Use ``fatal`` for conditions where LEAPP cannot continue safely and
         should exit the current operation immediately.
         """
@@ -198,7 +201,16 @@ class _LeappLogger:
         if isinstance(error_type, BaseException):
             error = error_type
         else:
-            error = error_type(msg)
+            # Some exception types need more arguments, such as torch.export's
+            # UserError, or keep their first argument elsewhere, such as
+            # GuardOnDataDependentSymNode, which would leave the error empty.
+            try:
+                error = error_type(msg)
+                kept = msg in error.args
+            except Exception:
+                kept = False
+            if not kept:
+                error = RuntimeError(msg)
 
         if cause is not None:
             raise error from cause
