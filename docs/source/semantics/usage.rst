@@ -66,10 +66,73 @@ annotations. Start with the controller example below, then see
 
 .. note::
 
-   Semantic annotation is only available for
-   :func:`~leapp.annotate.input_tensors` and
-   :func:`~leapp.annotate.output_tensors`. It is **not** supported for
-   :func:`~leapp.annotate.method` nodes.
+   ``annotate.set_semantics()`` describes named ports independently of values.
+   Inline descriptors with a ``ref`` are also accepted by ``input_tensors()``,
+   ``output_tensors()``, ``state_tensors()``, and ``update_state()``. For
+   ``method()`` nodes, use ``set_semantics()`` with the generated port names.
+
+Independent descriptions and overrides
+======================================
+
+Semantics belong to a node's named ports. You can register them before tensors
+exist, during capture, or after stopping capture, before compilation begins:
+
+.. code-block:: python
+
+   import torch
+   import leapp
+   from leapp import annotate, TensorSemantics, Kind
+
+   leapp.start("policy_graph")
+   annotate.set_semantics(
+       "policy",
+       inputs=[TensorSemantics("q", kind=Kind.JOINT_POSITION)],
+       outputs=[TensorSemantics("action", kind=Kind.JOINT_EFFORT)],
+       allow_unregistered_ports=True,
+   )
+   q = annotate.input_tensors("policy", {"q": torch.zeros(2)})
+   annotate.output_tensors("policy", {"action": q * 2}, export_with="jit")
+   leapp.stop()
+
+   # Replace this port's description before compilation.
+   annotate.set_semantics(
+       "policy", outputs=[TensorSemantics("action", kind=Kind.JOINT_POSITION)]
+   )
+   leapp.compile_graph(visualize=False)
+
+Names come from ``TensorSemantics.name``. No placeholder, tensor reference, or
+separate node-selection call is needed.
+By default, the named ports must already be registered in the specified
+direction. Pass ``allow_unregistered_ports=True`` to predefine descriptions
+before their ports exist. This creates the named node if needed; tensor
+annotations reuse it when concrete values become available.
+The option applies to that call only and defers port
+existence checks until registration and compilation. Semantic fields and known
+shapes still validate immediately.
+
+``states=[TensorSemantics("memory", kind=Kind.JOINT_POSITION)]`` sets both the
+input and output descriptions for a state named ``memory``.
+Both ports must exist unless predefinition is enabled.
+``state_tensors()`` can create a node, including one with only recurrent inputs.
+State feedback still requires ``update_state()`` and finalization through
+``output_tensors()``.
+
+Every explicit valid call replaces the full description of the supplied ports.
+Omitted fields are cleared; other ports retain their descriptions. Validation
+is atomic across the entire call. Shape-independent rules are checked at once;
+layout checks run when tensor shapes become known. Unmatched names fail
+immediately by default. Unresolved predefinitions fail at compilation.
+Set semantics before calling ``compile_graph()``. Later changes do not update
+saved artifacts. A new ``start()`` creates a fresh session with fresh metadata.
+
+Semantics remain in the node's map, keyed by direction and declared port name.
+Tensor registration does not consume the entries or copy them onto ports.
+YAML generation looks up the current metadata for each surviving port.
+Pruned inputs retain their metadata in the map but do not appear in YAML.
+Capture-time aliases resolve to the same executable port. Multiple predefinitions
+that resolve to one port are rejected.
+During compilation, an exporter may rename ports. Lookup retains the declared
+identity so the generated YAML uses the exported name and the current semantics.
 
 General Usage
 =============
@@ -299,10 +362,8 @@ supported.
 Limitations
 ===========
 
-#. ``input_tensors`` and ``output_tensors`` only --- semantic annotations
-   are not available for :func:`~leapp.annotate.method` nodes. These
-   nodes derive their I/O descriptions automatically from function
-   signatures and traced values.
+#. **Known port names** --- ``method()`` nodes derive port names from function
+   signatures and traced values. Use those names with ``set_semantics()``.
 #. **No mixing** --- when using ``TensorSemantics``, all items must be
    ``TensorSemantics``. You cannot mix raw tensors and ``TensorSemantics``
    in the same list or tuple.

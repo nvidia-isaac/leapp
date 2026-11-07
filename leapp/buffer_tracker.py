@@ -227,6 +227,9 @@ class BufferTracker:
                         break
 
                 # Remove from input descriptions (no longer a dynamic input)
+                for description in traced_node.inputs:
+                    if description.name == clean_name:
+                        traced_node.trimmed_inputs.update(description.declared_names)
                 traced_node.inputs = [
                     d for d in traced_node.inputs if d.name != clean_name
                 ]

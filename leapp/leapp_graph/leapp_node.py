@@ -15,6 +15,7 @@
 # limitations under the License.
 #
 import functools
+from copy import copy, deepcopy
 import torch
 from leapp.utils.semantics import TensorSemantics
 from leapp.utils.tensor_description import (
@@ -93,6 +94,7 @@ class LeappNode:
         # i/o settings
         self.inputs = []
         self.outputs = []
+        self._semantics = {"inputs": {}, "outputs": {}}
         self.input_formats = []
         self.output_formats = []
         # trimmed inputs are inputs that are not used in the computation or directly returned as output
@@ -165,12 +167,12 @@ class LeappNode:
             torch.cuda.empty_cache()
 
     def get_description(self):
-        # dynamically generate i/o descriptions depending on need
-        # Directly use the TensorDescription objects in self.inputs
-        input_descriptions = [input.dict() for input in self.inputs]
-
-        # Directly use the TensorDescription objects in self.outputs
-        output_descriptions = [output.dict() for output in self.outputs]
+        descriptions = {}
+        for direction in ("inputs", "outputs"):
+            descriptions[direction] = [
+                {**port.dict(), **self.get_port_semantics(direction, port)}
+                for port in getattr(self, direction)
+            ]
 
         parameters = {
             "model_path": self.model_path,
@@ -187,8 +189,8 @@ class LeappNode:
             parameters.update(backend_metadata)
 
         description = {}
-        description["inputs"] = input_descriptions
-        description["outputs"] = output_descriptions
+        description["inputs"] = descriptions["inputs"]
+        description["outputs"] = descriptions["outputs"]
         description["parameters"] = parameters
 
         return description
@@ -352,29 +354,130 @@ class LeappNode:
             existing_names.add(description.name_str)
             current_io_list.append(description)
 
-    @staticmethod
-    def _apply_semantics_to_descriptions(io_descriptions, semantics):
-        if semantics is None:
-            return
-        if len(io_descriptions) == 1:
-            io_descriptions[0].init_semantics(semantics)
-            return
-
-        semantic_fields = semantics.to_dict()
-        for desc in io_descriptions:
-            desc.init_semantics(
-                TensorSemantics(
-                    name=desc.name,
-                    ref=desc.value,
-                    **semantic_fields,
+    def set_semantics(
+        self, *, inputs=None, outputs=None, states=None, allow_unregistered_ports=False
+    ):
+        """Atomically replace entries in the node's independent semantic map."""
+        if not isinstance(allow_unregistered_ports, bool):
+            raise TypeError("allow_unregistered_ports must be a boolean")
+        if states is not None and not isinstance(states, (list, tuple)):
+            raise TypeError("states must be a list of TensorSemantics")
+        updates = []
+        for direction, descriptions in (("inputs", inputs), ("outputs", outputs)):
+            if descriptions is None:
+                descriptions = []
+            if not isinstance(descriptions, (list, tuple)):
+                raise TypeError(f"{direction} must be a list of TensorSemantics")
+            seen = set()
+            for semantics in [*descriptions, *(states or [])]:
+                if not isinstance(semantics, TensorSemantics):
+                    raise TypeError(f"{direction} must contain only TensorSemantics")
+                name = semantics.name
+                if not isinstance(name, str) or not name.strip():
+                    raise ValueError("TensorSemantics requires a non-empty port name")
+                port = self.get_io_description_by_name(name, getattr(self, direction))
+                if not allow_unregistered_ports and port is None:
+                    raise ValueError(
+                        f"Invalid {direction[:-1]} port name {name!r} for node {self.name!r}. "
+                        "To predefine semantics, pass allow_unregistered_ports=True."
+                    )
+                name = port.declared_name if port is not None else name
+                if name in seen:
+                    raise ValueError(f"Duplicate {direction} semantics for '{name}'")
+                seen.add(name)
+                snapshot = self._prepare_semantics(
+                    semantics,
+                    name,
+                    direction,
+                    shape=port.shape if port is not None else None,
                 )
+                updates.append((direction, name, port, snapshot))
+        for direction, name, port, semantics in updates:
+            entries = self._semantics[direction]
+            if port is not None:
+                for alias in port.declared_names:
+                    entries.pop(alias, None)
+            entries[name] = semantics
+
+    @staticmethod
+    def _prepare_semantics(semantics, name, direction, shape=None):
+        # Drop ref before copying to avoid retaining a tensor or traced graph.
+        snapshot = copy(semantics)
+        snapshot.ref = None
+        snapshot = deepcopy(snapshot)
+        snapshot.name = name
+        snapshot.__post_init__()
+        if direction == "outputs" and snapshot.is_setpoint:
+            raise ValueError("is_setpoint=True applies only to inputs")
+        if set(snapshot.to_dict()) & {"name", "dtype", "shape", "type"}:
+            raise ValueError("Semantic metadata cannot replace port structure")
+        if shape is not None:
+            snapshot.validate_shape(shape)
+        return snapshot
+
+    @staticmethod
+    def _lookup_port_semantics(entries, description):
+        matches = [
+            entries[name] for name in description.declared_names if name in entries
+        ]
+        if len(matches) > 1:
+            raise ValueError(
+                f"Duplicate semantics for port '{description.declared_name}'"
             )
+        if not matches:
+            return None
+        semantics = matches[0]
+        semantics.validate_shape(description.shape)
+        return semantics
+
+    def get_port_semantics(self, direction, description):
+        """Look up current node metadata without storing it on the port."""
+        semantics = self._lookup_port_semantics(self._semantics[direction], description)
+        if semantics is None:
+            return {}
+        return {
+            key: value.value if hasattr(value, "value") else value
+            for key, value in semantics.to_dict().items()
+        }
+
+    def _record_semantics(self, io_descriptions, semantics, direction):
+        entries = self._semantics[direction]
+        if semantics is None:
+            for desc in io_descriptions:
+                self._lookup_port_semantics(entries, desc)
+            return
+        updated = entries.copy()
+        for desc in io_descriptions:
+            snapshot = self._prepare_semantics(
+                semantics, desc.declared_name, direction, shape=desc.shape
+            )
+            for alias in desc.declared_names:
+                updated.pop(alias, None)
+            updated[desc.declared_name] = snapshot
+        for desc in io_descriptions:
+            self._lookup_port_semantics(updated, desc)
+        entries.clear()
+        entries.update(updated)
+
+    def validate_semantics(self):
+        for direction, entries in self._semantics.items():
+            ports = getattr(self, direction)
+            names = {name for port in ports for name in port.declared_names}
+            if direction == "inputs":
+                names.update(self.trimmed_inputs)
+            unresolved = entries.keys() - names
+            if unresolved:
+                raise ValueError(
+                    f"Unresolved {direction} semantics in '{self.name}': {sorted(unresolved)}"
+                )
+            for port in ports:
+                self._lookup_port_semantics(entries, port)
 
     def add_output(self, output_name, raw_output_name, output_value, semantics=None):
         io_descriptions, output_format = describe_io(
             output_name, raw_output_name, output_value
         )
-        self._apply_semantics_to_descriptions(io_descriptions, semantics)
+        self._record_semantics(io_descriptions, semantics, "outputs")
         for desc in io_descriptions:
             desc.cached_values = [
                 torch.zeros_like(desc.value) for _ in range(self._max_cached_io)
@@ -393,7 +496,7 @@ class LeappNode:
         io_descriptions, input_format = describe_io(
             input_name, raw_input_name, input_value
         )
-        self._apply_semantics_to_descriptions(io_descriptions, semantics)
+        self._record_semantics(io_descriptions, semantics, "inputs")
         for desc in io_descriptions:
             desc.cached_values = [
                 torch.zeros_like(desc.value) for _ in range(self._max_cached_io)

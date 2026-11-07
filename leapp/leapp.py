@@ -141,6 +141,8 @@ def compile_graph(
 ):
     """Compile and save the computational graph from traced nodes.
 
+    Register semantics before this call. Backend compilation may rename ports.
+
     Dry run is declared once via ``leapp.start(dry_run=True)``; when it is
     active this call skips compile, save, and validation.
 
@@ -232,6 +234,7 @@ class AnnotateAPI:
     """Annotation-only facade over ExportManager."""
 
     _ALLOWED_APIS = {
+        "set_semantics",
         "input_tensors",
         "output_tensors",
         "method",

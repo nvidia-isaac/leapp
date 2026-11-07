@@ -38,7 +38,6 @@ from leapp.utils.tensor_description import (
 # and exposes ``get_op``/``QUALIFIED_NAME`` used when emitting segment nodes.
 from leapp.leapp_graph.custom_operator_registry import warp_operator
 import collections
-from dataclasses import replace
 
 if TYPE_CHECKING:
     from leapp.leapp_graph.datatypes.warp import WarpSegment
@@ -582,14 +581,12 @@ class TracedTensorNode(LeappNode):
                 f"input '{declared.name}'. Both names describe one graph value, so "
                 f"'{declared.name}' will be the only port in the exported node interface."
             )
-            # Adoption skips add_input, which is where semantics are normally
-            # attached, so remember the alias and preserve any semantics the
-            # surviving port does not already have.
+            # Adoption skips add_input, so validate this name against the node's
+            # semantic map and record any explicit inline metadata there.
             surviving = self.get_io_description_by_name(declared.name, self.inputs)
             if name not in surviving.aliases:
                 surviving.aliases.append(name)
-            if semantics is not None and surviving.semantics is None:
-                surviving.init_semantics(replace(semantics, name=None))
+            self._record_semantics([surviving], semantics, "inputs")
             if isinstance(data, TracedData):
                 # Rebind the object the caller holds rather than returning a new
                 # carrier. A buffer promoted in place stays the same object on
@@ -813,7 +810,7 @@ class TracedTensorNode(LeappNode):
                         f"could not find input description for placeholder '{node.target}'"
                     )
                     continue
-                trimmed_inputs.add(input_description.name_str)
+                trimmed_inputs.update(input_description.declared_names)
 
             if len(node.users) == 0:
                 self.graph.erase_node(node)

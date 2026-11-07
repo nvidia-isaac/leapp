@@ -344,7 +344,8 @@ Semantic metadata
                    *, axes=None, is_setpoint=None, reference=None,
                    expressed_in=None)
 
-* ``name`` and ``ref`` supply the port name and tensor value.
+* ``name`` supplies the port name. ``ref`` supplies the tensor value for tensor
+  annotations; omit it when using ``annotate.set_semantics()``.
 * ``kind`` accepts ``Kind``, ``InputKindEnum``, ``OutputKindEnum``,
   custom strings, or ``None``. The legacy input/output enums are deprecated
   and emit ``FutureWarning`` when used in an annotation.
@@ -399,6 +400,43 @@ See :doc:`/semantics/kind_element_names` for the ``Kind`` catalog,
 
 Annotations
 ===========
+
+``annotate.set_semantics()``
+----------------------------
+
+.. code-block:: python
+
+   annotate.set_semantics(node_name, *, inputs=None, outputs=None, states=None,
+                          allow_unregistered_ports=False)
+
+Declare or replace node metadata independently of tensor values. Call after
+``leapp.start()`` to select the current session, before ``compile_graph()``.
+By default, each named port must already be registered on that node in the
+specified direction. An invalid port name raises ``ValueError`` with guidance
+to pass ``allow_unregistered_ports=True`` for predefinition.
+
+``allow_unregistered_ports=True`` permits descriptions before their ports exist.
+It creates the named node if needed, without requiring concrete tensors or
+adding ports. Semantics stay in the node's map, keyed by direction and declared
+port name. Tensor registration does not consume or copy them onto ports. YAML
+generation looks up each surviving port's current description. Missing ports
+are checked at compilation. Semantic fields and known shapes validate in both modes.
+
+Each argument accepts a list or tuple of named ``TensorSemantics`` descriptors.
+Names come from the descriptors; no dictionary keys or tensor references are
+required. Inputs and outputs have separate namespaces. ``states`` applies each
+descriptor to both the matching input and output; it does not create feedback
+connections. Declare those with ``state_tensors()`` and ``update_state()``.
+Both state ports must exist unless ``allow_unregistered_ports=True`` is supplied.
+
+Each valid call replaces the complete description for every supplied port;
+omitted fields are cleared and other ports remain unchanged. Missing names,
+duplicate names in a direction, incompatible layouts, and setpoint outputs
+raise errors without changing prior metadata. Shape checks wait until a port
+exists. Unresolved names fail compilation. Set semantics before calling
+``compile_graph()``, which may rename ports. Later changes do not update saved
+artifacts. A new ``start()`` creates a fresh semantic store. Existing inline
+tensor annotations use the same store and replacement rules.
 
 ``annotate.input_tensors()``
 ----------------------------
@@ -543,15 +581,15 @@ Signature
 
 .. code-block:: python
 
-   annotate.state_tensors(node_name: str,
-                          tensors: dict[str, torch.Tensor])
+   annotate.state_tensors(node_name: str, tensors)
 
 Parameters
 ~~~~~~~~~~
 
-* ``node_name`` (str, required): Existing traced node.
-* ``tensors`` (dict, required): Map of state names to initial tensor
-  values.
+* ``node_name`` (str, required): Traced node identifier; created if necessary.
+* ``tensors`` (required): A dict of state names to initial tensors, or named
+  ``TensorSemantics`` descriptors with ``ref`` values. Bound descriptions apply
+  to both the input and output state ports.
 
 Returns
 ~~~~~~~
@@ -579,15 +617,15 @@ Signature
 
 .. code-block:: python
 
-   annotate.update_state(node_name: str,
-                         tensors: dict[str, TracedTensor])
+   annotate.update_state(node_name: str, tensors)
 
 Parameters
 ~~~~~~~~~~
 
 * ``node_name`` (str, required): Existing traced node.
-* ``tensors`` (dict, required): Map from declared state names to their
-  updated traced values.
+* ``tensors`` (required): A dict from declared state names to updated traced
+  values, or named ``TensorSemantics`` descriptors with updated traced ``ref``
+  values. Their descriptions replace output metadata only.
 
 Returns
 ~~~~~~~

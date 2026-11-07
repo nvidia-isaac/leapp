@@ -134,6 +134,38 @@ class ExportManager:
     def get_nodes(self):
         return self.nodes
 
+    def set_semantics(
+        self,
+        node_name: str,
+        *,
+        inputs=None,
+        outputs=None,
+        states=None,
+        allow_unregistered_ports=False,
+    ):
+        """Declare or replace node metadata before compilation begins."""
+        if not isinstance(node_name, str) or not node_name.strip():
+            raise ValueError("node_name must be a non-empty string")
+        created = node_name not in self.nodes
+        node = (
+            self._setup_new_node(node_name, TracedTensorNode)
+            if created
+            else self.nodes[node_name]
+        )
+        try:
+            node.set_semantics(
+                inputs=inputs,
+                outputs=outputs,
+                states=states,
+                allow_unregistered_ports=allow_unregistered_ports,
+            )
+        except Exception:
+            if created:
+                del self.nodes[node_name]
+            raise
+        if created and not any(node._semantics.values()):
+            del self.nodes[node_name]
+
     @classmethod
     def set_interpret_graph(cls, is_enabled: bool):
         cls._interpret_graph = is_enabled
@@ -165,6 +197,8 @@ class ExportManager:
         self._next_completed_node_index += 1
 
     def validate_nodes_ready_for_compile(self):
+        for node in self.nodes.values():
+            node.validate_semantics()
         incomplete_nodes = [
             name
             for name, node in self.nodes.items()
@@ -193,7 +227,13 @@ class ExportManager:
             )
 
     def _setup_new_node(self, name, node_class: LeappNode, **kwargs):
-        if name in self.nodes:
+        existing = self.nodes.get(name)
+        if existing is not None and (
+            existing.inputs
+            or existing.outputs
+            or existing.captured
+            or not any(existing._semantics.values())
+        ):
             _get_logger().fatal(
                 f"Error: node '{name}' already exists. "
                 f"Cannot create a new node with the same name.",
@@ -220,6 +260,8 @@ class ExportManager:
             node = node_class(name, **kwargs)
 
         node._max_cached_io = self._max_cached_io
+        if existing is not None:
+            node._semantics = existing._semantics
         self.nodes[name] = node
         return node
 
@@ -237,7 +279,7 @@ class ExportManager:
             or any(isinstance(t, TensorSemantics) for t in tensors)
         ):
             tensors, metadata = unwrap_tensor_semantics(tensors)
-            if api_name.startswith("output_tensors"):
+            if api_name.startswith("output_tensors") or api_name == "update_state":
                 for semantics in metadata.values():
                     if semantics.is_setpoint:
                         raise ValueError(
@@ -294,6 +336,13 @@ class ExportManager:
         # if the node is not tracing, we validate the inputs only and return the raw tensors
         # the node is not tracing if it is already compiled.
         if not traced_tensors_node.is_tracing:
+            traced_tensors_node.set_semantics(
+                inputs=[
+                    semantics
+                    for name, semantics in metadata.items()
+                    if name not in traced_tensors_node.trimmed_inputs
+                ]
+            )
             matching_origin = next(
                 (
                     identity
@@ -385,6 +434,9 @@ class ExportManager:
             flattened_static = {}
             if normalized_static_outputs is not None:
                 flattened_static = flatten_io_structure(normalized_static_outputs, "")
+            traced_tensors_node.set_semantics(
+                outputs=[*metadata.values(), *static_outputs_metadata.values()]
+            )
             traced_tensors_node.reentry_validate_outputs(
                 flattened_tensors, flattened_static
             )
@@ -394,7 +446,17 @@ class ExportManager:
         warn_if_script_functions_in_scope()
 
         self._validate_initial_traced_payload(
-            "output_tensors", node_name, traced_tensors_node, flattened_tensors
+            "output_tensors",
+            node_name,
+            traced_tensors_node,
+            {
+                **flattened_tensors,
+                **{
+                    name: state["output"]
+                    for name, state in traced_tensors_node._state_tensors.items()
+                    if state["output"] is not None
+                },
+            },
         )
 
         # process static outputs (constant tensors that should be returned but aren't derived from inputs)
@@ -567,22 +629,21 @@ class ExportManager:
             _get_logger().fatal(msg, error_type=Exception)
 
     def state_tensors(
-        self, node_name: str, tensors: dict[str, torch.Tensor]
+        self, node_name: str, tensors
     ) -> TracedTensor | tuple[TracedTensor, ...]:
         """Register state tensors (both inputs AND outputs) for a traced node.
 
-        Call input_tensors() first to create the node. Use update_state() to set output values.
+        Creates the node if necessary. Use update_state() to set output values.
         """
+        tensors, metadata = self._normalize_named_tensor_payload(
+            "state_tensors", node_name, tensors
+        )
         if not ExportManager._interpret_graph:
             self._validate_flat_state_payload("state_tensors", node_name, tensors)
             return self._passthrough_dict_values(tensors)
 
         if node_name not in self.nodes:
-            msg = (
-                f"state_tensors() called for node '{node_name}' but node not found. "
-                "Call annotate.input_tensors() first to create the node."
-            )
-            _get_logger().fatal(msg, error_type=Exception)
+            self._setup_new_node(node_name, TracedTensorNode)
 
         traced_node = self.nodes[node_name]
 
@@ -594,6 +655,9 @@ class ExportManager:
             _get_logger().fatal(msg, error_type=Exception)
 
         self._validate_flat_state_payload("state_tensors", node_name, tensors)
+        traced_node.set_semantics(
+            states=list(metadata.values()), allow_unregistered_ports=True
+        )
 
         if not traced_node.is_tracing:
             traced_node.reentry_validate_inputs(tensors)
@@ -605,9 +669,12 @@ class ExportManager:
         return values[0] if len(values) == 1 else tuple(values)
 
     def update_state(
-        self, node_name: str, tensors: dict[str, TracedTensor]
+        self, node_name: str, tensors
     ) -> TracedTensor | tuple[TracedTensor, ...]:
         """Set output values for state tensors and return passthrough values."""
+        tensors, metadata = self._normalize_named_tensor_payload(
+            "update_state", node_name, tensors
+        )
         if not ExportManager._interpret_graph:
             self._validate_flat_state_payload("update_state", node_name, tensors)
             return self._passthrough_dict_values(tensors)
@@ -629,6 +696,9 @@ class ExportManager:
             _get_logger().fatal(msg, error_type=Exception)
 
         self._validate_flat_state_payload("update_state", node_name, tensors)
+        traced_node.set_semantics(
+            outputs=list(metadata.values()), allow_unregistered_ports=True
+        )
 
         if not traced_node.is_tracing:
             traced_node.reentry_validate_state_update(tensors)
@@ -840,7 +910,9 @@ class ExportManager:
                 if not ExportManager._interpret_graph:
                     return func(*args, **kwargs)
 
-                if name in self.nodes:
+                if name in self.nodes and isinstance(
+                    self.nodes[name], FunctionDecoratorNode
+                ):
                     new_node = False
                     node_context = self.nodes[name]
                 else:
