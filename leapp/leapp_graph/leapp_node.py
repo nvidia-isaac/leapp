@@ -40,6 +40,58 @@ _HIDDEN_STATE_HINT = (
     "annotate.state_tensors() and annotate.update_state()."
 )
 
+_TF32_HINT = (
+    "The captured outputs are on a CUDA GPU. If TF32 was enabled during capture "
+    "(torch.backends.cudnn.allow_tf32, on by default, or "
+    "torch.backends.cuda.matmul.allow_tf32), they carry TF32 rounding of float32 "
+    "convolutions and matrix multiplications, and a model that computes in full "
+    "float32 can differ by about 1e-3. If the logged differences are that small, "
+    "turn TF32 off before leapp.start(), or pass a larger atol to compile_graph()."
+)
+
+
+def _captured_on_cuda(examples) -> bool:
+    return any(
+        isinstance(output, torch.Tensor) and output.is_cuda
+        for _, _, outputs in examples
+        for output in outputs
+    )
+
+
+_REDUCED_PRECISION_DTYPES = (torch.bfloat16, torch.float16)
+_REDUCED_PRECISION_METHODS = {"bfloat16": torch.bfloat16, "half": torch.float16}
+
+
+def _reduced_precision_hint(module, examples) -> str | None:
+    """Name the reduced-precision dtypes a node computes in, if any."""
+    tensors = [t for _, inputs, outputs in examples for t in (*inputs, *outputs)]
+    found = set()
+    if isinstance(module, torch.nn.Module):
+        tensors += [*module.parameters(), *module.buffers()]
+    if isinstance(module, torch.fx.GraphModule):
+        # Casts such as x.to(torch.bfloat16) or x.half() show up only in the graph.
+        for node in module.graph.nodes:
+            if node.op == "call_method" and node.target in _REDUCED_PRECISION_METHODS:
+                found.add(_REDUCED_PRECISION_METHODS[node.target])
+            for arg in (*node.args, *node.kwargs.values()):
+                if isinstance(arg, torch.dtype) and arg in _REDUCED_PRECISION_DTYPES:
+                    found.add(arg)
+    found |= {
+        t.dtype
+        for t in tensors
+        if isinstance(t, torch.Tensor) and t.dtype in _REDUCED_PRECISION_DTYPES
+    }
+    if not found:
+        return None
+    names = " and ".join(sorted(str(dtype).replace("torch.", "") for dtype in found))
+    return (
+        f"This node uses {names}, so its outputs can differ between "
+        "devices and runtimes by far more than the default float32 tolerance, even "
+        "when the export is correct. Compare the mismatch with how far eager PyTorch "
+        "on another device is from the captured outputs, and pass a matching rtol "
+        "and atol to compile_graph()."
+    )
+
 
 class LeappNode:
     def __init_subclass__(cls, **kwargs):
@@ -648,6 +700,14 @@ class LeappNode:
             ):
                 all_match = False
                 error_hint = _HIDDEN_STATE_HINT
+
+        if not all_match and error_hint is None:
+            # The captured graph, since an export can replace compiled_module (ONNX
+            # prescript scripts it). A node built without capture has only the latter.
+            module = self.m if self.m is not None else self.compiled_module
+            error_hint = _reduced_precision_hint(module, examples)
+        if not all_match and error_hint is None and _captured_on_cuda(examples):
+            error_hint = _TF32_HINT
 
         if error_hint is not None:
             _get_logger().warning(f"  {self.name}: {error_hint}")

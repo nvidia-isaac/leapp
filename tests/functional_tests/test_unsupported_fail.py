@@ -197,6 +197,85 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
         self.assertIn("inlined as a constant", message)
         self.assertIn("annotate.input_tensors()", message)
 
+    def test_validation_tf32_hint_only_for_cuda_outputs(self):
+        """A failed validation mentions TF32 only for outputs captured on a CUDA GPU."""
+        devices = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
+        for device in devices:
+            with self.subTest(device=device):
+                leapp.start(name=self.TEST_GRAPH_NAME)
+                traced = annotate.input_tensors(
+                    "func", {"input": torch.ones(3, device=device)}
+                )
+                annotate.output_tensors(
+                    "func", {"output": traced + 1.0}, export_with="jit"
+                )
+                leapp.stop()
+                annotate.nodes["func"].outputs[0].value.data.add_(10.0)
+
+                with self.assertRaises(Exception) as exc:
+                    leapp.compile_graph(visualize=False, validate=True)
+                self.assertEqual("TF32" in str(exc.exception), device == "cuda")
+
+    def test_validation_hint_names_reduced_precision(self):
+        """A failed validation names the reduced precision a node casts to or holds."""
+        weight = torch.ones(3, dtype=torch.bfloat16)
+
+        def half(x):
+            return (x.half() * 3.0).float()
+
+        # (case, dtype the hint should name or None, computation, export options)
+        cases = [
+            ("float32", None, lambda x: x * 3.0, {"export_with": "jit"}),
+            (
+                "to",
+                "bfloat16",
+                lambda x: (x.to(torch.bfloat16) * 3.0).float(),
+                {"export_with": "jit"},
+            ),
+            ("half", "float16", half, {"export_with": "jit"}),
+            ("weight", "bfloat16", lambda x: x * weight, {"export_with": "jit"}),
+            # The export replaces the captured graph with a scripted module.
+            (
+                "prescript",
+                "float16",
+                half,
+                {
+                    "export_with": "onnx-torchscript",
+                    "backend_params": {"prescript": True},
+                },
+            ),
+        ]
+        for case, dtype, compute, export_options in cases:
+            with self.subTest(case=case):
+                leapp.start(name=self.TEST_GRAPH_NAME)
+                traced = annotate.input_tensors("func", {"input": torch.ones(3)})
+                annotate.output_tensors(
+                    "func", {"output": compute(traced)}, **export_options
+                )
+                leapp.stop()
+                annotate.nodes["func"].outputs[0].value.data.add_(10.0)
+
+                with self.assertRaises(Exception) as exc:
+                    leapp.compile_graph(visualize=False, validate=True)
+                message = str(exc.exception)
+                if dtype is None:
+                    self.assertNotIn("This node uses", message)
+                else:
+                    self.assertIn(f"This node uses {dtype}", message)
+
+        # The legacy decorator builds its module without a captured graph.
+        @annotate._method(export_with="jit", register_buffers=["weight"])
+        def legacy(inputL):
+            return inputL * weight
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        legacy(torch.ones(3))
+        leapp.stop()
+        annotate.nodes["legacy"].outputs[0].value.data.add_(10.0)
+        with self.assertRaises(Exception) as exc:
+            leapp.compile_graph(visualize=False, validate=True)
+        self.assertIn("This node uses bfloat16", str(exc.exception))
+
     def test_output_tensors_without_prior_input_tensors(self):
         """Calling output_tensors before input_tensors should raise a clear error."""
         leapp.start(name=self.TEST_GRAPH_NAME)
