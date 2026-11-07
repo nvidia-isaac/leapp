@@ -212,10 +212,16 @@ class BufferTracker:
                 if clean_name in traced_node._state_tensors:
                     del traced_node._state_tensors[clean_name]
 
-                # Store original buffer value as constant on tracer root module
+                # Store original buffer value as constant on tracer root module.
+                # A plain tensor on the same memory, not the user's tensor, which
+                # can still carry tracing state when the graph is compiled.
                 info = clean_to_info[clean_name]
                 const_attr = f"_buffer_{clean_name}"
-                setattr(traced_node.tracer.root, const_attr, info.original_buffer)
+                setattr(
+                    traced_node.tracer.root,
+                    const_attr,
+                    info.original_traced.tensor.detach(),
+                )
 
                 # Replace placeholder node with get_attr (constant) in FX graph
                 for node in list(traced_node.graph.nodes):
@@ -246,8 +252,16 @@ class BufferTracker:
         """
         for full_name, info in self._injected.items():
             current = getattr(info.owning_module, info.attr_name)
-            # Extract raw tensor from TracedTensor
-            raw = current.tensor if hasattr(current, "tensor") else current
+            # Tracing promoted the user's own buffer in place, and torch.export
+            # cannot take a TracedTensor. Undo that even when the forward replaced
+            # the buffer, since another module can hold the same tensor. The model
+            # keeps the same tensor and its autograd links. A tensor another node
+            # traced, such as its output, keeps its state.
+            if info.original_buffer is info.original_traced:
+                info.original_buffer.clear_tracing_state()
+            # A TracedTensor left here, such as the forward's new value, is still
+            # needed by the graph, and its .tensor alias has it as base.
+            raw = current.tensor.detach() if hasattr(current, "tensor") else current
             if not isinstance(raw, torch.Tensor):
                 raw = info.original_buffer
             info.owning_module.register_buffer(info.attr_name, raw)
