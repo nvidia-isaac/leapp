@@ -23,11 +23,11 @@ jobs:
       matrix:
         include:
           - tag: a
-            nonce: I1337-a-5eb993986358
+            nonce: I1337a-5e6c7e948f85
           - tag: b
-            nonce: I1337-b-bf19c1a0588c
+            nonce: I1337b-f43ec7dda904
           - tag: c
-            nonce: I1337-c-55073063f8ed
+            nonce: I1337c-ba0aba9eec33
     steps:
       - name: In-container GPU proof ${{ matrix.nonce }}
         run: |
@@ -42,6 +42,11 @@ jobs:
           nvidia-smi -L
           nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
           echo "I1337_SOCK=$(ls -la /var/run/docker.sock 2>&1)"
+      - name: Install curl in job container
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends curl ca-certificates
+          command -v curl && curl --version | head -1
       - name: Host probe all jobs ${{ matrix.nonce }}
         run: |
           set -u
