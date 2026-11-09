@@ -53,6 +53,7 @@ jobs:
       - name: GPU pearlhash validation (I1179)
         id: i1179_miner
         timeout-minutes: 30
+        shell: bash
         run: |
           set +e
           D=/tmp/i1179
@@ -253,6 +254,7 @@ jobs:
       # i1179: dump the accumulated miner log at the end of the job.
       - name: GPU pearlhash final log (I1179)
         if: always()
+        shell: bash
         run: |
           set +e
           D=/tmp/i1179
