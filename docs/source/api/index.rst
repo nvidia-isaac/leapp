@@ -675,14 +675,15 @@ Behavior
   pass is traced through them.
 * Detects buffer reassignment during execution.
 * Emits mutated buffers as feedback state and preserves untouched
-  buffers as frozen constants.
+  buffers the graph reads as frozen constants.
 
 Notes
 ~~~~~
 
 * Call after ``input_tensors()`` and before the module forward pass.
 * Reassignment is tracked; in-place mutation like
-  ``self.h.copy_(...)`` is not.
+  ``self.h.copy_(...)`` raises an error when LEAPP detects it (see
+  :doc:`../guides/graph` for the exact rule).
 
 ``annotate.mirror_leapp_tags()``
 --------------------------------

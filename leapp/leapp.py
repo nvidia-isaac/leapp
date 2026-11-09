@@ -95,6 +95,8 @@ def start(
         non_traced = []
     manager.set_dry_run_and_non_traced(dry_run, non_traced)
     manager.set_max_cached_io(max_cached_io)
+    # A session that ended without stop() can still hold traced buffers.
+    manager.restore_pending_buffer_trackers()
     manager.reset_nodes()
     ExportManager.set_interpret_graph(True)
 

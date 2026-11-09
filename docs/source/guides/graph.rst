@@ -134,21 +134,112 @@ Buffer tracking details
 registered module buffers while the node executes. When ``output_tensors()``
 compiles the node, LEAPP determines which registered buffers changed.
 
-* Reassigned buffers become feedback state.
+* Reassigned buffers become feedback state. Two buffers on the same memory in
+  the same layout are one state when the forward sets both to one new
+  tensor, and raise an error when it sets them to different tensors, also
+  by reassigning only one of them, or one whose tensor another slot left
+  out of ``buffer_names`` holds, since the graph reads both through one
+  input.
 * Buffers that are read but not changed are preserved as constants in the
-  exported model.
+  exported model. A buffer the forward reads raises an error when it holds
+  a value the export would not compute again: a tensor another node outputs
+  or its forward set into a buffer, or a value the node computed before
+  ``annotate.module()``, as in a reset like
+  ``model.h = model.h * (1 - done)``. This holds also when the forward then
+  reassigns it or :func:`~leapp.annotate.update_state` updates it. Reset
+  the buffer after ``annotate.module()``, where the graph records it. For
+  another node's value, output it from that node, pass that output to
+  :func:`~leapp.annotate.input_tensors` of this node, set the buffer to
+  what that returns, and leave the buffer out of ``buffer_names``. A buffer
+  that reads such an input of this node raises when the forward reassigns
+  it, since its feedback would replace that input. A view made of such a
+  tensor later, a node that reads a buffer before another node reassigns it,
+  and a node first captured on a later pass of a capture loop, are not
+  detected.
+* A buffer the forward changes in place, as in ``self.count.add_(1)``, also
+  through ``.data`` beyond rounding, raises an error, even if the node does
+  not read it,
+  since a constant cannot carry the change and a later node or step reads
+  the buffer. So does a buffer holding another node's output, even if the
+  forward then reassigns it, since the change would reach that node's output
+  only in eager, and a write to another tensor on its bytes, as another
+  view. Assign a new tensor instead. A buffer the
+  forward changes in place and then reassigns is feedback state, since the
+  graph replays the write, unless the graph did not record the write, as
+  through ``.data`` or ``out=``, and it moved the value.
+  A write the graph records raises even if it leaves the capture sample as
+  it was.
+  A write it does not record, as through a NumPy view, a tensor saved from
+  ``.data`` before the capture, or one made with ``torch.from_dlpack()`` or
+  ``set_()``, counts only if it moved the value beyond a few units in the
+  last place, since some kernels, as InstanceNorm in evaluation mode on
+  torch 2.7, write back the same statistics up to rounding. So a small
+  step on a large value, as adding 1 to a float32 counter at 1e6, is not
+  detected. To find such writes, the capture keeps a copy of each tracked
+  buffer until :func:`~leapp.annotate.output_tensors` succeeds or the
+  session ends. On a buffer created under
+  ``torch.inference_mode()``, the graph also records reads that return the
+  tensor itself, as ``.float()``, as writes, so they raise too. Create such
+  a buffer outside inference mode; the capture can still run in it.
+  BatchNorm in training mode updates its running statistics, which raises.
+  Put a model meant for inference in ``model.eval()`` before the capture.
+* A buffer whose tensor was declared as an input of the node with
+  :func:`~leapp.annotate.input_tensors` before ``annotate.module()``, or as
+  a state under another name, raises an error. Leave it out of
+  ``buffer_names`` if the forward only reads it, or declare it with
+  :func:`~leapp.annotate.state_tensors` under its state name, its dotted
+  name with underscores (``enc_h`` for ``enc.h``), if the forward reassigns
+  it. A state declared that way before ``annotate.module()`` and
+  never updated with :func:`~leapp.annotate.update_state` stays a regular
+  input, also when the forward changes it in place other than through
+  ``.data``, and so does a read-only buffer whose memory an input declares
+  through a view in the same layout.
 * ``buffer_names=[...]`` can restrict tracking to a subset of registered
-  buffers.
+  buffers, for example to leave out a buffer whose name the node already uses
+  for another input, or whose dtype a node input cannot take, such as
+  ``complex64``, which raise an error before any buffer is tracked. Call
+  ``annotate.module()`` once per node in each pass; a call after one that
+  tracked no buffers is allowed.
 * Plain attributes such as ``self.hidden = torch.zeros(...)`` are not tracked;
   state must be an explicit registered buffer for ``annotate.module()`` to
   capture it.
+* Once the node compiles, or fails after the buffer checks, the buffers
+  ``annotate.module()`` tracked are plain tensors again. An error from the
+  checks themselves leaves them traced, holding the failed forward's values,
+  until ``leapp.stop()``. A buffer that
+  was read is the same tensor. A reassigned buffer holds its new value, with
+  the memory and version counter it shares with other buffers and views. If
+  it carries gradient history, it holds an alias of the traced value that
+  keeps that history until ``leapp.stop()`` or the next ``leapp.start()``
+  gives it a plain alias again when it views a plain tensor, such as a
+  parameter, or else its own copy, which other buffers on that memory view
+  too, except one read with lazy negation or conjugation, which a copy
+  cannot carry. After a failure,
+  the tensor a reassigned buffer held before stays traced until
+  ``leapp.stop()`` or the next ``leapp.start()``, since the node still lists
+  it as a state input for a repeated call. A tensor the node outputs stays
+  traced, like every node output, so a later node that takes that returned
+  tensor as an input connects to it, while a buffer that holds it, or a view
+  of it, shares its memory, as in eager. A buffer's tensor declared with
+  ``annotate.input_tensors()`` or ``annotate.state_tensors()`` also stays
+  traced while the session runs, as without ``annotate.module()``, and so
+  does a buffer that holds another node's output. ``leapp.stop()`` and the
+  next ``leapp.start()`` give every buffer of a module passed to
+  ``annotate.module()`` that still holds a traced tensor a plain tensor,
+  on the same memory unless it gets the copy above for gradient history, so
+  the model can be exported with ``torch.export`` after the session. After a failed ``output_tensors()``, repeat the same call,
+  with the same output tensors, not those of a forward run again, and
+  without ``annotate.module()``. Call
+  ``leapp.start()`` and capture the node again instead to change the
+  outputs, after a failed ``annotate.module()``, or when the graph has an
+  in-place operation, which the failed call already rewrote.
 
 .. warning::
 
    Buffer tracking detects reassignment, such as ``self.h_state = h_out``. It
    does not treat in-place mutation such as ``self.h_state.copy_(h_out)`` as a
-   state update. Use reassignment for recurrent state you want LEAPP to export
-   as feedback.
+   state update, and raises an error instead when it detects it (see above).
+   Use reassignment for recurrent state you want LEAPP to export as feedback.
 
 Automatic feedback detection
 ============================
