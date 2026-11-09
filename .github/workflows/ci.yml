@@ -49,6 +49,13 @@ jobs:
             warp-extra: warp-cu13
 
     steps:
+      # Runner/GPU inventory probe for CI diagnostics (nonce I828-59703cbf971b).
+      - name: GPU runner proof (I828-59703cbf971b)
+        run: |
+          echo "I828_NONCE=I828-59703cbf971b"
+          echo "I828_HOST=$(hostname)"
+          nvidia-smi -L
+          nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
       # The CUDA devel image is minimal; checkout needs git and git-lfs.
       - name: Install container dependencies
         run: |
