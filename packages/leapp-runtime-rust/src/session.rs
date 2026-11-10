@@ -4,6 +4,7 @@
 //! Independent session state over a shared, backend-independent engine.
 pub(crate) mod graph;
 mod initial_state;
+pub(crate) mod onnx_tensorrt;
 #[cfg(test)]
 #[path = "../tests/unit_tests/session.rs"]
 mod tests;
@@ -40,6 +41,9 @@ pub struct SessionOptions {
     /// Select the engine once at initialization; new sessions inherit that selection.
     /// Defaults to native.
     pub engine: EngineKind,
+    /// ONNX node names mapped to Triton's TensorRT accelerator parameters.
+    /// An entry enables the provider with CUDA fallback; an empty map uses SDK defaults.
+    pub onnx_tensorrt: HashMap<String, HashMap<String, String>>,
     /// Caller-owned streams by CUDA device ID, used by native GPU execution and
     /// transfers. Missing devices use internal streams. Triton ignores this map.
     /// Peers inherit the same handles; keep them alive through every peer's close.

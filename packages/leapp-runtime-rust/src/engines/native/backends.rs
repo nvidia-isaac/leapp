@@ -145,8 +145,12 @@ pub(super) trait BackendPlugin: Send {
     }
 }
 
-type LoadBackend =
-    fn(&NodeSpec, MemoryLocation, Option<crate::CudaStream>) -> Result<Box<dyn BackendPlugin>>;
+type LoadBackend = fn(
+    &NodeSpec,
+    MemoryLocation,
+    Option<crate::CudaStream>,
+    Option<&std::collections::HashMap<String, String>>,
+) -> Result<Box<dyn BackendPlugin>>;
 
 struct Backend {
     name: &'static str,
@@ -159,12 +163,16 @@ const BACKENDS: &[Backend] = &[
     Backend {
         name: "onnx",
         validate: |_, _| Ok(()),
-        load: |spec, location, stream| Ok(Box::new(onnx::Model::load(spec, location, stream)?)),
+        load: |spec, location, stream, options| {
+            Ok(Box::new(onnx::Model::load(
+                spec, location, stream, options,
+            )?))
+        },
     },
     Backend {
         name: "jit",
         validate: |_, _| Ok(()),
-        load: |spec, location, stream| {
+        load: |spec, location, stream, _| {
             bridge::load(
                 spec,
                 location,
@@ -177,7 +185,7 @@ const BACKENDS: &[Backend] = &[
     Backend {
         name: "pt2",
         validate: |_, _| Ok(()),
-        load: |spec, location, stream| {
+        load: |spec, location, stream, _| {
             bridge::load(
                 spec,
                 location,
@@ -215,10 +223,11 @@ pub(super) fn load(
     spec: &NodeSpec,
     location: MemoryLocation,
     stream: Option<crate::CudaStream>,
+    onnx_tensorrt: Option<&std::collections::HashMap<String, String>>,
 ) -> Result<Box<dyn BackendPlugin>> {
     let backend = backend(spec)?;
     (backend.validate)(spec, location)?;
-    (backend.load)(spec, location, stream)
+    (backend.load)(spec, location, stream, onnx_tensorrt)
 }
 
 pub(super) fn error(phase: &'static str, source: anyhow::Error) -> RuntimeError {

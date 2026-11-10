@@ -1,18 +1,38 @@
-# Torch backend plugins
+# Triton backend plugins
 
-These plugins execute PyTorch artifacts through Triton's backend API. They build
-independently of Cargo and install beneath a backend directory selected by
+The Torch plugins execute PyTorch artifacts through Triton's backend API.
+They build independently of Cargo and install beneath a backend directory selected by
 the `LEAPP_TRITON_BACKENDS` environment variable. Applications use the same
 `lrt::Session` API as ONNX bundles; see the [runtime guide](../../../../README.md).
 
 Outputs use caller-provided buffers or fresh allocations. Retained allocated
 outputs remain valid across later calls and session closure.
 
-Build commands below run from `packages/leapp-runtime-rust`. Supply Linux,
+Torch build commands below run from `packages/leapp-runtime-rust`. Supply Linux,
 CMake 3.24+, a C++20 compiler, nlohmann_json 3.11+, Triton 2.69.0, CUDA, and
 CUDA-enabled LibTorch with the C++11 libstdc++ ABI. CUDA-enabled LibTorch is
 required even for CPU execution. Builds use installed dependencies without
 fetching or installing them. Set `TRITON_ROOT` and `TORCH_ROOT` to their SDK roots.
+
+## ONNX Runtime parameter passthrough
+
+The `onnxruntime` wrapper builds Triton's r26.09 ONNX backend with a small patch
+that forwards additional TensorRT options to ORT. Existing Triton aliases remain
+supported; ORT validates new keys and values. Stock Triton adapters retain their
+upstream parameter restrictions. This build fetches pinned upstream sources and
+requires Git, CMake 3.31.8+, RapidJSON development headers, and headers matching
+the installed ONNX Runtime:
+
+```sh
+cmake -S src/engines/triton/backends/onnxruntime -B target/onnxruntime-backend \
+  -DCMAKE_BUILD_TYPE=Release -DTRITON_ROOT="$TRITON_ROOT" \
+  -DORT_INCLUDE_DIR=/path/to/onnxruntime/include -DCUDAToolkit_ROOT="$CUDA_ROOT"
+cmake --build target/onnxruntime-backend -j4
+cmake --install target/onnxruntime-backend --prefix "$PWD/target/plugins"
+```
+
+Make the matching ORT provider libraries discoverable beside the installed
+`backends/onnxruntime/libtriton_onnxruntime.so`.
 
 ## PT2 / NativeRT
 

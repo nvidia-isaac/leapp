@@ -105,6 +105,7 @@ fn feedback_with_host_and_device_memory_placement() {
                     device,
                     engine,
                     cuda_streams: Default::default(),
+                    onnx_tensorrt: Default::default(),
                     output_placement: OutputPlacement {
                         overrides: [("accumulator/next".into(), output_location)].into(),
                         ..Default::default()

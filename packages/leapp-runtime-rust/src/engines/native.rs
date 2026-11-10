@@ -67,8 +67,13 @@ impl NativeEngine {
             .models
             .iter()
             .map(|(name, spec)| {
-                backends::load(spec, location, compute_stream)
-                    .map_err(|e| backends::error("load", e.context(format!("load node {name}"))))
+                backends::load(
+                    spec,
+                    location,
+                    compute_stream,
+                    options.onnx_tensorrt.get(name),
+                )
+                .map_err(|e| backends::error("load", e.context(format!("load node {name}"))))
             })
             .collect::<Result<Vec<_>, _>>()?;
 

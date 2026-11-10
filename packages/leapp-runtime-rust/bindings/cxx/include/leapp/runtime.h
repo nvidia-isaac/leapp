@@ -40,6 +40,10 @@ struct SessionOptions {
   uint32_t device_id = 0;
   MemoryLocation output_location;
   std::unordered_map<std::string, MemoryLocation> output_overrides;
+  // ONNX node -> Triton TensorRT accelerator parameters. Empty parameters
+  // enable SDK defaults.
+  std::unordered_map<std::string, std::unordered_map<std::string, std::string>>
+      onnx_tensorrt;
 };
 
 /// @brief Retained outputs; copies share allocations.

@@ -41,6 +41,7 @@ impl PySession {
     ) -> PyResult<Self> {
         let mut opts = SessionOptions::default();
         if let Some(options) = options {
+            opts.onnx_tensorrt = options.getattr("onnx_tensorrt")?.extract()?;
             let engine: String = options.getattr("engine")?.extract()?;
             opts.engine = match engine.as_str() {
                 "triton" => EngineKind::Triton,

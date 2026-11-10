@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "leapp/bundle.h"
+#include "leapp/runtime.h"
 
+#include <array>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -51,6 +52,21 @@ int main(int argc, char** argv) {
 
   lrt::Bundle bundle;
   Check(lrt::Bundle::Open(path, &bundle).ok(), "load opaque artifacts");
+  const std::string invalid_utf8(1, '\xff');
+  using Parameters = std::array<std::string, 3>;
+  for (const auto& [node, key, value] : {
+           Parameters{invalid_utf8, "trt_engine_cache_path", "cache"},
+           Parameters{"a_policy", invalid_utf8, "cache"},
+           Parameters{"a_policy", "trt_engine_cache_path", invalid_utf8}}) {
+    lrt::SessionOptions options;
+    options.onnx_tensorrt[node][key] = value;
+    lrt::Session session;
+    const auto invalid = lrt::Session::Open(bundle, options, &session);
+    Check(invalid.code() == lrt::ErrorCode::kInvalidArgument &&
+              invalid.message().find("UTF-8") != std::string::npos,
+          "invalid TensorRT node, key or value returns Status");
+    Check(!session.bundle().is_valid(), "invalid UTF-8 preserves empty session");
+  }
   Check(bundle.yaml_path() == path, "absolute path");
   Check(bundle.model_names() ==
             std::vector<std::string>({"z_observation", "a_policy"}),

@@ -39,7 +39,9 @@ release.
    `src/engines/triton/native.rs`, plus the generated-release label in
    `src/engines/triton/native/generate_bindings.py`. Update the supported-release
    references in this file and `README.md`, and check build/CI configuration for
-   old release pins.
+   old release pins. Update the source revisions in
+   `src/engines/triton/backends/onnxruntime/CMakeLists.txt` and recheck its
+   TensorRT option passthrough patch against the new ONNX backend.
 3. Set `TRITON_ROOT` to the target SDK and regenerate the C API bindings from
    this package directory:
 

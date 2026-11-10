@@ -275,6 +275,37 @@ flat tuple of tensors. The native engine also accepts a flat tensor list.
 Bundle port order determines argument order; public LEAPP names remain unchanged.
 Model-internal mutations are shared between peers and are not reset by `reset()`.
 
+### ONNX TensorRT acceleration
+
+Both engines accept per-node TensorRT accelerator parameters through
+`SessionOptions.onnx_tensorrt`. Install an ONNX Runtime TensorRT provider
+with its TensorRT dependencies beside the ONNX Runtime library.
+
+```python
+options = lrt.SessionOptions(
+    device="cuda:0",
+    onnx_tensorrt={"policy": {
+        "precision_mode": "FP16",
+        "trt_engine_cache_enable": "1",
+        "trt_engine_cache_path": "/var/cache/my-app/policy",
+    }},
+)
+```
+
+Rust and C++ expose the same node-to-parameter maps. An entry enables TensorRT;
+empty parameters use SDK defaults. Unlisted nodes retain their existing execution.
+Parameters follow [Triton's ONNX Runtime accelerator options](https://github.com/triton-inference-server/onnxruntime_backend/blob/r26.09/README.md#onnx-runtime-with-tensorrt-optimization),
+including precision, workspace, caching, and min/opt/max profile strings.
+Native execution forwards other options directly to ORT. The packaged Triton
+adapter also forwards them, using a small patch to Triton's ONNX backend;
+unmodified Triton adapters retain their upstream parameter restrictions.
+New provider options require support in the installed ORT version.
+The native engine rejects CUDA graph capture (`trt_cuda_graph_enable`) because
+borrowed runs and peer sessions can use different input and output addresses.
+ONNX Runtime executes supported subgraphs with TensorRT and uses CUDA/CPU fallback
+for other operations. Compilation and cache management follow ONNX Runtime's
+behavior; dynamic shapes can trigger compilation on the first inference.
+
 ### TensorRT engines
 
 The Triton engine accepts prebuilt `.plan` and `.engine` artifacts. The native

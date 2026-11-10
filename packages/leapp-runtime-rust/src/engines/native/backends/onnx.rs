@@ -12,6 +12,7 @@ use crate::{
 };
 use anyhow::{ensure, Context, Result};
 use ort::{
+    ep::ArbitrarilyConfigurableExecutionProvider,
     memory::{AllocationDevice, AllocatorType, MemoryInfo, MemoryType},
     session::{builder::GraphOptimizationLevel, IoBinding, Session},
     value::{DynTensorValueType, DynValue, Outlet, TensorElementType, ValueType},
@@ -89,6 +90,7 @@ impl Model {
         model: &NodeSpec,
         location: MemoryLocation,
         stream: Option<crate::CudaStream>,
+        tensorrt: Option<&HashMap<String, String>>,
     ) -> Result<Self> {
         let directory = std::env::var_os("LEAPP_NATIVE_BACKENDS")
             .map(PathBuf::from)
@@ -106,6 +108,19 @@ impl Model {
             .with_independent_thread_pool()
             .map_err(ort::Error::<()>::from)?;
         if let MemoryLocation::Cuda { device_id } = location {
+            let mut providers = Vec::new();
+            if let Some(parameters) = tensorrt {
+                let mut provider =
+                    ort::ep::TensorRT::default().with_device_id(i32::try_from(device_id)?);
+                for (key, value) in crate::session::onnx_tensorrt::provider_options(parameters)? {
+                    provider = provider.with_arbitrary_config(key, value);
+                }
+                if let Some(stream) = stream {
+                    // SAFETY: the caller retains the validated stream through every peer.
+                    provider = unsafe { provider.with_compute_stream(stream.as_raw().cast()) };
+                }
+                providers.push(provider.build().error_on_failure());
+            }
             let mut provider = ort::ep::CUDA::default()
                 .with_device_id(i32::try_from(device_id)?)
                 .with_tf32(false);
@@ -114,8 +129,9 @@ impl Model {
                 // caller retains it through every peer sharing the ORT session.
                 provider = unsafe { provider.with_compute_stream(stream.as_raw().cast()) };
             }
+            providers.push(provider.build().error_on_failure());
             builder = builder
-                .with_execution_providers([provider.build().error_on_failure()])
+                .with_execution_providers(providers)
                 .map_err(ort::Error::<()>::from)?;
         }
         // Reuse the optional Warp custom-op adapter installed for ONNX Runtime.

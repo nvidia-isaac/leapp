@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+diff --git a/src/onnxruntime.cc b/src/onnxruntime.cc
+--- a/src/onnxruntime.cc
++++ b/src/onnxruntime.cc
+@@ -668,13 +668,11 @@ ModelState::LoadModel(
+                     key = "trt_ep_context_embed_mode";
+                     value = value_string;
+                   } else {
+-                    return TRITONSERVER_ErrorNew(
+-                        TRITONSERVER_ERROR_INVALID_ARG,
+-                        std::string(
+-                            "unknown parameter '" + param_key +
+-                            "' is provided for TensorRT Execution "
+-                            "Accelerator")
+-                            .c_str());
++                    keys.push_back(param_key);
++                    RETURN_IF_ERROR(
++                        params.MemberAsString(param_key.c_str(), &value));
++                    values.push_back(value);
++                    continue;
+                   }
+                   if (!key.empty() && !value.empty()) {
+                     keys.push_back(key);
