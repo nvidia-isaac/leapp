@@ -46,7 +46,6 @@ wrapper rejects reset after explicit session closure.
 retain their owners for the synchronous call. Input map order does not affect
 routing. Output declaration order remains stable.
 
-Each core session owns its output pool. Peers share the engine and inherit
-`OutputPoolOptions`, but start with separate, empty caches. Closing a handle
-releases only its cache references; retained results remain usable. The common
-wrapper supplies serialization and closure without allocating tensor buffers.
+`run_into` borrows named output buffers through synchronous completion. Supplied
+outputs are omitted from the result; other outputs allocate
+fresh storage. The common wrapper supplies serialization and closure.

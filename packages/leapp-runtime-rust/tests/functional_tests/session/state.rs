@@ -6,7 +6,7 @@ use crate::engines::tests::support::{placed, TestTensor};
 use std::{env, path::PathBuf};
 
 #[test]
-fn native_output_snapshots_use_the_session_pool() {
+fn native_outputs_allocate_fresh_storage_or_use_caller_buffers() {
     let fixtures = env::var_os("LEAPP_TRITON_FIXTURES")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("target/triton-fixtures"));
@@ -18,98 +18,53 @@ fn native_output_snapshots_use_the_session_pool() {
         let input_name = format!("{fixture}/input");
         let output_name = format!("{fixture}/output");
         for device in [ExecutionDevice::Cpu, ExecutionDevice::Cuda { device_id: 0 }] {
-            for location in [
-                MemoryLocation::Cpu,
-                MemoryLocation::PinnedCpu,
-                MemoryLocation::Cuda { device_id: 0 },
-            ] {
-                for max_entries in [0, 1, 64] {
-                    let mut session = Session::open(
-                        &bundle,
-                        SessionOptions {
-                            engine: crate::EngineKind::Native,
-                            cuda_streams: Default::default(),
-                            device,
-                            output_pool: OutputPoolOptions { max_entries },
-                            output_placement: OutputPlacement {
-                                default_location: location,
-                                ..Default::default()
-                            },
-                        },
-                    )
+            let location = match device {
+                ExecutionDevice::Cpu => MemoryLocation::Cpu,
+                ExecutionDevice::Cuda { device_id } => MemoryLocation::Cuda { device_id },
+            };
+            let mut session = Session::open(
+                &bundle,
+                SessionOptions {
+                    engine: crate::EngineKind::Native,
+                    device,
+                    output_placement: OutputPlacement {
+                        default_location: location,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let input = placed(&values, &shape, location).unwrap();
+            let inputs = HashMap::from([(input_name.as_str(), input.view())]);
+            let first = session.run(&inputs).unwrap();
+            let second = session.run(&inputs).unwrap();
+            assert_ne!(
+                first.get(&output_name).unwrap().view().descriptor().data,
+                second.get(&output_name).unwrap().view().descriptor().data
+            );
+            let output = placed(&vec![0_f32; values.len()], &shape, location).unwrap();
+            let descriptor = *output.descriptor();
+            let mut buffers = HashMap::from([(
+                output_name.as_str(),
+                unsafe { OutputBuffer::new(&descriptor) }.unwrap(),
+            )]);
+            let supplied = session.run_into(&inputs, &mut buffers).unwrap();
+            assert!(supplied.get(&output_name).is_none());
+            drop(buffers);
+            let copied =
+                crate::engines::memory::dlpack::copy(output.view(), Some(MemoryLocation::Cpu))
                     .unwrap();
-                    let seed = |session: &Session| {
-                        let buffer = session
-                            .output_pool
-                            .allocate(values.len() * 4, location)
-                            .unwrap();
-                        assert_eq!(
-                            Arc::strong_count(&buffer),
-                            if max_entries == 0 { 1 } else { 2 }
-                        );
-                        buffer.ptr.as_ptr().cast::<std::ffi::c_void>()
-                    };
-                    // The pool keeps this allocation alive. A new, unpooled allocation
-                    // cannot reuse its address, so this checks actual pool integration.
-                    let address = seed(&session);
-                    let run = |session: &mut Session, values: &[f32]| {
-                        let input = placed(values, &shape, location).unwrap();
-                        session
-                            .run(&HashMap::from([(input_name.as_str(), input.view())]))
-                            .unwrap()
-                            .get(&output_name)
-                            .unwrap()
-                            .clone()
-                    };
-                    let first = run(&mut session, &values);
-                    if max_entries != 0 {
-                        assert_eq!(first.view().descriptor().data, address);
-                    }
-                    let changed: Vec<_> = values.iter().map(|value| value + 10.).collect();
-                    let second = run(&mut session, &changed);
-                    assert_ne!(
-                        first.view().descriptor().data,
-                        second.view().descriptor().data
-                    );
-                    assert_eq!(first.to_cpu_vec::<f32>().unwrap(), values);
-                    assert_eq!(second.to_cpu_vec::<f32>().unwrap(), changed);
-                    drop((first, second));
-                    let reused = run(&mut session, &values);
-                    if max_entries != 0 {
-                        assert_eq!(reused.view().descriptor().data, address);
-                    }
-
-                    let mut peer = session.new_session().unwrap();
-                    let peer_address = seed(&peer);
-                    let other = run(&mut peer, &changed);
-                    if max_entries != 0 {
-                        assert_eq!(other.view().descriptor().data, peer_address);
-                    }
-                    assert_ne!(
-                        reused.view().descriptor().data,
-                        other.view().descriptor().data
-                    );
-                    // Exporting the result must keep it out of subsequent reuse.
-                    let lease = reused.export(true);
-                    let next = run(&mut session, &changed);
-                    assert_ne!(
-                        reused.view().descriptor().data,
-                        next.view().descriptor().data
-                    );
-                    session.close();
-                    peer.close();
-                    assert_eq!(next.to_cpu_vec::<f32>().unwrap(), changed);
-                    assert_eq!(other.to_cpu_vec::<f32>().unwrap(), changed);
-                    // SAFETY: this test never gives the exported lease to a writer.
-                    let copied = engines::memory::dlpack::copy(
-                        unsafe { reused.borrow() },
-                        Some(MemoryLocation::Cpu),
-                    )
-                    .unwrap();
-                    assert_eq!(copied.to_cpu_vec::<f32>().unwrap(), values);
-                    drop(lease);
-                }
-            }
+            assert_eq!(copied.to_cpu_vec::<f32>().unwrap(), values);
+            session.close();
+            assert_eq!(
+                first
+                    .get(&output_name)
+                    .unwrap()
+                    .to_cpu_vec::<f32>()
+                    .unwrap(),
+                values
+            );
         }
     }
 }
@@ -127,6 +82,7 @@ fn feedback_with_host_and_device_memory_placement() {
         MemoryLocation::PinnedCpu,
         MemoryLocation::Cuda { device_id: 0 },
     ];
+    let engine = crate::engines::tests::support::engine();
     for (device, state_location) in [
         (ExecutionDevice::Cpu, MemoryLocation::Cpu),
         (
@@ -141,12 +97,14 @@ fn feedback_with_host_and_device_memory_placement() {
             }
         };
         for input_location in locations {
+            if engine == crate::EngineKind::Native && input_location != state_location {
+                continue;
+            }
             for output_location in locations {
                 let options = SessionOptions {
                     device,
-                    engine: crate::engines::tests::support::engine(),
+                    engine,
                     cuda_streams: Default::default(),
-                    output_pool: Default::default(),
                     output_placement: OutputPlacement {
                         overrides: [("accumulator/next".into(), output_location)].into(),
                         ..Default::default()
@@ -164,7 +122,6 @@ fn feedback_with_host_and_device_memory_placement() {
                     check_state(&session, expected);
                 }
                 let mut peer = session.new_session().unwrap();
-                assert!(!Arc::ptr_eq(&session.output_pool, &peer.output_pool));
                 check_state(&peer, 0.);
                 assert_eq!(
                     peer.run(&inputs)

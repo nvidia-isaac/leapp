@@ -8,13 +8,13 @@ mod plan;
 mod transfers;
 
 use crate::{
-    dlpack::{BorrowedTensor, SharedTensor},
-    engines::{memory::OutputPool, Engine},
+    dlpack::{BorrowedTensor, DLDevice, DLTensor, OutputBuffer, SharedTensor},
+    engines::{memory::Buffer, Engine},
     session::graph::Graph,
     Bundle, ExecutionDevice, MemoryLocation, OutputPlacement, RuntimeError, SessionOptions,
 };
 use anyhow::{ensure, Context};
-use backends::BackendPlugin;
+use backends::{BackendPlugin, InputRoute};
 use indexmap::IndexMap;
 use plan::Plan;
 use std::{
@@ -76,43 +76,83 @@ impl NativeEngine {
         Self::with_models(
             Arc::new(plan),
             models,
-            location,
             guarded.then(|| Arc::new(Mutex::new(()))),
-            options.cuda_streams.clone(),
+            options,
         )
     }
 
     fn with_models(
         plan: Arc<Plan>,
         models: Vec<Box<dyn BackendPlugin>>,
-        location: MemoryLocation,
         execution_guard: Option<Arc<Mutex<()>>>,
-        cuda_streams: HashMap<u32, crate::CudaStream>,
+        options: &SessionOptions,
     ) -> Result<Self, RuntimeError> {
-        let slots = plan
+        let location = match options.device {
+            ExecutionDevice::Cpu => MemoryLocation::Cpu,
+            ExecutionDevice::Cuda { device_id } => MemoryLocation::Cuda { device_id },
+        };
+        let slots: Vec<_> = plan
             .slots
             .iter()
-            .map(|spec| plan::Slot::new(spec.clone(), location))
+            .enumerate()
+            .map(|(id, spec)| {
+                plan::Slot::new(spec.clone(), plan.terminal_outputs.contains(&id), location)
+            })
             .collect::<anyhow::Result<Vec<_>>>()
             .map_err(|e| RuntimeError::new("prepare", e))?;
-        let input_order = vec![usize::MAX; plan.inputs.len()];
+        let input_bytes = plan
+            .inputs
+            .values()
+            .map(|&id| slots[id].fixed.as_ref().map_or(0, |fixed| fixed.buffer.len))
+            .collect();
         let mut input_positions = vec![None; plan.slots.len()];
+        let mut dynamic_state_inputs = Vec::new();
         for (position, &slot) in plan.inputs.values().enumerate() {
             input_positions[slot] = Some(position);
+            if position >= plan.public_inputs && slots[slot].fixed.is_none() {
+                dynamic_state_inputs.push(position);
+            }
         }
-        let borrow_calls = vec![false; models.len()];
+        let dynamic_slots = slots
+            .iter()
+            .enumerate()
+            .filter_map(|(id, slot)| slot.fixed.is_none().then_some(id))
+            .collect();
+        let calls = Vec::with_capacity(plan.calls.len());
+        let mut input_alignments = vec![0; plan.public_inputs];
+        let mut output_alignments = HashMap::new();
+        let binding_capacity = plan
+            .calls
+            .iter()
+            .map(|call| call.outputs.len())
+            .max()
+            .unwrap_or(0);
+        let device = crate::engines::memory::dlpack::device(location)
+            .map_err(|e| RuntimeError::new("prepare", e.into()))?;
         let mut workspace = Workspace {
             models,
             slots,
             plan,
-            input_order,
-            input_positions,
-            borrow_calls,
-            transfers: Transfers::new(location, &cuda_streams)
+            input_bytes,
+            staged_inputs: Vec::new(),
+            dynamic_state_inputs,
+            calls,
+            dynamic_slots,
+            output_bindings: Vec::with_capacity(binding_capacity),
+            transfers: Transfers::new(location, options)
                 .map_err(|e| backends::error("prepare", e))?,
         };
         // Workspace's field order also protects buffers on failed preparation.
         for call in &workspace.plan.calls {
+            let mut external_inputs = Vec::new();
+            for (position, &id) in call.inputs.iter().enumerate() {
+                if let Some(order) = input_positions[id] {
+                    external_inputs.push(InputRoute {
+                        position,
+                        boundary: order,
+                    });
+                }
+            }
             if workspace.models[call.model].can_prepare()
                 && call
                     .inputs
@@ -126,10 +166,6 @@ impl NativeEngine {
                     .map(|&id| workspace.slots[id].view())
                     .collect::<anyhow::Result<Vec<_>>>()
                     .map_err(|e| RuntimeError::new("prepare", e))?;
-                for (spec, &value) in call.input_specs.iter().zip(&inputs) {
-                    plan::matches(spec, value).map_err(|e| RuntimeError::new("prepare", e))?;
-                }
-
                 let outputs = call
                     .outputs
                     .iter()
@@ -140,14 +176,146 @@ impl NativeEngine {
                 unsafe { workspace.models[call.model].prepare(&inputs, &outputs) }
                     .map_err(|e| backends::error("prepare", e))?;
             }
+            let prepared = workspace.models[call.model].is_prepared();
+            if !prepared {
+                workspace
+                    .dynamic_slots
+                    .extend(call.outputs.iter().copied().filter(|&id| {
+                        workspace.slots[id].terminal && workspace.slots[id].fixed.is_some()
+                    }));
+            }
+            let input_alignment = if prepared && !external_inputs.is_empty() {
+                workspace.models[call.model].input_alignment()
+            } else {
+                0
+            };
+            if input_alignment != 0 {
+                for route in &external_inputs {
+                    if route.boundary < workspace.plan.public_inputs {
+                        input_alignments[route.boundary] =
+                            input_alignments[route.boundary].max(input_alignment);
+                    }
+                }
+            } else {
+                workspace.staged_inputs.extend(
+                    external_inputs
+                        .iter()
+                        .map(|route| (call.inputs[route.position], route.boundary)),
+                );
+                external_inputs.clear();
+            }
+            for &id in &call.outputs {
+                if let Some((name, _)) =
+                    workspace.plan.outputs.iter().find(|(_, slot)| **slot == id)
+                {
+                    output_alignments.insert(
+                        name.clone(),
+                        workspace.models[call.model].output_alignment(),
+                    );
+                }
+            }
+            workspace.calls.push(CallState {
+                outputs: call
+                    .outputs
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(position, &id)| {
+                        workspace
+                            .plan
+                            .outputs
+                            .iter()
+                            .find(|(_, slot)| **slot == id)
+                            .map(|(name, _)| (position, id, name.clone()))
+                    })
+                    .collect(),
+                execute: if prepared {
+                    Workspace::run_prepared
+                } else {
+                    Workspace::run_dynamic
+                },
+                external_inputs,
+            });
         }
 
+        let inputs = workspace
+            .plan
+            .inputs
+            .values()
+            .take(workspace.plan.public_inputs)
+            .zip(input_alignments)
+            .map(|(&id, alignment)| (workspace.slots[id].spec.clone(), alignment))
+            .collect();
         Ok(Self {
+            inputs,
+            output_alignments,
+            device,
             workspace: Mutex::new(workspace),
-            location,
             execution_guard,
-            cuda_streams,
+            options: options.clone(),
         })
+    }
+
+    fn validate(
+        &self,
+        inputs: &[(&str, BorrowedTensor<'_>)],
+        outputs: &HashMap<&str, OutputBuffer<'_>>,
+        lengths: &mut [usize],
+    ) -> anyhow::Result<()> {
+        // Names/order are established by Session. Private state cannot alias caller
+        // storage and was validated when loaded. Only public metadata can change.
+        for (((spec, alignment), (_, value)), bytes) in
+            self.inputs.iter().zip(inputs).zip(lengths.iter_mut())
+        {
+            let tensor = value.descriptor();
+            if *alignment != 0 {
+                ensure!(
+                    tensor.device.device_type == self.device.device_type
+                        && tensor.device.device_id == self.device.device_id,
+                    "port {} must be on the execution device for direct input binding",
+                    spec.name
+                );
+            }
+            *bytes = plan::matches(spec, *value, self.device)?;
+            let address = tensor.data as usize + tensor.byte_offset as usize;
+            if *alignment > 1 {
+                ensure!(
+                    address.is_multiple_of(*alignment),
+                    "port {} requires a {alignment}-byte aligned address for direct input binding",
+                    spec.name
+                );
+            }
+        }
+        // Validate only supplied outputs, using requirements resolved at initialization.
+        for (&name, output) in outputs {
+            let tensor = output.descriptor();
+            ensure!(
+                tensor.device.device_type == self.device.device_type
+                    && tensor.device.device_id == self.device.device_id,
+                "output buffer {name} must be on the execution device"
+            );
+            let alignment = self.output_alignments[name];
+            ensure!(
+                output.bytes == 0
+                    || (tensor.data as usize + tensor.byte_offset as usize)
+                        .is_multiple_of(alignment),
+                "output buffer {name} requires a {alignment}-byte aligned address"
+            );
+            for ((_, input), &bytes) in inputs.iter().zip(lengths.iter()).take(self.inputs.len()) {
+                let source = input.descriptor();
+                ensure!(
+                    !crate::engines::memory::dlpack::ranges_overlap(
+                        source.device,
+                        source.data as usize + source.byte_offset as usize,
+                        bytes,
+                        tensor.device,
+                        output.address(),
+                        output.bytes
+                    ),
+                    "output buffer overlaps an input"
+                );
+            }
+        }
+        Ok(())
     }
 
     fn peer(&self) -> Result<Self, RuntimeError> {
@@ -163,18 +331,19 @@ impl NativeEngine {
         Self::with_models(
             workspace.plan.clone(),
             models,
-            self.location,
             self.execution_guard.clone(),
-            self.cuda_streams.clone(),
+            &self.options,
         )
     }
 }
 
 struct NativeEngine {
+    inputs: Vec<(Arc<plan::TensorSpec>, usize)>,
+    output_alignments: HashMap<String, usize>,
+    device: DLDevice,
     workspace: Mutex<Workspace>,
-    location: MemoryLocation,
     execution_guard: Option<Arc<Mutex<()>>>,
-    cuda_streams: HashMap<u32, crate::CudaStream>,
+    options: SessionOptions,
 }
 
 struct Workspace {
@@ -182,10 +351,29 @@ struct Workspace {
     models: Vec<Box<dyn BackendPlugin>>,
     slots: Vec<plan::Slot>,
     plan: Arc<Plan>,
-    input_order: Vec<usize>,
-    input_positions: Vec<Option<usize>>,
-    borrow_calls: Vec<bool>,
+    input_bytes: Vec<usize>,
+    // Fixed at initialization for dynamic calls and backend-required isolation.
+    staged_inputs: Vec<(usize, usize)>,
+    dynamic_state_inputs: Vec<usize>,
+    calls: Vec<CallState>,
+    dynamic_slots: Vec<usize>,
+    output_bindings: Vec<(usize, DLTensor)>,
     transfers: Transfers,
+}
+
+// SAFETY: the mutex exclusively owns every handle and descriptor. Invocation
+// bindings are cleared before returning; moving scratch capacity never accesses
+// the caller's storage. All other workspace fields are independently Send.
+unsafe impl Send for Workspace {}
+
+// Select each node's execution function once, with no mode flag in the loop.
+type Execute = fn(&mut Workspace, usize, &[(&str, BorrowedTensor<'_>)]) -> anyhow::Result<()>;
+
+struct CallState {
+    execute: Execute,
+    // Input position within this call and its boundary position in Plan.inputs.
+    external_inputs: Vec<InputRoute>,
+    outputs: Vec<(usize, usize, String)>,
 }
 
 impl Engine for NativeEngine {
@@ -197,7 +385,7 @@ impl Engine for NativeEngine {
         &self,
         inputs: &[(&str, BorrowedTensor<'_>)],
         placement: &OutputPlacement,
-        pool: &Arc<OutputPool>,
+        outputs: &mut HashMap<&str, OutputBuffer<'_>>,
     ) -> Result<IndexMap<String, SharedTensor>, RuntimeError> {
         let mut workspace = self.workspace.lock().map_err(|_| {
             RuntimeError::new(
@@ -205,6 +393,9 @@ impl Engine for NativeEngine {
                 crate::error::Internal("native workspace lock poisoned".into()).into(),
             )
         })?;
+
+        self.validate(inputs, outputs, &mut workspace.input_bytes)
+            .map_err(|error| backends::error("execute", error))?;
 
         // Stateful/unclassified models keep the existing graph-wide order.
         // Hold the guard through output snapshots, including dynamic result copies.
@@ -216,11 +407,14 @@ impl Engine for NativeEngine {
             .map_err(|_| {
                 RuntimeError::new("execute", anyhow::anyhow!("native model lock poisoned"))
             })?;
-        let result = workspace.run(inputs, placement, pool);
+        let result = workspace.run(inputs, placement, outputs);
+        // Scratch capacity is reusable; invocation pointers must not survive return.
+        workspace.output_bindings.clear();
 
         // No dynamic value from a failed/previous call can feed a later call.
-        for slot in &mut workspace.slots {
-            slot.clear_dynamic();
+        let workspace = &mut *workspace;
+        for &id in &workspace.dynamic_slots {
+            workspace.slots[id].clear_dynamic();
         }
 
         result.map_err(|e| backends::error("execute", e))
@@ -230,132 +424,116 @@ impl Engine for NativeEngine {
         &self,
         input: BorrowedTensor<'_>,
         target: MemoryLocation,
-        pool: Option<&OutputPool>,
     ) -> Result<SharedTensor, RuntimeError> {
         let mut workspace = self.workspace.lock().map_err(|_| {
             RuntimeError::new("copy", anyhow::anyhow!("native workspace lock poisoned"))
         })?;
-        match pool {
-            Some(pool) => workspace.transfers.copy_pooled(input, target, pool),
-            None => workspace.transfers.copy(input, target),
-        }
-        .map_err(|e| backends::error("copy", e))
+        workspace
+            .transfers
+            .copy(input, target)
+            .map_err(|e| backends::error("copy", e))
     }
 }
 
 impl Workspace {
+    fn run_prepared(
+        &mut self,
+        index: usize,
+        inputs: &[(&str, BorrowedTensor<'_>)],
+    ) -> anyhow::Result<()> {
+        // SAFETY: run retains every supplied output and validates it before dispatch.
+        unsafe {
+            self.models[self.plan.calls[index].model].run(
+                inputs,
+                &self.calls[index].external_inputs,
+                &self.output_bindings,
+            )
+        }
+    }
+
+    fn run_dynamic(
+        &mut self,
+        index: usize,
+        _inputs: &[(&str, BorrowedTensor<'_>)],
+    ) -> anyhow::Result<()> {
+        let call = &self.plan.calls[index];
+        let inputs = call
+            .inputs
+            .iter()
+            .map(|&id| self.slots[id].view())
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        // SAFETY: invocation-scoped writable outputs remain alive through completion.
+        let outputs = unsafe {
+            self.models[call.model].run_dynamic(&inputs, &self.output_bindings, &mut self.transfers)
+        }?;
+        for (&id, value) in call.outputs.iter().zip(outputs) {
+            if let Some(value) = value {
+                self.slots[id].assign_owned(value, &mut self.transfers)?;
+            }
+        }
+        Ok(())
+    }
+
     fn run(
         &mut self,
         inputs: &[(&str, BorrowedTensor<'_>)],
         placement: &OutputPlacement,
-        pool: &OutputPool,
+        buffers: &mut HashMap<&str, OutputBuffer<'_>>,
     ) -> anyhow::Result<IndexMap<String, SharedTensor>> {
-        ensure!(
-            inputs.len() == self.plan.inputs.len(),
-            "native input count mismatch"
-        );
-
-        // Validate the complete boundary before changing any workspace storage.
-        self.input_order.fill(usize::MAX);
-        for (position, &(name, value)) in inputs.iter().enumerate() {
-            let (index, _, &id) = self
-                .plan
-                .inputs
-                .get_full(name)
-                .with_context(|| format!("unknown input {name}"))?;
-            ensure!(
-                self.input_order[index] == usize::MAX,
-                "duplicate input {name}"
-            );
-            plan::matches(&self.slots[id].spec, value)?;
-            self.input_order[index] = position;
-        }
-
-        ensure!(
-            self.input_order.iter().all(|&index| index != usize::MAX),
-            "missing native input"
-        );
-
-        for name in self.plan.outputs.keys() {
-            placement.location(name).validate()?;
-        }
-        // Preserve upfront staging for dynamic calls and incompatible devices.
-        // Each boundary slot belongs to one call; forward edges use output slots.
-        for call in &self.plan.calls {
-            let mut borrow = self.models[call.model].is_prepared();
-            let mut external = false;
-            for &id in &call.inputs {
-                if let Some(order) = self.input_positions[id] {
-                    external = true;
-                    if borrow {
-                        let source = inputs[self.input_order[order]].1.descriptor().device;
-                        let target = self.slots[id].view()?.descriptor().device;
-                        borrow = source.device_type == target.device_type
-                            && source.device_id == target.device_id;
-                    }
-                }
+        for &position in &self.dynamic_state_inputs {
+            // SAFETY: Session owns validated state; only its current copy length
+            // is needed. Fixed private lengths were computed at initialization.
+            self.input_bytes[position] = unsafe {
+                crate::engines::memory::dlpack::layout_unchecked(*inputs[position].1.descriptor())
             }
-            self.borrow_calls[call.model] = borrow && external;
-            if !self.borrow_calls[call.model] {
-                for &id in &call.inputs {
-                    if let Some(order) = self.input_positions[id] {
-                        self.slots[id]
-                            .assign(inputs[self.input_order[order]].1, &mut self.transfers)?;
-                    }
-                }
+            .1;
+        }
+
+        // Staging routes are fixed at initialization, never selected as a
+        // fallback for incompatible public inputs. Private state is already valid.
+        for &(slot, order) in &self.staged_inputs {
+            // SAFETY: the complete boundary was validated before any staging.
+            unsafe {
+                self.slots[slot].assign_validated(
+                    inputs[order].1,
+                    self.input_bytes[order],
+                    &mut self.transfers,
+                )?;
             }
         }
 
-        for call in &self.plan.calls {
-            let model = &mut self.models[call.model];
-            if self.borrow_calls[call.model] {
-                let views = call
-                    .inputs
-                    .iter()
-                    .map(|&id| match self.input_positions[id] {
-                        Some(order) => Ok(inputs[self.input_order[order]].1),
-                        None => self.slots[id].view(),
-                    })
-                    .collect::<anyhow::Result<Vec<_>>>()?;
-                if model
-                    .run_borrowed(&views)
-                    .with_context(|| format!("execute node {}", call.name))?
-                {
-                    continue;
-                }
-                // A declined call has not executed or changed its bindings.
-                for &id in &call.inputs {
-                    if let Some(order) = self.input_positions[id] {
-                        self.slots[id]
-                            .assign(inputs[self.input_order[order]].1, &mut self.transfers)?;
+        let mut allocated = HashMap::new();
+        for index in 0..self.calls.len() {
+            self.output_bindings.clear();
+            for &(position, id, ref name) in &self.calls[index].outputs {
+                if let Some(buffer) = buffers.get(name.as_str()) {
+                    self.output_bindings.push((position, *buffer.descriptor()));
+                } else if let Some(fixed) = &self.slots[id].fixed {
+                    if placement.location(name) == fixed.buffer.location {
+                        let buffer = Arc::new(Buffer::allocate_for_copy(
+                            fixed.buffer.len,
+                            fixed.buffer.location,
+                        )?);
+                        let mut tensor = *fixed.view().descriptor();
+                        tensor.data = buffer.ptr.as_ptr().cast();
+                        self.output_bindings.push((position, tensor));
+                        allocated.insert(id, buffer);
                     }
                 }
             }
-            if model.is_prepared() {
-                model
-                    .run()
-                    .with_context(|| format!("execute node {}", call.name))?;
-            } else {
-                for (&id, spec) in call.inputs.iter().zip(&call.input_specs) {
-                    plan::matches(spec, self.slots[id].view()?)?;
-                }
-
-                let inputs = call
-                    .inputs
-                    .iter()
-                    .map(|&id| self.slots[id].view())
-                    .collect::<anyhow::Result<Vec<_>>>()?;
-                let outputs = model
-                    .run_dynamic(&inputs, &mut self.transfers)
-                    .with_context(|| format!("execute node {}", call.name))?;
-                ensure!(
-                    outputs.len() == call.outputs.len(),
-                    "native backend output count mismatch"
-                );
-
-                for (&id, value) in call.outputs.iter().zip(&outputs) {
-                    // SAFETY: newly returned independent outputs are ready and unpublished.
-                    self.slots[id].assign(unsafe { value.borrow() }, &mut self.transfers)?;
+            let execute = self.calls[index].execute;
+            execute(self, index, inputs)
+                .with_context(|| format!("execute node {}", self.plan.calls[index].name))?;
+            for binding in &self.output_bindings {
+                let id = self.plan.calls[index].outputs[binding.0];
+                if !self.slots[id].terminal {
+                    // SAFETY: the completed backend initialized the validated target.
+                    let view = unsafe { BorrowedTensor::new(&binding.1) };
+                    let len = unsafe {
+                        crate::engines::memory::dlpack::layout_unchecked(*view.descriptor())
+                    }
+                    .1;
+                    unsafe { self.slots[id].assign_validated(view, len, &mut self.transfers) }?;
                 }
             }
         }
@@ -363,16 +541,21 @@ impl Workspace {
         self.plan
             .outputs
             .iter()
+            .filter(|(name, _)| !buffers.contains_key(name.as_str()))
             .map(|(name, &id)| {
-                // Snapshot before releasing the workspace lock, including private feedback.
-                Ok((
-                    name.clone(),
-                    self.transfers.copy_pooled(
-                        self.slots[id].view()?,
-                        placement.location(name),
-                        pool,
-                    )?,
-                ))
+                let value = if let Some(buffer) = allocated.remove(&id) {
+                    // SAFETY: successful execution initialized this complete allocation.
+                    unsafe {
+                        crate::engines::memory::dlpack::from_buffer(
+                            crate::engines::memory::dlpack::dl_type(self.slots[id].spec.dtype),
+                            self.slots[id].spec.shape.clone(),
+                            buffer,
+                        )
+                    }?
+                } else {
+                    self.slots[id].snapshot(placement.location(name), &mut self.transfers)?
+                };
+                Ok((name.clone(), value))
             })
             .collect()
     }

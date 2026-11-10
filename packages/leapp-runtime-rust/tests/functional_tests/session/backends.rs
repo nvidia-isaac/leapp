@@ -1,9 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{
-    dlpack::BorrowedTensor, Bundle, EngineKind, ErrorCode, ExecutionDevice, Session, SessionOptions,
-};
+use super::support::{self, placed, TestTensor};
+use crate::{Bundle, EngineKind, ErrorCode, ExecutionDevice, Session, SessionOptions};
 use serde_json::{json, Value};
 use std::{collections::HashMap, env, fs, os::unix::fs::symlink, path::Path, process::Command};
 
@@ -227,11 +226,8 @@ fn unrelated_backends_do_not_affect_onnx_execution() {
             )
             .unwrap();
             let mut peer = session.new_session().unwrap();
-            let values = [1_f32; 4];
-            let inputs = HashMap::from([(
-                "accumulator/observation",
-                BorrowedTensor::cpu(&values, &[4]).unwrap(),
-            )]);
+            let values = placed(&[1_f32; 4], &[4], support::execution_location(device)).unwrap();
+            let inputs = HashMap::from([("accumulator/observation", values.view())]);
             let retained = session.run(&inputs).unwrap();
             drop(session);
             assert_eq!(

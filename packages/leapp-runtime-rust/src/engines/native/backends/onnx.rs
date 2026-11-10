@@ -3,7 +3,7 @@
 
 //! ONNX loading and cached CPU/CUDA bindings, refactored from the native prototype.
 
-use super::BackendPlugin;
+use super::{BackendPlugin, InputRoute};
 use crate::{
     bundle::schema::NodeSpec,
     dlpack::{BorrowedTensor, DLTensor, SharedTensor},
@@ -80,6 +80,7 @@ struct Loaded {
     // Workspace arguments/results follow bundle order, not ONNX graph order.
     input_names: Vec<String>,
     output_names: Vec<String>,
+    output_shapes: Vec<Vec<i64>>,
     location: MemoryLocation,
 }
 
@@ -149,6 +150,11 @@ impl Model {
                 custom_ops,
                 input_names,
                 output_names,
+                output_shapes: model
+                    .outputs
+                    .iter()
+                    .map(|port| port.shape.clone())
+                    .collect(),
                 location,
             }),
         })
@@ -175,6 +181,10 @@ impl BackendPlugin for Model {
         self.prepared.is_some()
     }
 
+    fn input_alignment(&self) -> usize {
+        usize::from(!self.loaded.custom_ops)
+    }
+
     #[cfg(test)]
     fn loaded_identity(&self) -> usize {
         self.loaded.session.ptr() as usize
@@ -185,7 +195,7 @@ impl BackendPlugin for Model {
         let prepared = self.prepared.as_ref()?;
         Some(
             prepared
-                ._values
+                .values
                 .iter()
                 .map(|value| value.ptr() as usize)
                 .chain(prepared.name_ptrs.iter().map(|&name| name as usize))
@@ -198,7 +208,6 @@ impl BackendPlugin for Model {
                 .chain([
                     prepared.inputs.as_ptr() as usize,
                     prepared.outputs.as_ptr() as usize,
-                    prepared.borrowed_inputs.as_ptr() as usize,
                     prepared.run_options.ptr() as usize,
                 ])
                 .collect(),
@@ -230,45 +239,25 @@ impl BackendPlugin for Model {
             for &input in inputs {
                 // SAFETY: the workspace keeps this read-only region alive until
                 // the prepared call is dropped, before releasing its allocations.
-                values.push(unsafe { borrowed_value(input)? });
+                values.push(unsafe { borrowed_value(input.descriptor())? });
             }
             for &writable in outputs {
                 // SAFETY: the caller retains exclusive fixed output storage.
-                values.push(unsafe { borrowed_value(writable)? });
+                values.push(unsafe { borrowed_value(writable.descriptor())? });
             }
             let input_metadata = inputs
                 .iter()
                 .map(|&input| InputMetadata::new(input))
                 .collect::<Result<Vec<_>>>()?;
-            let borrowed_inputs = vec![ptr::null(); inputs.len()];
             let run_options = ort::session::RunOptions::new()?;
             let count = inputs.len();
             let name_ptrs = names.iter().map(|n| n.as_ptr()).collect();
-            let inputs = values[..count].iter().map(|v| v.ptr()).collect();
-            let outputs = values[count..].iter_mut().map(|v| v.ptr_mut()).collect();
-            let binding = if matches!(self.loaded.location, MemoryLocation::Cuda { .. }) {
-                let mut binding = session.create_binding()?;
-                for (name, value) in names[count..].iter().zip(&values[count..]) {
-                    // SAFETY: values and names are retained by Prepared; bindings
-                    // are destroyed before these wrappers and workspace storage.
-                    unsafe {
-                        ort::Error::result_from_status((ort::api().BindOutput)(
-                            binding.ptr_mut(),
-                            name.as_ptr(),
-                            value.ptr(),
-                        ))?;
-                    }
-                }
-                Some(binding)
-            } else {
-                None
-            };
+            let inputs: Vec<_> = values[..count].iter().map(|v| v.ptr()).collect();
+            let outputs: Vec<_> = values[count..].iter_mut().map(|v| v.ptr_mut()).collect();
             Ok(Prepared {
                 input_metadata,
-                borrowed_inputs,
                 run_options,
-                binding,
-                _values: values,
+                values,
                 _names: names,
                 name_ptrs,
                 inputs,
@@ -279,73 +268,39 @@ impl BackendPlugin for Model {
         Ok(())
     }
 
-    fn run(&mut self) -> Result<()> {
-        let mut run = || -> Result<()> {
-            let prepared = self.prepared.as_mut().context("unprepared ONNX model")?;
-            let session = &self.loaded.session;
-            let mut completion = Completion::new(self.loaded.location)?;
-            // SAFETY: workspace storage is exclusively owned under its workspace mutex,
-            // all pointer arrays/bindings are workspace-private. ORT supports concurrent
-            // runs of this shared session (CUDA graph capture remains disabled).
-            // Default run options synchronize providers before successful return.
-            let result = unsafe {
-                if let Some(binding) = &mut prepared.binding {
-                    for (name, value) in prepared.name_ptrs.iter().zip(&prepared.inputs) {
-                        // ORT can stage CPU-only controls during BindInput; a
-                        // stable source address does not imply unchanged contents.
-                        ort::Error::result_from_status((ort::api().BindInput)(
-                            binding.ptr_mut(),
-                            *name,
-                            *value,
-                        ))?;
-                    }
-                    ort::Error::result_from_status((ort::api().RunWithBinding)(
-                        session.ptr().cast_mut(),
-                        prepared.run_options.ptr(),
-                        binding.ptr(),
-                    ))
-                } else {
-                    ort::Error::result_from_status((ort::api().Run)(
-                        session.ptr().cast_mut(),
-                        prepared.run_options.ptr(),
-                        prepared.name_ptrs.as_ptr(),
-                        prepared.inputs.as_ptr(),
-                        prepared.inputs.len(),
-                        prepared.name_ptrs[prepared.inputs.len()..].as_ptr(),
-                        prepared.outputs.len(),
-                        prepared.outputs.as_mut_ptr(),
-                    ))
-                }
-            };
-            completion.finish(result)
-        };
-        run()
-    }
-
-    fn run_borrowed(&mut self, inputs: &[BorrowedTensor<'_>]) -> Result<bool> {
-        if self.loaded.custom_ops {
-            return Ok(false);
-        }
+    unsafe fn run(
+        &mut self,
+        inputs: &[(&str, BorrowedTensor<'_>)],
+        routes: &[InputRoute],
+        outputs: &[(usize, DLTensor)],
+    ) -> Result<()> {
         let prepared = self.prepared.as_mut().context("unprepared ONNX model")?;
-        ensure!(
-            inputs.len() == prepared.input_metadata.len(),
-            "ONNX input count mismatch"
-        );
         let api = ort::api();
+        let output_values = outputs
+            .iter()
+            .map(|output| unsafe { borrowed_value(&output.1) })
+            .collect::<Result<Vec<_>>>()?;
+        let output_values_guard = OutputValues {
+            pointers: &mut prepared.outputs,
+            owners: &prepared.values[prepared.inputs.len()..],
+            bindings: outputs,
+        };
+        for (output, value) in outputs.iter().zip(&output_values) {
+            output_values_guard.pointers[output.0] = value.ptr().cast_mut();
+        }
         // Reuse the pointer array, but release all caller-backed handles on return.
-        let values = InputValues {
-            pointers: &mut prepared.borrowed_inputs,
+        let mut values = InputValues {
+            pointers: &mut prepared.inputs,
+            owners: &prepared.values,
+            routes,
+            initialized: 0,
             api,
         };
         // Drop this guard before the wrappers, including on failure or unwind.
         let mut completion = Completion::new(self.loaded.location)?;
-        for ((metadata, input), slot) in prepared
-            .input_metadata
-            .iter()
-            .zip(inputs)
-            .zip(values.pointers.iter_mut())
-        {
-            let descriptor = input.descriptor();
+        for &InputRoute { position, boundary } in routes {
+            let metadata = &prepared.input_metadata[position];
+            let descriptor = inputs[boundary].1.descriptor();
             let mut raw = ptr::null_mut();
             // Boundary validation checked this run's shape, dtype, contiguous layout
             // and device. Only immutable model metadata survives between calls.
@@ -364,9 +319,10 @@ impl BackendPlugin for Model {
                     &mut raw,
                 ))?;
             }
-            *slot = NonNull::new(raw)
+            values.pointers[position] = NonNull::new(raw)
                 .context("ORT returned null borrowed tensor")?
                 .as_ptr();
+            values.initialized += 1;
         }
         // Same entry point and lifetime handling for CPU and CUDA tensors.
         let result = unsafe {
@@ -377,97 +333,114 @@ impl BackendPlugin for Model {
                 values.pointers.as_ptr(),
                 values.pointers.len(),
                 prepared.name_ptrs[values.pointers.len()..].as_ptr(),
-                prepared.outputs.len(),
-                prepared.outputs.as_mut_ptr(),
+                output_values_guard.pointers.len(),
+                output_values_guard.pointers.as_mut_ptr(),
             ))
         };
         completion.finish(result)?;
-        Ok(true)
+        Ok(())
     }
 
-    fn run_dynamic(
+    unsafe fn run_dynamic(
         &mut self,
         inputs: &[BorrowedTensor<'_>],
+        bindings: &[(usize, DLTensor)],
         transfers: &mut crate::engines::native::Transfers,
-    ) -> Result<Vec<SharedTensor>> {
-        let mut run = || -> Result<Vec<SharedTensor>> {
-            let session = &self.loaded.session;
-            ensure!(
-                inputs.len() == session.inputs().len(),
-                "ONNX input count mismatch"
-            );
-            // The executor owns these already-routed inputs through completion.
-            let values = inputs
-                .iter()
-                .map(|&view| {
-                    // SAFETY: the invocation retains each owner until the SDK binding drops.
-                    unsafe { borrowed_value(view) }
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let mut binding = session.create_binding()?;
-            // This guard drops before bindings, wrappers and input allocations,
-            // including when binding or inference fails or unwinds.
-            let mut completion = Completion::new(self.loaded.location)?;
-            for (name, value) in self.loaded.input_names.iter().zip(&values) {
-                binding.bind_input(name.as_str(), value)?;
-            }
-            let info = memory(self.loaded.location)?;
-            for name in &self.loaded.output_names {
+    ) -> Result<Vec<Option<SharedTensor>>> {
+        let session = &self.loaded.session;
+        // The executor owns these already-routed inputs through completion.
+        let values = inputs
+            .iter()
+            .map(|&view| {
+                // SAFETY: the invocation retains each owner until the SDK binding drops.
+                unsafe { borrowed_value(view.descriptor()) }
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut binding = session.create_binding()?;
+        // This guard drops before bindings, wrappers and input allocations,
+        // including when binding or inference fails or unwinds.
+        let mut completion = Completion::new(self.loaded.location)?;
+        for (name, value) in self.loaded.input_names.iter().zip(&values) {
+            binding.bind_input(name.as_str(), value)?;
+        }
+        let info = memory(self.loaded.location)?;
+        for (position, name) in self.loaded.output_names.iter().enumerate() {
+            if let Some(output) = bindings.iter().find(|output| output.0 == position) {
+                let value = unsafe { borrowed_value(&output.1) }?;
+                binding.bind_output(name.as_str(), value)?;
+            } else {
                 binding.bind_output_to_device(name.as_str(), &info)?;
             }
-            // SAFETY: each invocation owns its binding; shared ORT sessions support
-            // concurrent RunWithBinding with distinct bindings and tensor storage.
-            let result = unsafe {
-                ort::Error::result_from_status((ort::api().RunWithBinding)(
-                    session.ptr().cast_mut(),
-                    ptr::null(),
-                    binding.ptr(),
-                ))
-            };
-            completion.finish(result)?;
-            let outputs = bound_outputs(session, &binding)?;
-            self.loaded
-                .output_names
-                .iter()
-                .zip(&outputs)
-                .map(|(_name, value)| {
-                    let tensor = value.downcast_ref::<DynTensorValueType>()?;
-                    let ValueType::Tensor { ty, shape, .. } = tensor.dtype() else {
-                        unreachable!()
-                    };
-                    let info = tensor.memory_info();
-                    let location = if info.is_cpu_accessible() {
-                        MemoryLocation::Cpu
-                    } else {
-                        ensure!(
-                            info.allocation_device() == AllocationDevice::CUDA,
-                            "unsupported ORT output allocation"
-                        );
-                        MemoryLocation::Cuda {
-                            device_id: u32::try_from(info.device_id())?,
-                        }
-                    };
+        }
+        // SAFETY: each invocation owns its binding; shared ORT sessions support
+        // concurrent RunWithBinding with distinct bindings and tensor storage.
+        let result = unsafe {
+            ort::Error::result_from_status((ort::api().RunWithBinding)(
+                session.ptr().cast_mut(),
+                ptr::null(),
+                binding.ptr(),
+            ))
+        };
+        completion.finish(result)?;
+        let outputs = bound_outputs(session, &binding)?;
+        self.loaded
+            .output_names
+            .iter()
+            .zip(&outputs)
+            .zip(&self.loaded.output_shapes)
+            .enumerate()
+            .map(|(position, ((name, value), expected))| {
+                let tensor = value.downcast_ref::<DynTensorValueType>()?;
+                let ValueType::Tensor { ty, shape, .. } = tensor.dtype() else {
+                    unreachable!()
+                };
+                // ORT can return newly allocated tensors whose dimensions
+                // differ from the declared shape. Establish the producer
+                // guarantee once here before publication.
+                ensure!(
+                    shape.len() == expected.len()
+                        && shape
+                            .iter()
+                            .zip(expected)
+                            .all(|(&actual, &expected)| expected == -1 || actual == expected),
+                    "ONNX output {name} does not match declared shape"
+                );
+                if bindings.iter().any(|output| output.0 == position) {
+                    return Ok(None);
+                }
+                let info = tensor.memory_info();
+                let location = if info.is_cpu_accessible() {
+                    MemoryLocation::Cpu
+                } else {
+                    ensure!(
+                        info.allocation_device() == AllocationDevice::CUDA,
+                        "unsupported ORT output allocation"
+                    );
+                    MemoryLocation::Cuda {
+                        device_id: u32::try_from(info.device_id())?,
+                    }
+                };
 
-                    // SAFETY: ORT owns this ready value until the independent native
-                    // copy completes; subsequent runs cannot mutate the returned owner.
-                    let descriptor = DLTensor {
-                        data: tensor.data_ptr().cast_mut(),
-                        device: dlpack::device(location)?,
-                        ndim: i32::try_from(shape.len())?,
-                        dtype: dlpack::dl_type(native_type(*ty)?),
-                        shape: shape.as_ptr().cast_mut(),
-                        strides: ptr::null_mut(),
-                        byte_offset: 0,
-                    };
-                    // SAFETY: ORT owns the completed output until this copy finishes.
-                    transfers.copy(
+                // SAFETY: ORT owns this ready value until the independent native
+                // copy completes; subsequent runs cannot mutate the returned owner.
+                let descriptor = DLTensor {
+                    data: tensor.data_ptr().cast_mut(),
+                    device: dlpack::device(location)?,
+                    ndim: i32::try_from(shape.len())?,
+                    dtype: dlpack::dl_type(native_type(*ty)?),
+                    shape: shape.as_ptr().cast_mut(),
+                    strides: ptr::null_mut(),
+                    byte_offset: 0,
+                };
+                // SAFETY: ORT owns the completed output until this copy finishes.
+                transfers
+                    .copy(
                         unsafe { BorrowedTensor::new(&descriptor) },
                         self.loaded.location,
                     )
-                })
-                .collect()
-        };
-        run()
+                    .map(Some)
+            })
+            .collect()
     }
 }
 
@@ -529,10 +502,8 @@ fn check_ports(specs: &[PortSpec], outlets: &[Outlet]) -> Result<Vec<String>> {
 
 struct Prepared {
     input_metadata: Vec<InputMetadata>,
-    borrowed_inputs: Vec<*const ort::sys::OrtValue>,
     run_options: ort::session::RunOptions,
-    binding: Option<IoBinding>,
-    _values: Vec<DynValue>,
+    values: Vec<DynValue>,
     _names: Vec<CString>,
     name_ptrs: Vec<*const c_char>,
     inputs: Vec<*const ort::sys::OrtValue>,
@@ -560,18 +531,32 @@ impl InputMetadata {
 
 struct InputValues<'a> {
     pointers: &'a mut [*const ort::sys::OrtValue],
+    owners: &'a [DynValue],
+    routes: &'a [InputRoute],
+    initialized: usize,
     api: &'static ort::sys::OrtApi,
 }
 
 impl Drop for InputValues<'_> {
     fn drop(&mut self) {
-        for value in self.pointers.iter_mut() {
-            if !value.is_null() {
-                // SAFETY: each non-null entry owns its wrapper; completion has
-                // drained all work before this invocation guard is dropped.
-                unsafe { (self.api.ReleaseValue)(value.cast_mut()) };
-                *value = ptr::null();
-            }
+        for &InputRoute { position, .. } in &self.routes[..self.initialized] {
+            // SAFETY: only successfully created caller-backed wrappers are released;
+            // completion drained all work. Forwarded inputs keep their prepared wrappers.
+            unsafe { (self.api.ReleaseValue)(self.pointers[position].cast_mut()) };
+            self.pointers[position] = self.owners[position].ptr();
+        }
+    }
+}
+
+struct OutputValues<'a> {
+    pointers: &'a mut [*mut ort::sys::OrtValue],
+    owners: &'a [DynValue],
+    bindings: &'a [(usize, DLTensor)],
+}
+impl Drop for OutputValues<'_> {
+    fn drop(&mut self) {
+        for binding in self.bindings {
+            self.pointers[binding.0] = self.owners[binding.0].ptr().cast_mut();
         }
     }
 }
@@ -626,11 +611,11 @@ impl Drop for Completion {
     }
 }
 
-// The OrtValue owns a wrapper only. The caller must retain the ready storage
-// through every use of the value and drain native work before releasing it.
-unsafe fn borrowed_value(view: BorrowedTensor<'_>) -> Result<DynValue> {
-    let descriptor = view.descriptor();
-    let (shape, bytes) = dlpack::layout(view)?;
+// The OrtValue owns a wrapper only. The caller must retain compatible readable
+// input or writable output storage and validated metadata through completion.
+unsafe fn borrowed_value(descriptor: &DLTensor) -> Result<DynValue> {
+    // SAFETY: preparation and invocation boundaries validated this unchanged view.
+    let (shape, bytes) = unsafe { dlpack::layout_unchecked(*descriptor) };
     let info = memory(dlpack::location(descriptor.device)?)?;
     let mut raw = ptr::null_mut();
     // SAFETY: caller supplies the storage lifetime, exclusivity for outputs, and completion.

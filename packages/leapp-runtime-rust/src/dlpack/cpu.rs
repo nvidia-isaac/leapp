@@ -127,13 +127,25 @@ impl<'a> BorrowedTensor<'a> {
     }
 }
 
+impl<'a> OutputBuffer<'a> {
+    /// Borrow a writable CPU slice as an output tensor without copying.
+    pub fn cpu<T: CpuElement>(values: &'a mut [T], shape: &'a [i64]) -> Result<Self, &'static str> {
+        let tensor = BorrowedTensor::cpu(values, shape)?;
+        Ok(Self {
+            descriptor: *tensor.descriptor(),
+            bytes: std::mem::size_of_val(values),
+            lifetime: PhantomData,
+        })
+    }
+}
+
 impl SharedTensor {
     /// Copy a contiguous output into an owned Rust vector, including device
     /// storage when the engine supplies a synchronous transfer callback.
     ///
     /// Rejects storage previously exposed through `descriptor()` or `export()`
     /// on any clone: a foreign consumer could still be writing it. Copies and
-    /// first exposure are synchronized; copying does not prevent pool reuse.
+    /// first exposure are synchronized.
     pub fn to_cpu_vec<T: CpuElement>(&self) -> Result<Vec<T>, String> {
         let exposed = self.0.exposed.lock().unwrap_or_else(|e| e.into_inner());
         if *exposed {

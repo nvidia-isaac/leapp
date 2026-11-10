@@ -5,83 +5,107 @@ SPDX-License-Identifier: Apache-2.0
 
 # Native backend plugins
 
-The native engine uses [`BackendPlugin`](../backends.rs) to execute model nodes
-with ONNX, TensorRT, TorchScript, or NativeRT. The engine handles graph routing,
-workspace buffers, and public results; each plugin handles model execution.
-This is an internal contributor interface. Applications use the runtime's
-Session API, and Triton has its own backend interface.
+See the [runtime guide](../../../../README.md) for model support and public APIs.
 
-## Usage and lifecycle
+## Installation
 
-The engine selects a backend from each node's bundle configuration, validates
-support, and loads the model. Each workspace has its own plugin instance and
-buffers. Instances created through `new_session()` share loaded models, weights,
-and model-owned state. Execution-context state is private to each instance and
-starts fresh in each peer.
+Build the core runtime and plugins from the same source revision. The commands
+below run from `packages/leapp-runtime-rust` and require CMake 3.24+ and a C++20
+compiler. For the core build and library-loader setup, see
+[core installation](../../../../README.md#installation).
+SDKs and sources are build dependencies; deployment needs the installed libraries
+and their runtime dependencies.
 
-Runtime libraries are loaded only for backends used by the bundle. Keep library
-loading and SDK initialization in the backend's load path so inspection and
-unrelated backends work without that runtime installed. Preserve the underlying
-loader error and library path when reporting initialization failures.
+Set `LEAPP_NATIVE_BACKENDS` to the plugin installation directory (default:
+`/opt/leapp/backends`):
 
-Plugins support two execution paths:
+```sh
+export LEAPP_NATIVE_BACKENDS="$PWD/target/native-backends"
+```
 
-- **Prepared:** bind fixed-address input and output buffers once, then call
-  `run()` repeatedly. Buffer contents change between runs; bindings and tensor
-  metadata are reused to minimize overhead.
-- **Dynamic:** pass inputs to `run_dynamic()` on each call and receive owned
-  outputs. This path also supports models with fixed shapes when preparation
-  is unavailable.
+Install the libraries needed by your bundle at these relative paths:
 
-Prepared plugins may also implement `run_borrowed(inputs)` to execute directly
-from inputs borrowed for one invocation, keeping output buffers fixed. The
-engine uses this on both CPU and GPU when memory placement is compatible.
-Declining a call preserves the ordinary prepared path and its input copies.
+| Backend | Path under `LEAPP_NATIVE_BACKENDS` |
+| --- | --- |
+| ONNX | `onnxruntime/libonnxruntime.so` |
+| TorchScript | `torchscript/libleapp_torchscript.so` |
+| NativeRT | `nativert/libleapp_nativert_backend.so` |
+| TensorRT | `tensorrt/libleapp_tensorrt.so` |
 
-To add a backend, implement `BackendPlugin` and register its validation and
-loading functions in [`backends.rs`](../backends.rs). ONNX implements the trait
-in Rust; C++ backends can reuse the [shared bridge](bridge.rs). See the
-[runtime README](../../../../README.md) for build and configuration instructions.
+### ONNX
 
-## Interface contract
+Use ONNX Runtime supporting API 24, installed at the path above or selected with
+`ORT_DYLIB_PATH`. The adapter is included in the Rust runtime and has no separate
+plugin build. For GPU execution, install the CUDA provider libraries beside ONNX
+Runtime and make their CUDA/cuDNN dependencies discoverable.
 
-| Method | Responsibility | Default |
-| --- | --- | --- |
-| `new_session()` | Create an unprepared peer sharing the loaded model and weights, without reloading artifacts or copying bindings or execution-context state. | Required |
-| `needs_guard()` | Indicate whether execution must be serialized across peers. The decision must remain stable across all related instances. | `true` |
-| `can_prepare()` | Report whether fixed bindings are supported. This permits a preparation attempt; it does not guarantee success. | `false` |
-| `is_prepared()` | Report whether this instance has valid prepared bindings. New instances start unprepared. | `false` |
-| `prepare(inputs, outputs)` | Bind fixed buffers and cache reusable metadata. On success, `is_prepared()` must become `true`. | Unsupported |
-| `run()` | Execute with prepared bindings and current input contents, writing into bound outputs. Return an error if unprepared. | Unsupported |
-| `run_borrowed(inputs)` | Optionally execute with invocation-scoped inputs and prepared outputs. Return `true` after completion, or `false` before execution with original bindings intact. Errors propagate without retry. | `false` |
-| `run_dynamic(inputs, transfers)` | Execute with borrowed inputs and return independently owned outputs. The workspace transfer helper is available for copies. | Required |
+### TorchScript
 
-A minimal backend implements `new_session()` and `run_dynamic()`. Supporting
-prepared execution requires all four preparation-related methods:
-`can_prepare()`, `is_prepared()`, `prepare()`, and `run()`.
+Set `TORCH_ROOT` to a CUDA-enabled LibTorch SDK containing `include/` and `lib/`,
+even for CPU execution. `TORCH_CXX11_ABI` defaults to `1`; match it to the SDK.
+Use `CUDAToolkit_ROOT` for a nonstandard CUDA installation.
 
-All implementations must honor these guarantees:
+```sh
+cmake -S src/engines/native/backends/torchscript -B target/native-torchscript \
+  -DCMAKE_BUILD_TYPE=Release -DTORCH_ROOT="$TORCH_ROOT" \
+  -DCMAKE_INSTALL_PREFIX="$LEAPP_NATIVE_BACKENDS"
+cmake --build target/native-torchscript -j4
+cmake --install target/native-torchscript
+```
 
-- **Tensor compatibility:** inputs and outputs follow declared port order,
-  dtype, shape, and device. Inputs are read-only.
-- **Completion:** finish all work accessing borrowed storage before returning,
-  including on errors or unwinding. Results must be ready for the engine to use.
-- **Streams:** use a supplied CUDA stream for primary GPU execution and inherit
-  it in peers. The caller owns it; plugins must not destroy it. Auxiliary work
-  must complete before borrowed storage is released, including on failures.
-- **Buffer lifetime:** prepared buffers remain at fixed addresses until the
-  plugin instance is destroyed. Retained metadata must be owned or copied, and
-  partially prepared instances must be safe to destroy. Preparation failure
-  aborts workspace creation. Invocation-scoped inputs must not be retained.
-  Restore any temporarily replaced bindings before returning; if restoration
-  fails, the instance must reject further execution.
-- **Output ownership:** dynamic outputs survive later calls and plugin
-  destruction, without aliasing inputs or mutable backend state.
-- **Concurrency and state:** instances are `Send` and called exclusively, but
-  may move between threads. Disable the guard only when peers can safely execute
-  concurrently. Peer creation must also be safe during another peer's execution,
-  and shared model state must be protected from concurrent mutation.
+### NativeRT / PT2
 
-`prepare()` is unsafe because it retains borrowed storage. Its full caller
-obligations, including aliasing and access restrictions, are documented on the
-[trait](../backends.rs).
+Supply PyTorch v2.12.1 sources with submodules, LibTorch 2.12.1, and a matching
+NativeRT library from the
+[shared source-build recipe](../../triton/backends/README.md#pt2--nativert).
+The [TorchScript SDK and ABI settings](#torchscript) also apply.
+
+```sh
+cmake -S src/engines/native/backends/nativert -B target/native-nativert \
+  -DCMAKE_BUILD_TYPE=Release -DTORCH_ROOT="$TORCH_ROOT" \
+  -DPYTORCH_SOURCE=/path/to/pytorch-v2.12.1 \
+  -DNATIVERT_LIBRARY=/path/to/libleapp_nativert.so \
+  -DCMAKE_INSTALL_PREFIX="$LEAPP_NATIVE_BACKENDS"
+cmake --build target/native-nativert -j4
+cmake --install target/native-nativert
+```
+
+### TensorRT
+
+Use TensorRT 10.16 or newer 10.x headers/libraries and CUDA.
+
+```sh
+cmake -S src/engines/native/backends/tensorrt -B target/tensorrt-backend \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$LEAPP_NATIVE_BACKENDS" \
+  -DTENSORRT_ROOT=/path/to/TensorRT -DCUDA_ROOT=/usr/local/cuda
+cmake --build target/tensorrt-backend -j
+cmake --install target/tensorrt-backend
+```
+
+See [TensorRT model support](../../../../README.md#tensorrt-engines) for engine
+compatibility and I/O limits.
+
+### Warp operators
+
+Build the [shared Warp adapters](../../triton/backends/README.md#warp-operators)
+with ONNX Runtime headers and LibTorch matching the selected native backends.
+Install and link the required adapters beside their backends:
+
+```sh
+cmake --install /path/to/warp-build --prefix "$PWD/target/warp-adapters"
+mkdir -p "$LEAPP_NATIVE_BACKENDS/onnxruntime" "$LEAPP_NATIVE_BACKENDS/nativert"
+ln -s "$PWD/target/warp-adapters/lib/libleapp_wrp_onnx_custom_op.so" \
+  "$LEAPP_NATIVE_BACKENDS/onnxruntime/libleapp_wrp_onnx_custom_op.so"
+ln -s "$PWD/target/warp-adapters/lib/libleapp_wrp_torch_custom_op.so" \
+  "$LEAPP_NATIVE_BACKENDS/nativert/libleapp_wrp_torch_custom_op.so"
+```
+
+Use matching Warp export/runtime releases and add Warp's `bin/` directory to the
+library search path. See [Warp model support](../../../../README.md#native-warp-support)
+for execution requirements.
+
+## Adding a backend
+
+Implement `BackendPlugin` and register it in [`backends.rs`](../backends.rs).
+The trait documents execution, ownership, and safety requirements. C++ plugins
+can use the [shared bridge](bridge.rs).

@@ -7,11 +7,9 @@ mod memory;
 mod native;
 
 use crate::dlpack::{BorrowedTensor, SharedTensor};
-use crate::engines::memory::OutputPool;
 use crate::OutputPlacement;
 use native::error::{Error, ErrorKind, Result};
 use std::path::PathBuf;
-use std::sync::Arc;
 
 /// Installation settings specific to Triton.
 #[derive(Debug, Clone)]
@@ -46,10 +44,7 @@ pub(super) fn open(
     graph: &crate::session::graph::Graph<'_>,
     options: &crate::SessionOptions,
 ) -> std::result::Result<std::sync::Arc<dyn crate::engines::Engine>, crate::RuntimeError> {
-    options.output_placement.default_location.validate()?;
-    for location in options.output_placement.overrides.values() {
-        location.validate()?;
-    }
+    options.output_placement.validate()?;
     let installation = Options::default();
     let mut pipeline = convert::convert(bundle, options.device, graph)
         .map_err(|e| crate::RuntimeError::new("convert", e))?;
@@ -120,7 +115,7 @@ impl crate::engines::Engine for TritonEngine {
         &self,
         inputs: &[(&str, BorrowedTensor<'_>)],
         placement: &OutputPlacement,
-        pool: &Arc<OutputPool>,
+        outputs: &mut std::collections::HashMap<&str, crate::dlpack::OutputBuffer<'_>>,
     ) -> std::result::Result<indexmap::IndexMap<String, SharedTensor>, crate::RuntimeError> {
         let inputs = inputs
             .iter()
@@ -139,7 +134,7 @@ impl crate::engines::Engine for TritonEngine {
         // Ensemble output names already use logical LEAPP names, including private terminals.
         Ok(self
             .native
-            .infer(&self.model, &inputs, placement, pool)?
+            .infer(&self.model, &inputs, placement, outputs)?
             .into_iter()
             .collect())
     }

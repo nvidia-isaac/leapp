@@ -33,33 +33,45 @@ fn stream(device: u32) -> Result<Arc<lrt::dlpack::HandoffStream>, lrt::RuntimeEr
 
 pub fn import_items<'py>(
     py: Python<'py>,
-    items: &Bound<'py, PyAny>,
-) -> PyResult<Vec<(String, ManagedTensor)>> {
+    inputs: &Bound<'py, PyAny>,
+    outputs: Option<&Bound<'py, PyAny>>,
+) -> PyResult<[Vec<(String, ManagedTensor)>; 2]> {
     // Retain producers and capsules until every queued dependency has completed,
     // including failed imports. Declare owners last so their deleters run first.
     let mut retained = Vec::new();
     let mut handoffs = Vec::new();
-    let mut owned = Vec::new();
+    let mut owned = [Vec::new(), Vec::new()];
     let imported = (|| {
-        for item in items.try_iter()? {
-            let (name, producer): (String, Bound<'_, PyAny>) = item?.extract()?;
-            retained.push(producer);
-            let (capsule, declared) =
-                request_capsule(py, retained.last().unwrap(), &mut handoffs)?;
-            retained.push(capsule);
-            owned.push((name, consume(retained.last().unwrap())?));
-            let descriptor = owned
-                .last()
-                .unwrap()
-                .1
-                .descriptor()
-                .map_err(PyBufferError::new_err)?;
-            let actual = (descriptor.device.device_type, descriptor.device.device_id);
-            // Pinned producers may conservatively export ordinary CPU descriptors.
-            if actual != declared && !(declared == (3, 0) && actual == (1, 0)) {
-                return Err(PyBufferError::new_err(
-                    "DLPack device descriptor changed during import",
-                ));
+        for ((label, mapping), owned) in [("inputs", Some(inputs)), ("outputs", outputs)]
+            .into_iter()
+            .zip(&mut owned)
+        {
+            let Some(mapping) = mapping else { continue };
+            let items = mapping.call_method0("items").map_err(|_| {
+                PyTypeError::new_err(format!(
+                    "{label} must be a mapping of qualified names to tensors"
+                ))
+            })?;
+            for item in items.try_iter()? {
+                let (name, producer): (String, Bound<'_, PyAny>) = item?.extract()?;
+                retained.push(producer);
+                let (capsule, declared) =
+                    request_capsule(py, retained.last().unwrap(), &mut handoffs)?;
+                retained.push(capsule);
+                owned.push((name, consume(retained.last().unwrap())?));
+                let descriptor = owned
+                    .last()
+                    .unwrap()
+                    .1
+                    .descriptor()
+                    .map_err(PyBufferError::new_err)?;
+                let actual = (descriptor.device.device_type, descriptor.device.device_id);
+                // Pinned producers may conservatively export ordinary CPU descriptors.
+                if actual != declared && !(declared == (3, 0) && actual == (1, 0)) {
+                    return Err(PyBufferError::new_err(
+                        "DLPack device descriptor changed during import",
+                    ));
+                }
             }
         }
         Ok(())
@@ -126,16 +138,15 @@ fn request_capsule<'py>(
 fn consume(capsule: &Bound<'_, PyAny>) -> PyResult<ManagedTensor> {
     // SAFETY: validate capsule name before reading; rename before adopting the lease.
     unsafe {
-        let (name, used, versioned) =
-            if ffi::PyCapsule_IsValid(capsule.as_ptr(), VERSIONED) != 0 {
-                (VERSIONED, USED_VERSIONED, true)
-            } else if ffi::PyCapsule_IsValid(capsule.as_ptr(), LEGACY) != 0 {
-                (LEGACY, USED_LEGACY, false)
-            } else {
-                return Err(PyBufferError::new_err(
-                    "invalid or already consumed DLPack capsule",
-                ));
-            };
+        let (name, used, versioned) = if ffi::PyCapsule_IsValid(capsule.as_ptr(), VERSIONED) != 0 {
+            (VERSIONED, USED_VERSIONED, true)
+        } else if ffi::PyCapsule_IsValid(capsule.as_ptr(), LEGACY) != 0 {
+            (LEGACY, USED_LEGACY, false)
+        } else {
+            return Err(PyBufferError::new_err(
+                "invalid or already consumed DLPack capsule",
+            ));
+        };
         let ptr = ffi::PyCapsule_GetPointer(capsule.as_ptr(), name);
         if ptr.is_null() || ffi::PyCapsule_SetName(capsule.as_ptr(), used) != 0 {
             return Err(PyErr::fetch(capsule.py()));

@@ -100,12 +100,56 @@ pub(crate) fn byte_size(dtype: DLDataType, shape: &[i64]) -> Result<usize> {
 
 /// Validate metadata once at the engine boundary. The borrow supplies pointer validity.
 pub(crate) fn layout(input: BorrowedTensor<'_>) -> Result<(&[i64], usize)> {
-    let t = input.descriptor();
+    layout_with_device(input, None)
+}
+
+/// The workspace already validated its execution device at initialization.
+pub(crate) fn layout_on(input: BorrowedTensor<'_>, known: DLDevice) -> Result<(&[i64], usize)> {
+    layout_with_device(input, Some(known))
+}
+
+/// Read a layout that has already passed the engine boundary.
+/// # Safety
+/// Metadata must retain its validated contiguous layout, dtype and byte size,
+/// and shape pointers must outlive the returned slice.
+pub(crate) unsafe fn layout_unchecked<'a>(tensor: DLTensor) -> (&'a [i64], usize) {
+    let shape = if tensor.ndim == 0 {
+        &[]
+    } else {
+        // SAFETY: the caller supplies validated, unchanged metadata.
+        unsafe { std::slice::from_raw_parts(tensor.shape, tensor.ndim as usize) }
+    };
+    let count = shape
+        .iter()
+        .fold(1usize, |count, &dim| count * dim as usize);
+    let len = count * usize::from(tensor.dtype.bits / 8);
+    (shape, len)
+}
+
+fn layout_with_device(
+    input: BorrowedTensor<'_>,
+    known: Option<DLDevice>,
+) -> Result<(&[i64], usize)> {
+    // SAFETY: the input borrow retains the descriptor's metadata for the returned slice.
+    let result = unsafe { layout_metadata(*input.descriptor()) }?;
+    let actual = input.descriptor().device;
+    if !known.is_some_and(|device| {
+        device.device_type == actual.device_type && device.device_id == actual.device_id
+    }) {
+        location(actual)?.validate()?;
+    }
+    Ok(result)
+}
+
+/// Check contiguous tensor metadata without probing device availability.
+/// # Safety
+/// Shape and stride pointers must cover the declared rank and outlive the returned slice.
+pub(crate) unsafe fn layout_metadata<'a>(t: DLTensor) -> Result<(&'a [i64], usize)> {
     let n = usize::try_from(t.ndim).map_err(|_| invalid("negative dimension count"))?;
     if n > isize::MAX as usize / 8 || (n != 0 && t.shape.is_null()) {
         return Err(invalid("invalid shape descriptor"));
     }
-    // SAFETY: BorrowedTensor's contract covers metadata lengths; zero-dimensional shapes need no pointer.
+    // SAFETY: the caller covers metadata lengths; zero-dimensional shapes need no pointer.
     let shape = if n == 0 {
         &[]
     } else {
@@ -118,9 +162,9 @@ pub(crate) fn layout(input: BorrowedTensor<'_>) -> Result<(&[i64], usize)> {
     if !t.strides.is_null() && len != 0 {
         let mut expected = 1i64;
         for i in (0..n).rev() {
-            // SAFETY: BorrowedTensor guarantees ndim stride entries when non-null.
+            // SAFETY: the caller guarantees ndim stride entries when non-null.
             if shape[i] > 1 && unsafe { *t.strides.add(i) } != expected {
-                return Err(invalid("DLPack inputs must be C-contiguous"));
+                return Err(invalid("DLPack tensors must be C-contiguous"));
             }
             expected = expected
                 .checked_mul(shape[i])
@@ -132,7 +176,6 @@ pub(crate) fn layout(input: BorrowedTensor<'_>) -> Result<(&[i64], usize)> {
         .checked_add(offset)
         .and_then(|v| v.checked_add(len))
         .ok_or_else(|| invalid("tensor address overflow"))?;
-    location(t.device)?.validate()?;
     Ok((shape, len))
 }
 
@@ -148,14 +191,14 @@ unsafe extern "C" fn delete(p: *mut DLManagedTensorVersioned) {
     }
 }
 
-pub(crate) fn from_buffer(
+/// # Safety
+/// Dtype and shape must have been checked against this ready allocation's byte
+/// size. All dimensions and the rank must be valid and unchanged since validation.
+pub(crate) unsafe fn from_buffer(
     dtype: DLDataType,
     mut shape: Vec<i64>,
     buffer: Arc<Buffer>,
 ) -> Result<SharedTensor> {
-    if byte_size(dtype, &shape)? != buffer.len {
-        return Err(invalid("output byte size mismatch"));
-    }
     let descriptor = DLTensor {
         data: if buffer.len == 0 {
             ptr::null_mut()
@@ -169,7 +212,6 @@ pub(crate) fn from_buffer(
         strides: ptr::null_mut(),
         byte_offset: 0,
     };
-    let exposed_buffer = buffer.clone();
     let copy_buffer = buffer.clone();
     let context = Box::into_raw(Box::new(Output {
         _shape: shape,
@@ -189,7 +231,6 @@ pub(crate) fn from_buffer(
     unsafe {
         SharedTensor::new(
             ManagedTensor::from_versioned(p).unwrap(),
-            Some(Box::new(move || exposed_buffer.expose())),
             Some(Box::new(move |destination| {
                 if destination.len() != copy_buffer.len {
                     return Err("CPU copy size does not match allocation".into());
@@ -208,40 +249,11 @@ pub(crate) fn from_buffer(
 /// Engine allocation used for initial state and isolation of writable public outputs.
 /// This is deliberately not a tensor method or framework conversion API.
 pub fn copy(input: BorrowedTensor<'_>, target: Option<MemoryLocation>) -> Result<SharedTensor> {
-    copy_with(input, target, |len, location| {
-        Ok(Arc::new(Buffer::allocate_for_copy(len, location)?))
-    })
-}
-
-pub(crate) fn copy_with(
-    input: BorrowedTensor<'_>,
-    target: Option<MemoryLocation>,
-    allocate: impl FnOnce(usize, MemoryLocation) -> Result<Arc<Buffer>>,
-) -> Result<SharedTensor> {
     let t = input.descriptor();
     let (shape, len) = layout(input)?;
     let source = location(t.device)?;
     let target = target.unwrap_or(source);
-    let buffer = allocate(len, target)?;
-    copy_into(input, &buffer)?;
-    from_buffer(t.dtype, shape.to_vec(), buffer)
-}
-
-#[cfg(test)]
-#[path = "../../../tests/unit_tests/memory/dlpack.rs"]
-mod tests;
-
-/// Copy ready borrowed storage into a private fixed slot of exactly the same byte size.
-/// # Safety
-/// The destination must be exclusive, disjoint from input, and outlive this synchronous copy.
-pub(crate) unsafe fn write_buffer(input: BorrowedTensor<'_>, buffer: &Buffer) -> Result<()> {
-    let t = input.descriptor();
-    let (_, len) = layout(input)?;
-    if len != buffer.len {
-        return Err(invalid("fixed buffer byte size mismatch"));
-    }
-    let source = location(t.device)?;
-    let target = buffer.location;
+    let buffer = Arc::new(Buffer::allocate_for_copy(len, target)?);
     let ptr = t
         .data
         .cast::<u8>()
@@ -271,10 +283,29 @@ pub(crate) unsafe fn write_buffer(input: BorrowedTensor<'_>, buffer: &Buffer) ->
             }
         }
     }
-    Ok(())
+    // SAFETY: layout established the byte size; the completed copy initialized the allocation.
+    unsafe { from_buffer(t.dtype, shape.to_vec(), buffer) }
 }
 
-fn copy_into(input: BorrowedTensor<'_>, buffer: &Buffer) -> Result<()> {
-    // SAFETY: only called with a newly reserved allocation, disjoint from input.
-    unsafe { write_buffer(input, buffer) }
+#[cfg(test)]
+#[path = "../../../tests/unit_tests/memory/dlpack.rs"]
+mod tests;
+
+/// Validated contiguous ranges overlap only within the same address space.
+pub(crate) fn ranges_overlap(
+    left: crate::dlpack::DLDevice,
+    a: usize,
+    a_len: usize,
+    right: crate::dlpack::DLDevice,
+    b: usize,
+    b_len: usize,
+) -> bool {
+    let space = |device: crate::dlpack::DLDevice| {
+        if device.device_type == crate::dlpack::kDLCUDA as i32 {
+            (2, device.device_id)
+        } else {
+            (1, 0)
+        }
+    };
+    a_len != 0 && b_len != 0 && space(left) == space(right) && a < b + b_len && b < a + a_len
 }

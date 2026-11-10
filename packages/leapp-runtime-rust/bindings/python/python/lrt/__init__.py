@@ -32,20 +32,12 @@ class ErrorCode(IntEnum):
 
 
 @dataclass(frozen=True)
-class OutputPoolOptions:
-    """Per-session cached buffer count; bytes follow bundle and dynamic sizes."""
-
-    max_entries: int = 64
-
-
-@dataclass(frozen=True)
 class SessionOptions:
-    """Construction-time model placement, output storage, and cache retention."""
+    """Construction-time engine and device placement."""
 
     device: str = "cpu"
     output_device: str = "cpu"
     output_overrides: dict[str, str] = field(default_factory=dict)
-    output_pool: OutputPoolOptions = field(default_factory=OutputPoolOptions)
     engine: str = _DEFAULT_ENGINE
 
 
@@ -60,6 +52,5 @@ __all__ = [
     "RunResult",
     "RuntimeError",
     "SessionOptions",
-    "OutputPoolOptions",
     "Session",
 ]

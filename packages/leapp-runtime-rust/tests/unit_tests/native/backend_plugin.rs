@@ -17,12 +17,25 @@ impl BackendPlugin for CopyPlugin {
         Ok(Box::new(Self(self.0.clone())))
     }
 
-    fn run_dynamic(
+    unsafe fn run_dynamic(
         &mut self,
         inputs: &[BorrowedTensor<'_>],
+        outputs: &[(usize, DLTensor)],
         transfers: &mut Transfers,
-    ) -> anyhow::Result<Vec<SharedTensor>> {
-        Ok(vec![transfers.copy(inputs[0], MemoryLocation::Cpu)?])
+    ) -> anyhow::Result<Vec<Option<SharedTensor>>> {
+        if let Some(output) = outputs.first() {
+            let input = inputs[0].as_cpu_slice::<f32>().unwrap();
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    input.as_ptr(),
+                    output.1.data.cast::<f32>(),
+                    input.len(),
+                )
+            };
+            Ok(vec![None])
+        } else {
+            Ok(vec![Some(transfers.copy(inputs[0], MemoryLocation::Cpu)?)])
+        }
     }
 
     fn loaded_identity(&self) -> usize {
@@ -42,13 +55,14 @@ fn plan(nodes: usize) -> Arc<Plan> {
                 name: format!("node{i}"),
                 model: i,
                 inputs: vec![i],
-                input_specs: vec![spec()],
                 outputs: vec![i + 1],
             })
             .collect(),
         inputs: IndexMap::from([("input".into(), 0)]),
+        public_inputs: 1,
         outputs: IndexMap::from([("output".into(), nodes)]),
         slots: (0..=nodes).map(|_| Arc::new(spec())).collect(),
+        terminal_outputs: [nodes].into_iter().collect(),
     })
 }
 
@@ -58,9 +72,9 @@ fn dynamic_only_trait_defaults_and_peers_preserve_output_ownership() {
     assert!(model.needs_guard());
     assert!(!model.can_prepare());
     assert!(!model.is_prepared());
-    assert!(!model.run_borrowed(&[]).unwrap());
+    assert_eq!(model.input_alignment(), 0);
     assert_eq!(
-        backends::error("execute", model.run().unwrap_err()).code(),
+        backends::error("execute", unsafe { model.run(&[], &[], &[]) }.unwrap_err()).code(),
         crate::ErrorCode::Unsupported
     );
     // SAFETY: empty slices have no storage to retain; this optional path rejects them.
@@ -72,9 +86,8 @@ fn dynamic_only_trait_defaults_and_peers_preserve_output_ownership() {
     let parent = NativeEngine::with_models(
         plan(1),
         vec![model],
-        MemoryLocation::Cpu,
         Some(Arc::new(Mutex::new(()))),
-        Default::default(),
+        &SessionOptions::default(),
     )
     .unwrap();
     let peer = parent.peer().unwrap();
@@ -97,7 +110,7 @@ fn dynamic_only_trait_defaults_and_peers_preserve_output_ownership() {
         .run(
             &[("input", BorrowedTensor::cpu(&values, &[1]).unwrap())],
             &OutputPlacement::default(),
-            &Arc::new(OutputPool::new(Default::default(), 0)),
+            &mut HashMap::new(),
         )
         .unwrap();
     drop(parent);
@@ -106,7 +119,7 @@ fn dynamic_only_trait_defaults_and_peers_preserve_output_ownership() {
         .run(
             &[("input", BorrowedTensor::cpu(&values, &[1]).unwrap())],
             &OutputPlacement::default(),
-            &Arc::new(OutputPool::new(Default::default(), 0)),
+            &mut HashMap::new(),
         )
         .unwrap();
     drop(peer);
@@ -114,12 +127,13 @@ fn dynamic_only_trait_defaults_and_peers_preserve_output_ownership() {
     assert_eq!(second["output"].to_cpu_vec::<f32>().unwrap(), [7.]);
 }
 
-// A prepared backend verifies direct routing, decline, and no retry after an
+// A prepared backend verifies preselected input routing and no retry after an
 // execution error without needing an SDK or adding production test hooks.
 struct PreparedProbe {
-    outcome: Result<bool, &'static str>,
+    alignment: usize,
+    outcome: Result<(), &'static str>,
     input: usize,
-    output: usize,
+    outputs: Vec<usize>,
     runs: Arc<AtomicUsize>,
 }
 
@@ -127,8 +141,9 @@ impl BackendPlugin for PreparedProbe {
     fn new_session(&self) -> anyhow::Result<Box<dyn BackendPlugin>> {
         Ok(Box::new(Self {
             input: 0,
-            output: 0,
+            outputs: Vec::new(),
             runs: self.runs.clone(),
+            alignment: self.alignment,
             outcome: self.outcome,
         }))
     }
@@ -138,7 +153,11 @@ impl BackendPlugin for PreparedProbe {
     }
 
     fn is_prepared(&self) -> bool {
-        self.output != 0
+        !self.outputs.is_empty()
+    }
+
+    fn input_alignment(&self) -> usize {
+        self.alignment
     }
 
     unsafe fn prepare(
@@ -147,39 +166,47 @@ impl BackendPlugin for PreparedProbe {
         outputs: &[BorrowedTensor<'_>],
     ) -> anyhow::Result<()> {
         self.input = inputs[0].descriptor().data as usize;
-        self.output = outputs[0].descriptor().data as usize;
+        self.outputs = outputs
+            .iter()
+            .map(|view| view.descriptor().data as usize)
+            .collect();
         Ok(())
     }
 
-    fn run(&mut self) -> anyhow::Result<()> {
+    unsafe fn run(
+        &mut self,
+        inputs: &[(&str, BorrowedTensor<'_>)],
+        routes: &[InputRoute],
+        bindings: &[(usize, DLTensor)],
+    ) -> anyhow::Result<()> {
         self.runs.fetch_add(1, Ordering::SeqCst);
-        // SAFETY: this fixture prepares one f32 input/output, retained by the workspace.
-        unsafe {
-            *(self.output as *mut f32) = *(self.input as *const f32);
+        self.outcome.map_err(anyhow::Error::msg)?;
+        let address = routes.first().map_or(self.input, |route| {
+            let tensor = inputs[route.boundary].1.descriptor();
+            let address = tensor.data as usize + tensor.byte_offset as usize;
+            assert_ne!(address, self.input);
+            address
+        });
+        // SAFETY: this fixture's validated f32 input and prepared output stay
+        // alive under the workspace lock, whether routed or already bound.
+        for (position, &original) in self.outputs.iter().enumerate() {
+            let output = bindings
+                .iter()
+                .find(|output| output.0 == position)
+                .map_or(original, |output| {
+                    output.1.data as usize + output.1.byte_offset as usize
+                });
+            unsafe { *(output as *mut f32) = *(address as *const f32) };
         }
         Ok(())
     }
 
-    fn run_borrowed(&mut self, inputs: &[BorrowedTensor<'_>]) -> anyhow::Result<bool> {
-        assert_ne!(inputs[0].descriptor().data as usize, self.input);
-        let handled = self.outcome.map_err(anyhow::Error::msg)?;
-        if handled {
-            let value = inputs[0]
-                .as_cpu_slice::<f32>()
-                .map_err(anyhow::Error::msg)?[0];
-            // SAFETY: the prepared output is exclusively owned under the workspace lock.
-            unsafe {
-                *(self.output as *mut f32) = value;
-            }
-        }
-        Ok(handled)
-    }
-
-    fn run_dynamic(
+    unsafe fn run_dynamic(
         &mut self,
         _: &[BorrowedTensor<'_>],
+        _: &[(usize, DLTensor)],
         _: &mut Transfers,
-    ) -> anyhow::Result<Vec<SharedTensor>> {
+    ) -> anyhow::Result<Vec<Option<SharedTensor>>> {
         unreachable!("prepared fixture")
     }
 
@@ -189,27 +216,31 @@ impl BackendPlugin for PreparedProbe {
 }
 
 #[test]
-fn borrowed_execution_only_falls_back_after_an_explicit_decline() {
-    for outcome in [Ok(true), Ok(false), Err("injected execution failure")] {
+fn prepared_execution_uses_one_entry_point_and_never_retries_errors() {
+    for (alignment, outcome) in [
+        (1, Ok(())),
+        (0, Ok(())),
+        (1, Err("injected execution failure")),
+    ] {
         let runs = Arc::new(AtomicUsize::new(0));
         let model = PreparedProbe {
+            alignment,
             outcome,
             input: 0,
-            output: 0,
+            outputs: Vec::new(),
             runs: runs.clone(),
         };
         let engine = NativeEngine::with_models(
             plan(1),
             vec![Box::new(model)],
-            MemoryLocation::Cpu,
             None,
-            Default::default(),
+            &SessionOptions::default(),
         )
         .unwrap();
         let result = engine.run(
             &[("input", BorrowedTensor::cpu(&[7f32], &[1]).unwrap())],
             &OutputPlacement::default(),
-            &Arc::new(OutputPool::new(Default::default(), 0)),
+            &mut HashMap::new(),
         );
         if outcome.is_err() {
             assert!(result
@@ -220,10 +251,7 @@ fn borrowed_execution_only_falls_back_after_an_explicit_decline() {
         } else {
             assert_eq!(result.unwrap()["output"].to_cpu_vec::<f32>().unwrap(), [7.]);
         }
-        assert_eq!(
-            runs.load(Ordering::SeqCst),
-            usize::from(outcome == Ok(false))
-        );
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
     }
 }
 
@@ -267,11 +295,12 @@ impl BackendPlugin for PartialBinding {
         Ok(())
     }
 
-    fn run_dynamic(
+    unsafe fn run_dynamic(
         &mut self,
         _inputs: &[BorrowedTensor<'_>],
+        _outputs: &[(usize, DLTensor)],
         _transfers: &mut Transfers,
-    ) -> anyhow::Result<Vec<SharedTensor>> {
+    ) -> anyhow::Result<Vec<Option<SharedTensor>>> {
         anyhow::bail!("failed construction must never reach execution")
     }
 
@@ -306,13 +335,7 @@ fn failed_preparation_drops_all_trait_objects_before_workspace_slots() {
             }) as Box<dyn BackendPlugin>
         })
         .collect();
-    let result = NativeEngine::with_models(
-        plan.clone(),
-        models,
-        MemoryLocation::Cpu,
-        None,
-        Default::default(),
-    );
+    let result = NativeEngine::with_models(plan.clone(), models, None, &SessionOptions::default());
     let error = result.err().expect("second preparation must fail");
     assert_eq!(error.phase(), "prepare");
     assert!(error.to_string().contains("injected preparation failure"));

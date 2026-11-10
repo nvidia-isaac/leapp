@@ -38,8 +38,13 @@ fn ensembles_support_host_and_device_buffers_and_retained_results() {
 
         let mut retained = None;
         for location in locations() {
-            let observation = placed(&[1f32, 2., 3., 4.], &[4], location).unwrap();
-            let bias = placed(&[10f32, 20., 30., 40.], &[4], location).unwrap();
+            let input_location = if support::engine() == lrt::EngineKind::Native {
+                MemoryLocation::Cuda { device_id: 0 }
+            } else {
+                location
+            };
+            let observation = placed(&[1f32, 2., 3., 4.], &[4], input_location).unwrap();
+            let bias = placed(&[10f32, 20., 30., 40.], &[4], input_location).unwrap();
             let mut options = options();
             options.output_placement.default_location = location;
             let mut session = Session::open(runtime.info(), options).unwrap();

@@ -6,7 +6,7 @@ use crate::{
     dlpack::{import_items, Output},
 };
 use leapp_runtime_bindings::{Error, SessionHandle};
-use lrt::dlpack::BorrowedTensor;
+use lrt::dlpack::{BorrowedTensor, OutputBuffer};
 use lrt::{EngineKind, ExecutionDevice, RunResult, SessionOptions};
 use pyo3::{
     exceptions::{PyKeyError, PyTypeError, PyValueError},
@@ -41,10 +41,6 @@ impl PySession {
     ) -> PyResult<Self> {
         let mut opts = SessionOptions::default();
         if let Some(options) = options {
-            opts.output_pool.max_entries = options
-                .getattr("output_pool")?
-                .getattr("max_entries")?
-                .extract()?;
             let engine: String = options.getattr("engine")?.extract()?;
             opts.engine = match engine.as_str() {
                 "triton" => EngineKind::Triton,
@@ -125,11 +121,14 @@ impl PySession {
     }
     /// Run with all public inputs; retain input owners until completion.
     /// Inputs must remain unmodified during the call.
-    fn run(&self, py: Python<'_>, inputs: &Bound<'_, PyAny>) -> PyResult<PyRunResult> {
-        let items = inputs.call_method0("items").map_err(|_| {
-            PyTypeError::new_err("inputs must be a mapping of qualified names to tensors")
-        })?;
-        let owned = import_items(py, &items)?;
+    #[pyo3(signature = (inputs, *, outputs=None))]
+    fn run(
+        &self,
+        py: Python<'_>,
+        inputs: &Bound<'_, PyAny>,
+        outputs: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<PyRunResult> {
+        let [owned, owned_outputs] = import_items(py, inputs, outputs)?;
         let views = owned
             .iter()
             .map(|(name, value)| -> PyResult<_> {
@@ -147,9 +146,37 @@ impl PySession {
                 }
                 Ok(views)
             })?;
-        // Owners stay on this attached stack until inference releases every input.
+        let mut buffers = HashMap::new();
+        for (name, output) in &owned_outputs {
+            let flags = output
+                .flags()
+                .map_err(pyo3::exceptions::PyBufferError::new_err)?;
+            if flags
+                & (lrt::dlpack::DLPACK_FLAG_BITMASK_READ_ONLY
+                    | lrt::dlpack::DLPACK_FLAG_BITMASK_IS_COPIED)
+                != 0
+            {
+                return Err(pyo3::exceptions::PyBufferError::new_err(
+                    "output buffer must be writable and exported without copying",
+                ));
+            }
+            // SAFETY: the producer lease retains writable storage through completion;
+            // callers must avoid concurrent access; execution rejects overlapping buffers.
+            let buffer = unsafe {
+                OutputBuffer::new(
+                    output
+                        .descriptor()
+                        .map_err(pyo3::exceptions::PyBufferError::new_err)?,
+                )
+            }
+            .map_err(|e| crate::execution_error(py, e))?;
+            if buffers.insert(name.as_str(), buffer).is_some() {
+                return Err(PyValueError::new_err("duplicate output name"));
+            }
+        }
+        // Foreign owners stay on the attached stack until all writes have completed.
         let result = py
-            .detach(|| self.inner.run(&views))
+            .detach(|| self.inner.run_into(&views, &mut buffers))
             .map_err(|e| binding_error(py, e))?;
         Ok(PyRunResult { inner: result })
     }

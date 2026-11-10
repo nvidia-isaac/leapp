@@ -5,7 +5,7 @@
 
 mod ffi;
 
-use super::BackendPlugin;
+use super::{BackendPlugin, InputRoute};
 use crate::{
     bundle::schema::NodeSpec,
     dlpack::{BorrowedTensor, DLTensor, SharedTensor},
@@ -24,7 +24,7 @@ pub(in crate::engines::native) struct Model {
     loaded: Arc<Loaded>,
     session: *mut c_void,
     prepared: *mut c_void,
-    location: MemoryLocation,
+    input_views: Views,
 }
 
 // SAFETY: each workspace mutex exclusively owns its execution handles. The bridge selects
@@ -35,6 +35,8 @@ struct Loaded {
     library: ffi::Library,
     model: *mut c_void,
     guarded: bool,
+    location: MemoryLocation,
+    output_alignment: usize,
 }
 
 // SAFETY: the backend permits concurrent shared-model access or requires the
@@ -75,6 +77,8 @@ impl Model {
             library: ffi::Library::open(&directory.join(backend).join(library), backend)?,
             model: ptr::null_mut(),
             guarded,
+            location,
+            output_alignment: if backend == "tensorrt" { 256 } else { 1 },
         };
         let path = CString::new(spec.parameters.model_path.as_os_str().as_encoded_bytes())?;
         let inputs: Vec<_> = spec.inputs.iter().map(port).collect();
@@ -97,15 +101,15 @@ impl Model {
             ffi::nonnull(loaded.model)?;
         }
 
-        Self::with_loaded(Arc::new(loaded), location)
+        Self::with_loaded(Arc::new(loaded))
     }
 
-    fn with_loaded(loaded: Arc<Loaded>, location: MemoryLocation) -> Result<Self> {
+    fn with_loaded(loaded: Arc<Loaded>) -> Result<Self> {
         let mut value = Self {
             loaded,
             session: ptr::null_mut(),
             prepared: ptr::null_mut(),
-            location,
+            input_views: Views::default(),
         };
         let api = &value.loaded.library.api;
         // SAFETY: the shared loaded handle outlives every private session.
@@ -123,10 +127,7 @@ impl BackendPlugin for Model {
     }
 
     fn new_session(&self) -> Result<Box<dyn BackendPlugin>> {
-        Ok(Box::new(Self::with_loaded(
-            self.loaded.clone(),
-            self.location,
-        )?))
+        Ok(Box::new(Self::with_loaded(self.loaded.clone())?))
     }
 
     fn can_prepare(&self) -> bool {
@@ -136,6 +137,19 @@ impl BackendPlugin for Model {
 
     fn is_prepared(&self) -> bool {
         !self.prepared.is_null()
+    }
+
+    fn input_alignment(&self) -> usize {
+        // SAFETY: only live prepared handles reach the bridge query.
+        if self.prepared.is_null() {
+            0
+        } else {
+            unsafe { (self.loaded.library.api.input_alignment)(self.prepared) }
+        }
+    }
+
+    fn output_alignment(&self) -> usize {
+        self.loaded.output_alignment
     }
 
     /// # Safety
@@ -150,25 +164,19 @@ impl BackendPlugin for Model {
             "native backend model is already prepared"
         );
 
-        let inputs = inputs
-            .iter()
-            .map(|&value| view(value, self.location))
-            .collect::<Result<Vec<_>>>()?;
-        let outputs = outputs
-            .iter()
-            .map(|&value| view(value, self.location))
-            .collect::<Result<Vec<_>>>()?;
+        self.input_views = Views::new(inputs, self.loaded.location)?;
+        let output_views = Views::new(outputs, self.loaded.location)?;
         let api = &self.loaded.library.api;
 
-        // SAFETY: metadata is temporary; the bridge caches the fixed storage
-        // addresses guaranteed by the caller and configures its context once.
+        // SAFETY: the backend copies temporary output metadata; input metadata
+        // and all fixed workspace storage outlive the prepared call.
         unsafe {
             api.check((api.prepare)(
                 self.session,
-                inputs.as_ptr(),
-                inputs.len(),
-                outputs.as_ptr(),
-                outputs.len(),
+                self.input_views.values.as_ptr(),
+                self.input_views.values.len(),
+                output_views.values.as_ptr(),
+                output_views.values.len(),
                 &mut self.prepared,
             ))?;
         }
@@ -178,48 +186,52 @@ impl BackendPlugin for Model {
         Ok(())
     }
 
-    fn run(&mut self) -> Result<()> {
-        ensure!(self.is_prepared(), "unprepared native backend model");
-
-        // SAFETY: prepared handles and workspace buffers remain exclusively
-        // owned. The bridge drains CUDA work on success and failure.
-        unsafe {
-            self.loaded
-                .library
-                .api
-                .check((self.loaded.library.api.run)(self.prepared))
+    unsafe fn run(
+        &mut self,
+        inputs: &[(&str, BorrowedTensor<'_>)],
+        routes: &[InputRoute],
+        outputs: &[(usize, DLTensor)],
+    ) -> Result<()> {
+        let outputs = unsafe { output_bindings(outputs, self.loaded.location) }?;
+        let views = BorrowedViews {
+            views: &mut self.input_views,
+            routes,
+        };
+        for route in routes {
+            let descriptor = inputs[route.boundary].1.descriptor();
+            views.views.values[route.position].data =
+                descriptor.data as usize + descriptor.byte_offset as usize;
         }
-    }
-
-    fn run_borrowed(&mut self, inputs: &[BorrowedTensor<'_>]) -> Result<bool> {
-        ensure!(self.is_prepared(), "unprepared native backend model");
-        let inputs = inputs
-            .iter()
-            .map(|&value| view(value, self.location))
-            .collect::<Result<Vec<_>>>()?;
-        let mut handled = false;
         let api = &self.loaded.library.api;
         // SAFETY: owners remain borrowed until completion, including failures.
         // The backend restores bindings before releasing the borrow.
         unsafe {
-            api.check((api.run_borrowed)(
+            api.check((api.run)(
                 self.prepared,
-                inputs.as_ptr(),
-                inputs.len(),
-                &mut handled,
+                views.views.values.as_ptr(),
+                views.views.values.len(),
+                routes.as_ptr(),
+                routes.len(),
+                outputs.as_ptr(),
+                outputs.len(),
             ))?;
         }
-        Ok(handled)
+        Ok(())
     }
 
-    fn run_dynamic(
+    unsafe fn run_dynamic(
         &mut self,
         inputs: &[BorrowedTensor<'_>],
+        bindings: &[(usize, DLTensor)],
         transfers: &mut crate::engines::native::Transfers,
-    ) -> Result<Vec<SharedTensor>> {
+    ) -> Result<Vec<Option<SharedTensor>>> {
+        let targets = unsafe { output_bindings(bindings, self.loaded.location) }?;
         let inputs = inputs
             .iter()
-            .map(|&value| view(value, self.location))
+            .map(|&value| {
+                // SAFETY: the engine validated and routed every input before dispatch.
+                unsafe { view_validated(value.descriptor(), self.loaded.location) }
+            })
             .collect::<Result<Vec<_>>>()?;
         let api = &self.loaded.library.api;
         let mut output = Outputs {
@@ -234,6 +246,8 @@ impl BackendPlugin for Model {
                 self.session,
                 inputs.as_ptr(),
                 inputs.len(),
+                targets.as_ptr(),
+                targets.len(),
                 &mut output.value,
             ))?;
             ffi::nonnull(output.value)?;
@@ -257,7 +271,11 @@ impl BackendPlugin for Model {
 
             values
                 .iter()
-                .map(|value| {
+                .enumerate()
+                .map(|(position, value)| {
+                    if bindings.iter().any(|output| output.0 == position) {
+                        return Ok(None);
+                    }
                     let location = if value.device == -1 {
                         MemoryLocation::Cpu
                     } else {
@@ -277,12 +295,16 @@ impl BackendPlugin for Model {
                     };
 
                     let borrowed = BorrowedTensor::new(&descriptor);
+                    let len = dlpack::layout(borrowed)?.1;
                     ensure!(
-                        dlpack::layout(borrowed)?.1 == value.bytes,
+                        len == value.bytes,
                         "native backend output byte size mismatch"
                     );
-
-                    transfers.copy(borrowed, self.location)
+                    // SAFETY: this SDK boundary validated the complete layout;
+                    // copy into independent execution-device storage without rechecking it.
+                    transfers
+                        .copy_validated(borrowed, self.loaded.location, len)
+                        .map(Some)
                 })
                 .collect()
         }
@@ -327,6 +349,56 @@ struct Outputs<'a> {
     api: &'a ffi::Api,
 }
 
+/// Owned fixed metadata for initialization and invocation-scoped input binding.
+/// Prepare this once instead of revalidating each borrowed input.
+#[derive(Default)]
+struct Views {
+    values: Vec<ffi::View>,
+    _shapes: Vec<Vec<i64>>,
+}
+
+impl Views {
+    fn new(tensors: &[BorrowedTensor<'_>], location: MemoryLocation) -> Result<Self> {
+        let mut values = tensors
+            .iter()
+            .map(|&tensor| view(tensor, location))
+            .collect::<Result<Vec<_>>>()?;
+        let shapes: Vec<_> = values
+            .iter()
+            .map(|value| {
+                if value.port.rank == 0 {
+                    Vec::new()
+                } else {
+                    // SAFETY: view checked the descriptor's complete layout above.
+                    unsafe { std::slice::from_raw_parts(value.port.shape, value.port.rank) }
+                        .to_vec()
+                }
+            })
+            .collect();
+        for (value, shape) in values.iter_mut().zip(&shapes) {
+            value.port.shape = shape.as_ptr();
+        }
+        Ok(Self {
+            values,
+            _shapes: shapes,
+        })
+    }
+}
+
+struct BorrowedViews<'a> {
+    views: &'a mut Views,
+    routes: &'a [InputRoute],
+}
+
+impl Drop for BorrowedViews<'_> {
+    fn drop(&mut self) {
+        for route in self.routes {
+            // C++ restored its prepared bindings. Keep no caller addresses in Rust.
+            self.views.values[route.position].data = 0;
+        }
+    }
+}
+
 impl Drop for Outputs<'_> {
     fn drop(&mut self) {
         // SAFETY: this guard owns the output handle and outlives its borrowed views.
@@ -344,28 +416,51 @@ fn port(spec: &PortSpec) -> ffi::Port {
     }
 }
 
+/// # Safety
+/// Output metadata and execution placement must be validated and retained through completion.
+unsafe fn output_bindings(
+    outputs: &[(usize, DLTensor)],
+    location: MemoryLocation,
+) -> Result<Vec<ffi::OutputBinding>> {
+    outputs
+        .iter()
+        .map(|output| {
+            Ok(ffi::OutputBinding {
+                position: output.0,
+                view: unsafe { view_validated(&output.1, location) }?,
+            })
+        })
+        .collect()
+}
+
 fn view(value: BorrowedTensor<'_>, location: MemoryLocation) -> Result<ffi::View> {
-    let descriptor = value.descriptor();
+    dlpack::layout(value)?;
     ensure!(
-        dlpack::location(descriptor.device)? == location,
+        dlpack::location(value.descriptor().device)? == location,
         "native backend workspace device mismatch"
     );
+    // SAFETY: initialization checked the complete layout and placement above.
+    unsafe { view_validated(value.descriptor(), location) }
+}
 
-    let (shape, bytes) = dlpack::layout(value)?;
-
+/// # Safety
+/// The tensor metadata and execution placement have already been validated.
+unsafe fn view_validated(descriptor: &DLTensor, location: MemoryLocation) -> Result<ffi::View> {
+    // SAFETY: the caller retains the validated input through backend completion.
+    let (shape, bytes) = unsafe { dlpack::layout_unchecked(*descriptor) };
     Ok(ffi::View {
         port: ffi::Port {
             name: ptr::null(),
             name_size: 0,
             dtype: dtype(dlpack::data_type(descriptor.dtype)?),
-            shape: descriptor.shape,
+            shape: shape.as_ptr(),
             rank: shape.len(),
         },
-        data: descriptor.data as usize + usize::try_from(descriptor.byte_offset)?,
+        data: descriptor.data as usize + descriptor.byte_offset as usize,
         bytes,
         device: match location {
-            MemoryLocation::Cpu | MemoryLocation::PinnedCpu => -1,
-            MemoryLocation::Cuda { device_id } => i32::try_from(device_id)?,
+            MemoryLocation::Cuda { device_id } => device_id as i32,
+            _ => -1,
         },
     })
 }

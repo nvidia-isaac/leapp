@@ -117,14 +117,14 @@ if (!status.ok()) return status;
   share writable storage. Public outputs that also feed back are detached from
   private session state at the configured public location. Never mutate inputs concurrently
   with execution. There are no LEAPP tensor accessors or copy helpers. Allocation
-  pooling belongs to each session; exporting a lease excludes its storage from
-  reuse.
+  belongs to each returned result.
 
-`SessionOptions.output_pool.max_entries` limits cached buffers (default 64).
-Zero disables caching. The byte budget follows bundle output sizes and grows for
-larger dynamic outputs; there is no fixed byte cap. `NewSession` inherits the
-policy with an empty cache. The limit does not restrict live results, and closing
-one session leaves retained outputs and peer sessions valid.
+`Run(inputs, &result, outputs)` writes named outputs into caller-owned buffers.
+Native binds these buffers directly; Triton copies ensemble results into them.
+Only omitted outputs are allocated and returned. Buffers must match the
+output dtype and shape, meet backend device/alignment requirements, and be disjoint
+from inputs and each other. They remain borrowed until return. Their contents are
+unspecified on failure. Calling `Run` without output buffers returns fresh storage.
 
 ## CUDA buffers
 

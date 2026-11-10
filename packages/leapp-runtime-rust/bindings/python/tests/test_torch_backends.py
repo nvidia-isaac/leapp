@@ -52,8 +52,26 @@ def test_torch_dlpack_outputs_survive_reuse_and_session_close(backend, device):
                 inputs = {"model/values": values}
                 weighted_name, transposed_name = "model/output_0", "model/output_1"
             expected = values * torch.arange(2.0, 6.0, device=device) + bias
-            result = session.run(inputs)
-            weighted = torch.from_dlpack(result[weighted_name])
+            target = torch.empty_like(values) if offset == 7.0 else None
+            if target is not None:
+                with pytest.raises(lr.RuntimeError, match="overlap"):
+                    session.run(
+                        inputs,
+                        outputs={
+                            weighted_name: target,
+                            transposed_name: target.reshape(2, 2),
+                        },
+                    )
+            result = session.run(
+                inputs, outputs={weighted_name: target} if target is not None else None
+            )
+            weighted = (
+                target
+                if target is not None
+                else torch.from_dlpack(result[weighted_name])
+            )
+            if target is not None:
+                assert weighted_name not in result.keys()
             transposed = torch.from_dlpack(result[transposed_name])
             assert weighted.device == values.device
             torch.testing.assert_close(transposed, values.reshape(2, 2).t())

@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::dlpack::{BorrowedTensor, SharedTensor};
-use crate::engines::memory::OutputPool;
 use crate::engines::triton::tests::support::{placed, TestTensor};
 use crate::engines::triton::*;
 use crate::MemoryLocation;
@@ -11,9 +10,9 @@ use crate::{
     engines::triton::convert::{convert_bundle, TritonPipeline},
     Bundle,
 };
-use crate::{ExecutionDevice, OutputPoolOptions, Session, SessionOptions};
+use crate::{ExecutionDevice, Session, SessionOptions};
 use std::path::PathBuf;
-use std::{collections::HashMap, env, sync::Arc, thread};
+use std::{collections::HashMap, env, thread};
 
 fn devices() -> Vec<ExecutionDevice> {
     vec![ExecutionDevice::Cpu, ExecutionDevice::Cuda { device_id: 0 }]
@@ -65,60 +64,54 @@ fn output<'a>(outputs: &'a [(String, SharedTensor)], name: &str) -> &'a SharedTe
 
 #[test]
 #[ignore = "requires the NativeRT backend and generated PT2 fixtures"]
-fn session_pool_limits_preserve_peer_and_retained_outputs() {
+fn sessions_preserve_peer_and_retained_outputs() {
     for device in devices() {
         let bundle = bundle("weighted", device);
-        for max_entries in [0, 1, 64] {
-            let mut session = Session::open(
-                &bundle,
-                SessionOptions {
-                    engine: crate::EngineKind::Triton,
-                    cuda_streams: Default::default(),
-                    device,
-                    output_placement: OutputPlacement {
-                        default_location: match device {
-                            ExecutionDevice::Cpu => MemoryLocation::Cpu,
-                            ExecutionDevice::Cuda { device_id } => {
-                                MemoryLocation::Cuda { device_id }
-                            }
-                        },
-                        ..Default::default()
+        let mut session = Session::open(
+            &bundle,
+            SessionOptions {
+                engine: crate::EngineKind::Triton,
+                cuda_streams: Default::default(),
+                device,
+                output_placement: OutputPlacement {
+                    default_location: match device {
+                        ExecutionDevice::Cpu => MemoryLocation::Cpu,
+                        ExecutionDevice::Cuda { device_id } => MemoryLocation::Cuda { device_id },
                     },
-                    output_pool: OutputPoolOptions { max_entries },
+                    ..Default::default()
                 },
-            )
-            .unwrap();
-            let mut peer = session.new_session().unwrap();
-            let input = |values| {
-                HashMap::from([("model/values", BorrowedTensor::cpu(values, &[4]).unwrap())])
-            };
-            let retained = session.run(&input(&[1_f32, 2., 3., 4.])).unwrap();
-            let read = |result: &crate::RunResult| {
-                result
-                    .get("model/output_0")
-                    .unwrap()
-                    .to_cpu_vec::<f32>()
-                    .unwrap()
-            };
-            for _ in 0..3 {
-                assert_eq!(
-                    read(&session.run(&input(&[2_f32; 4])).unwrap()),
-                    [14., 26., 38., 50.]
-                );
-                assert_eq!(
-                    read(&peer.run(&input(&[3_f32; 4])).unwrap()),
-                    [16., 29., 42., 55.]
-                );
-                assert_eq!(read(&retained), [12., 26., 42., 60.]);
-            }
-            session.close();
+            },
+        )
+        .unwrap();
+        let mut peer = session.new_session().unwrap();
+        let input =
+            |values| HashMap::from([("model/values", BorrowedTensor::cpu(values, &[4]).unwrap())]);
+        let retained = session.run(&input(&[1_f32, 2., 3., 4.])).unwrap();
+        let read = |result: &crate::RunResult| {
+            result
+                .get("model/output_0")
+                .unwrap()
+                .to_cpu_vec::<f32>()
+                .unwrap()
+        };
+        for _ in 0..3 {
+            assert_eq!(
+                read(&session.run(&input(&[2_f32; 4])).unwrap()),
+                [14., 26., 38., 50.]
+            );
             assert_eq!(
                 read(&peer.run(&input(&[3_f32; 4])).unwrap()),
                 [16., 29., 42., 55.]
             );
-            peer.close();
             assert_eq!(read(&retained), [12., 26., 42., 60.]);
         }
+        session.close();
+        assert_eq!(
+            read(&peer.run(&input(&[3_f32; 4])).unwrap()),
+            [16., 29., 42., 55.]
+        );
+        peer.close();
+        assert_eq!(read(&retained), [12., 26., 42., 60.]);
     }
 }
 
@@ -128,7 +121,6 @@ fn weights_noncontiguous_outputs_and_memory_placements() {
     for device in devices() {
         let pipeline = pipeline("weighted", device);
         let runtime = open(&pipeline).unwrap();
-        let pool = Arc::new(OutputPool::new(OutputPoolOptions::default(), 0));
         let mut retained = Vec::new();
         for input_location in locations() {
             let input = placed(&[1.0f32, 2.0, 3.0, 4.0], &[4], input_location).unwrap();
@@ -143,7 +135,7 @@ fn weights_noncontiguous_outputs_and_memory_placements() {
                         &pipeline.ensemble.name,
                         &[(pipeline.inputs[0].tensor_name.as_str(), input.view())],
                         &placement,
-                        &pool,
+                        &mut std::collections::HashMap::new(),
                     )
                     .unwrap();
                 let weighted = output(&retained, "model/output_0");
@@ -163,7 +155,6 @@ fn weights_noncontiguous_outputs_and_memory_placements() {
         }
         let repository = runtime._repository.path().to_owned();
         drop(runtime);
-        drop(pool);
         assert!(!repository.exists());
         assert_eq!(
             output(&retained, "model/output_0")
@@ -180,10 +171,9 @@ fn mutation_is_contained_and_concurrent_requests_are_independent() {
     for device in devices() {
         let pipeline = pipeline("mutating", device);
         let runtime = open(&pipeline).unwrap();
-        let pool = Arc::new(OutputPool::new(OutputPoolOptions::default(), 0));
         thread::scope(|scope| {
             for worker in 0..4 {
-                let (runtime, pipeline, pool) = (&runtime, &pipeline, &pool);
+                let (runtime, pipeline) = (&runtime, &pipeline);
                 scope.spawn(move || {
                     for location in locations() {
                         let data = [worker as f32; 4];
@@ -195,7 +185,7 @@ fn mutation_is_contained_and_concurrent_requests_are_independent() {
                                     &pipeline.ensemble.name,
                                     &[(pipeline.inputs[0].tensor_name.as_str(), input.view())],
                                     &OutputPlacement::default(),
-                                    pool,
+                                    &mut std::collections::HashMap::new(),
                                 )
                                 .unwrap();
                             assert_eq!(
@@ -219,7 +209,6 @@ fn dynamic_shapes_backend_error_and_recovery() {
     for device in devices() {
         let pipeline = pipeline("reshape", device);
         let runtime = open(&pipeline).unwrap();
-        let pool = Arc::new(OutputPool::new(OutputPoolOptions::default(), 0));
         let name = pipeline.inputs[0].tensor_name.as_str();
         let bad = BorrowedTensor::cpu(&[1.0f32, 2.0, 3.0], &[3]).unwrap();
         let error = runtime
@@ -228,7 +217,7 @@ fn dynamic_shapes_backend_error_and_recovery() {
                 &pipeline.ensemble.name,
                 &[(name, bad)],
                 &OutputPlacement::default(),
-                &pool,
+                &mut std::collections::HashMap::new(),
             )
             .err()
             .unwrap();
@@ -242,7 +231,7 @@ fn dynamic_shapes_backend_error_and_recovery() {
                     &pipeline.ensemble.name,
                     &[(name, BorrowedTensor::cpu(&data, &shape).unwrap())],
                     &OutputPlacement::default(),
-                    &pool,
+                    &mut std::collections::HashMap::new(),
                 )
                 .unwrap();
             let value = output(&outputs, "model/output_0");
@@ -258,7 +247,6 @@ fn integer_tensors() {
     for device in devices() {
         let pipeline = pipeline("integer", device);
         let runtime = open(&pipeline).unwrap();
-        let pool = Arc::new(OutputPool::new(OutputPoolOptions::default(), 0));
         let outputs = runtime
             .native
             .infer(
@@ -268,7 +256,7 @@ fn integer_tensors() {
                     BorrowedTensor::cpu(&[1i64, 2, 3, 4], &[4]).unwrap(),
                 )],
                 &OutputPlacement::default(),
-                &pool,
+                &mut std::collections::HashMap::new(),
             )
             .unwrap();
         assert_eq!(
@@ -335,7 +323,6 @@ fn mixed_onnx_pt2_ensemble() {
         let bundle = Bundle::open(path).unwrap();
         let pipeline = convert_bundle(&bundle, device).unwrap();
         let runtime = open(&pipeline).unwrap();
-        let pool = Arc::new(OutputPool::new(OutputPoolOptions::default(), 0));
         let outputs = runtime
             .native
             .infer(
@@ -345,7 +332,7 @@ fn mixed_onnx_pt2_ensemble() {
                     BorrowedTensor::cpu(&[1.0f32, 2.0, 3.0, 4.0], &[4]).unwrap(),
                 )],
                 &OutputPlacement::default(),
-                &pool,
+                &mut std::collections::HashMap::new(),
             )
             .unwrap();
         assert_eq!(

@@ -3,6 +3,7 @@
 
 //! Private C++ backend ABI. Keep field order and signatures paired with api.h.
 
+use super::super::InputRoute;
 use crate::engines::error::{Error, ErrorKind};
 use anyhow::{Context, Result};
 use std::{
@@ -25,6 +26,12 @@ pub(super) struct View {
     pub data: usize,
     pub bytes: usize,
     pub device: i32,
+}
+
+#[repr(C)]
+pub(super) struct OutputBinding {
+    pub position: usize,
+    pub view: View,
 }
 
 #[repr(C)]
@@ -53,11 +60,24 @@ pub(super) struct Api {
         *mut *mut c_void,
     ) -> *mut c_char,
     pub destroy_call: unsafe extern "C" fn(*mut c_void),
-    pub run: unsafe extern "C" fn(*mut c_void) -> *mut c_char,
-    pub run_borrowed:
-        unsafe extern "C" fn(*mut c_void, *const View, usize, *mut bool) -> *mut c_char,
-    pub run_dynamic:
-        unsafe extern "C" fn(*mut c_void, *const View, usize, *mut *mut c_void) -> *mut c_char,
+    pub input_alignment: unsafe extern "C" fn(*const c_void) -> usize,
+    pub run: unsafe extern "C" fn(
+        *mut c_void,
+        *const View,
+        usize,
+        *const InputRoute,
+        usize,
+        *const OutputBinding,
+        usize,
+    ) -> *mut c_char,
+    pub run_dynamic: unsafe extern "C" fn(
+        *mut c_void,
+        *const View,
+        usize,
+        *const OutputBinding,
+        usize,
+        *mut *mut c_void,
+    ) -> *mut c_char,
     pub destroy_outputs: unsafe extern "C" fn(*mut c_void),
     pub views: unsafe extern "C" fn(*const c_void, *mut usize) -> *const View,
     pub free_error: unsafe extern "C" fn(*mut c_char),

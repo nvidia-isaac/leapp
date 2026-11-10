@@ -4,7 +4,7 @@
 //! Indexed routing and stable workspace storage. Feedback stays in Session.
 
 use crate::{
-    dlpack::{BorrowedTensor, DLTensor, SharedTensor},
+    dlpack::{BorrowedTensor, DLDevice, DLTensor, SharedTensor},
     engines::memory::{dlpack, Buffer},
     session::graph::{port_ref, Graph, InputSource},
     Bundle, DataType, MemoryLocation, PortSpec,
@@ -36,15 +36,16 @@ pub(super) struct Call {
     pub name: String,
     pub model: usize,
     pub inputs: Vec<usize>,
-    pub input_specs: Vec<TensorSpec>,
     pub outputs: Vec<usize>,
 }
 
 pub(super) struct Plan {
     pub calls: Vec<Call>,
     pub inputs: IndexMap<String, usize>,
+    pub public_inputs: usize,
     pub outputs: IndexMap<String, usize>,
     pub slots: Vec<Arc<TensorSpec>>,
+    pub terminal_outputs: BTreeSet<usize>,
 }
 
 impl Plan {
@@ -85,8 +86,15 @@ impl Plan {
         let mut plan = Self {
             calls: Vec::new(),
             inputs: IndexMap::new(),
+            public_inputs: bundle
+                .pipeline_inputs()
+                .iter()
+                .map(|port| port.name())
+                .collect::<BTreeSet<_>>()
+                .len(),
             outputs: IndexMap::new(),
             slots: Vec::new(),
+            terminal_outputs: BTreeSet::new(),
         };
         let mut outputs = HashMap::new();
         for (name, model) in models {
@@ -119,7 +127,6 @@ impl Plan {
                 name: name.clone(),
                 model: model_id,
                 inputs,
-                input_specs: model.inputs.iter().map(Into::into).collect(),
                 outputs: model
                     .outputs
                     .iter()
@@ -129,6 +136,27 @@ impl Plan {
         }
 
         let pipeline = &bundle.0.description.pipeline;
+        // Session supplies public arguments first, then defaults/feedback in
+        // model declaration order. Resolve that order once, independently of
+        // the topological execution order.
+        let boundary = bundle.pipeline_inputs().iter().cloned().chain(
+            models
+                .iter()
+                .flat_map(|(name, model)| model.inputs.iter().map(move |spec| port_ref(name, spec)))
+                .filter(|port| {
+                    matches!(
+                        graph.sources.get(port),
+                        None | Some(InputSource::Feedback(_))
+                    )
+                }),
+        );
+        plan.inputs = boundary
+            .map(|port| {
+                let name = port.name();
+                let id = plan.inputs[&name];
+                (name, id)
+            })
+            .collect();
         for port in bundle
             .pipeline_outputs()
             .iter()
@@ -143,6 +171,7 @@ impl Plan {
                 let port = port_ref(name, spec);
                 if pipeline.data_flow.get(&port).is_none_or(Vec::is_empty) {
                     plan.outputs.insert(port.name(), outputs[&port]);
+                    plan.terminal_outputs.insert(outputs[&port]);
                 }
             }
         }
@@ -151,8 +180,12 @@ impl Plan {
     }
 }
 
-pub(super) fn matches(spec: &TensorSpec, value: BorrowedTensor<'_>) -> Result<()> {
-    let (shape, _) = dlpack::layout(value)?;
+pub(super) fn matches(
+    spec: &TensorSpec,
+    value: BorrowedTensor<'_>,
+    device: DLDevice,
+) -> Result<usize> {
+    let (shape, len) = dlpack::layout_on(value, device)?;
     ensure!(
         dlpack::data_type(value.descriptor().dtype)? == spec.dtype
             && shape.len() == spec.shape.len()
@@ -163,10 +196,11 @@ pub(super) fn matches(spec: &TensorSpec, value: BorrowedTensor<'_>) -> Result<()
         "port {} does not match declared dtype/shape",
         spec.name
     );
-    Ok(())
+    Ok(len)
 }
 
 pub(super) struct Slot {
+    pub terminal: bool,
     pub spec: Arc<TensorSpec>,
     pub fixed: Option<FixedTensor>,
     dynamic: Option<SharedTensor>,
@@ -174,13 +208,14 @@ pub(super) struct Slot {
 }
 
 impl Slot {
-    pub fn new(spec: Arc<TensorSpec>, location: MemoryLocation) -> Result<Self> {
+    pub fn new(spec: Arc<TensorSpec>, terminal: bool, location: MemoryLocation) -> Result<Self> {
         let fixed = if spec.shape.contains(&-1) {
             None
         } else {
             Some(FixedTensor::new(&spec, location)?)
         };
         Ok(Self {
+            terminal,
             spec,
             fixed,
             dynamic: None,
@@ -199,19 +234,38 @@ impl Slot {
         }
     }
 
-    pub fn assign(
+    pub fn assign_owned(
         &mut self,
-        value: BorrowedTensor<'_>,
+        value: SharedTensor,
         transfers: &mut super::Transfers,
     ) -> Result<()> {
-        matches(&self.spec, value)?;
+        if self.terminal || self.fixed.is_none() {
+            self.dynamic = Some(value);
+            Ok(())
+        } else {
+            let len = self.fixed.as_ref().unwrap().buffer.len;
+            // SAFETY: the plugin guarantees valid storage matching the
+            // producer's declared dtype/shape, hence this fixed allocation.
+            unsafe { self.assign_validated(value.borrow(), len, transfers) }
+        }
+    }
+
+    /// # Safety
+    /// The immutable value must have passed matches for this slot, with byte size len.
+    pub unsafe fn assign_validated(
+        &mut self,
+        value: BorrowedTensor<'_>,
+        len: usize,
+        transfers: &mut super::Transfers,
+    ) -> Result<()> {
         if let Some(fixed) = &mut self.fixed {
-            // SAFETY: the workspace mutex exclusively owns this disjoint workspace slot.
+            // SAFETY: the validated value fits this exclusively owned workspace slot.
             unsafe {
                 transfers.write(value, &fixed.buffer)?;
             }
         } else {
-            self.dynamic = Some(transfers.copy(value, self.location)?);
+            // SAFETY: the caller checked the layout and retains it through this copy.
+            self.dynamic = Some(unsafe { transfers.copy_validated(value, self.location, len)? });
         }
         Ok(())
     }
@@ -219,13 +273,39 @@ impl Slot {
     pub fn clear_dynamic(&mut self) {
         self.dynamic = None;
     }
+
+    pub fn snapshot(
+        &self,
+        target: MemoryLocation,
+        transfers: &mut super::Transfers,
+    ) -> Result<SharedTensor> {
+        if let Some(value) = &self.dynamic {
+            // Independently owned backend results can be returned without another copy.
+            if target == self.location {
+                return Ok(value.clone());
+            }
+            // SAFETY: private, completed backend storage remains alive through the copy.
+            return unsafe {
+                let view = value.borrow();
+                let (_, len) = dlpack::layout_unchecked(*view.descriptor());
+                transfers.copy_validated(view, target, len)
+            };
+        }
+        let fixed = self
+            .fixed
+            .as_ref()
+            .with_context(|| format!("uninitialized slot {}", self.spec.name))?;
+        // SAFETY: initialization validated the fixed descriptor/allocation;
+        // execution completed before snapshotting.
+        unsafe { transfers.copy_validated(fixed.view(), target, fixed.buffer.len) }
+    }
 }
 
-/// Metadata and addresses remain stable while prepared backend bindings borrow them.
+/// Owned metadata and storage for a fixed workspace slot.
 pub(super) struct FixedTensor {
     descriptor: DLTensor,
     _shape: Vec<i64>,
-    buffer: Buffer,
+    pub buffer: Buffer,
 }
 
 // SAFETY: allocations and metadata are owned, accesses are exclusive under the
@@ -238,7 +318,7 @@ impl FixedTensor {
         let mut shape = spec.shape.clone();
         let descriptor = DLTensor {
             data: buffer.ptr.as_ptr().cast(),
-            device: dlpack::device(location)?,
+            device: dlpack::device(buffer.location)?,
             ndim: i32::try_from(shape.len())?,
             dtype,
             shape: shape.as_mut_ptr(),

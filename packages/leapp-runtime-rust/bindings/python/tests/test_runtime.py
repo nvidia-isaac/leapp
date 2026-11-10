@@ -33,17 +33,8 @@ def step(session, value=1):
     )["accumulator/next"]
 
 
-@pytest.mark.parametrize(
-    "options",
-    [
-        {},
-        {"output_pool": lr.OutputPoolOptions(0)},
-        {"output_pool": lr.OutputPoolOptions(1)},
-    ],
-    ids=["default", "no-cache", "one-entry"],
-)
-def test_output_lifetime_feedback_and_close(options):
-    with open_session(**options) as rt:
+def test_output_lifetime_feedback_and_close():
+    with open_session() as rt:
         session = rt.new_session()
         tensor = step(session)
         view = np.from_dlpack(tensor)
@@ -88,9 +79,47 @@ def test_output_lifetime_feedback_and_close(options):
     np.testing.assert_array_equal(view, [retained_value] * 4)
 
 
-def test_negative_cache_limit_is_rejected():
-    with pytest.raises(OverflowError):
-        open_session(output_pool=lr.OutputPoolOptions(-1))
+def test_caller_output_buffers_and_validation():
+    values = np.arange(4, dtype=np.float32)
+    target = np.zeros(4, dtype=np.float32)
+    with open_session() as session:
+        inputs = {"accumulator/observation": values}
+        outputs = {"accumulator/next": target}
+        assert len(session.run(inputs, outputs=outputs)) == 0
+        np.testing.assert_array_equal(target, values)
+        target[:] = 99
+        np.testing.assert_array_equal(
+            np.from_dlpack(session.run(inputs)["accumulator/next"]), values * 2
+        )
+        for bad in [np.zeros(3, dtype=np.float32), np.zeros(4, dtype=np.int32)]:
+            with pytest.raises(lr.RuntimeError):
+                session.run(inputs, outputs={"accumulator/next": bad})
+        with pytest.raises(lr.RuntimeError, match="unknown public output"):
+            session.run(inputs, outputs={"unknown": target})
+        with pytest.raises(lr.RuntimeError, match="overlap"):
+            session.run(inputs, outputs={"accumulator/next": values})
+        readonly = np.zeros(4, dtype=np.float32)
+        readonly.flags.writeable = False
+        with pytest.raises(BufferError):
+            session.run(inputs, outputs={"accumulator/next": readonly})
+    with open_session("dynamic") as session:
+        assert (
+            len(
+                session.run(
+                    {"dynamic/input": values}, outputs={"dynamic/output": target}
+                )
+            )
+            == 0
+        )
+        np.testing.assert_array_equal(target, values)
+        with pytest.raises(lr.RuntimeError):
+            session.run(
+                {"dynamic/input": values[:3]}, outputs={"dynamic/output": target}
+            )
+        np.testing.assert_array_equal(
+            np.from_dlpack(session.run({"dynamic/input": values})["dynamic/output"]),
+            values,
+        )
 
 
 def test_unknown_engine_is_rejected():
@@ -219,8 +248,17 @@ def test_cuda_streams_and_output_placement(output_device):
         with open_session(
             device="cuda:0", output_overrides={"accumulator/next": "cpu"}
         ) as host_session:
-            result = step(host_session)
+            result = host_session.run({"accumulator/observation": obs})[
+                "accumulator/next"
+            ]
             assert result.__dlpack_device__() == (1, 0)
+            target = cp.empty_like(obs)
+            supplied = host_session.run(
+                {"accumulator/observation": obs},
+                outputs={"accumulator/next": target},
+            )
+            assert len(supplied) == 0
+            np.testing.assert_array_equal(cp.asnumpy(target), [2, 4, 6, 8])
 
 
 @pytest.mark.parametrize("output_device", ["cpu", "pinned", "cuda:0"])
@@ -463,10 +501,10 @@ def test_multiple_dlpack_outputs_and_retained_placements(device, tmp_path):
                 )
                 retained.append(result)
         # Retained results must survive later runs with different placement.
-        host = np.arange(1, 5, dtype=np.float32)
+        host_input = torch.arange(1, 5, dtype=torch.float32, device=device)
         host_session = open_session(tmp_path / "policy", device)
         again = host_session.run(
-            {"preprocess/observation": host, "policy/bias": host * 10}
+            {"preprocess/observation": host_input, "policy/bias": host_input * 10}
         )
         np.testing.assert_array_equal(
             np.from_dlpack(again["policy/action"]), [14, 29, 46, 65]
@@ -484,12 +522,23 @@ def test_multiple_dlpack_outputs_and_retained_placements(device, tmp_path):
 
 
 @pytest.mark.skipif(not CUDA, reason="set LEAPP_TEST_CUDA=1")
-@pytest.mark.parametrize("fail", [None, "input", "iterator", "producer"])
+@pytest.mark.parametrize(
+    "fail",
+    [
+        None,
+        "input",
+        "iterator",
+        "producer",
+        "output",
+        "output_iterator",
+        "output_producer",
+    ],
+)
 def test_batch_waits_for_each_producer_stream_even_on_import_error(fail):
     torch = pytest.importorskip("torch")
-    streams = [torch.cuda.Stream(), torch.cuda.Stream()]
-    done = [torch.cuda.Event(), torch.cuda.Event()]
-    values = [torch.empty(4, device="cuda"), torch.empty(4, device="cuda")]
+    streams = [torch.cuda.Stream() for _ in range(3)]
+    done = [torch.cuda.Event() for _ in range(3)]
+    values = [torch.empty(4, device="cuda") for _ in range(3)]
 
     released = []
 
@@ -502,7 +551,9 @@ def test_batch_waits_for_each_producer_stream_even_on_import_error(fail):
 
         def __dlpack__(self, **kwargs):
             capsule = values[self.index].__dlpack__(**kwargs)
-            if fail == "producer" and self.index == 1:
+            if (fail == "producer" and self.index == 1) or (
+                fail == "output_producer" and self.index == 2
+            ):
                 raise ValueError("producer failed")
             return capsule
 
@@ -522,16 +573,30 @@ def test_batch_waits_for_each_producer_stream_even_on_import_error(fail):
             if fail == "iterator":
                 raise ValueError("iterator failed")
 
+    class Outputs:
+        def items(self):
+            with torch.cuda.stream(streams[2]):
+                torch.cuda._sleep(10_000_000)
+                values[2].fill_(-1)
+                done[2].record()
+                yield "policy/action", Producer(2)
+            if fail == "output":
+                yield "invalid", object()
+            if fail == "output_iterator":
+                raise ValueError("output iterator failed")
+
     with open_session("policy", "cuda:0") as rt:
         session = rt.new_session()
         if fail:
-            with pytest.raises(TypeError if fail == "input" else ValueError):
-                session.run(Inputs())
+            with pytest.raises(
+                TypeError if fail in {"input", "output"} else ValueError
+            ):
+                session.run(Inputs(), outputs=Outputs())
         else:
-            result = session.run(Inputs())
-            np.testing.assert_array_equal(
-                np.from_dlpack(result["policy/action"]), [6, 8, 10, 12]
-            )
-        assert all(event.query() for event in done)
+            result = session.run(Inputs(), outputs=Outputs())
+            assert len(result) == 0
+            np.testing.assert_array_equal(values[2].cpu().numpy(), [6, 8, 10, 12])
+        count = 2 if fail in {"input", "iterator", "producer"} else 3
+        assert all(event.query() for event in done[:count])
         gc.collect()
-        assert released == [True, True]
+        assert released == [True] * count

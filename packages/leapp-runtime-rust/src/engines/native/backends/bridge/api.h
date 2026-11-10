@@ -25,13 +25,22 @@ struct View {
   int32_t device;  // CUDA ordinal; -1 for CPU tensors.
 };
 
+struct InputRoute {
+  size_t position;
+  size_t boundary;  // Session input index; Rust resolves its current View data.
+};
+
+struct OutputBinding {
+  size_t position;
+  View view;
+};
+
 // Fallible calls return null or an owned diagnostic released by free_error.
-// All work finishes before return, including errors. A prepared call borrows
-// fixed workspace buffers until destroy_call. Output views live until
-// destroy_outputs; Rust copies them before releasing their owner.
-// Destruction order: calls/outputs, session, model, library. Access is
-// exclusive per session/call. Loaded models may have multiple sessions. TensorRT
-// engines are shared read-only; Torch runners require the Rust graph guard.
+// Prepared workspace storage lives until destroy_call. Invocation input/output
+// bindings and metadata live through run only; returned views live until
+// destroy_outputs. Complete work and restore prepared bindings before
+// returning, including errors. Destruction order: calls/outputs, session,
+// model, library.
 struct Api {
   // Optional caller-owned CUDA stream; null requests internal streams. Retain
   // it through model/session destruction. Peers inherit the same selection.
@@ -44,9 +53,11 @@ struct Api {
   char* (*prepare)(void*, const View*, size_t, const View*, size_t,
                    void**) noexcept;
   void (*destroy_call)(void*) noexcept;
-  char* (*run)(void*) noexcept;
-  char* (*run_borrowed)(void*, const View*, size_t, bool* handled) noexcept;
-  char* (*run_dynamic)(void*, const View*, size_t, void**) noexcept;
+  size_t (*input_alignment)(const void*) noexcept;
+  char* (*run)(void*, const View*, size_t, const InputRoute*, size_t,
+               const OutputBinding*, size_t) noexcept;
+  char* (*run_dynamic)(void*, const View*, size_t, const OutputBinding*, size_t,
+                       void**) noexcept;
   void (*destroy_outputs)(void*) noexcept;
   const View* (*views)(const void*, size_t*) noexcept;
   void (*free_error)(char*) noexcept;

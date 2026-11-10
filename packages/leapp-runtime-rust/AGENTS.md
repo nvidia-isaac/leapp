@@ -12,10 +12,10 @@ Use `name.rs` beside `name/` directories, rather than `mod.rs`.
 
 - `src/bundle/`: immutable bundle inspection and validation.
 - `src/session.rs` and `src/session/`: public execution API, graph routing,
-  initial values, feedback, and session-owned output caches.
+  initial values, feedback, and caller-provided outputs.
 - `src/engines.rs`: private engine contract; native is selected by default.
 - `src/engines/memory*`: reusable CPU, pinned-host, and CUDA allocations, copies,
-  DLPack validation, and output pooling. Keep engine SDK types out of this code.
+  DLPack validation, and output allocation. Keep engine SDK types out of this code.
 - `src/engines/triton/`: conversion, model repositories, native requests, and
   Triton-specific datatype and memory tags.
 - `src/dlpack/`: ABI, leases, and ownership guards.
@@ -101,14 +101,14 @@ Generate `tests/generators/generate_warp_models.py` fixtures, set
 `LEAPP_TEST_ENGINE=triton cargo test --locked engines::tests::warp -- --ignored --test-threads=1`.
 Repeat with `LEAPP_TEST_ENGINE=native` to exercise native execution.
 This covers ONNX/PT2 CPU and GPU instances, CPU/pinned/CUDA output placement,
-pool limits 0/1/64, changed inputs, retained results, peer sessions, and unload.
+changed inputs, retained results, peer sessions, and unload.
 Warp replay requires CUDA even with CPU model instances.
 
 The Python and C++ binding READMEs describe building and testing each adapter.
 Also verify the installed C++ SDK with `bindings/cxx/tests/consumer` so installed
 headers and CMake targets work without generated bridge headers or Rust sources.
-Pool changes must preserve retained/weak owners, exposure exclusion, byte offsets,
-failed-copy cleanup, independent peer caches, and CPU/pinned/CUDA behavior.
+Output changes must preserve retained owners, byte offsets, failure cleanup,
+feedback isolation, and CPU/pinned/CUDA behavior.
 
 ### Minimal backend installations
 
@@ -121,7 +121,8 @@ and should be omitted from this matrix.
 
 Generate all four fixture sets before isolation and set `LEAPP_TRITON_FIXTURES`,
 `LEAPP_TORCHSCRIPT_FIXTURES`, `LEAPP_PT2_FIXTURES`, and `LEAPP_TENSORRT_FIXTURES`.
-With the Python binding and NumPy installed, run for each engine:
+With the Python binding and NumPy installed (plus CuPy for native CUDA inputs),
+run for each engine:
 
 ```sh
 python tests/deployment/check_installation.py --backend onnx --engine native --cuda

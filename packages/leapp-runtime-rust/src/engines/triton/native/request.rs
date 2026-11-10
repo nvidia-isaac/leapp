@@ -5,7 +5,7 @@ use super::{
     error::{check, Handle},
     sys,
 };
-use crate::engines::memory::{Buffer, OutputPool};
+use crate::engines::memory::Buffer;
 use crate::engines::triton::{Error, ErrorKind, OutputPlacement, Result, SharedTensor};
 use std::{
     ffi::{c_char, c_void, CStr, CString},
@@ -28,21 +28,30 @@ struct Completion {
     error: Option<Error>,
 }
 
-pub(crate) struct State {
-    placement: OutputPlacement,
-    pool: Arc<OutputPool>,
+pub(crate) struct State<'a> {
+    placement: &'a OutputPlacement,
+    pub(super) targets: &'a std::collections::HashMap<&'a str, crate::dlpack::OutputBuffer<'a>>,
     completion: Mutex<Completion>,
     ready: Condvar,
 }
 
-impl State {
-    pub(crate) fn new(placement: OutputPlacement, pool: Arc<OutputPool>) -> Self {
+impl<'a> State<'a> {
+    pub(crate) fn new(
+        placement: &'a OutputPlacement,
+        targets: &'a std::collections::HashMap<&'a str, crate::dlpack::OutputBuffer<'a>>,
+    ) -> Self {
         Self {
             placement,
-            pool,
+            targets,
             completion: Mutex::new(Completion::default()),
             ready: Condvar::new(),
         }
+    }
+
+    fn location(&self, name: &str) -> crate::MemoryLocation {
+        self.targets
+            .get(name)
+            .map_or_else(|| self.placement.location(name), |target| target.location())
     }
 
     fn lock(&self) -> MutexGuard<'_, Completion> {
@@ -81,9 +90,7 @@ fn internal(message: &str) -> Error {
 }
 
 // Convert callback failures to owned C errors; no Rust unwind crosses the ABI.
-fn callback(
-    operation: impl FnOnce() -> Result<()> + UnwindSafe,
-) -> *mut sys::TRITONSERVER_Error {
+fn callback(operation: impl FnOnce() -> Result<()> + UnwindSafe) -> *mut sys::TRITONSERVER_Error {
     let error = match catch_unwind(operation) {
         Ok(Ok(())) => return ptr::null_mut(),
         Ok(Err(error)) => error,
@@ -91,7 +98,16 @@ fn callback(
     };
     let message = CString::new(error.to_string().replace('\0', "\\0")).expect("NULs escaped");
     // SAFETY: Triton copies the diagnostic before CString is dropped.
-    unsafe { sys::TRITONSERVER_ErrorNew(sys::TRITONSERVER_ERROR_INTERNAL, message.as_ptr()) }
+    unsafe {
+        sys::TRITONSERVER_ErrorNew(
+            if error.kind() == ErrorKind::InvalidArgument {
+                sys::TRITONSERVER_ERROR_INVALID_ARG
+            } else {
+                sys::TRITONSERVER_ERROR_INTERNAL
+            },
+            message.as_ptr(),
+        )
+    }
 }
 
 pub(crate) unsafe extern "C" fn query(
@@ -113,7 +129,7 @@ pub(crate) unsafe extern "C" fn query(
                     .to_str()
                     .map_err(|_| internal("output name is not UTF-8"))?
             };
-            (*memory, *device) = state.placement.location(name).native();
+            (*memory, *device) = state.location(name).native();
         }
         Ok(())
     })
@@ -141,11 +157,24 @@ pub(crate) unsafe extern "C" fn allocate(
             let name = CStr::from_ptr(name)
                 .to_str()
                 .map_err(|_| internal("output name is not UTF-8"))?;
-            let location = state.placement.location(name);
+            let location = state.location(name);
             (*memory, *device) = location.native();
             // Triton need not call release for null, zero-length allocations.
             if len != 0 {
-                let buffer = state.pool.allocate(len, location)?;
+                if let Some(target) = state.targets.get(name) {
+                    if len > target.bytes {
+                        return Err(Error::new(
+                            ErrorKind::InvalidArgument,
+                            "execute",
+                            "output buffer capacity is insufficient",
+                        ));
+                    }
+                    *data = target.address() as *mut c_void;
+                    return Ok(());
+                }
+                // Placement was validated before submission. Triton fills the
+                // response before a successful result is published.
+                let buffer = Arc::new(Buffer::allocate_validated(len, location, false)?);
                 *data = buffer.ptr.as_ptr().cast();
                 *owner = Box::into_raw(Box::new(buffer)).cast();
             }
@@ -184,13 +213,10 @@ pub(crate) unsafe extern "C" fn release_request(
     // SAFETY: RELEASE_ALL transfers ownership and guarantees no more input access.
     // State remains alive until both completion flags have been observed.
     unsafe {
-        let result = catch_unwind(|| {
-            check(sys::TRITONSERVER_InferenceRequestDelete(request), "release")
-        });
+        let result =
+            catch_unwind(|| check(sys::TRITONSERVER_InferenceRequestDelete(request), "release"));
         let state = &*userp.cast::<State>();
-        state.released(
-            result.unwrap_or_else(|_| Err(internal("panic releasing Triton request"))),
-        );
+        state.released(result.unwrap_or_else(|_| Err(internal("panic releasing Triton request"))));
     }
 }
 
@@ -229,7 +255,9 @@ pub(crate) unsafe extern "C" fn receive_response(
 pub(crate) fn outputs(
     response: &Response,
     placement: &OutputPlacement,
+    targets: &std::collections::HashMap<&str, crate::dlpack::OutputBuffer<'_>>,
 ) -> Result<Vec<(String, SharedTensor)>> {
+    let mut written = 0;
     let mut result = Vec::new();
     // SAFETY: the response is owned and complete; metadata and allocator userp
     // remain live until it is dropped after all output owners are retained.
@@ -269,7 +297,9 @@ pub(crate) fn outputs(
                 .to_str()
                 .map_err(|_| internal("output name is not UTF-8"))?
                 .to_owned();
-            let location = placement.location(&name);
+            let target = targets.get(name.as_str());
+            let location =
+                target.map_or_else(|| placement.location(&name), |target| target.location());
             if (memory, device) != location.native() {
                 return Err(internal("output memory does not match requested placement"));
             }
@@ -280,15 +310,33 @@ pub(crate) fn outputs(
                 return Err(internal("invalid output dimension count"));
             }
             let shape = if dimensions == 0 {
-                Vec::new()
+                &[][..]
             } else {
-                std::slice::from_raw_parts(shape, dimensions).to_vec()
+                std::slice::from_raw_parts(shape, dimensions)
             };
-            if crate::engines::memory::dlpack::byte_size(dtype, &shape)? != len {
+            if crate::engines::memory::dlpack::byte_size(dtype, shape)? != len {
                 return Err(internal("output byte count does not match dtype and shape"));
             }
+            if let Some(target) = target {
+                if target.shape() != shape
+                    || (
+                        target.descriptor().dtype.code,
+                        target.descriptor().dtype.bits,
+                        target.descriptor().dtype.lanes,
+                    ) != (dtype.code, dtype.bits, dtype.lanes)
+                    || (len != 0 && target.address() != data as usize)
+                {
+                    return Err(Error::new(
+                        ErrorKind::InvalidArgument,
+                        "execute",
+                        "output buffer does not match actual output",
+                    ));
+                }
+                written += 1;
+                continue;
+            }
             let buffer = if len == 0 {
-                Arc::new(Buffer::allocate(0, location)?)
+                Arc::new(Buffer::allocate_validated(0, location, false)?)
             } else {
                 if owner.is_null() {
                     return Err(internal("output has no allocation owner"));
@@ -304,12 +352,17 @@ pub(crate) fn outputs(
             };
             result.push((
                 name,
-                crate::engines::memory::dlpack::from_buffer(dtype, shape, buffer)?,
+                // Shape, dtype, and allocation length were checked above.
+                crate::engines::memory::dlpack::from_buffer(dtype, shape.to_vec(), buffer)?,
             ));
         }
     }
+    if written != targets.len() {
+        return Err(internal("missing supplied output"));
+    }
     for name in placement.overrides.keys() {
-        if !result.iter().any(|(output, _)| output == name) {
+        if !targets.contains_key(name.as_str()) && !result.iter().any(|(output, _)| output == name)
+        {
             return Err(Error::new(
                 ErrorKind::InvalidArgument,
                 "execute",

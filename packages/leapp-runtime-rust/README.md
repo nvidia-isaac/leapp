@@ -34,10 +34,9 @@ selecting Cargo features. Running exported bundles does not require Python
 model-export packages.
 
 For native execution, follow the
-[native backend installation guide](src/engines/native/backends/INSTALLATION.md).
-`LEAPP_NATIVE_BACKENDS` defaults to `/opt/leapp/backends`; `ORT_DYLIB_PATH` can
-select an ONNX Runtime library directly. For Triton, use its ONNX Runtime and
-TensorRT backends and the [Torch/Warp plugins](src/engines/triton/backends/README.md).
+[native backend installation guide](src/engines/native/backends/README.md#installation).
+For Triton, use its ONNX Runtime and TensorRT backends and the
+[Torch/Warp plugins](src/engines/triton/backends/README.md).
 `LEAPP_TRITON_BACKENDS` defaults to `$TRITON_ROOT/backends` or
 `/opt/tritonserver/backends`.
 
@@ -107,11 +106,12 @@ fixed-width Rust integers and `f32`/`f64`; booleans and half floats use raw desc
 and returns an independent Rust vector. CUDA transfers select the source device,
 finish before returning, and restore the caller's device. It rejects outputs already exposed through
 `descriptor()` or `export()` on any clone, since foreign consumers may still write
-them. Copying and first exposure are synchronized. CPU copies do not exclude the
-original storage from pool reuse. An existing `BorrowedTensor` can also be read
+them. Copying and first exposure are synchronized. An existing `BorrowedTensor` can also be read
 without copying through its safe `as_cpu_slice` method when its storage is on the host.
-CPU-slice inputs work with both CPU and GPU execution; output placement does not
-change the safe input or output-copy APIs.
+Native backends that bind inputs directly require them on the execution device.
+TensorRT also requires 256-byte aligned addresses, including any DLPack byte
+offset. Incompatible inputs return an error; transfer or align them explicitly.
+Output placement does not change input requirements.
 
 Array libraries and CUDA callers can use standard DLPack descriptors through
 `unsafe { BorrowedTensor::new(&descriptor) }`. They must retain the descriptor,
@@ -176,29 +176,22 @@ feed back are copied to the requested public location before publication, protec
 private feedback and reset snapshots. Do not mutate an allocation while inference
 or another consumer reads it.
 
-Each session owns its output cache. `SessionOptions::output_pool.max_entries`
-limits cached allocations (default 64); zero disables caching while inference
-continues to allocate normally. The byte budget is the bundle's largest static
-output size multiplied by this entry limit, and grows when execution produces a
-larger dynamic output. There is no fixed byte cap or eager allocation. This policy
-limits cache retention, not memory held by models, live outputs, or feedback.
-`new_session()` inherits the policy with an empty cache; close releases cached
-references while retained outputs stay valid.
-
-Both engines use this cache for output storage. Native execution copies results
-from its fixed workspace into session-owned buffers using its existing transfer
-streams. Reusing output storage does not change workspace addresses or prepared
-backend metadata; live or exported results remain protected from reuse.
-
-Reuse matches byte size and memory location and requires exclusive ownership,
-including no weak owners. Descriptor access or DLPack export permanently excludes
-an allocation from reuse because foreign GPU work may outlive its lease. Safe
-`to_cpu_vec` copies preserve reuse eligibility. Public feedback copies use the
-same cache; retained results and feedback always prevent reuse.
+`run(inputs)` returns freshly allocated outputs. Use `run_into(inputs, &mut outputs)`
+with named `dlpack::OutputBuffer` values to write into caller-owned storage.
+Native backends bind these buffers directly. Triton copies ensemble results into
+them; supplying buffers does not eliminate Triton's intermediate output storage.
+`OutputBuffer::cpu` borrows a mutable CPU slice; other allocations use its unsafe
+DLPack constructor. Supplied buffers must match the output dtype and shape, meet
+backend device/alignment requirements, and be disjoint from inputs and each other.
+Only outputs without supplied buffers appear in the returned `RunResult`.
+A backend may reject a data-dependent output buffer if it requires more capacity
+than the tensor's final shape.
+On failure, supplied buffer contents are unspecified; feedback does not advance.
 
 `SessionOptions::output_placement` sets a default location and per-output
-overrides keyed by public LEAPP names at construction. `run` accepts only inputs.
-New sessions inherit this placement, and every output uses its exact requested location.
+overrides keyed by public LEAPP names at construction.
+New sessions inherit this placement. Allocated outputs use the requested location;
+supplied buffers determine their own storage location.
 Initial state, default inputs, and private feedback stay on the execution device.
 Public outputs retain their requested location, including outputs also used as
 feedback.
@@ -246,18 +239,17 @@ ONNX ports are matched by name, independently of bundle declaration order.
 ### Native engine
 
 Native sessions share loaded models and weights, with private reusable workspace
-buffers. Concrete-shaped models reuse fixed workspace addresses and cached backend
-metadata. Eligible inputs are borrowed directly on ONNX, TorchScript, and NativeRT
-(CPU/GPU), and TensorRT (GPU). Copies remain where needed to protect caller inputs
-or satisfy backend and memory placement requirements. Returned results own storage
+buffers. Eligible inputs are borrowed directly on ONNX, TorchScript, and NativeRT
+(CPU/GPU), and TensorRT (GPU). Copies remain where needed to protect caller inputs,
+isolate feedback, or satisfy output placement. Returned results own storage
 independent of the workspace.
 
 Peers may run concurrently, but TorchScript, NativeRT, and Warp models
 serialize execution across peers. Nodes within one graph
 execute sequentially. Each peer requires memory for its workspace and execution
-resources. See the [installation guide](src/engines/native/backends/INSTALLATION.md)
+resources. See the [installation guide](src/engines/native/backends/README.md#installation)
 for backend setup, and the
-[plugin contract](src/engines/native/backends/README.md) to contribute a backend.
+[contributor notes](src/engines/native/backends/README.md#adding-a-backend) to add a backend.
 
 ### PT2 execution
 
@@ -297,6 +289,6 @@ adapters. Replay requires CUDA device 0 even for CPU model placement. Warm each
 model serially before concurrent use. These adapters do not support Warp operators
 in TorchScript or TensorRT artifacts.
 
-See [native adapter installation](src/engines/native/backends/INSTALLATION.md#warp-operators)
+See [native adapter installation](src/engines/native/backends/README.md#warp-operators)
 or [Triton adapter installation](src/engines/triton/backends/README.md#warp-operators).
 For contributor layout and validation commands, see [AGENTS.md](AGENTS.md).

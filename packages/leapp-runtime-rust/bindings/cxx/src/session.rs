@@ -26,7 +26,6 @@ pub fn result_new() -> Box<ResultHandle> {
 pub fn session_open(
     bundle: &BundleHandle,
     engine: ffi::EngineKind,
-    max_entries: usize,
     device: ffi::Location,
     output_location: ffi::Location,
     overrides: &[ffi::Placement],
@@ -52,7 +51,6 @@ pub fn session_open(
         },
         ..SessionOptions::default()
     };
-    options.output_pool.max_entries = max_entries;
     options.output_placement.default_location = match location(output_location) {
         Ok(v) => v,
         Err(e) => return e,
@@ -107,9 +105,11 @@ pub fn session_reset(session: &SessionHandle) -> ffi::StatusData {
 
 /// # Safety
 /// Inputs must reference live, ready, immutable storage at their declared locations.
+/// Output descriptors must retain live, writable storage and metadata until return.
 pub unsafe fn session_run(
     session: &SessionHandle,
     inputs: &[ffi::Input],
+    buffers: &[ffi::Input],
     output: &mut ResultHandle,
 ) -> ffi::StatusData {
     let Some(session) = &session.0 else {
@@ -143,7 +143,28 @@ pub unsafe fn session_run(
         Ok(v) => v,
         Err(e) => return e,
     };
-    crate::binding_status(session.run(&views).map(|r| {
+    let mut outputs = std::collections::HashMap::new();
+    for buffer in buffers {
+        let ptr = buffer.descriptor as *const lrt::dlpack::DLTensor;
+        if ptr.is_null() {
+            return crate::invalid("null output buffer");
+        }
+        let name = match std::str::from_utf8(&buffer.name) {
+            Ok(name) => name,
+            Err(_) => return crate::invalid("output name is not UTF-8"),
+        };
+        // SAFETY: C++ Run requires live exclusive output storage through completion.
+        let value = match unsafe { lrt::dlpack::OutputBuffer::new(&*ptr) } {
+            Ok(value) => value,
+            Err(error) => {
+                return crate::binding_status(Err(leapp_runtime_bindings::Error::Runtime(error)))
+            }
+        };
+        if outputs.insert(name, value).is_some() {
+            return crate::invalid("duplicate output name");
+        }
+    }
+    crate::binding_status(session.run_into(&views, &mut outputs).map(|r| {
         output.0 = Some(r);
     }))
 }

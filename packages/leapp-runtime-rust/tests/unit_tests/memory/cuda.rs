@@ -86,15 +86,18 @@ fn allocation_transfer_and_release_restore_the_calling_device() {
         tensor.copy_to(output.as_mut_ptr().cast()).unwrap();
     }
     assert_eq!(output, values);
-    let tensor = crate::engines::memory::dlpack::from_buffer(
-        crate::dlpack::DLDataType {
-            code: 2,
-            bits: 32,
-            lanes: 1,
-        },
-        vec![2],
-        std::sync::Arc::new(tensor),
-    )
+    // SAFETY: the completed copy initialized this eight-byte allocation of two f32s.
+    let tensor = unsafe {
+        crate::engines::memory::dlpack::from_buffer(
+            crate::dlpack::DLDataType {
+                code: 2,
+                bits: 32,
+                lanes: 1,
+            },
+            vec![2],
+            std::sync::Arc::new(tensor),
+        )
+    }
     .unwrap();
     for location in [
         MemoryLocation::Cpu,

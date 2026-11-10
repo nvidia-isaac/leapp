@@ -4,7 +4,6 @@
 #ifndef LEAPP_RUNTIME_H_
 #define LEAPP_RUNTIME_H_
 
-#include <cstddef>
 #include <initializer_list>
 #include <memory>
 #include <span>
@@ -34,11 +33,6 @@ struct MemoryLocation {
   bool operator==(const MemoryLocation&) const = default;
 };
 
-struct OutputPoolOptions {
-  // Zero disables caching. The byte budget follows bundle and dynamic sizes.
-  std::size_t max_entries = 64;
-};
-
 struct SessionOptions {
   // Native by default. Resolved by the linked runtime.
   EngineKind engine = detail::DefaultEngine();
@@ -46,7 +40,6 @@ struct SessionOptions {
   uint32_t device_id = 0;
   MemoryLocation output_location;
   std::unordered_map<std::string, MemoryLocation> output_overrides;
-  OutputPoolOptions output_pool;
 };
 
 /// @brief Retained outputs; copies share allocations.
@@ -99,12 +92,18 @@ class Session {
   /// @brief Borrow every public input for synchronous inference.
   /// Failure preserves *result and explicit feedback state. Backend-internal
   /// state changes cannot be rolled back. Success replaces *result.
-  Status Run(std::span<const NamedTensor> inputs, RunResult* result);
+  /// Supplied outputs must be writable and disjoint from inputs/each other.
+  /// Native binds them directly; Triton copies ensemble results into them.
+  /// Supplied outputs are omitted from *result; other outputs allocate.
+  /// On failure supplied buffer contents are unspecified.
+  Status Run(std::span<const NamedTensor> inputs, RunResult* result,
+             std::span<const NamedTensor> outputs = {});
 
-  Status Run(std::initializer_list<NamedTensor> inputs,
-             RunResult* result) {
+  Status Run(std::initializer_list<NamedTensor> inputs, RunResult* result,
+             std::initializer_list<NamedTensor> outputs = {}) {
     return Run(std::span<const NamedTensor>(inputs.begin(), inputs.size()),
-               result);
+               result,
+               std::span<const NamedTensor>(outputs.begin(), outputs.size()));
   }
 
   /// @brief Restore explicit feedback to its initial state.

@@ -50,6 +50,7 @@ fn fixed_torch_buffers_and_bindings_survive_changed_inputs_and_placements() {
     for device in devices() {
         for (backend, fixture, input, output) in [
             ("jit", "scripted", "model/z_values", "model/z_result"),
+            ("jit", "alias_identity", "model/z_values", "model/z_result"),
             ("pt2", "weighted", "model/values", "model/output_0"),
         ] {
             let bundle = bundle(backend, fixture, device);
@@ -58,22 +59,41 @@ fn fixed_torch_buffers_and_bindings_survive_changed_inputs_and_placements() {
             let before = identities(&engine.workspace.lock().unwrap());
             assert!(before.1.iter().all(Option::is_some));
             let mut retained = Vec::new();
-            for input_location in locations() {
-                for output_location in locations() {
-                    for offset in [0f32, 7., -2.] {
-                        let data = [1. + offset, 2. + offset, 3. + offset, 4. + offset];
-                        let values = placed(&data, &[4], input_location).unwrap();
-                        let bias = placed(&[10f32, 20., 30., 40.], &[4], input_location).unwrap();
-                        let mut inputs = vec![(input, values.view())];
-                        if backend == "jit" {
-                            inputs.push(("model/INPUT__9", bias.view()));
-                        }
-                        if input_location == engine.location {
-                            let views = inputs.iter().map(|(_, value)| *value).collect::<Vec<_>>();
-                            assert!(engine.workspace.lock().unwrap().models[0]
-                                .run_borrowed(&views)
-                                .unwrap());
-                        }
+            let execution = execution_location(&engine);
+            // Reject incompatible devices once each, then exercise recovery and placements.
+            for input_location in locations()
+                .into_iter()
+                .filter(|&location| location != execution)
+                .chain(std::iter::once(execution))
+            {
+                let offsets: &[f32] = if input_location == execution {
+                    &[0., 7., -2.]
+                } else {
+                    &[0.]
+                };
+                for &offset in offsets {
+                    let data = [1. + offset, 2. + offset, 3. + offset, 4. + offset];
+                    let values = placed(&data, &[4], input_location).unwrap();
+                    let bias = placed(&[10f32, 20., 30., 40.], &[4], input_location).unwrap();
+                    let mut inputs = vec![(input, values.view())];
+                    if backend == "jit" {
+                        let other = if fixture == "alias_identity" && offset == 0. {
+                            values.view()
+                        } else {
+                            bias.view()
+                        };
+                        inputs.push(("model/INPUT__9", other));
+                    }
+                    if input_location != execution {
+                        let error = engine
+                            .run(&inputs, &OutputPlacement::default(), &mut HashMap::new())
+                            .err()
+                            .unwrap();
+                        assert_eq!(error.code(), ErrorCode::InvalidArgument);
+                        assert!(error.to_string().contains("execution device"));
+                        continue;
+                    }
+                    for output_location in locations() {
                         let result = engine
                             .run(
                                 &inputs,
@@ -81,15 +101,19 @@ fn fixed_torch_buffers_and_bindings_survive_changed_inputs_and_placements() {
                                     default_location: output_location,
                                     ..Default::default()
                                 },
-                                &Arc::new(OutputPool::new(Default::default(), 0)),
+                                &mut HashMap::new(),
                             )
                             .unwrap();
-                        let expected = [
-                            data[0] * 2. + 10.,
-                            data[1] * 3. + 20.,
-                            data[2] * 4. + 30.,
-                            data[3] * 5. + 40.,
-                        ];
+                        let expected = if fixture == "alias_identity" {
+                            data.map(|value| value + if offset == 0. { 1. } else { 2. })
+                        } else {
+                            [
+                                data[0] * 2. + 10.,
+                                data[1] * 3. + 20.,
+                                data[2] * 4. + 30.,
+                                data[3] * 5. + 40.,
+                            ]
+                        };
                         assert_eq!(values.to_cpu_vec::<f32>().unwrap(), data);
                         assert_eq!(result[output].location(), output_location);
                         assert_eq!(identities(&engine.workspace.lock().unwrap()), before);
@@ -107,15 +131,20 @@ fn fixed_torch_buffers_and_bindings_survive_changed_inputs_and_placements() {
 
 #[test]
 #[ignore = "requires native TorchScript backend and CPU/CUDA fixtures"]
-fn torch_borrowing_declines_mutation_retention_and_background_work() {
+fn torch_execution_preserves_inputs_for_mutation_retention_and_background_work() {
     for device in devices() {
         for name in ["mutating", "retaining", "forked"] {
             let bundle = bundle("jit", name, device);
             let engine = engine(&bundle, device);
-            let input = placed(&[1f32; 4], &[4], engine.location).unwrap();
-            assert!(!engine.workspace.lock().unwrap().models[0]
-                .run_borrowed(&[input.view()])
-                .unwrap());
+            let input = placed(&[1f32; 4], &[4], execution_location(&engine)).unwrap();
+            let name = bundle.pipeline_inputs()[0].name();
+            engine
+                .run(
+                    &[(&name, input.view())],
+                    &OutputPlacement::default(),
+                    &mut HashMap::new(),
+                )
+                .unwrap();
             assert_eq!(input.to_cpu_vec::<f32>().unwrap(), [1.; 4]);
         }
     }
@@ -125,6 +154,10 @@ fn torch_borrowing_declines_mutation_retention_and_background_work() {
 #[ignore = "requires native NativeRT backend and CPU/CUDA fixtures"]
 fn nativert_peers_preserve_shared_persistent_state() {
     for device in devices() {
+        let location = match device {
+            ExecutionDevice::Cpu => MemoryLocation::Cpu,
+            ExecutionDevice::Cuda { device_id } => MemoryLocation::Cuda { device_id },
+        };
         let bundle = bundle("pt2", "stateful", device);
         let mut parent = Session::open(
             &bundle,
@@ -146,6 +179,7 @@ fn nativert_peers_preserve_shared_persistent_state() {
                 .map(|peer| {
                     let start = &start;
                     scope.spawn(move || {
+                        let input = placed(&[1f32; 4], &[4], location).unwrap();
                         start.wait();
                         (0..10)
                             .map(|_| {
@@ -153,7 +187,7 @@ fn nativert_peers_preserve_shared_persistent_state() {
                                 let result = peer
                                     .run(&std::collections::HashMap::from([(
                                         "model/values",
-                                        BorrowedTensor::cpu(&[1f32; 4], &[4]).unwrap(),
+                                        input.view(),
                                     )]))
                                     .unwrap();
                                 let value = result
@@ -194,7 +228,7 @@ fn nativert_dynamic_shapes_recover_after_execution_errors() {
                     BorrowedTensor::cpu(&values, &shape).unwrap(),
                 )],
                 &OutputPlacement::default(),
-                &Arc::new(OutputPool::new(Default::default(), 0)),
+                &mut HashMap::new(),
             );
             if size == 3 {
                 assert_eq!(result.err().unwrap().phase(), "execute");
@@ -275,11 +309,12 @@ fn torch_scalars_empty_tensors_and_dynamic_dtype_transport() {
                 let bundle = bundle(backend, name, device);
                 let engine = engine(&bundle, device);
                 assert!(engine.workspace.lock().unwrap().models[0].is_prepared());
+                let input = placed(data, shape, execution_location(&engine)).unwrap();
                 let result = engine
                     .run(
-                        &[("model/values", BorrowedTensor::cpu(data, shape).unwrap())],
+                        &[("model/values", input.view())],
                         &OutputPlacement::default(),
-                        &Arc::new(OutputPool::new(Default::default(), 0)),
+                        &mut HashMap::new(),
                     )
                     .unwrap();
                 assert_eq!(result[output].shape(), shape);
@@ -299,7 +334,7 @@ fn torch_scalars_empty_tensors_and_dynamic_dtype_transport() {
                         .run(
                             &[("model/values", BorrowedTensor::cpu(&values, &[4]).unwrap())],
                             &OutputPlacement::default(),
-                            &Arc::new(OutputPool::new(Default::default(), 0)),
+                            &mut HashMap::new(),
                         )
                         .unwrap();
                     assert_eq!(result[output].to_cpu_vec::<f64>().unwrap(), values);
@@ -309,7 +344,7 @@ fn torch_scalars_empty_tensors_and_dynamic_dtype_transport() {
                         .run(
                             &[("model/values", BorrowedTensor::cpu(&values, &[4]).unwrap())],
                             &OutputPlacement::default(),
-                            &Arc::new(OutputPool::new(Default::default(), 0)),
+                            &mut HashMap::new(),
                         )
                         .unwrap();
                     assert_eq!(result[output].to_cpu_vec::<i16>().unwrap(), values);
@@ -361,11 +396,16 @@ fn retained_inputs_and_pt2_buffer_updates_preserve_model_state() {
             },
         )
         .unwrap();
+        let location = match device {
+            ExecutionDevice::Cpu => MemoryLocation::Cpu,
+            ExecutionDevice::Cuda { device_id } => MemoryLocation::Cuda { device_id },
+        };
+        let input = placed(&[1f32; 4], &[4], location).unwrap();
         for step in 1..=3 {
             let result = session
                 .run(&std::collections::HashMap::from([(
                     "model/values",
-                    BorrowedTensor::cpu(&[1f32; 4], &[4]).unwrap(),
+                    input.view(),
                 )]))
                 .unwrap();
             assert_eq!(
@@ -399,10 +439,15 @@ fn nativert_places_archive_weights_on_the_selected_device() {
             },
         )
         .unwrap();
+        let location = match execution {
+            ExecutionDevice::Cpu => MemoryLocation::Cpu,
+            ExecutionDevice::Cuda { device_id } => MemoryLocation::Cuda { device_id },
+        };
+        let input = placed(&[1f32, 2., 3., 4.], &[4], location).unwrap();
         let result = session
             .run(&std::collections::HashMap::from([(
                 "model/values",
-                BorrowedTensor::cpu(&[1f32, 2., 3., 4.], &[4]).unwrap(),
+                input.view(),
             )]))
             .unwrap();
         assert_eq!(

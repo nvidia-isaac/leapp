@@ -5,11 +5,8 @@ independently of Cargo and install beneath a backend directory selected by
 the `LEAPP_TRITON_BACKENDS` environment variable. Applications use the same
 `lrt::Session` API as ONNX bundles; see the [runtime guide](../../../../README.md).
 
-Outputs use the calling session's pool. Set `SessionOptions.output_pool.max_entries`
-once at initialization (default 64; zero disables caching). New sessions share
-loaded models and inherit this limit with separate, empty pools. Retained outputs
-remain valid across later calls and session closure. Buffer sizes follow the
-bundle and actual dynamic outputs, with no fixed byte cap.
+Outputs use caller-provided buffers or fresh allocations. Retained allocated
+outputs remain valid across later calls and session closure.
 
 Build commands below run from `packages/leapp-runtime-rust`. Supply Linux,
 CMake 3.24+, a C++20 compiler, nlohmann_json 3.11+, Triton 2.69.0, CUDA, and
@@ -96,9 +93,8 @@ keeping replay tensors on the GPU; CPU models retain host staging. The embedded
 archive is copied to host once when loading. Warm each model serially before
 concurrent inference.
 PT2 model unload releases expired Warp cache entries while preserving live models.
-Warp bundles use the same session-owned output pool and initialization options
-described above. Retained results remain valid across subsequent runs and session
-closure; the adapters continue to own their internal replay buffers.
+Retained Warp results remain valid across subsequent runs and session closure;
+the adapters continue to own their internal replay buffers.
 
 Install the adapters and link them beside the backends under
 `LEAPP_TRITON_BACKENDS`. Use local backend directories as above so the links do

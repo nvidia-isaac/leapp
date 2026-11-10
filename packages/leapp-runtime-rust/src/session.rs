@@ -9,8 +9,8 @@ mod initial_state;
 mod tests;
 
 use crate::{
-    dlpack::{BorrowedTensor, SharedTensor},
-    engines::{self, memory::OutputPool, Engine},
+    dlpack::{BorrowedTensor, OutputBuffer, SharedTensor},
+    engines::{self, Engine},
     Bundle, EngineKind, ExecutionDevice, MemoryLocation, RuntimeError,
 };
 use anyhow::{ensure, Context};
@@ -32,40 +32,11 @@ impl OutputPlacement {
     }
 }
 
-/// Retention policy for each session's reusable output buffers.
-///
-/// The byte budget is the largest static bundle output size times `max_entries`,
-/// growing it for actual dynamic output sizes. Reuse matches memory placement.
-/// There is no fixed byte limit that excludes large tensors from reuse. This policy does not cap
-/// memory held by models, fixed workspaces, or retained results.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct OutputPoolOptions {
-    /// Maximum number of cached buffers. Zero disables caching, not allocation.
-    pub max_entries: usize,
-}
-
-impl Default for OutputPoolOptions {
-    fn default() -> Self {
-        Self { max_entries: 64 }
-    }
-}
-
 /// Immutable construction options, inherited by every new session.
-///
-/// ```
-/// use lrt::{OutputPoolOptions, SessionOptions};
-///
-/// let options = SessionOptions {
-///     output_pool: OutputPoolOptions { max_entries: 0 },
-///     ..Default::default()
-/// };
-/// ```
 #[derive(Debug, Clone, Default)]
 pub struct SessionOptions {
     pub device: ExecutionDevice,
     pub output_placement: OutputPlacement,
-    /// Each session has its own cache; peers inherit this policy, not its buffers.
-    pub output_pool: OutputPoolOptions,
     /// Select the engine once at initialization; new sessions inherit that selection.
     /// Defaults to native.
     pub engine: EngineKind,
@@ -102,12 +73,13 @@ impl RunResult {
 pub struct Session {
     engine: Option<Arc<dyn Engine>>,
     bundle: Bundle,
-    output_pool: Arc<OutputPool>,
+    output_specs: IndexMap<String, (crate::dlpack::DLDataType, Vec<i64>)>,
+    state_location: MemoryLocation,
     public_inputs: IndexSet<String>,
-    public_outputs: IndexSet<String>,
     initial_inputs: IndexMap<String, SharedTensor>,
     inputs: IndexMap<String, SharedTensor>,
     feedback: IndexMap<String, String>,
+    feedback_sources: IndexSet<String>,
     placement: OutputPlacement,
     engine_placement: OutputPlacement,
 }
@@ -139,15 +111,6 @@ impl Session {
             ExecutionDevice::Cpu => MemoryLocation::Cpu,
             ExecutionDevice::Cuda { device_id } => MemoryLocation::Cuda { device_id },
         };
-        let largest_output = graph
-            .outputs
-            .values()
-            .filter(|spec| spec.shape.iter().all(|&dim| dim >= 0))
-            .map(|spec| {
-                engines::memory::dlpack::byte_size(initial_state::dl_dtype(spec.dtype), &spec.shape)
-            })
-            .try_fold(0, |largest, size| size.map(|size| largest.max(size)))?;
-        let output_pool = Arc::new(OutputPool::new(options.output_pool, largest_output));
         let initial_inputs =
             initial_state::initial_inputs(bundle, graph, state_location, engine.as_ref())?;
         let feedback: IndexMap<String, String> = bundle
@@ -162,16 +125,29 @@ impl Session {
                     .map(move |target| (target.name(), source.name()))
             })
             .collect();
-        let public_outputs: IndexSet<String> =
-            bundle.pipeline_outputs().iter().map(|p| p.name()).collect();
+        let feedback_sources: IndexSet<String> = feedback.values().cloned().collect();
+        let output_specs: IndexMap<_, _> = bundle
+            .pipeline_outputs()
+            .iter()
+            .map(|port| {
+                let spec = graph.outputs[port];
+                (
+                    port.name(),
+                    (
+                        engines::memory::dlpack::dl_type(spec.dtype),
+                        spec.shape.clone(),
+                    ),
+                )
+            })
+            .collect();
         // SessionOptions and graph routing are immutable after initialization.
         let mut engine_placement = OutputPlacement::default();
-        for name in &public_outputs {
+        for name in output_specs.keys() {
             engine_placement
                 .overrides
                 .insert(name.clone(), options.output_placement.location(name));
         }
-        for source in feedback.values() {
+        for source in &feedback_sources {
             engine_placement
                 .overrides
                 .insert(source.clone(), state_location);
@@ -179,12 +155,13 @@ impl Session {
         Ok(Self {
             engine: Some(engine),
             bundle: bundle.clone(),
-            output_pool,
+            output_specs,
+            state_location,
             public_inputs: bundle.pipeline_inputs().iter().map(|p| p.name()).collect(),
-            public_outputs,
             inputs: initial_inputs.clone(),
             initial_inputs,
             feedback,
+            feedback_sources,
             placement: options.output_placement,
             engine_placement,
         })
@@ -211,12 +188,13 @@ impl Session {
         Ok(Self {
             engine: Some(self.engine()?.clone().new_session()?),
             bundle: self.bundle.clone(),
-            output_pool: Arc::new(self.output_pool.fresh()),
+            output_specs: self.output_specs.clone(),
+            state_location: self.state_location,
             public_inputs: self.public_inputs.clone(),
-            public_outputs: self.public_outputs.clone(),
             initial_inputs: self.initial_inputs.clone(),
             inputs: self.initial_inputs.clone(),
             feedback: self.feedback.clone(),
+            feedback_sources: self.feedback_sources.clone(),
             placement: self.placement.clone(),
             engine_placement: self.engine_placement.clone(),
         })
@@ -227,7 +205,6 @@ impl Session {
         self.inputs.clear();
         self.initial_inputs.clear();
         self.engine.take();
-        self.output_pool.clear();
     }
 
     /// Restore captured state without rereading files or resetting model-internal state.
@@ -260,15 +237,66 @@ impl Session {
         &mut self,
         inputs: &HashMap<&str, BorrowedTensor<'_>>,
     ) -> Result<RunResult, RuntimeError> {
-        self.execute(inputs)
+        self.run_into(inputs, &mut HashMap::new())
+    }
+
+    /// Supplied outputs use caller storage; omitted outputs are allocated.
+    /// Native backends bind supplied buffers directly; Triton copies ensemble results into them.
+    /// The result contains only allocated outputs. Supplied buffers must have
+    /// compatible dtype, shape, device and alignment and cannot overlap inputs
+    /// or each other. On failure contents are unspecified; feedback is unchanged.
+    pub fn run_into(
+        &mut self,
+        inputs: &HashMap<&str, BorrowedTensor<'_>>,
+        buffers: &mut HashMap<&str, OutputBuffer<'_>>,
+    ) -> Result<RunResult, RuntimeError> {
+        self.execute(inputs, buffers)
             .map_err(|error| match error.downcast::<RuntimeError>() {
                 Ok(error) => error,
                 Err(error) => RuntimeError::new("execute", error),
             })
     }
 
-    fn execute(&mut self, inputs: &HashMap<&str, BorrowedTensor<'_>>) -> anyhow::Result<RunResult> {
+    fn execute(
+        &mut self,
+        inputs: &HashMap<&str, BorrowedTensor<'_>>,
+        buffers: &mut HashMap<&str, OutputBuffer<'_>>,
+    ) -> anyhow::Result<RunResult> {
         let engine = self.engine()?;
+        let mut remaining = buffers.iter();
+        while let Some((&name, buffer)) = remaining.next() {
+            let (dtype, expected) = self
+                .output_specs
+                .get(name)
+                .with_context(|| format!("unknown public output {name}"))?;
+            let descriptor = buffer.descriptor();
+            let shape = buffer.shape();
+            ensure!(
+                (
+                    descriptor.dtype.code,
+                    descriptor.dtype.bits,
+                    descriptor.dtype.lanes
+                ) == (dtype.code, dtype.bits, dtype.lanes)
+                    && shape.len() == expected.len()
+                    && shape.iter().zip(expected).all(|(&a, &b)| b == -1 || a == b),
+                "output buffer {name} does not match declared dtype/shape"
+            );
+            let address = buffer.address();
+            for (&other, next) in remaining.clone() {
+                let next_descriptor = next.descriptor();
+                ensure!(
+                    !engines::memory::dlpack::ranges_overlap(
+                        descriptor.device,
+                        address,
+                        buffer.bytes,
+                        next_descriptor.device,
+                        next.address(),
+                        next.bytes
+                    ),
+                    "output buffers {name} and {other} overlap"
+                );
+            }
+        }
         for name in inputs.keys() {
             ensure!(
                 self.public_inputs.contains(*name),
@@ -293,24 +321,32 @@ impl Session {
                 .iter()
                 .map(|(name, tensor)| (name.as_str(), unsafe { tensor.borrow() })),
         );
-        let outputs = engine.run(&values, &self.engine_placement, &self.output_pool)?;
+        let mut outputs = engine.run(&values, &self.engine_placement, buffers)?;
+        if !buffers.is_empty() {
+            for name in &self.feedback_sources {
+                if let Some(buffer) = buffers.get(name.as_str()) {
+                    // SAFETY: successful inference initialized this exclusive buffer.
+                    outputs.insert(
+                        name.clone(),
+                        engine.copy(unsafe { buffer.borrow() }, self.state_location)?,
+                    );
+                }
+            }
+        }
         let output = |name: &str| -> anyhow::Result<SharedTensor> {
             outputs.get(name).cloned().ok_or_else(|| {
                 crate::error::Internal(format!("missing engine output {name}")).into()
             })
         };
         let public_outputs = self
-            .public_outputs
-            .iter()
+            .output_specs
+            .keys()
+            .filter(|name| !buffers.contains_key(name.as_str()))
             .map(|name| {
                 let value = output(name)?;
-                let value = if self.feedback.values().any(|source| source == name) {
+                let value = if self.feedback_sources.contains(name) {
                     // SAFETY: completed output storage has not been published to a foreign writer.
-                    engine.copy(
-                        unsafe { value.borrow() },
-                        self.placement.location(name),
-                        Some(&self.output_pool),
-                    )?
+                    engine.copy(unsafe { value.borrow() }, self.placement.location(name))?
                 } else {
                     value
                 };

@@ -14,6 +14,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <span>
 #include <stdexcept>
@@ -543,12 +544,25 @@ void Model::inspect_fixed_shapes() {
 }
 
 struct Output : trt::IOutputAllocator {
-  Output(int device, bool host) : buffer(device, host) {}
+  Output(int device, bool host, const adapter::View* target = nullptr)
+      : buffer(device, host),
+        direct(target && !host && target->bytes != 0),
+        external(target ? std::optional<adapter::View>(*target)
+                        : std::nullopt) {}
 
   void* reallocateOutputAsync(const char*, void*, uint64_t size,
                               uint64_t alignment,
                               cudaStream_t) noexcept override {
     try {
+      if (direct) {
+        invalid(
+            size <= external->bytes &&
+                (alignment <= 1 || external->data % alignment == 0),
+            "output buffer capacity or alignment is insufficient (requested " +
+                std::to_string(size) + " bytes, available " +
+                std::to_string(external->bytes) + " bytes)");
+        return reinterpret_cast<void*>(external->data);
+      }
       buffer.reserve(size, alignment);
       return buffer.data;
     } catch (...) {
@@ -562,6 +576,8 @@ struct Output : trt::IOutputAllocator {
   }
 
   Buffer buffer;
+  bool direct;
+  std::optional<adapter::View> external;
   trt::Dims shape{-1, {}};
   std::exception_ptr failure;
 };
@@ -580,13 +596,27 @@ struct Outputs {
       const auto& port = model.outputs[i];
       port.check(value.shape);
       const auto size = byte_size(value.shape, port.dtype.bytes);
-      require(value.buffer.data != nullptr && size <= value.buffer.capacity,
+      auto* data = value.external
+                       ? reinterpret_cast<void*>(value.external->data)
+                       : value.buffer.data;
+      require(size == 0 || (data != nullptr &&
+                            size <= (value.external ? value.external->bytes
+                                                    : value.buffer.capacity)),
               "TensorRT output allocation is incomplete");
+      if (value.external) {
+        const auto expected =
+            dimensions(value.external->port.shape, value.external->port.rank);
+        invalid(expected.nbDims == value.shape.nbDims &&
+                    std::equal(expected.d, expected.d + expected.nbDims,
+                               value.shape.d),
+                "output buffer shape mismatch");
+      }
       views.push_back({{nullptr, 0, port.dtype.code, value.shape.d,
                         static_cast<size_t>(value.shape.nbDims)},
-                       reinterpret_cast<uintptr_t>(value.buffer.data),
+                       reinterpret_cast<uintptr_t>(data),
                        size,
-                       port.host ? -1 : model.device});
+                       value.external ? value.external->device
+                                      : (port.host ? -1 : model.device)});
     }
   }
 };
@@ -598,9 +628,15 @@ struct OutputBindings {
 
   ~OutputBindings() {
     DeviceScope scope(execution.model.device);
+    bool restored = true;
     for (const auto& port : execution.model.outputs) {
-      execution.context->setOutputAllocator(port.name.c_str(), nullptr);
-      execution.context->setTensorAddress(port.name.c_str(), nullptr);
+      restored &=
+          execution.context->setOutputAllocator(port.name.c_str(), nullptr);
+      restored &=
+          execution.context->setTensorAddress(port.name.c_str(), nullptr);
+    }
+    if (!restored) {
+      execution.context.reset();
     }
   }
 
@@ -614,10 +650,13 @@ struct Session {
   std::unique_ptr<Call> prepare(std::span<const adapter::View> inputs,
                                 std::span<const adapter::View> outputs);
 
-  std::unique_ptr<Outputs> run_dynamic(std::span<const adapter::View> inputs) {
+  std::unique_ptr<Outputs> run_dynamic(
+      std::span<const adapter::View> inputs,
+      std::span<const adapter::OutputBinding> targets) {
     if (!dynamic) {
       dynamic = std::make_unique<Execution>(model, stream);
     }
+    require(dynamic->context != nullptr, "TensorRT dynamic call is unusable");
     auto output = std::make_unique<Outputs>();
     OutputBindings bindings(*dynamic);
     Work work(stream);
@@ -627,15 +666,37 @@ struct Session {
     // inferShapes; the same stream orders profile changes and inference.
     cuda::check(cudaStreamSynchronize(stream.value));
     dynamic->configure(inputs);
-    for (const auto& port : model.outputs) {
-      auto value = std::make_unique<Output>(model.device, port.host);
+    for (size_t i = 0; i < model.outputs.size(); ++i) {
+      const auto& port = model.outputs[i];
+      const auto target = std::find_if(
+          targets.begin(), targets.end(),
+          [i](const auto& output) { return output.position == i; });
+      auto value = std::make_unique<Output>(
+          model.device, port.host,
+          target == targets.end() ? nullptr : &target->view);
       value->shape = dynamic->context->getTensorShape(port.name.c_str());
       if (concrete(value->shape)) {
         port.check(value->shape);
-        value->buffer.reserve(byte_size(value->shape, port.dtype.bytes));
-        require(dynamic->context->setTensorAddress(port.name.c_str(),
-                                                   value->buffer.data),
-                "TensorRT output binding failed");
+        const auto size = byte_size(value->shape, port.dtype.bytes);
+        if (value->external) {
+          invalid(size == value->external->bytes,
+                  "output buffer byte size mismatch");
+          const auto expected = dimensions(value->external->port.shape,
+                                           value->external->port.rank);
+          invalid(expected.nbDims == value->shape.nbDims &&
+                      std::equal(expected.d, expected.d + expected.nbDims,
+                                 value->shape.d),
+                  "output buffer shape mismatch");
+        }
+        if (!value->direct) {
+          value->buffer.reserve(size);
+        }
+        require(
+            dynamic->context->setTensorAddress(
+                port.name.c_str(),
+                value->direct ? reinterpret_cast<void*>(value->external->data)
+                              : value->buffer.data),
+            "TensorRT output binding failed");
       } else {
         require(dynamic->context->setOutputAllocator(port.name.c_str(),
                                                      value.get()),
@@ -647,10 +708,25 @@ struct Session {
       invalid(dynamic->context->inferShapes(0, nullptr) == 0,
               "output shape inference failed");
     }
-    require(dynamic->context->enqueueV3(stream.value),
-            "TensorRT enqueueV3 failed");
+    const bool enqueued = dynamic->context->enqueueV3(stream.value);
     work.finish();
+    for (const auto& value : output->values) {
+      if (value->failure) {
+        std::rethrow_exception(value->failure);
+      }
+    }
+    require(enqueued, "TensorRT enqueueV3 failed");
     output->describe(model);
+    Work copies(stream);
+    for (size_t i = 0; i < output->values.size(); ++i) {
+      const auto& value = output->values[i];
+      if (value->external && !value->direct && output->views[i].bytes != 0) {
+        cuda::check(cudaMemcpyAsync(
+            reinterpret_cast<void*>(value->external->data), value->buffer.data,
+            output->views[i].bytes, cudaMemcpyHostToDevice, stream.value));
+      }
+    }
+    copies.finish();
     return output;
   }
 
@@ -667,6 +743,11 @@ struct Call {
     Work work(session.stream);
     execution.inputs(inputs);
     execution.configure(inputs);
+    borrowable = execution.transfers.empty();
+    for (size_t i = 0; i < inputs.size(); ++i) {
+      borrowable &= !session.model.inputs[i].host &&
+                    !session.model.inputs[i].control && inputs[i].bytes != 0;
+    }
     invalid(outputs.size() == session.model.outputs.size(),
             "output count mismatch");
     for (size_t i = 0; i < outputs.size(); ++i) {
@@ -679,75 +760,40 @@ struct Call {
               "fixed output does not match inferred engine shape");
       auto* destination = reinterpret_cast<void*>(view.data);
       void* address = destination;
+      OutputRoute route{destination, -1};
       if (port.host || view.bytes == 0 || view.data % 256 != 0) {
         auto buffer = std::make_unique<Buffer>(session.model.device, port.host);
         buffer->reserve(view.bytes);
         address = buffer->data;
+        route.transfer = static_cast<int64_t>(transfers.size());
         transfers.push_back(
             {destination, address, view.bytes,
              port.host ? cudaMemcpyHostToDevice : cudaMemcpyDeviceToDevice});
         staging.push_back(std::move(buffer));
       }
+      output_routes.push_back(route);
       require(execution.context->setTensorAddress(port.name.c_str(), address),
               "TensorRT output binding failed");
     }
     work.finish();
   }
 
-  void run() {
-    require(execution.context != nullptr, "TensorRT prepared call is unusable");
-    Work work(execution.stream);
-    const auto stream = execution.stream.value;
-    execution.refresh(stream);
-    if (execution.model.shape_outputs) {
-      invalid(execution.context->inferShapes(0, nullptr) == 0,
-              "output shape inference failed");
-    }
-    require(execution.context->enqueueV3(stream), "TensorRT enqueueV3 failed");
-    for (const auto& transfer : transfers) {
-      transfer.run(stream);
-    }
-    work.finish();
-  }
-
-  bool run_borrowed(std::span<const adapter::View> views) {
-    require(execution.context != nullptr, "TensorRT prepared call is unusable");
-    invalid(views.size() == execution.model.inputs.size(),
-            "input count mismatch");
-    // Existing staging/control transfers refer to prepared workspace storage.
-    // Borrow only when all inputs can be bound directly for this invocation.
-    if (!execution.transfers.empty()) {
-      return false;
-    }
-    for (size_t i = 0; i < views.size(); ++i) {
-      const auto& port = execution.model.inputs[i];
-      port.check(views[i], execution.model.device);
-      if (port.host || port.control || views[i].bytes == 0 ||
-          views[i].data % 256 != 0) {
-        return false;
-      }
-    }
-    DeviceScope scope(execution.model.device);
-    scope.check();
-    try {
-      for (size_t i = 0; i < views.size(); ++i) {
-        require(execution.context->setInputTensorAddress(
-                    execution.model.inputs[i].name.c_str(),
-                    reinterpret_cast<const void*>(views[i].data)),
-                "TensorRT borrowed input binding failed");
-      }
-      run();  // Work drains the stream before restoration, even on exceptions.
-    } catch (...) {
-      restore_inputs();
-      throw;
-    }
-    require(restore_inputs(), "TensorRT input binding restoration failed");
-    return true;
-  }
-
-  bool restore_inputs() noexcept {
+  bool restore_bindings(
+      std::span<const adapter::InputRoute> routes,
+      std::span<const adapter::OutputBinding> outputs) noexcept {
     bool restored = true;
-    for (size_t i = 0; i < execution.addresses.size(); ++i) {
+    for (const auto& output : outputs) {
+      const auto& route = output_routes[output.position];
+      if (route.transfer >= 0) {
+        transfers[route.transfer].destination = route.destination;
+      } else if (!execution.context->setTensorAddress(
+                     execution.model.outputs[output.position].name.c_str(),
+                     route.destination)) {
+        restored = false;
+      }
+    }
+    for (const auto& route : routes) {
+      const auto i = route.position;
       if (!execution.context->setInputTensorAddress(
               execution.model.inputs[i].name.c_str(), execution.addresses[i])) {
         restored = false;
@@ -761,8 +807,63 @@ struct Call {
     return restored;
   }
 
+  void run(std::span<const adapter::View> views,
+           std::span<const adapter::InputRoute> routes,
+           std::span<const adapter::OutputBinding> outputs) {
+    require(execution.context != nullptr, "TensorRT prepared call is unusable");
+    // Placement and alignment were resolved before dispatch.
+    DeviceScope scope(execution.model.device);
+    scope.check();
+    try {
+      for (const auto& output : outputs) {
+        const auto& route = output_routes[output.position];
+        auto* destination = reinterpret_cast<void*>(output.view.data);
+        if (route.transfer >= 0) {
+          transfers[route.transfer].destination = destination;
+        } else {
+          require(execution.context->setTensorAddress(
+                      execution.model.outputs[output.position].name.c_str(),
+                      destination),
+                  "TensorRT output binding failed");
+        }
+      }
+      for (const auto& route : routes) {
+        const auto i = route.position;
+        require(execution.context->setInputTensorAddress(
+                    execution.model.inputs[i].name.c_str(),
+                    reinterpret_cast<const void*>(views[i].data)),
+                "TensorRT borrowed input binding failed");
+      }
+      // Work drains the stream before restoration, even on exceptions.
+      Work work(execution.stream);
+      const auto stream = execution.stream.value;
+      execution.refresh(stream);
+      if (execution.model.shape_outputs) {
+        invalid(execution.context->inferShapes(0, nullptr) == 0,
+                "output shape inference failed");
+      }
+      require(execution.context->enqueueV3(stream),
+              "TensorRT enqueueV3 failed");
+      for (const auto& transfer : transfers) {
+        transfer.run(stream);
+      }
+      work.finish();
+    } catch (...) {
+      restore_bindings(routes, outputs);
+      throw;
+    }
+    require(restore_bindings(routes, outputs),
+            "TensorRT binding restoration failed");
+  }
+
   std::vector<std::unique_ptr<Buffer>> staging;
   std::vector<Transfer> transfers;
+  struct OutputRoute {
+    void* destination;
+    int64_t transfer;
+  };
+  std::vector<OutputRoute> output_routes;
+  bool borrowable = false;
   Execution execution;
 };
 
@@ -798,8 +899,9 @@ char* invoke(F&& function) noexcept {
 }
 
 const adapter::Api api{
-    [](const char* path, int32_t device, void* stream, const adapter::Port* inputs,
-       size_t input_count, const adapter::Port* outputs, size_t output_count,
+    [](const char* path, int32_t device, void* stream,
+       const adapter::Port* inputs, size_t input_count,
+       const adapter::Port* outputs, size_t output_count,
        void** value) noexcept {
       return invoke([&] {
         *value = new Model(path, device, static_cast<cudaStream_t>(stream),
@@ -826,21 +928,24 @@ const adapter::Api api{
       });
     },
     [](void* value) noexcept { delete static_cast<Call*>(value); },
-    [](void* value) noexcept {
-      return invoke([&] { static_cast<Call*>(value)->run(); });
+    [](const void* value) noexcept {
+      return static_cast<const Call*>(value)->borrowable ? size_t{256}
+                                                         : size_t{0};
     },
     [](void* call, const adapter::View* inputs, size_t count,
-       bool* handled) noexcept {
-      *handled = false;
+       const adapter::InputRoute* routes, size_t route_count,
+       const adapter::OutputBinding* outputs, size_t output_count) noexcept {
       return invoke([&] {
-        *handled = static_cast<Call*>(call)->run_borrowed({inputs, count});
+        static_cast<Call*>(call)->run({inputs, count}, {routes, route_count},
+                                      {outputs, output_count});
       });
     },
     [](void* session, const adapter::View* inputs, size_t count,
+       const adapter::OutputBinding* outputs, size_t output_count,
        void** value) noexcept {
       return invoke([&] {
         *value = static_cast<Session*>(session)
-                     ->run_dynamic({inputs, count})
+                     ->run_dynamic({inputs, count}, {outputs, output_count})
                      .release();
       });
     },

@@ -5,10 +5,10 @@
 
 use crate::{
     dlpack::{BorrowedTensor, SharedTensor},
-    engines::memory::{cuda::HandoffStream, dlpack, Buffer, OutputPool},
+    engines::memory::{cuda::HandoffStream, dlpack, Buffer},
     MemoryLocation,
 };
-use anyhow::{ensure, Result};
+use anyhow::Result;
 use std::{collections::HashMap, sync::Arc};
 
 #[derive(Default)]
@@ -17,20 +17,24 @@ pub(super) struct Transfers {
 }
 
 impl Transfers {
-    pub fn new(
-        location: MemoryLocation,
-        streams: &HashMap<u32, crate::CudaStream>,
-    ) -> Result<Self> {
+    pub fn new(location: MemoryLocation, options: &crate::SessionOptions) -> Result<Self> {
         let mut value = Self {
-            streams: streams
+            streams: options
+                .cuda_streams
                 .iter()
                 .map(|(&device, &stream)| (device, HandoffStream::borrowed(device, stream)))
                 .collect(),
         };
-        if let MemoryLocation::Cuda { device_id } = location {
-            if let std::collections::hash_map::Entry::Vacant(entry) = value.streams.entry(device_id)
-            {
-                entry.insert(HandoffStream::new(device_id)?);
+        for location in std::iter::once(location)
+            .chain(std::iter::once(options.output_placement.default_location))
+            .chain(options.output_placement.overrides.values().copied())
+        {
+            if let MemoryLocation::Cuda { device_id } = location {
+                if let std::collections::hash_map::Entry::Vacant(entry) =
+                    value.streams.entry(device_id)
+                {
+                    entry.insert(HandoffStream::new(device_id)?);
+                }
             }
         }
         Ok(value)
@@ -41,35 +45,39 @@ impl Transfers {
         input: BorrowedTensor<'_>,
         target: MemoryLocation,
     ) -> Result<SharedTensor> {
-        let (shape, len) = dlpack::layout(input)?;
+        let (_, len) = dlpack::layout(input)?;
+        // SAFETY: layout checked the metadata, location and byte count of this borrow.
+        unsafe { self.copy_validated(input, target, len) }
+    }
+
+    /// # Safety
+    /// Input must have a validated, unchanged contiguous layout of len bytes.
+    pub unsafe fn copy_validated(
+        &mut self,
+        input: BorrowedTensor<'_>,
+        target: MemoryLocation,
+        len: usize,
+    ) -> Result<SharedTensor> {
+        let descriptor = input.descriptor();
+        let shape = if descriptor.ndim == 0 {
+            &[]
+        } else {
+            // SAFETY: the caller validated the metadata, retained by the input borrow.
+            unsafe { std::slice::from_raw_parts(descriptor.shape, descriptor.ndim as usize) }
+        };
         let buffer = Arc::new(Buffer::allocate_for_copy(len, target)?);
         // SAFETY: newly allocated output is exclusive and disjoint from input.
         unsafe {
             self.write(input, &buffer)?;
         }
-        Ok(dlpack::from_buffer(
-            input.descriptor().dtype,
-            shape.to_vec(),
-            buffer,
-        )?)
-    }
-
-    pub fn copy_pooled(
-        &mut self,
-        input: BorrowedTensor<'_>,
-        target: MemoryLocation,
-        pool: &OutputPool,
-    ) -> Result<SharedTensor> {
-        // SAFETY: write fills the reserved buffer and waits on the private stream,
-        // including error paths, before the pool publishes or caches the result.
-        unsafe { pool.copy_with(input, target, |input, buffer| self.write(input, buffer)) }
+        // SAFETY: the input layout was checked and write initialized every byte.
+        Ok(unsafe { dlpack::from_buffer(input.descriptor().dtype, shape.to_vec(), buffer)? })
     }
 
     /// # Safety
-    /// The buffer must be private, writable and disjoint from the ready input.
+    /// The input layout must match the private, writable, disjoint buffer's byte size.
     pub unsafe fn write(&mut self, input: BorrowedTensor<'_>, buffer: &Buffer) -> Result<()> {
-        let (_, len) = dlpack::layout(input)?;
-        ensure!(len == buffer.len, "fixed buffer byte size mismatch");
+        let len = buffer.len;
         if len == 0 {
             return Ok(());
         }
@@ -89,6 +97,8 @@ impl Transfers {
         // SAFETY: the caller owns the destination exclusively until the copy completes.
         unsafe {
             if let Some(device) = device {
+                // Configured execution/output devices are initialized up front.
+                // A staged input can introduce another CUDA device later.
                 if let std::collections::hash_map::Entry::Vacant(entry) = self.streams.entry(device)
                 {
                     entry.insert(HandoffStream::new(device)?);

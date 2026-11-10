@@ -11,7 +11,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <optional>
-#include <utility>
 
 #include "../bridge/api.h"
 #include "../bridge/cuda.h"
@@ -38,7 +37,6 @@ at::Device device(int32_t id) {
 }
 
 at::Tensor borrow(const View& view) {
-  TORCH_CHECK(view.port.dtype < types.size(), "unsupported Torch dtype");
   const auto shape = at::IntArrayRef(view.port.shape, view.port.rank);
   const auto options = at::TensorOptions()
                            .dtype(types[view.port.dtype])
@@ -51,8 +49,15 @@ at::Tensor borrow(const View& view) {
                          .options(options)
                          .target_device(device(view.device))
                          .make_tensor();
-  TORCH_CHECK(value.nbytes() == view.bytes, "Torch tensor byte count mismatch");
   return value;
+}
+
+bool same_tensor(const View& left, const View& right) {
+  // Empty slots share sentinel addresses, not tensor identity.
+  return left.bytes != 0 && left.data == right.data &&
+         left.device == right.device && left.port.dtype == right.port.dtype &&
+         at::IntArrayRef(left.port.shape, left.port.rank) ==
+             at::IntArrayRef(right.port.shape, right.port.rank);
 }
 
 void check(const at::Tensor& value, const Port& port) {
@@ -79,7 +84,9 @@ at::ScalarType scalar_type(uint8_t dtype) {
 struct Context {
   std::unique_ptr<Call> prepare(std::span<const View> inputs,
                                 std::span<const View> outputs);
-  std::unique_ptr<Outputs> run_dynamic(std::span<const View> inputs);
+  std::unique_ptr<Outputs> run_dynamic(
+      std::span<const View> inputs,
+      std::span<const adapter::OutputBinding> outputs);
 
   at::Device target;
 
@@ -174,20 +181,13 @@ struct Inputs {
 
   Inputs(Context& context, std::span<const View> views)
       : access(context.plan.access) {
-    TORCH_CHECK(views.size() == context.inputs.size(),
-                "Torch input count mismatch");
+    // The engine supplies validated inputs in the loaded port order.
     for (size_t i = 0; i < views.size(); ++i) {
       auto value = borrow(views[i]);
-      check(value, context.inputs[i]);
-      TORCH_CHECK(value.device() == context.target,
-                  "Torch input device mismatch");
       sources.push_back(value);
       size_t alias = i;
       for (size_t j = 0; j < i; ++j) {
-        // Empty slots share a sentinel address, not tensor identity.
-        if (views[i].bytes != 0 && views[i].data == views[j].data &&
-            value.scalar_type() == sources[j].scalar_type() &&
-            value.sizes() == sources[j].sizes()) {
+        if (same_tensor(views[i], views[j])) {
           alias = aliases[j];
           access[alias] = std::max(access[alias], access[i]);
           break;
@@ -221,6 +221,21 @@ struct Inputs {
   }
 };
 
+// Restore invocation-scoped arguments after execution, including failures.
+// Prepared sources and wrappers stay alive independently of caller storage.
+struct InputBindings {
+  Inputs& inputs;
+  std::span<const adapter::InputRoute> routes;
+  size_t initialized = 0;
+
+  ~InputBindings() {
+    for (size_t i = 0; i < initialized; ++i) {
+      const auto position = routes[i].position;
+      inputs.args[position] = inputs.sources[inputs.aliases[position]];
+    }
+  }
+};
+
 // Prepared calls retain TensorImpl/IValue metadata and fixed destination
 // wrappers.
 struct Call {
@@ -241,14 +256,19 @@ struct Call {
     }
   }
 
-  void run();
-  bool run_borrowed(std::span<const View> views);
-  void execute(Inputs& arguments);
+  void run(std::span<const View> views,
+           std::span<const adapter::InputRoute> routes,
+           std::span<const adapter::OutputBinding> outputs);
+  size_t input_alignment() const {
+    return !context.plan.background_work &&
+           std::all_of(context.plan.access.begin(), context.plan.access.end(),
+                       [](InputAccess access) {
+                         return access == InputAccess::Borrow;
+                       });
+  }
 };
 
 struct Outputs {
-  void describe();
-
   std::vector<at::Tensor> values;
   std::vector<std::vector<int64_t>> shapes;
   std::vector<adapter::View> views;
@@ -262,75 +282,83 @@ std::unique_ptr<Call> Context::prepare(std::span<const View> inputs,
   return call;
 }
 
-void Call::run() {
-  execute(inputs);
-}
-
-bool Call::run_borrowed(std::span<const View> views) {
-  if (context.plan.background_work ||
-      std::any_of(
-          context.plan.access.begin(), context.plan.access.end(),
-          [](InputAccess access) { return access != InputAccess::Borrow; })) {
-    return false;
-  }
-  // Only read-only, non-retained inputs reach this path. Temporary wrappers
-  // outlive execution and its completion guard; prepared bindings stay intact.
-  Inputs borrowed(context, views);
-  execute(borrowed);
-  return true;
-}
-
-void Call::execute(Inputs& arguments) {
+void Call::run(std::span<const View> views,
+               std::span<const adapter::InputRoute> routes,
+               std::span<const adapter::OutputBinding> outputs) {
+  InputBindings bindings{inputs, routes};
   // Keep result owners alive until the stream finishes, including on
   // exceptions.
-  std::vector<at::Tensor> values;
+  std::vector<at::Tensor> values, targets;
   Context::Execution execution(context);
-  arguments.refresh();
-  context.forward(arguments.args, values);
-  for (size_t i = 0; i < values.size(); ++i) {
-    TORCH_CHECK(values[i].sizes() == destinations[i].sizes(),
-                "Torch output shape differs from fixed workspace");
+  for (const auto& output : outputs) {
+    targets.push_back(borrow(output.view));
   }
+  for (const auto& route : routes) {
+    const auto previous = routes.first(bindings.initialized);
+    const auto alias =
+        std::find_if(previous.begin(), previous.end(), [&](const auto& other) {
+          return same_tensor(views[route.position], views[other.position]);
+        });
+    inputs.args[route.position] =
+        alias == previous.end() ? c10::IValue(borrow(views[route.position]))
+                                : inputs.args[alias->position];
+    ++bindings.initialized;
+  }
+  inputs.refresh();
+  context.forward(inputs.args, values);
   for (size_t i = 0; i < values.size(); ++i) {
-    destinations[i].copy_(values[i], /*non_blocking=*/true);
+    const auto target =
+        std::find_if(outputs.begin(), outputs.end(),
+                     [i](const auto& output) { return output.position == i; });
+    const auto& destination = target == outputs.end()
+                                  ? destinations[i]
+                                  : targets[target - outputs.begin()];
+    destination.copy_(values[i], /*non_blocking=*/true);
   }
   execution.finish();
 }
 
-std::unique_ptr<Outputs> Context::run_dynamic(std::span<const View> views) {
+std::unique_ptr<Outputs> Context::run_dynamic(
+    std::span<const View> views,
+    std::span<const adapter::OutputBinding> bindings) {
   // Owners outlive the completion guard, also on exceptions.
   std::optional<Inputs> inputs;
   auto outputs = std::make_unique<Outputs>();
+  std::vector<at::Tensor> targets;
   Execution execution(*this);
   inputs.emplace(*this, views);
   inputs->refresh();
   forward(inputs->args, outputs->values);
+  for (const auto& binding : bindings) {
+    targets.push_back(borrow(binding.view));
+    const auto& value = outputs->values[binding.position];
+    TORCH_CHECK(targets.back().sizes() == value.sizes(),
+                "output buffer shape mismatch");
+    targets.back().copy_(value, /*non_blocking=*/true);
+  }
   // Raw Rust views cannot represent strides or Torch's lazy negative bit.
   // Materialize those before exposing storage; ordinary contiguous values stay
   // borrowed until Rust snapshots them before returning.
-  for (auto& value : outputs->values) {
-    value = value.resolve_neg().contiguous();
+  outputs->shapes.reserve(outputs->values.size() - bindings.size());
+  // Retain port positions; Rust skips the empty entries for supplied outputs.
+  outputs->views.resize(outputs->values.size());
+  for (size_t i = 0; i < outputs->values.size(); ++i) {
+    if (std::none_of(bindings.begin(), bindings.end(), [i](const auto& output) {
+          return output.position == i;
+        })) {
+      auto& value = outputs->values[i];
+      value = value.resolve_neg().contiguous();
+      outputs->shapes.emplace_back(value.sizes().begin(), value.sizes().end());
+      const auto& shape = outputs->shapes.back();
+      outputs->views[i] = {
+          {nullptr, 0, this->outputs[i].dtype, shape.data(), shape.size()},
+          reinterpret_cast<uintptr_t>(value.data_ptr()),
+          value.nbytes(),
+          value.is_cuda() ? value.get_device() : -1};
+    }
   }
   execution.finish();
-  outputs->describe();
   return outputs;
-}
-
-void Outputs::describe() {
-  shapes.reserve(values.size());
-  views.reserve(values.size());
-  for (const auto& value : values) {
-    const auto type =
-        std::find(types.begin(), types.end(), value.scalar_type());
-    TORCH_CHECK(type != types.end(), "unsupported Torch output dtype");
-    shapes.emplace_back(value.sizes().begin(), value.sizes().end());
-    const auto& shape = shapes.back();
-    views.push_back({{nullptr, 0, static_cast<uint8_t>(type - types.begin()),
-                      shape.data(), shape.size()},
-                     reinterpret_cast<uintptr_t>(value.data_ptr()),
-                     value.nbytes(),
-                     value.is_cuda() ? value.get_device() : -1});
-  }
 }
 
 namespace {
@@ -391,8 +419,9 @@ char* invoke(F&& function) noexcept {
 }
 
 const adapter::Api api{
-    [](const char* path, int32_t device, void* stream, const adapter::Port* inputs,
-       size_t input_count, const adapter::Port* outputs, size_t output_count,
+    [](const char* path, int32_t device, void* stream,
+       const adapter::Port* inputs, size_t input_count,
+       const adapter::Port* outputs, size_t output_count,
        void** value) noexcept {
       return invoke([&] {
         *value = new Factory(path, device, static_cast<cudaStream_t>(stream),
@@ -419,21 +448,23 @@ const adapter::Api api{
       });
     },
     [](void* value) noexcept { delete static_cast<Call*>(value); },
-    [](void* value) noexcept {
-      return invoke([&] { static_cast<Call*>(value)->run(); });
+    [](const void* value) noexcept {
+      return static_cast<const Call*>(value)->input_alignment();
     },
     [](void* call, const adapter::View* inputs, size_t count,
-       bool* handled) noexcept {
-      *handled = false;
+       const adapter::InputRoute* routes, size_t route_count,
+       const adapter::OutputBinding* outputs, size_t output_count) noexcept {
       return invoke([&] {
-        *handled = static_cast<Call*>(call)->run_borrowed({inputs, count});
+        static_cast<Call*>(call)->run({inputs, count}, {routes, route_count},
+                                      {outputs, output_count});
       });
     },
     [](void* session, const adapter::View* inputs, size_t count,
+       const adapter::OutputBinding* outputs, size_t output_count,
        void** value) noexcept {
       return invoke([&] {
         *value = static_cast<Context*>(session)
-                     ->run_dynamic({inputs, count})
+                     ->run_dynamic({inputs, count}, {outputs, output_count})
                      .release();
       });
     },

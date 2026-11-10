@@ -4,7 +4,8 @@
 """Check a minimal installation using pre-generated fixtures, without exporters.
 
 Run in an isolated environment containing only the selected model runtime and
-its backend plugins. See the runtime contributor guide for the test matrix.
+its backend plugins. Native CUDA checks also require CuPy for device inputs.
+See the runtime contributor guide for the test matrix.
 """
 
 import argparse
@@ -35,6 +36,10 @@ def fixture(backend, device="cpu"):
 
 
 def execute(backend, engine, device):
+    xp = np
+    if engine == "native" and device.startswith("cuda"):
+        import cupy as xp
+
     bundle = fixture(backend, device)
     name, output, expected = {
         "onnx": ("accumulator/observation", "accumulator/next", [1, 2, 3, 4]),
@@ -42,7 +47,7 @@ def execute(backend, engine, device):
         "torchscript": ("model/values", "model/result", [9, 12, 15, 18]),
         "nativert": ("model/values", "model/output_0", [12, 26, 42, 60]),
     }[backend]
-    values = np.arange(1, 5, dtype=np.float32)
+    values = xp.arange(1, 5, dtype=xp.float32)
     inputs = {name: values}
     with lrt.Session.open(
         bundle, lrt.SessionOptions(engine=engine, device=device)
@@ -55,12 +60,14 @@ def execute(backend, engine, device):
             np.from_dlpack(peer.run(inputs)[output]), expected
         )
     np.testing.assert_array_equal(retained, expected)
-    np.testing.assert_array_equal(values, [1, 2, 3, 4])
+    np.testing.assert_array_equal(
+        xp.asnumpy(values) if xp is not np else values, [1, 2, 3, 4]
+    )
     print(f"PASS {engine}/{backend}/{device}: inference, peer, retained output")
     if backend == "onnx":
         root = Path(os.environ.get("LEAPP_TRITON_FIXTURES", "target/triton-fixtures"))
         convolution = lrt.Bundle.open(root / "convolution.yaml")
-        values = np.arange(16, dtype=np.float32).reshape(1, 1, 4, 4)
+        values = xp.arange(16, dtype=xp.float32).reshape(1, 1, 4, 4)
         with lrt.Session.open(
             convolution, lrt.SessionOptions(engine=engine, device=device)
         ) as session:

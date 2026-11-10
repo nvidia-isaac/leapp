@@ -14,6 +14,13 @@ pub fn engine() -> lrt::EngineKind {
     }
 }
 
+pub fn execution_location(device: lrt::ExecutionDevice) -> MemoryLocation {
+    match device {
+        lrt::ExecutionDevice::Cpu => MemoryLocation::Cpu,
+        lrt::ExecutionDevice::Cuda { device_id } => MemoryLocation::Cuda { device_id },
+    }
+}
+
 pub fn placed<T: CpuElement>(
     values: &[T],
     shape: &[i64],

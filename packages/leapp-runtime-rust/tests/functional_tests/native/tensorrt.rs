@@ -39,68 +39,66 @@ fn fixed_bindings_reuse_addresses_metadata_and_contexts_in_mixed_graphs() {
         let before = identities(&engine.workspace.lock().unwrap());
         assert!(before.1.iter().all(Option::is_some), "{name}");
         let mut retained = Vec::new();
-        for input_location in locations() {
-            for output_location in locations() {
-                for offset in [0f32, 1., 2., 0.] {
-                    let inputs = match name {
-                        "dynamic_fixed" => vec![(
-                            "dynamic/input",
-                            placed(&[offset; 8], &[8], input_location).unwrap(),
-                        )],
-                        "shape_fixed" => vec![(
-                            "shape/data",
-                            placed(&[offset; 4], &[2, 2], input_location).unwrap(),
-                        )],
-                        _ => vec![
-                            (
-                                "preprocess/observation",
-                                placed(&[1f32, 2., 3., 4.], &[4], input_location).unwrap(),
-                            ),
-                            (
-                                "policy/bias",
-                                placed(
-                                    &[10f32, 20., 30., 40.].map(|v| v + offset),
-                                    &[4],
-                                    input_location,
-                                )
-                                .unwrap(),
-                            ),
-                        ],
-                    };
-                    let inputs = inputs
-                        .iter()
-                        .map(|(name, value)| (*name, value.view()))
-                        .collect::<Vec<_>>();
-                    let result = engine
-                        .run(
-                            &inputs,
-                            &OutputPlacement {
-                                default_location: output_location,
-                                ..Default::default()
-                            },
-                            &Arc::new(OutputPool::new(Default::default(), 0)),
-                        )
-                        .unwrap();
-                    let output_name = match name {
-                        "dynamic_fixed" => "dynamic/output",
-                        "shape_fixed" => "shape/output",
-                        _ => "policy/action",
-                    };
-                    let value = result[output_name].clone();
-                    assert_eq!(value.location(), output_location);
-                    if name == "shape_fixed" {
-                        assert_eq!(value.to_cpu_vec::<i32>().unwrap(), [2, 2]);
+        let input_location = execution_location(&engine);
+        for output_location in locations() {
+            for offset in [0f32, 1., 2., 0.] {
+                let inputs = match name {
+                    "dynamic_fixed" => vec![(
+                        "dynamic/input",
+                        placed(&[offset; 8], &[8], input_location).unwrap(),
+                    )],
+                    "shape_fixed" => vec![(
+                        "shape/data",
+                        placed(&[offset; 4], &[2, 2], input_location).unwrap(),
+                    )],
+                    _ => vec![
+                        (
+                            "preprocess/observation",
+                            placed(&[1f32, 2., 3., 4.], &[4], input_location).unwrap(),
+                        ),
+                        (
+                            "policy/bias",
+                            placed(
+                                &[10f32, 20., 30., 40.].map(|v| v + offset),
+                                &[4],
+                                input_location,
+                            )
+                            .unwrap(),
+                        ),
+                    ],
+                };
+                let inputs = inputs
+                    .iter()
+                    .map(|(name, value)| (*name, value.view()))
+                    .collect::<Vec<_>>();
+                let result = engine.run(
+                    &inputs,
+                    &OutputPlacement {
+                        default_location: output_location,
+                        ..Default::default()
+                    },
+                    &mut HashMap::new(),
+                );
+                let result = result.unwrap();
+                let output_name = match name {
+                    "dynamic_fixed" => "dynamic/output",
+                    "shape_fixed" => "shape/output",
+                    _ => "policy/action",
+                };
+                let value = result[output_name].clone();
+                assert_eq!(value.location(), output_location);
+                if name == "shape_fixed" {
+                    assert_eq!(value.to_cpu_vec::<i32>().unwrap(), [2, 2]);
+                } else {
+                    let expected = if name == "dynamic_fixed" {
+                        vec![offset; 8]
                     } else {
-                        let expected = if name == "dynamic_fixed" {
-                            vec![offset; 8]
-                        } else {
-                            [14., 29., 46., 65.].map(|v| v + offset).to_vec()
-                        };
-                        assert_eq!(value.to_cpu_vec::<f32>().unwrap(), expected);
-                        retained.push((expected, value));
-                    }
-                    assert_eq!(identities(&engine.workspace.lock().unwrap()), before);
+                        [14., 29., 46., 65.].map(|v| v + offset).to_vec()
+                    };
+                    assert_eq!(value.to_cpu_vec::<f32>().unwrap(), expected);
+                    retained.push((expected, value));
                 }
+                assert_eq!(identities(&engine.workspace.lock().unwrap()), before);
             }
         }
         drop(engine);
@@ -112,13 +110,14 @@ fn fixed_bindings_reuse_addresses_metadata_and_contexts_in_mixed_graphs() {
 
 #[test]
 #[ignore = "requires TensorRT backend, GPU, and generated engines"]
-fn borrowed_inputs_restore_bindings_between_direct_and_staged_calls() {
+fn direct_inputs_reject_incompatible_buffers_and_recover() {
     let engine = load("dynamic_fixed");
     let mut retained = Vec::new();
     for (location, offset) in [
         (MemoryLocation::Cuda { device_id: 0 }, 0),
         (MemoryLocation::Cuda { device_id: 0 }, 1),
         (MemoryLocation::Cpu, 0),
+        (MemoryLocation::PinnedCpu, 0),
         (MemoryLocation::Cuda { device_id: 0 }, 0),
     ] {
         let values = [1f32, 2., 3., 4., 5., 6., 7., 8., 9.];
@@ -129,28 +128,57 @@ fn borrowed_inputs_restore_bindings_between_direct_and_staged_calls() {
         descriptor.byte_offset = offset * 4;
         // SAFETY: the owner/shape retain a ready contiguous eight-element slice.
         let input = unsafe { BorrowedTensor::new(&descriptor) };
-        if location == (MemoryLocation::Cuda { device_id: 0 }) {
-            // Also check the optional plugin entry point, including its decline
-            // without execution for a valid but unaligned GPU input.
-            let mut workspace = engine.workspace.lock().unwrap();
-            assert_eq!(
-                workspace.models[0].run_borrowed(&[input]).unwrap(),
-                offset == 0
-            );
+        let output = engine.run(
+            &[("dynamic/input", input)],
+            &OutputPlacement::default(),
+            &mut HashMap::new(),
+        );
+        if location != execution_location(&engine) || offset != 0 {
+            let error = output.err().unwrap();
+            assert_eq!(error.code(), ErrorCode::InvalidArgument);
+            assert!(error.to_string().contains(if offset != 0 {
+                "256-byte aligned address"
+            } else {
+                "execution device"
+            }));
+            assert_eq!(owner.to_cpu_vec::<f32>().unwrap(), values);
+            continue;
         }
-        let output = engine
-            .run(
-                &[("dynamic/input", input)],
-                &OutputPlacement::default(),
-                &Arc::new(OutputPool::new(Default::default(), 0)),
-            )
-            .unwrap();
+        let output = output.unwrap();
         assert_eq!(owner.to_cpu_vec::<f32>().unwrap(), values);
         retained.push((
             values[offset as usize..offset as usize + 8].to_vec(),
             output,
         ));
     }
+    let input = placed(&[1_f32; 8], &[8], execution_location(&engine)).unwrap();
+    let target = placed(&[0_f32; 9], &[9], execution_location(&engine)).unwrap();
+    let shape = [8_i64];
+    for offset in [4, 0] {
+        let mut descriptor = *target.view().descriptor();
+        descriptor.shape = shape.as_ptr().cast_mut();
+        descriptor.byte_offset = offset;
+        let mut buffers = HashMap::from([(
+            "dynamic/output",
+            // SAFETY: private target storage and metadata outlive this call.
+            unsafe { OutputBuffer::new(&descriptor) }.unwrap(),
+        )]);
+        let result = engine.run(
+            &[("dynamic/input", input.view())],
+            &OutputPlacement::default(),
+            &mut buffers,
+        );
+        if offset != 0 {
+            assert!(result
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("256-byte aligned"));
+        } else {
+            assert!(result.unwrap().is_empty());
+        }
+    }
+    assert_eq!(&target.to_cpu_vec::<f32>().unwrap()[..8], &[1.; 8]);
     drop(engine);
     for (expected, result) in retained {
         assert_eq!(
@@ -227,7 +255,7 @@ fn shape_control_values_refresh_with_concrete_bundle_dimensions() {
                     ("slice/end", upper.view()),
                 ],
                 &OutputPlacement::default(),
-                &Arc::new(OutputPool::new(Default::default(), 0)),
+                &mut HashMap::new(),
             );
             if end - start != 2 {
                 assert_eq!(result.err().unwrap().code(), ErrorCode::InvalidArgument);
@@ -264,10 +292,9 @@ fn data_dependent_outputs_empty_tensors_and_host_shape_outputs() {
                 .filter(|(_, v)| **v != 0.)
                 .map(|(i, _)| i as i64)
                 .collect();
-            let result = session.run(&std::collections::HashMap::from([(
-                "nonzero/data",
-                BorrowedTensor::cpu(&data, &[4]).unwrap(),
-            )]));
+            let inputs =
+                HashMap::from([("nonzero/data", BorrowedTensor::cpu(&data, &[4]).unwrap())]);
+            let result = session.run(&inputs);
             if name == "nonzero_fixed" && expected.len() != 2 {
                 assert_eq!(result.err().unwrap().code(), ErrorCode::InvalidArgument);
             } else {
@@ -275,6 +302,31 @@ fn data_dependent_outputs_empty_tensors_and_host_shape_outputs() {
                 let output = result.get("nonzero/indices").unwrap();
                 assert_eq!(output.shape(), [1, expected.len() as i64]);
                 assert_eq!(output.to_cpu_vec::<i64>().unwrap(), expected);
+                let shape = [1, expected.len() as i64];
+                let target = placed(
+                    &vec![0_i64; expected.len()],
+                    &shape,
+                    MemoryLocation::Cuda { device_id: 0 },
+                )
+                .unwrap();
+                let descriptor = *target.view().descriptor();
+                let mut buffers = HashMap::from([(
+                    "nonzero/indices",
+                    // SAFETY: this private target and its metadata remain exclusive and live.
+                    unsafe { OutputBuffer::new(&descriptor) }.unwrap(),
+                )]);
+                let result = session.run_into(&inputs, &mut buffers);
+                if expected.is_empty() {
+                    assert_eq!(result.unwrap().iter().count(), 0);
+                } else {
+                    // TensorRT NonZero requests padded capacity beyond the final
+                    // tensor shape. An exactly-sized caller buffer cannot supply it.
+                    let error = result.err().unwrap();
+                    assert_eq!(error.code(), ErrorCode::InvalidArgument);
+                    assert!(error.to_string().contains("output buffer capacity"));
+                }
+                drop(buffers);
+                assert_eq!(target.to_cpu_vec::<i64>().unwrap(), vec![0; expected.len()]);
                 retained.push((expected, output.clone()));
             }
         }
@@ -286,10 +338,11 @@ fn data_dependent_outputs_empty_tensors_and_host_shape_outputs() {
     for (name, data, shape) in [("empty", vec![], vec![0]), ("scalar", vec![3f32], vec![])] {
         let mut session = Session::open(&bundle(name), options()).unwrap();
         let input_name = format!("{name}/input");
+        let input = placed(&data, &shape, MemoryLocation::Cuda { device_id: 0 }).unwrap();
         let result = session
             .run(&std::collections::HashMap::from([(
                 input_name.as_str(),
-                BorrowedTensor::cpu(&data, &shape).unwrap(),
+                input.view(),
             )]))
             .unwrap();
         let output = result.get(&format!("{name}/output")).unwrap();
@@ -345,7 +398,8 @@ fn feedback_is_independent_and_survives_reset_close_and_deleted_engines() {
             let barrier = barrier.clone();
             std::thread::spawn(move || {
                 let value = (index + 1) as f32;
-                let input = placed(&[value; 4], &[4], locations()[index]).unwrap();
+                let input =
+                    placed(&[value; 4], &[4], MemoryLocation::Cuda { device_id: 0 }).unwrap();
                 barrier.wait();
                 let retained = session
                     .run(&std::collections::HashMap::from([(
@@ -446,11 +500,12 @@ fn cpu_rejection_and_engine_metadata_errors_are_classified() {
 fn rng_contexts_are_private_and_prepared_across_peers() {
     let engine = load("random");
     let run = |engine: &NativeEngine, low: f32| {
+        let input = placed(&[low], &[1], execution_location(engine)).unwrap();
         engine
             .run(
-                &[("random/low", BorrowedTensor::cpu(&[low], &[1]).unwrap())],
+                &[("random/low", input.view())],
                 &OutputPlacement::default(),
-                &Arc::new(OutputPool::new(Default::default(), 0)),
+                &mut HashMap::new(),
             )
             .unwrap()["random/output"]
             .clone()

@@ -14,10 +14,19 @@ mod torchscript;
 use super::Transfers;
 use crate::{
     bundle::schema::NodeSpec,
-    dlpack::{BorrowedTensor, SharedTensor},
+    dlpack::{BorrowedTensor, DLTensor, SharedTensor},
     ErrorCode, MemoryLocation, RuntimeError,
 };
 use anyhow::Result;
+
+/// A prepared argument replaced by an invocation-scoped Session input.
+/// Keep this layout paired with bridge/api.h.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(super) struct InputRoute {
+    pub position: usize,
+    pub boundary: usize,
+}
 
 /// Backend plugin instance for one model node in one native workspace.
 ///
@@ -59,16 +68,22 @@ pub(super) trait BackendPlugin: Send {
         false
     }
 
+    /// Required alignment for borrowed prepared inputs, queried at initialization.
+    /// Zero disables borrowing. Placement/alignment are resolved before execution.
+    fn input_alignment(&self) -> usize {
+        0
+    }
+
     /// Bind buffers and cache tensor wrappers, metadata and argument arrays once.
     /// On success `is_prepared()` must return true. Contents can change between
-    /// runs; addresses and layouts remain fixed. Copy/own retained metadata;
+    /// runs; layouts remain fixed. Copy/own retained metadata;
     /// argument slices and descriptor objects themselves are temporary.
     ///
     /// # Safety
     /// The caller supplies valid, ready input storage and writable output storage
     /// with matching dtype, shape and device. Inputs may alias each other; outputs
     /// must be disjoint from inputs and each other. Keep storage alive at fixed
-    /// addresses until this plugin instance drops, including after failed preparation.
+    /// addresses until this plugin instance drops, including failed preparation.
     /// During backend operations no other user may access that storage; between
     /// completed calls the engine may copy inputs/read outputs. The backend must
     /// finish all accesses before returning and may not mutate input storage.
@@ -80,37 +95,49 @@ pub(super) trait BackendPlugin: Send {
         Err(crate::error::Unsupported("backend does not support fixed bindings".into()).into())
     }
 
-    /// Execute using successful preparation and current bound input contents.
-    /// Write ready results into bound outputs, reusing bindings/metadata. Calling
-    /// without preparation must return an error. No public snapshots are created
-    /// here; the engine copies completed outputs before releasing its guard.
-    fn run(&mut self) -> Result<()> {
-        Err(crate::error::Unsupported("backend has no prepared execution path".into()).into())
+    /// Required output address alignment, stable across all invocations.
+    fn output_alignment(&self) -> usize {
+        1
     }
 
-    /// Execute with caller inputs and prepared output buffers, reusing metadata.
-    /// The engine validates inputs against prepared ports. Inputs may alias each
-    /// other, but not outputs, and remain borrowed only for this call.
-    /// Return `Ok(true)` after execution, or `Ok(false)` before execution to let
-    /// the engine copy inputs and call `run()`. Errors propagate without retry.
-    ///
-    /// Finish all work before returning or unwinding; never retain caller pointers.
-    /// Restore original bindings, or reject later runs if restoration fails.
-    fn run_borrowed(&mut self, _inputs: &[BorrowedTensor<'_>]) -> Result<bool> {
-        Ok(false)
+    /// Execute once with prepared bindings and selected boundary inputs.
+    /// Each route maps an argument position to its index in Session's inputs.
+    /// Unrouted arguments retain their prepared workspace bindings. The engine
+    /// has already established input compatibility, placement and alignment.
+    /// Complete all work and restore bindings before returning, including errors.
+    /// Caller pointers must never be retained. Execution errors propagate without retry.
+    /// Empty routes reuse all prepared inputs. There is one prepared execution
+    /// entry point, with no borrowing/staging selection during dispatch.
+    /// # Safety
+    /// Output bindings are writable, disjoint, compatible, and alive through completion.
+    unsafe fn run(
+        &mut self,
+        _inputs: &[(&str, BorrowedTensor<'_>)],
+        _routes: &[InputRoute],
+        _outputs: &[(usize, DLTensor)],
+    ) -> Result<()> {
+        Err(crate::error::Unsupported("backend has no prepared execution path".into()).into())
     }
 
     /// Execute without fixed bindings, including concrete models that cannot be
     /// prepared. Inputs and the copy helper are borrowed only for this call.
-    /// Return ready, independently owned outputs in declared port order; they
+    /// Return one entry per output: None for supplied targets, Some for owned results.
+    /// Return valid, contiguous, ready, independently owned outputs on the
+    /// workspace execution device, matching the declared output count, order,
+    /// dtype, rank and fixed dimensions. SDK metadata establishes these guarantees
+    /// at initialization or the backend checks unresolved values before return. They
     /// must survive later runs/plugin destruction and must not alias inputs or
     /// mutable backend state. Use workspace transfers to isolate SDK-owned data.
-    /// The engine validates output count/layout and routes results into its slots.
-    fn run_dynamic(
+    /// Inputs have already passed layout, device and port validation. Bundle
+    /// validation requires identical declarations across connected ports.
+    /// # Safety
+    /// Supplied outputs satisfy the same contract as run and are not retained.
+    unsafe fn run_dynamic(
         &mut self,
         inputs: &[BorrowedTensor<'_>],
+        outputs: &[(usize, DLTensor)],
         transfers: &mut Transfers,
-    ) -> Result<Vec<SharedTensor>>;
+    ) -> Result<Vec<Option<SharedTensor>>>;
 
     // Ownership diagnostics are test-only, not part of plugin execution/ABI.
     #[cfg(test)]

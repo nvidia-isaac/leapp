@@ -5,7 +5,14 @@ use super::*;
 use crate::engines::tests::support::{placed, TestTensor};
 use crate::{ErrorCode, Session};
 use serde_json::{json, Value};
-use std::{fs, path::PathBuf};
+use std::{collections::HashMap, fs, path::PathBuf};
+
+fn execution_location(engine: &NativeEngine) -> MemoryLocation {
+    match engine.options.device {
+        ExecutionDevice::Cpu => MemoryLocation::Cpu,
+        ExecutionDevice::Cuda { device_id } => MemoryLocation::Cuda { device_id },
+    }
+}
 
 fn fixtures() -> PathBuf {
     std::env::var_os("LEAPP_TRITON_FIXTURES")
@@ -113,18 +120,18 @@ fn onnx_peers_share_models_and_run_with_independent_workspaces() {
         // Lock the original workspace throughout the peer's call. This proves
         // the peer can execute without acquiring the original workspace lock.
         let original = engine.workspace.lock().unwrap();
+        let data = placed(&[10f32, 20., 30., 40.], &[4], execution_location(&engine)).unwrap();
+        let lower = placed(&[1i64], &[1], execution_location(&engine)).unwrap();
+        let upper = placed(&[3i64], &[1], execution_location(&engine)).unwrap();
         let output = peer
             .run(
                 &[
-                    (
-                        "slice/data",
-                        BorrowedTensor::cpu(&[10f32, 20., 30., 40.], &[4]).unwrap(),
-                    ),
-                    ("slice/start", BorrowedTensor::cpu(&[1i64], &[1]).unwrap()),
-                    ("slice/end", BorrowedTensor::cpu(&[3i64], &[1]).unwrap()),
+                    ("slice/data", data.view()),
+                    ("slice/start", lower.view()),
+                    ("slice/end", upper.view()),
                 ],
                 &OutputPlacement::default(),
-                &Arc::new(OutputPool::new(Default::default(), 0)),
+                &mut HashMap::new(),
             )
             .unwrap();
         assert_eq!(
@@ -139,7 +146,9 @@ fn onnx_peers_share_models_and_run_with_independent_workspaces() {
         let invalid = Plan {
             calls: vec![],
             inputs: IndexMap::new(),
+            public_inputs: 0,
             outputs: IndexMap::new(),
+            terminal_outputs: Default::default(),
             slots: vec![Arc::new(plan::TensorSpec {
                 name: "invalid".into(),
                 dtype: crate::DataType::Float32,
@@ -153,14 +162,9 @@ fn onnx_peers_share_models_and_run_with_independent_workspaces() {
             .collect::<anyhow::Result<Vec<_>>>()
             .unwrap();
         drop(workspace);
-        assert!(NativeEngine::with_models(
-            Arc::new(invalid),
-            models,
-            engine.location,
-            None,
-            Default::default()
-        )
-        .is_err());
+        assert!(
+            NativeEngine::with_models(Arc::new(invalid), models, None, &engine.options).is_err()
+        );
 
         let start = std::sync::Barrier::new(2);
         std::thread::scope(|scope| {
@@ -171,21 +175,20 @@ fn onnx_peers_share_models_and_run_with_independent_workspaces() {
                     start.wait();
                     for iteration in 0..40 {
                         let first = ((iteration + index) % 3) as i64;
+                        let data =
+                            placed(&[10f32, 20., 30., 40.], &[4], execution_location(engine))
+                                .unwrap();
+                        let lower = placed(&[first], &[1], execution_location(engine)).unwrap();
+                        let upper = placed(&[first + 2], &[1], execution_location(engine)).unwrap();
                         let result = engine
                             .run(
                                 &[
-                                    (
-                                        "slice/data",
-                                        BorrowedTensor::cpu(&[10f32, 20., 30., 40.], &[4]).unwrap(),
-                                    ),
-                                    ("slice/start", BorrowedTensor::cpu(&[first], &[1]).unwrap()),
-                                    (
-                                        "slice/end",
-                                        BorrowedTensor::cpu(&[first + 2], &[1]).unwrap(),
-                                    ),
+                                    ("slice/data", data.view()),
+                                    ("slice/start", lower.view()),
+                                    ("slice/end", upper.view()),
                                 ],
                                 &OutputPlacement::default(),
-                                &Arc::new(OutputPool::new(Default::default(), 0)),
+                                &mut HashMap::new(),
                             )
                             .unwrap();
                         assert_eq!(
@@ -204,7 +207,7 @@ fn onnx_peers_share_models_and_run_with_independent_workspaces() {
 fn fixed_buffers_and_ort_metadata_survive_changing_cpu_and_cuda_controls() {
     let directory = tempfile::tempdir().unwrap();
     let mut data = fixture("slice");
-    // Different dtypes/shapes must be validated by name, even before preparation.
+    // Session argument order stays independent of the model port order.
     data["models"]["slice"]["inputs"]
         .as_array_mut()
         .unwrap()
@@ -223,19 +226,20 @@ fn fixed_buffers_and_ort_metadata_survive_changing_cpu_and_cuda_controls() {
         .unwrap();
         let before = identities(&engine.workspace.lock().unwrap());
         assert!(before.1.iter().all(Option::is_some));
+        let direct_inputs = engine.inputs.iter().any(|(_, alignment)| *alignment != 0);
         // An invalid fixed-output shape must not invalidate cached ORT handles.
+        let data = placed(&[10f32, 20., 30., 40.], &[4], execution_location(&engine)).unwrap();
+        let lower = placed(&[0i64], &[1], execution_location(&engine)).unwrap();
+        let upper = placed(&[1i64], &[1], execution_location(&engine)).unwrap();
         assert!(engine
             .run(
                 &[
-                    (
-                        "slice/data",
-                        BorrowedTensor::cpu(&[10f32, 20., 30., 40.], &[4]).unwrap()
-                    ),
-                    ("slice/start", BorrowedTensor::cpu(&[0i64], &[1]).unwrap()),
-                    ("slice/end", BorrowedTensor::cpu(&[1i64], &[1]).unwrap()),
+                    ("slice/data", data.view()),
+                    ("slice/start", lower.view()),
+                    ("slice/end", upper.view()),
                 ],
                 &OutputPlacement::default(),
-                &Arc::new(OutputPool::new(Default::default(), 0)),
+                &mut HashMap::new(),
             )
             .is_err());
         assert_eq!(identities(&engine.workspace.lock().unwrap()), before);
@@ -246,20 +250,25 @@ fn fixed_buffers_and_ort_metadata_survive_changing_cpu_and_cuda_controls() {
                 for start in [0i64, 2, 1, 0] {
                     let lower = placed(&[start], &[1], input_location).unwrap();
                     let upper = placed(&[start + 2], &[1], input_location).unwrap();
-                    let result = engine
-                        .run(
-                            &[
-                                ("slice/data", data.view()),
-                                ("slice/start", lower.view()),
-                                ("slice/end", upper.view()),
-                            ],
-                            &OutputPlacement {
-                                default_location: output_location,
-                                ..Default::default()
-                            },
-                            &Arc::new(OutputPool::new(Default::default(), 0)),
-                        )
-                        .unwrap();
+                    let result = engine.run(
+                        &[
+                            ("slice/data", data.view()),
+                            ("slice/start", lower.view()),
+                            ("slice/end", upper.view()),
+                        ],
+                        &OutputPlacement {
+                            default_location: output_location,
+                            ..Default::default()
+                        },
+                        &mut HashMap::new(),
+                    );
+                    if direct_inputs && input_location != execution_location(&engine) {
+                        let error = result.err().unwrap();
+                        assert_eq!(error.code(), ErrorCode::InvalidArgument);
+                        assert!(error.to_string().contains("execution device"));
+                        continue;
+                    }
+                    let result = result.unwrap();
                     assert_eq!(result["slice/output"].location(), output_location);
                     retained.push((start as usize, result));
                     assert_eq!(identities(&engine.workspace.lock().unwrap()), before);
@@ -367,11 +376,12 @@ fn scalar_and_empty_outputs_use_the_prepared_path() {
             let input = format!("{name}/input");
             let output = format!("{name}/output");
             for _ in 0..2 {
+                let values_input = placed(values, shape, execution_location(&engine)).unwrap();
                 let result = engine
                     .run(
-                        &[(&input, BorrowedTensor::cpu(values, shape).unwrap())],
+                        &[(&input, values_input.view())],
                         &OutputPlacement::default(),
-                        &Arc::new(OutputPool::new(Default::default(), 0)),
+                        &mut HashMap::new(),
                     )
                     .unwrap();
                 assert_eq!(result[&output].to_cpu_vec::<f32>().unwrap(), values);
@@ -425,17 +435,17 @@ fn new_sessions_and_reset_do_not_reopen_models_or_external_weights() {
         directory.close().unwrap();
         let mut peer = original.new_session().unwrap();
         original.close();
+        let location = match device {
+            ExecutionDevice::Cpu => MemoryLocation::Cpu,
+            ExecutionDevice::Cuda { device_id } => MemoryLocation::Cuda { device_id },
+        };
+        let observation = placed(&[1f32, 2., 3., 4.], &[4], location).unwrap();
+        let bias = placed(&[10f32, 20., 30., 40.], &[4], location).unwrap();
         for _ in 0..2 {
             let result = peer
                 .run(&std::collections::HashMap::from([
-                    (
-                        "preprocess/observation",
-                        BorrowedTensor::cpu(&[1f32, 2., 3., 4.], &[4]).unwrap(),
-                    ),
-                    (
-                        "policy/bias",
-                        BorrowedTensor::cpu(&[10f32, 20., 30., 40.], &[4]).unwrap(),
-                    ),
+                    ("preprocess/observation", observation.view()),
+                    ("policy/bias", bias.view()),
                 ]))
                 .unwrap();
             assert_eq!(
@@ -476,7 +486,10 @@ fn unsupported_backends_are_rejected_before_any_model_is_loaded() {
 
 #[test]
 fn dynamic_outputs_feed_fixed_and_dynamic_nodes_and_recover_after_shape_errors() {
-    for device in devices() {
+    for (device, output_shape) in devices()
+        .into_iter()
+        .flat_map(|device| [vec![-1], vec![4]].map(|shape| (device, shape)))
+    {
         let directory = tempfile::tempdir().unwrap();
         let policy = policy_copy(directory.path());
         let mut dynamic: Value =
@@ -497,9 +510,10 @@ fn dynamic_outputs_feed_fixed_and_dynamic_nodes_and_recover_after_shape_errors()
                 "feedback_flow": {}, "configs": {}
             }
         });
-        // Connected ports retain identical bundle declarations. The middle
-        // node accepts a dynamic declaration but must produce a fixed result.
-        data["models"]["fixed"]["inputs"][0]["shape"] = json!([-1]);
+        // Exercise declared output dimensions that the dynamic ONNX artifact
+        // can only establish during execution.
+        data["models"]["first"]["outputs"][0]["shape"] = json!(output_shape);
+        data["models"]["fixed"]["inputs"][0]["shape"] = json!(output_shape);
         data["models"]["last"]["inputs"][0]["shape"] = json!([4]);
         let bundle = write_bundle(&data, directory.path());
         let mut session = Session::open(

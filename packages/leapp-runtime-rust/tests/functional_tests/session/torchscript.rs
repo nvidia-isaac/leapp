@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::support;
-use lrt::dlpack::BorrowedTensor;
-use lrt::{Bundle, ExecutionDevice, MemoryLocation, OutputPoolOptions, Session, SessionOptions};
+use lrt::dlpack::{BorrowedTensor, OutputBuffer};
+use lrt::{Bundle, ExecutionDevice, MemoryLocation, Session, SessionOptions};
 use std::{collections::HashMap, env, fs, path::PathBuf};
 use support::{placed, TestTensor};
 
@@ -44,13 +44,14 @@ fn scripted_traced_and_mixed_match_pytorch_with_positional_ports() {
     let expected: Vec<Vec<f32>> =
         serde_json::from_slice(&fs::read(fixtures().join("expected.json")).unwrap()).unwrap();
     for device in devices() {
+        let input_location = support::execution_location(device);
         for name in ["scripted", "traced", "mixed"] {
             let runtime = open(name, device);
 
             let mut retained = None;
             for location in locations() {
-                let values = placed(&[1f32, 2., 3., 4.], &[4], location).unwrap();
-                let bias = placed(&[10f32, 20., 30., 40.], &[4], location).unwrap();
+                let values = placed(&[1f32, 2., 3., 4.], &[4], input_location).unwrap();
+                let bias = placed(&[10f32, 20., 30., 40.], &[4], input_location).unwrap();
                 let mut options = SessionOptions {
                     engine: support::engine(),
                     device,
@@ -129,12 +130,32 @@ fn dynamic_shapes_integer_tensors_and_recoverable_execution_errors() {
         let mut session = runtime.new_session().unwrap();
         for size in [4, 6, 3, 4] {
             let values: Vec<f32> = (0..size).map(|i| i as f32).collect();
-            let result = session.run(&HashMap::from([(
+            let shape = [size];
+            let inputs = HashMap::from([(
                 "model/values",
-                BorrowedTensor::cpu(&values, &[size]).unwrap(),
-            )]));
+                BorrowedTensor::cpu(&values, &shape).unwrap(),
+            )]);
+            let target = placed(
+                &vec![0_f32; (size / 2 * 2) as usize],
+                &[size / 2, 2],
+                support::execution_location(device),
+            )
+            .unwrap();
+            let descriptor = *target.view().descriptor();
+            let mut buffers = HashMap::new();
+            if size != 4 {
+                // SAFETY: this private destination remains alive through inference.
+                buffers.insert(
+                    "model/result",
+                    unsafe { OutputBuffer::new(&descriptor) }.unwrap(),
+                );
+            }
+            let result = session.run_into(&inputs, &mut buffers);
             if size == 3 {
                 assert_eq!(result.err().unwrap().phase(), "execute");
+            } else if size == 6 {
+                assert!(result.unwrap().iter().next().is_none());
+                assert_eq!(target.to_cpu_vec::<f32>().unwrap(), values);
             } else {
                 let result = result.unwrap();
                 let output = result.get("model/result").unwrap();
@@ -144,11 +165,9 @@ fn dynamic_shapes_integer_tensors_and_recoverable_execution_errors() {
         }
         let runtime = open("integer", device);
         let mut session = runtime.new_session().unwrap();
+        let values = placed(&[1i64, 2, 3, 4], &[4], support::execution_location(device)).unwrap();
         let result = session
-            .run(&HashMap::from([(
-                "model/values",
-                BorrowedTensor::cpu(&[1i64, 2, 3, 4], &[4]).unwrap(),
-            )]))
+            .run(&HashMap::from([("model/values", values.view())]))
             .unwrap();
         assert_eq!(
             result
@@ -195,12 +214,14 @@ fn mutation_does_not_cross_ensemble_consumers() {
         let runtime = open("fanout", device);
         let mut session = runtime.new_session().unwrap();
         for _ in 0..3 {
-            let values = [1f32, 2., 3., 4.];
+            let values = placed(
+                &[1f32, 2., 3., 4.],
+                &[4],
+                support::execution_location(device),
+            )
+            .unwrap();
             let result = session
-                .run(&HashMap::from([(
-                    "producer/values",
-                    BorrowedTensor::cpu(&values, &[4]).unwrap(),
-                )]))
+                .run(&HashMap::from([("producer/values", values.view())]))
                 .unwrap();
             assert_eq!(
                 result
@@ -208,7 +229,7 @@ fn mutation_does_not_cross_ensemble_consumers() {
                     .unwrap()
                     .to_cpu_vec::<f32>()
                     .unwrap(),
-                values
+                [1., 2., 3., 4.]
             );
             assert_eq!(
                 result
@@ -218,7 +239,7 @@ fn mutation_does_not_cross_ensemble_consumers() {
                     .unwrap(),
                 [9., 12., 15., 18.]
             );
-            assert_eq!(values, [1., 2., 3., 4.]);
+            assert_eq!(values.to_cpu_vec::<f32>().unwrap(), [1., 2., 3., 4.]);
         }
     }
 }
@@ -232,7 +253,6 @@ fn failed_mutation_preserves_feedback_and_retained_outputs() {
             &bundle,
             SessionOptions {
                 device,
-                output_pool: OutputPoolOptions { max_entries: 1 },
                 ..Default::default()
             },
         )

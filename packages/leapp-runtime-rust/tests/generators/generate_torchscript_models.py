@@ -22,6 +22,11 @@ class Weighted(torch.nn.Module):
         return values * self.weight + bias, values.reshape(2, 2).t()
 
 
+class AliasIdentity(torch.nn.Module):
+    def forward(self, values, other):
+        return values + 1 if values is other else values + 2
+
+
 class Mutating(torch.nn.Module):
     def forward(self, values):
         values.add_(2)
@@ -125,6 +130,15 @@ def generate(root):
         name = "traced" if traced else "scripted"
         weighted = export(name, Weighted(), inputs, outputs, (values, bias), traced)
         write(name, bundle(weighted))
+
+    write(
+        "alias_identity",
+        bundle(
+            export(
+                "alias_identity", AliasIdentity(), inputs, outputs[:1], (values, bias)
+            )
+        ),
+    )
 
     expected = [t.flatten().tolist() for t in Weighted()(values, bias)]
     (root / "expected.json").write_text(json.dumps(expected) + "\n")

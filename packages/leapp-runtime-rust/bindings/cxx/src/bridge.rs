@@ -139,7 +139,6 @@ pub mod ffi {
         fn session_open(
             bundle: &BundleHandle,
             engine: EngineKind,
-            max_entries: usize,
             location: Location,
             output_location: Location,
             overrides: &[Placement],
@@ -154,6 +153,7 @@ pub mod ffi {
         unsafe fn session_run(
             session: &SessionHandle,
             inputs: &[Input],
+            buffers: &[Input],
             output: &mut ResultHandle,
         ) -> StatusData;
 

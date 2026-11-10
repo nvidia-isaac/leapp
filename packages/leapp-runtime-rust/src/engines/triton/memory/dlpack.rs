@@ -64,7 +64,7 @@ pub(crate) unsafe fn append_input(
     request: *mut sys::TRITONSERVER_InferenceRequest,
     name: *const c_char,
     input: BorrowedTensor<'_>,
-) -> Result<()> {
+) -> Result<usize> {
     let t = input.descriptor();
     let (shape, len) = layout(input)?;
     let (memory, device) = location(t.device)?.native();
@@ -94,6 +94,7 @@ pub(crate) unsafe fn append_input(
             ),
             "execute",
         )
+        .map(|()| len)
     }
 }
 
