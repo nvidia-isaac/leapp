@@ -6,11 +6,18 @@ and importing it require neither the Triton nor the CUDA SDK.
 NumPy is a package dependency; PyTorch and CuPy are optional DLPack
 producers/consumers.
 
-Build with the workspace's Rust toolchain and Python 3.10 or newer:
+For a published release, use `python -m pip install leapp-runtime`.
+The planned release wheels target Linux x86-64 and aarch64, CPython 3.10–3.14,
+and glibc 2.28 or newer. They are interpreter-specific wheels. Backend SDKs may
+require a newer operating system; Jetson backend environments are validated
+separately. A source installation requires Rust 1.88 or newer.
+
+Until the first registry release, build from the runtime workspace with Rust
+and Python 3.10 or newer:
 
 ```sh
-python -m pip install maturin
-maturin build --release --manifest-path bindings/python/Cargo.toml --auditwheel skip
+python -m pip install 'maturin>=1.9,<2'
+maturin build --locked --release --manifest-path bindings/python/Cargo.toml
 python -m pip install target/wheels/leapp_runtime-*.whl
 ```
 
@@ -23,7 +30,9 @@ Triton and CUDA libraries load only when needed. Set `TRITON_ROOT` and
 `CUDA_ROOT` for explicit installations, and make their dependencies available
 through `LD_LIBRARY_PATH`. Native CPU ONNX with CPU I/O can run without either
 library; the current Torch plugins still require CUDA even for CPU execution.
-The wheel does not redistribute model runtimes or NVIDIA libraries. See the
+The wheel does not redistribute model runtimes or NVIDIA libraries. Use the
+[Pixi consumer generator](../../packaging/README.md#install-an-application-environment)
+for a locked backend environment. See the
 [runtime installation guide](../../README.md#installation) for library discovery.
 
 ```python

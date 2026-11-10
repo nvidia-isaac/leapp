@@ -4,8 +4,15 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 publish = false
-# Lifecycle regressions run in the root test target.
+rust-version = "1.88"
 autotests = false
 
 [dependencies]
-leapp-runtime = { path = "../.." }
+leapp-runtime = { version = "=0.1.0", path = "../.." }
+
+[dev-dependencies]
+tempfile = "3"
+
+[[test]]
+name = "binding_lifecycle"
+path = "tests/lifecycle.rs"

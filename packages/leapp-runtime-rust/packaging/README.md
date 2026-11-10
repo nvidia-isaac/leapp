@@ -3,14 +3,35 @@ SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All 
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Pixi binary packages
+# Runtime distribution and backend environments
 
-Pixi creates a locked environment containing the runtime and only the backend
-packages your application selects. Both orchestration engines are included in the
-core; use `SessionOptions.engine` to select native or Triton. Backend libraries
-and Triton adapters are installed separately. Adding a backend does not rebuild
-the runtime. These recipes currently produce a **local channel**;
-there is no public package service or upload step.
+Cargo and PyPI distribute the core runtime. C++ applications integrate the source
+through CMake. Pixi creates a locked environment containing the selected backend
+libraries and, for Python consumers, the PyPI core. Both orchestration engines
+remain in the core; `SessionOptions.engine` selects native or Triton at execution.
+Adding a backend does not rebuild it. Backend recipes currently produce a
+**local channel**; public backend hosting is separate work.
+
+## Core release artifacts
+
+Run with Python 3.12+, Rust, Maturin, and the workspace dependencies available:
+
+```sh
+cargo package --locked -p leapp-runtime
+python packaging/build_sdist.py
+```
+
+`build_sdist.py` uses Maturin to include the core and shared binding sources. It
+prunes the unrelated C++ workspace entries from the source archive's Cargo lock
+file without changing any retained dependency version. The resulting archive
+builds with `--locked`. The planned release wheel matrix is manylinux_2_28
+for x86-64 and aarch64 and CPython 3.10–3.14, built from that archive.
+The local SDK producer's `--auditwheel skip` path is only for local Conda packages.
+
+The runtime version is independent of the exporter version. Keep the runtime's
+Cargo manifests, Python metadata, CMake version, and lockfile aligned when
+preparing a release, and keep the packaged license copies synchronized with the
+repository license.
 
 ## Package selection
 
@@ -23,8 +44,7 @@ there is no public package service or upload step.
 | `leapp-triton-{backend}` | Selected backend's Triton adapter and server dependencies |
 | `leapp-onnx-tensorrt` | Optional ONNX Runtime TensorRT provider and builder dependencies |
 | `leapp-warp-{engine}-{backend}` | Optional Warp adapter for the selected engine and backend |
-| `leapp-runtime-python` | `lrt` extension for the build's Python version and NumPy dependency |
-| `leapp-runtime-cxx` | Shared library, public headers, `lrt::runtime` CMake target |
+| `leapp-runtime-python`, `leapp-runtime-cxx` | Optional local bindings, built with `--bindings`, for development before publication |
 
 Shared dependencies are installed once. The `leapp-libs-*` packages are resolved
 automatically. A core-only environment installs no model SDKs. A native CPU ONNX
@@ -53,7 +73,13 @@ because both use aarch64.
 
 ## Install an application environment
 
-Given a channel built as described below, create a consumer manifest:
+For a published Python core, a core-only environment needs no backend channel:
+
+```sh
+pixi run consumer --output target/inspect-only
+```
+
+Given a channel built from the matching runtime release, create a consumer manifest:
 
 ```sh
 pixi run consumer --channel target/packaging/channel \
@@ -63,10 +89,10 @@ pixi run --manifest-path target/my-app/pixi.toml python -c 'import lrt'
 ```
 
 Omit `--cuda` for CPU deployment and use a CPU-only ONNX channel to avoid CUDA
-dependencies. Use `--binding cxx` or `--binding both` when needed.
-Select `--engines triton` or `--engines native triton` when those adapters are
-needed; native is the default. List multiple `--backends`, or omit backends
-for bundle inspection.
+dependencies. Use `--binding none` for Rust/C++ applications building their core
+from source. Select `--engines triton` or `--engines native triton` when those
+adapters are needed; native is the default. List multiple `--backends`, or omit
+the channel and backends for bundle inspection.
 `--warp onnx` adds Warp to an ONNX environment. Warp execution requires CUDA,
 including for CPU model instances. A deployment machine needs a compatible host
 OS and NVIDIA driver for GPU execution, but no build container or CUDA SDK.
@@ -76,7 +102,7 @@ to include TensorRT acceleration. Configure selected nodes with
 [`SessionOptions.onnx_tensorrt`](../README.md#onnx-tensorrt-acceleration).
 Other consumers keep their existing backend dependencies.
 
-The generated manifest pins the local channel's exact build. Commit the consumer's
+The generated manifest pins the Python core version and local channel's exact build. Commit the consumer's
 `pixi.toml` and generated `pixi.lock` with your application. To add another backend,
 use the same version and build string shown in that manifest:
 
@@ -86,8 +112,12 @@ pixi add --manifest-path target/my-app/pixi.toml \
 pixi remove --manifest-path target/my-app/pixi.toml leapp-backend-torchscript
 ```
 
-An upgrade must update the binding and selected plugins together. Exact package
-dependencies reject incompatible combinations instead of mixing plugin ABIs.
+An upgrade must update the core and selected plugins together. A PyPI consumer
+requires its backend channel to have been built from the clean matching
+`runtime-vVERSION` tag. Local development bindings and plugins share an exact
+package build. Dependency-only Rust/C++ consumers must build the core from the
+same revision recorded in `packages.json`; Cargo/CMake dependencies are managed
+by the application.
 The package build identifier comes from the source and SDK library checksums;
 it is package metadata, not a new versioned runtime interface.
 
@@ -130,8 +160,13 @@ pixi run build-runtime --backends onnx --glibc 2.28 \
 pixi run package-runtime
 ```
 
-With no backends or explicit engines, the producer builds only the local Python
-and C++ bindings and backend discovery configuration, and requires no model SDK.
+With no backends or explicit engines, the producer creates only discovery
+configuration and requires no SDK. Before the first public release, or for
+uncommitted development builds, add `--bindings python` to the producer command
+and `--core-source channel` to the consumer command. Local C++ validation can use
+`--bindings cxx` and `--core-source channel --binding cxx`; public C++ integration
+uses CMake source builds. The local binding packages are not public release
+artifacts.
 
 The producer's `--onnx-tensorrt` option requires ONNX Runtime's TensorRT provider,
 a compatible `TENSORRT_ROOT`, and `--cuda`. With Triton selected, the producer
@@ -156,7 +191,7 @@ rattler-build still installs patchelf transitively, but this workflow does not
 invoke it. Neither relocation tool is included in consumer environments.
 
 `--backends onnx tensorrt --engines native triton` selects producer work.
-The `tensorrt` backend is packaged only for Triton. Backends are
+The `tensorrt` backend is packaged only for Triton. Backends and local bindings are
 opt-in; `--engines native` is the default. To package Warp,
 build the existing [Warp adapters](../src/engines/triton/backends/README.md#warp-operators)
 against the same SDK, then pass `--warp /path/to/adapter-libraries`. Each adapter

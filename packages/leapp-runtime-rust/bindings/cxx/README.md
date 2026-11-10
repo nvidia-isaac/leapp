@@ -22,7 +22,7 @@ compiler. The Triton and CUDA SDKs are not required. Run from
 ```sh
 cmake -S bindings/cxx -B target/cxx-build \
   -DCMAKE_BUILD_TYPE=Release \
-  -DBUILD_TESTING=OFF
+  -DLEAPP_BUILD_TESTING=OFF
 cmake --build target/cxx-build -j
 cmake --install target/cxx-build --prefix /your/sdk
 ```
@@ -45,6 +45,40 @@ target_link_libraries(my_application PRIVATE lrt::runtime)
 Set `CMAKE_PREFIX_PATH` to the installation prefix. C++ exceptions are not required.
 Operational failures return `Status` with code, phase, and message. Allocation
 failure and Rust panics are not recoverable status errors.
+
+## Embed in an application
+
+For a local checkout, add the C++ binding directory and link the same target:
+
+```cmake
+add_subdirectory(path/to/leapp/packages/leapp-runtime-rust/bindings/cxx leapp-runtime)
+target_link_libraries(my_application PRIVATE lrt::runtime)
+```
+
+To fetch a release, keep the full repository layout so Cargo can locate the
+core and shared binding crate. Pin `GIT_TAG` to the commit of the runtime release:
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(leapp
+  GIT_REPOSITORY https://github.com/nvidia-isaac/leapp.git
+  GIT_TAG <runtime-release-commit>
+  SOURCE_SUBDIR packages/leapp-runtime-rust/bindings/cxx)
+FetchContent_MakeAvailable(leapp)
+target_link_libraries(my_application PRIVATE lrt::runtime)
+```
+
+Embedded builds leave LEAPP tests disabled by default. Use
+`LEAPP_BUILD_TESTING=ON` to enable them explicitly. Standalone builds also respect
+`BUILD_TESTING=OFF`. Debug configurations build Rust's dev profile; other
+configurations build its release profile. Ninja Multi-Config is supported.
+Build natively on Linux; cross-compilation is not configured. Rust and a C++20
+compiler are build dependencies; applications using an installed shared library
+do not need Rust at deployment. Pre-1.0 package compatibility and library SONAMEs
+are scoped to the minor release.
+
+Use the [Pixi generator](../../packaging/README.md#install-an-application-environment)
+with `--binding none` to provision backend dependencies for a source build.
 
 ## API and ownership
 

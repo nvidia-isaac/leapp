@@ -3,22 +3,34 @@ project(leapp_runtime VERSION 0.1.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
-include(CTest)
+
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  message(FATAL_ERROR "LEAPP runtime currently supports Linux")
+endif()
+if(CMAKE_CROSSCOMPILING)
+  message(FATAL_ERROR "Build LEAPP runtime natively on the deployment architecture")
+endif()
+
+set(LEAPP_TEST_DEFAULT ${PROJECT_IS_TOP_LEVEL})
+if(DEFINED BUILD_TESTING AND NOT BUILD_TESTING)
+  set(LEAPP_TEST_DEFAULT OFF)
+endif()
+option(LEAPP_BUILD_TESTING "Build LEAPP runtime tests" ${LEAPP_TEST_DEFAULT})
 
 find_package(Threads REQUIRED)
 find_program(CARGO_EXECUTABLE cargo REQUIRED)
-option(LEAPP_TEST_CUDA "Run integration tests on CUDA device 0" OFF)
-include("${CMAKE_CURRENT_SOURCE_DIR}/../../src/engines/cxx.cmake")
-
 set(LEAPP_NATIVE_INCLUDE_DIR
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/engines/native/backends/include")
-set(RUST_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/cargo")
-set(RUST_LIBRARY "${RUST_TARGET_DIR}/release/libleapp_runtime_cxx.a")
+set(RUST_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/cargo/$<CONFIG>")
+set(RUST_PROFILE "$<IF:$<CONFIG:Debug>,debug,release>")
+set(RUST_LIBRARY "${RUST_TARGET_DIR}/${RUST_PROFILE}/libleapp_runtime_cxx.a")
 
 # Cargo tracks Rust sources and dependencies; this also refreshes generated headers.
 add_custom_target(leapp_runtime_rust
   COMMAND "${CMAKE_COMMAND}" -E env --unset=MAKEFLAGS --unset=MFLAGS
-          "${CARGO_EXECUTABLE}" build --locked --release
+          --unset=CARGO_BUILD_TARGET
+          "${CARGO_EXECUTABLE}" build --locked
+          --profile "$<IF:$<CONFIG:Debug>,dev,release>"
           --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
           --target-dir "${RUST_TARGET_DIR}"
   BYPRODUCTS "${RUST_LIBRARY}"
@@ -27,8 +39,12 @@ add_custom_target(leapp_runtime_rust
 add_library(leapp_runtime SHARED src/runtime.cc)
 add_library(lrt::runtime ALIAS leapp_runtime)
 add_dependencies(leapp_runtime leapp_runtime_rust)
+set(LEAPP_SOVERSION ${PROJECT_VERSION_MAJOR})
+if(PROJECT_VERSION_MAJOR EQUAL 0)
+  set(LEAPP_SOVERSION "0.${PROJECT_VERSION_MINOR}")
+endif()
 set_target_properties(leapp_runtime PROPERTIES EXPORT_NAME runtime
-  VERSION ${PROJECT_VERSION} SOVERSION 0)
+  VERSION ${PROJECT_VERSION} SOVERSION ${LEAPP_SOVERSION})
 target_compile_features(leapp_runtime PUBLIC cxx_std_20)
 target_include_directories(leapp_runtime
   PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
@@ -48,21 +64,30 @@ install(FILES "${LEAPP_NATIVE_INCLUDE_DIR}/leapp/data_type.h"
               "${LEAPP_NATIVE_INCLUDE_DIR}/leapp/status.h"
   DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/leapp")
 install(DIRECTORY ../../src/dlpack/include/dlpack DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+install(FILES ../../LICENSE DESTINATION "${CMAKE_INSTALL_DATADIR}/licenses/leapp-runtime")
 install(EXPORT leapp_runtimeTargets NAMESPACE lrt::
   DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/leapp_runtime")
 
 configure_package_config_file(cmake/leapp_runtimeConfig.cmake.in
   "${CMAKE_CURRENT_BINARY_DIR}/leapp_runtimeConfig.cmake"
   INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/leapp_runtime")
+if(PROJECT_VERSION_MAJOR EQUAL 0)
+  set(LEAPP_VERSION_COMPATIBILITY SameMinorVersion)
+else()
+  set(LEAPP_VERSION_COMPATIBILITY SameMajorVersion)
+endif()
 write_basic_package_version_file(
   "${CMAKE_CURRENT_BINARY_DIR}/leapp_runtimeConfigVersion.cmake"
-  VERSION ${PROJECT_VERSION} COMPATIBILITY SameMajorVersion)
+  VERSION ${PROJECT_VERSION} COMPATIBILITY ${LEAPP_VERSION_COMPATIBILITY})
 
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/leapp_runtimeConfig.cmake"
               "${CMAKE_CURRENT_BINARY_DIR}/leapp_runtimeConfigVersion.cmake"
   DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/leapp_runtime")
 
-if(BUILD_TESTING)
+if(LEAPP_BUILD_TESTING)
+  enable_testing()
+  option(LEAPP_TEST_CUDA "Run integration tests on CUDA device 0" OFF)
+  include("${CMAKE_CURRENT_SOURCE_DIR}/../../src/engines/cxx.cmake")
   add_executable(leapp_bundle_test tests/bundle_test.cc)
   target_link_libraries(leapp_bundle_test PRIVATE lrt::runtime Threads::Threads)
   target_compile_options(leapp_bundle_test PRIVATE

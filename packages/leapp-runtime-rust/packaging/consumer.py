@@ -1,21 +1,30 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Create a small consumer workspace from a built local channel."""
+"""Lock a public Python core or source-built core to selected backend packages."""
 
 import argparse
 import json
 from pathlib import Path
+import tomllib
 
-from sdk import jetson_release
+from sdk import ROOT, jetson_release, native_platform
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--channel", type=Path, required=True)
+    parser.add_argument(
+        "--channel",
+        type=Path,
+        help="Local backend channel; optional for core-only installs",
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
-        "--binding", choices=["python", "cxx", "both"], default="python"
+        "--binding", choices=["python", "cxx", "both", "none"], default="python"
+    )
+    parser.add_argument("--core-source", choices=["pypi", "channel"], default="pypi")
+    parser.add_argument(
+        "--runtime-version", help="Core version for an environment without a channel"
     )
     parser.add_argument(
         "--engines", nargs="+", choices=["native", "triton"], default=["native"]
@@ -32,8 +41,31 @@ def main():
     args = parser.parse_args()
     if "tensorrt" in args.backends and "triton" not in args.engines:
         parser.error("precompiled TensorRT engines require --engines triton")
-    channel = args.channel.resolve()
-    report = json.loads((channel / "packages.json").read_text())
+    channel = args.channel.resolve() if args.channel else None
+    report = (
+        json.loads((channel / "packages.json").read_text())
+        if channel
+        else {
+            "version": args.runtime_version
+            or tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]["version"],
+            "platform": native_platform(),
+            "glibc": "2.28",
+            "l4t": None,
+            "engines": ["native"],
+            "versions": {},
+            "packages": {},
+        }
+    )
+    if args.runtime_version and args.runtime_version != report["version"]:
+        parser.error(
+            "--runtime-version must match the backend channel's runtime version"
+        )
+    if args.core_source == "pypi" and args.binding in {"cxx", "both"}:
+        parser.error(
+            "C++ consumers use --binding none and build with CMake; local binaries require --core-source channel"
+        )
+    if args.core_source == "channel" and not channel:
+        parser.error("--core-source channel requires --channel")
     if not set(args.engines) <= set(report["engines"]):
         parser.error("Selected engines have not been built in this channel")
     if report["l4t"] and jetson_release() != report["l4t"]:
@@ -50,9 +82,23 @@ def main():
         parser.error("This channel has no CUDA runtime")
     if args.cuda and "onnx" in args.backends and not report.get("onnx_cuda"):
         parser.error("Rebuild the ONNX backend channel with --cuda")
-    bindings = ["python", "cxx"] if args.binding == "both" else [args.binding]
-    selected = ["leapp-runtime-environment"]
-    selected += [f"leapp-runtime-{binding}" for binding in bindings]
+    if (
+        channel
+        and args.core_source == "pypi"
+        and args.binding == "python"
+        and not report.get("runtime_release")
+    ):
+        parser.error(
+            "PyPI cores require plugins built from the clean matching runtime-vVERSION tag; use --core-source channel for development builds"
+        )
+    bindings = (
+        ["python", "cxx"]
+        if args.binding == "both"
+        else ([] if args.binding == "none" else [args.binding])
+    )
+    selected = ["leapp-runtime-environment"] if channel else []
+    if args.core_source == "channel":
+        selected += [f"leapp-runtime-{binding}" for binding in bindings]
     for engine in sorted(set(args.engines)):
         kind = "backend" if engine == "native" else "triton"
         selected += [
@@ -76,11 +122,14 @@ def main():
     platform += " }"
     text = (
         f'[workspace]\nname = "leapp-consumer"\nrequires-pixi = ">=0.84.0"\n'
-        f'channels = [{json.dumps(channel.as_uri())}, "conda-forge"]\n'
+        f'channels = [{json.dumps(channel.as_uri()) + ", " if channel else ""}"conda-forge"]\n'
         f"platforms = [{platform}]\n\n[dependencies]\n"
     )
     for name in selected:
         text += f'{name} = {{ version = "=={report["version"]}", build = "{report["build"]}" }}\n'
+    if args.core_source == "pypi" and args.binding == "python":
+        text += 'python = "3.12.*"\n\n[pypi-dependencies]\n'
+        text += f'leapp-runtime = "=={report["version"]}"\n'
     # Explicit overrides are preserved. Pixi expands these at activation, not
     # when writing the manifest, so another install prefix works unchanged.
     text += (

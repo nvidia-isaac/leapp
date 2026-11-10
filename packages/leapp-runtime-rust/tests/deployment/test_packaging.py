@@ -160,6 +160,8 @@ class PackagingTests(unittest.TestCase):
                 str(output),
                 "--binding",
                 "cxx",
+                "--core-source",
+                "channel",
             ]
             with patch.object(sys, "argv", args):
                 for actual in (None, "39.1.0"):

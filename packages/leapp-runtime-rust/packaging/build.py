@@ -65,6 +65,28 @@ def select_sdk(backends, engines, cuda=False, warp=False, onnx_tensorrt=False):
     }
 
 
+def release_source(version):
+    """A public core version is usable only with plugins from its clean release."""
+    revision = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+    ).strip()
+    tag = subprocess.run(
+        ["git", "rev-parse", "--verify", f"refs/tags/runtime-v{version}^{{commit}}"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+    dirty = subprocess.check_output(
+        ["git", "status", "--porcelain", "--", ".", "../../LICENSE"],
+        cwd=ROOT,
+        text=True,
+    ).strip()
+    return (
+        revision,
+        not dirty and tag.returncode == 0 and tag.stdout.strip() == revision,
+    )
+
+
 def cmake(source, build, prefix, *options):
     run(
         "cmake",
@@ -103,6 +125,13 @@ def main():
         "--cuda", action="store_true", help="Include ONNX CUDA providers"
     )
     parser.add_argument(
+        "--bindings",
+        nargs="*",
+        choices=["python", "cxx"],
+        default=[],
+        help="Optionally stage local bindings for unreleased source builds",
+    )
+    parser.add_argument(
         "--warp", type=Path, help="Directory containing built Warp ONNX/PT2 adapters"
     )
     parser.add_argument("--onnx-tensorrt", action="store_true")
@@ -136,7 +165,8 @@ def main():
     torch = Path(sdk["torch"]) if sdk["torch"] else None
     pytorch = required("PYTORCH_SOURCE") if "nativert" in args.backends else None
     versions = inspect_sdk(sdk, args.backends)
-    versions["python"] = f"{sys.version_info.major}.{sys.version_info.minor}"
+    if "python" in args.bindings:
+        versions["python"] = f"{sys.version_info.major}.{sys.version_info.minor}"
     out = args.output.resolve()
     stage = out / "stage"
     if stage.exists():
@@ -145,6 +175,7 @@ def main():
         )
     stage.mkdir(parents=True)
     version = tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]["version"]
+    source_revision, runtime_release = release_source(version)
     source_hash = hashlib.sha256()
     # Include uncommitted source. Ignore caches and build products, not source edits.
     for path in sorted(ROOT.rglob("*")):
@@ -160,6 +191,8 @@ def main():
         "platform": target,
         "version": version,
         "source_sha256": source_hash.hexdigest(),
+        "source_revision": source_revision,
+        "runtime_release": runtime_release,
         "sdk_origin": args.sdk_origin,
         "versions": versions,
         "glibc": args.glibc,
@@ -197,41 +230,43 @@ def main():
         provenance["nativert_source_sha256"] = source_digest.hexdigest()
     (out / "build.json").write_text(json.dumps(provenance, indent=2) + "\n")
     (out / "sdk.json").write_text(json.dumps(sdk, indent=2) + "\n")
-    wheel_dir = out / "wheels"
-    run(
-        "maturin",
-        "build",
-        "--locked",
-        "--release",
-        "--manifest-path",
-        ROOT / "bindings/python/Cargo.toml",
-        "--auditwheel",
-        "skip",
-        "--target-dir",
-        out / "cargo",
-        "--out",
-        wheel_dir,
-        "--interpreter",
-        sys.executable,
-    )
-    wheels = list(wheel_dir.glob("*.whl"))
-    if len(wheels) != 1:
-        raise RuntimeError(f"Expected one wheel, found {wheels}")
-    run(
-        sys.executable,
-        "-m",
-        "pip",
-        "install",
-        "--no-deps",
-        "--no-compile",
-        "--no-index",
-        "--prefix",
-        stage / "leapp-runtime-python",
-        wheels[0],
-    )
-    for path in (stage / "leapp-runtime-python").rglob("direct_url.json"):
-        path.unlink()
-    cmake("bindings/cxx", out / "build-cxx", stage / "leapp-runtime-cxx")
+    if "python" in args.bindings:
+        wheel_dir = out / "wheels"
+        run(
+            "maturin",
+            "build",
+            "--locked",
+            "--release",
+            "--manifest-path",
+            ROOT / "bindings/python/Cargo.toml",
+            "--auditwheel",
+            "skip",
+            "--target-dir",
+            out / "cargo",
+            "--out",
+            wheel_dir,
+            "--interpreter",
+            sys.executable,
+        )
+        wheels = list(wheel_dir.glob("*.whl"))
+        if len(wheels) != 1:
+            raise RuntimeError(f"Expected one wheel, found {wheels}")
+        run(
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "--no-deps",
+            "--no-compile",
+            "--no-index",
+            "--prefix",
+            stage / "leapp-runtime-python",
+            wheels[0],
+        )
+        for path in (stage / "leapp-runtime-python").rglob("direct_url.json"):
+            path.unlink()
+    if "cxx" in args.bindings:
+        cmake("bindings/cxx", out / "build-cxx", stage / "leapp-runtime-cxx")
     if pytorch:
         nativert = stage / "leapp-libs-nativert"
         cmake(
