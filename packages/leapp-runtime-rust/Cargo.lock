@@ -321,6 +321,7 @@ name = "leapp-runtime-bindings"
 version = "0.1.0"
 dependencies = [
  "leapp-runtime",
+ "tempfile",
 ]
 
 [[package]]

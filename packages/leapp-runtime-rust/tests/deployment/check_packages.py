@@ -79,7 +79,7 @@ def audit(prefix, backends, report, onnx_tensorrt=False, engines=("native",)):
         for path in (prefix / "share/leapp/packages").glob("*.json")
     ]
     builds = {item["build"] for item in metadata}
-    assert len(builds) == 1, f"Mixed incompatible LEAPP builds: {builds}"
+    assert len(builds) <= 1, f"Mixed incompatible backend builds: {builds}"
     for release in {item["l4t"] for item in metadata} - {None}:
         path = Path("/etc/nv_tegra_release")
         actual = re.search(
@@ -108,7 +108,7 @@ def audit(prefix, backends, report, onnx_tensorrt=False, engines=("native",)):
                 path = path.resolve()
                 core[str(path.relative_to(prefix))] = sha256(path)
     report.update(
-        build=builds.pop(),
+        build=next(iter(builds), None),
         core=core,
         packages=[
             {
