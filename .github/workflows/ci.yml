@@ -24,6 +24,300 @@ jobs:
       - name: Check formatting
         run: ruff format --check .
 
+  runtime-changes:
+    name: Detect runtime changes
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      runtime: ${{ steps.changes.outputs.runtime }}
+    steps:
+      - uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            runtime:
+              - 'packages/leapp-runtime-rust/**'
+              - '.github/scripts/runtime-backends.sh'
+              - '.github/workflows/ci.yml'
+              - 'LICENSE'
+
+  runtime-packaging:
+    name: Runtime packaging
+    needs: runtime-changes
+    if: needs.runtime-changes.outputs.runtime == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: packages/leapp-runtime-rust
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.11.3
+        with:
+          pixi-version: v0.84.0
+          working-directory: packages/leapp-runtime-rust
+          locked: true
+          cache: true
+
+      - name: Check native backend C++ style
+        run: |
+          pixi run --locked python -m pip install clang-format==18.1.8 cpplint==2.0.2
+          files=(
+            src/engines/native/backends/include/leapp/*.h
+            src/engines/native/backends/include/leapp/native/*.h
+            src/engines/native/backends/include/leapp/native/detail/*.h
+            src/engines/native/backends/cxx/src/*.cc
+            src/engines/native/backends/cxx/tests/*.cc
+            src/engines/native/backends/bridge/tensor_view.h
+            src/engines/native/backends/torch/executor.{h,cc}
+            src/engines/native/backends/torch/plugin.cc
+          )
+          pixi run --locked clang-format --dry-run --Werror "${files[@]}"
+          pixi run --locked cpplint --filter=-build/c++17 --root=src/engines/native/backends/include "${files[@]}"
+
+      - name: Check Rust runtime and bindings
+        run: |
+          pixi run --locked cargo clippy --locked --workspace --all-targets -- -D warnings
+          pixi run --locked cargo test --locked --test bundle --test dlpack
+          pixi run --locked cargo test --locked -p leapp-runtime-bindings --test binding_lifecycle
+          pixi run --locked cargo test --locked --lib engines::native::backend_plugin_tests -- --test-threads=1
+
+      - name: Test source and installed native backend SDK
+        run: |
+          pixi run --locked cmake -S src/engines/native/backends/cxx -B target/backend-sdk \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/backend-sdk"
+          pixi run --locked cmake --build target/backend-sdk --parallel 2
+          pixi run --locked ctest --test-dir target/backend-sdk --output-on-failure
+          pixi run --locked cmake --install target/backend-sdk
+          cp -R src/engines/native/backends/cxx/tests "$RUNNER_TEMP/backend-consumer"
+          pixi run --locked cmake -S "$RUNNER_TEMP/backend-consumer" -B target/backend-consumer \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/backend-sdk"
+          pixi run --locked cmake --build target/backend-consumer --parallel 2
+          pixi run --locked ctest --test-dir target/backend-consumer --output-on-failure
+          for plugins in "$PWD/target/backend-sdk/plugins" "$PWD/target/backend-consumer/plugins"; do
+            LEAPP_NATIVE_TEST_PLUGINS="$plugins" pixi run --locked cargo test --locked --lib engines::native::backends::bridge -- --test-threads=1
+          done
+
+      - name: Test packaging helpers
+        run: pixi run --locked python -m unittest discover -s tests/deployment -p test_packaging.py -v
+
+      - name: Build and verify Rust source package
+        run: pixi run --locked cargo package --locked -p leapp-runtime
+
+      - name: Build Python wheel from source distribution
+        run: |
+          pixi run --locked build-sdist
+          mkdir -p target/sdist
+          tar -xzf target/distributions/leapp_runtime-*.tar.gz -C target/sdist
+          pixi run --locked maturin build --locked --release --manifest-path target/sdist/leapp_runtime-*/bindings/python/Cargo.toml --out target/wheels
+
+      - name: Check installed Python wheel
+        run: |
+          pixi run --locked python -m venv target/install
+          target/install/bin/python -m pip install --no-deps target/wheels/*.whl
+          target/install/bin/python -c "import lrt"
+
+      - name: Build local Pixi channel and consumer manifest
+        run: |
+          pixi run --locked build-runtime --glibc 2.39 --bindings python
+          pixi run --locked package-runtime
+          pixi run --locked consumer --channel target/packaging/channel --core-source channel --output target/consumer
+
+      - name: Audit fresh Pixi consumer
+        # Mount the channel at its original path so its generated file:// URL resolves.
+        run: |
+          docker run --rm \
+            --mount "type=bind,src=$(command -v pixi),dst=/usr/local/bin/pixi,readonly" \
+            --mount "type=bind,src=$PWD/target/packaging/channel,dst=$PWD/target/packaging/channel,readonly" \
+            --mount "type=bind,src=$PWD/target/consumer/pixi.toml,dst=/app/pixi.toml,readonly" \
+            --mount "type=bind,src=$PWD/tests/deployment,dst=/tests,readonly" \
+            ubuntu:24.04 bash -euc '
+              apt-get update
+              apt-get install -y --no-install-recommends ca-certificates
+              pixi install --manifest-path /app/pixi.toml
+              pixi run --locked --manifest-path /app/pixi.toml python /tests/check_packages.py --report /app/audit.json
+            '
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: leapp-runtime-core
+          path: packages/leapp-runtime-rust/target/wheels/*.whl
+          if-no-files-found: error
+          retention-days: 1
+
+  runtime-onnx-cpu:
+    name: Runtime ONNX (CPU, native)
+    needs: runtime-packaging
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: packages/leapp-runtime-rust
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: leapp-runtime-core
+          path: packages/leapp-runtime-rust/target/onnx-ci/core
+      - name: Isolate build caches
+        env:
+          LEAPP_CI_ROOT: ${{ runner.temp }}/leapp-onnx-${{ github.run_id }}-${{ github.run_attempt }}-cpu
+        run: |
+          {
+            echo "LEAPP_CI_ROOT=$LEAPP_CI_ROOT"
+            echo "PIXI_HOME=$LEAPP_CI_ROOT/pixi"
+            echo "PIXI_CACHE_DIR=$LEAPP_CI_ROOT/cache/rattler"
+            echo "XDG_CACHE_HOME=$LEAPP_CI_ROOT/cache"
+            echo "CARGO_HOME=$LEAPP_CI_ROOT/cargo"
+          } >> "$GITHUB_ENV"
+      - uses: prefix-dev/setup-pixi@v0.11.3
+        with:
+          pixi-version: v0.84.0
+          pixi-bin-path: ${{ env.LEAPP_CI_ROOT }}/bin/pixi
+          working-directory: packages/leapp-runtime-rust
+          locked: true
+          cache: true
+
+      - name: Install ONNX SDK and generate fixtures
+        run: |
+          pixi run --locked python -m venv target/onnx-ci/sdk
+          target/onnx-ci/sdk/bin/python -m pip install --report target/onnx-ci/sdk.json onnxruntime==1.26.0 onnx==1.19.0
+          target/onnx-ci/sdk/bin/python tests/generators/generate_models.py --output target/onnx-ci/fixtures
+          target/onnx-ci/sdk/bin/python - <<'PY'
+          import json, os, sys, sysconfig
+          from pathlib import Path
+
+          site = Path(sysconfig.get_path("platlib"))
+          libraries = [Path(sys.base_prefix) / "lib", site / "onnxruntime/capi"]
+          values = {
+              "ORT_DYLIB_PATH": next((site / "onnxruntime/capi").glob("libonnxruntime.so.*")),
+              "LD_LIBRARY_PATH": ":".join(map(str, libraries)),
+          }
+          report = json.loads(Path("target/onnx-ci/sdk.json").read_text())
+          values["SDK_ORIGIN"] = ";".join(
+              item["download_info"]["url"] + "#sha256=" + item["download_info"]["archive_info"]["hashes"]["sha256"]
+              for item in report["install"]
+          )
+          with open(os.environ["GITHUB_ENV"], "a") as output:
+              for name, value in values.items():
+                  output.write(f"{name}={value}\n")
+          PY
+
+      - name: Build ONNX channel and consumer manifest
+        run: |
+          pixi run --locked build-runtime --output target/onnx-ci/packages --glibc 2.39 --backends onnx --sdk-origin "$SDK_ORIGIN"
+          pixi run --locked package-runtime --input target/onnx-ci/packages
+          pixi run --locked consumer --channel target/onnx-ci/packages/channel --core-source channel --binding none --output target/onnx-ci/consumer --backends onnx
+          pixi run --locked python - <<'PY'
+          from pathlib import Path
+
+          manifest = Path("target/onnx-ci/consumer/pixi.toml")
+          text = manifest.read_text().replace("[dependencies]\n", '[dependencies]\npython = "3.12.*"\n')
+          wheel = next(Path("target/onnx-ci/core").glob("*.whl"))
+          text += '\n[pypi-dependencies]\nleapp-runtime = { path = "/wheels/' + wheel.name + '" }\n'
+          manifest.write_text(text)
+          PY
+
+      - name: Run ONNX inference in a fresh consumer
+        run: |
+          docker run --rm \
+            --mount "type=bind,src=$(command -v pixi),dst=/usr/local/bin/pixi,readonly" \
+            --mount "type=bind,src=$PWD/target/onnx-ci/packages/channel,dst=$PWD/target/onnx-ci/packages/channel,readonly" \
+            --mount "type=bind,src=$PWD/target/onnx-ci/consumer/pixi.toml,dst=/app/pixi.toml,readonly" \
+            --mount "type=bind,src=$PWD/target/onnx-ci/core,dst=/wheels,readonly" \
+            --mount "type=bind,src=$PWD/target/onnx-ci/fixtures,dst=/fixtures,readonly" \
+            --mount "type=bind,src=$PWD/tests/deployment,dst=/tests,readonly" \
+            --env LEAPP_TRITON_FIXTURES=/fixtures \
+            ubuntu:24.04 bash -euc '
+              apt-get update
+              apt-get install -y --no-install-recommends ca-certificates
+              pixi install --manifest-path /app/pixi.toml
+              pixi run --locked --manifest-path /app/pixi.toml python /tests/check_packages.py --backends onnx --report /app/audit.json
+              pixi run --locked --manifest-path /app/pixi.toml python /tests/check_installation.py --backend onnx --engine native --installed-only --without-triton --without-cuda
+            '
+
+  runtime-backends:
+    name: Runtime ${{ matrix.backend }}
+    needs: runtime-packaging
+    runs-on: [self-hosted, linux, x64, gpu]
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [onnx, torchscript, tensorrt]
+    defaults:
+      run:
+        working-directory: packages/leapp-runtime-rust
+    env:
+      BACKEND: ${{ matrix.backend }}
+      # Triton 26.05 supplies the supported server 2.69.0 and matching adapters.
+      SDK_IMAGE: nvcr.io/nvidia/tritonserver:26.05-py3@sha256:f319b4364ab48ab44c846654c4aca8ed1e1c6c1687a7c510d1c58b524ca84cdc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: leapp-runtime-core
+          path: packages/leapp-runtime-rust/target/backend-ci/core
+      - name: Isolate build caches
+        run: |
+          ci_root=$(mktemp -d "$RUNNER_TEMP/leapp-backends-XXXXXX")
+          {
+            echo "LEAPP_CI_ROOT=$ci_root"
+            echo "PIXI_HOME=$ci_root/pixi"
+            echo "PIXI_CACHE_DIR=$ci_root/cache/rattler"
+            echo "XDG_CACHE_HOME=$ci_root/cache"
+          } >> "$GITHUB_ENV"
+      - uses: prefix-dev/setup-pixi@v0.11.3
+        with:
+          pixi-version: v0.84.0
+          pixi-bin-path: ${{ env.LEAPP_CI_ROOT }}/bin/pixi
+          run-install: false
+          cache: false
+
+      - name: Build backend packages and fixtures
+        run: |
+          docker run --rm --gpus all \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=$GITHUB_WORKSPACE" \
+            --mount "type=bind,src=$LEAPP_CI_ROOT,dst=/ci" \
+            --mount "type=bind,src=$(command -v pixi),dst=/usr/local/bin/pixi,readonly" \
+            --workdir "$PWD" --env SDK_IMAGE \
+            --env PIXI_HOME=/ci/pixi --env PIXI_CACHE_DIR=/ci/cache/rattler \
+            --env XDG_CACHE_HOME=/ci/cache --env CARGO_HOME=/ci/cargo \
+            "$SDK_IMAGE" bash ../../.github/scripts/runtime-backends.sh "$BACKEND"
+
+      - name: Audit supported engine consumers
+        run: |
+          for engine in native triton; do
+            if [[ "$BACKEND" == tensorrt && "$engine" == native ]]; then
+              continue
+            fi
+            docker run --rm --gpus all \
+              --mount "type=bind,src=$(command -v pixi),dst=/usr/local/bin/pixi,readonly" \
+              --mount "type=bind,src=$PWD/target/backend-ci/packages/channel,dst=$PWD/target/backend-ci/packages/channel,readonly" \
+              --mount "type=bind,src=$PWD/target/backend-ci/$engine/pixi.toml,dst=/app/pixi.toml,readonly" \
+              --mount "type=bind,src=$PWD/target/backend-ci/core,dst=/wheels,readonly" \
+              --mount "type=bind,src=$PWD/target/backend-ci/fixtures,dst=/fixtures,readonly" \
+              --mount "type=bind,src=$PWD/tests/deployment,dst=/tests,readonly" \
+              --env LEAPP_TRITON_FIXTURES=/fixtures --env LEAPP_TORCHSCRIPT_FIXTURES=/fixtures \
+              --env LEAPP_TENSORRT_FIXTURES=/fixtures --env BACKEND --env ENGINE="$engine" \
+              ubuntu:24.04 bash -euc '
+                apt-get update
+                apt-get install -y --no-install-recommends ca-certificates
+                pixi install --manifest-path /app/pixi.toml
+                pixi run --locked --manifest-path /app/pixi.toml python /tests/check_packages.py --backends "$BACKEND" --engines "$ENGINE" --cuda --report /app/audit.json
+              '
+          done
+
+      - name: Clean GPU runner build files
+        if: always() && env.LEAPP_CI_ROOT != ''
+        run: |
+          docker run --rm \
+            --mount "type=bind,src=$PWD,dst=/source" \
+            --mount "type=bind,src=$LEAPP_CI_ROOT,dst=/ci" \
+            ubuntu:24.04 bash -euc 'rm -rf /source/target/backend-ci /source/.pixi /ci/*'
+          rmdir "$LEAPP_CI_ROOT"
+
   test:
     runs-on: [self-hosted, gpu]
     container:

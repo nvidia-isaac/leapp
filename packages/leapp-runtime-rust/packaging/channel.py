@@ -135,6 +135,20 @@ def licenses(path, sdk):
                     and ("license" in str(p).lower() or p.name == "NOTICE")
                 ]
             break
+    # Collect installed Conda notices from the package that owns this library.
+    for prefix in path.parents:
+        metadata = prefix / "conda-meta"
+        if not metadata.is_dir():
+            continue
+        for record in metadata.glob("*.json"):
+            record = json.loads(record.read_text())
+            files = record.get("files", [])
+            if str(path.relative_to(prefix)) not in files:
+                continue
+            candidates += [
+                prefix / name for name in files if name.startswith("share/licenses/")
+            ]
+        break
     if shutil.which("dpkg-query"):
         result = subprocess.run(
             ["dpkg-query", "-S", str(path)], text=True, capture_output=True
