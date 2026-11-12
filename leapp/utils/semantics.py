@@ -372,9 +372,9 @@ _COMPONENTS = {
     Kind.FRAME_POSE: ("x", "y", "z", "qx", "qy", "qz", "qw"),
     Kind.FRAME_POSITION: ("x", "y", "z"),
     Kind.FRAME_ORIENTATION: ("qx", "qy", "qz", "qw"),
-    Kind.FRAME_TWIST: ("vx", "vy", "vz", "wx", "wy", "wz"),
-    Kind.FRAME_LINEAR_VELOCITY: ("vx", "vy", "vz"),
-    Kind.FRAME_ANGULAR_VELOCITY: ("wx", "wy", "wz"),
+    Kind.FRAME_TWIST: ("x", "y", "z", "angular_x", "angular_y", "angular_z"),
+    Kind.FRAME_LINEAR_VELOCITY: ("x", "y", "z"),
+    Kind.FRAME_ANGULAR_VELOCITY: ("angular_x", "angular_y", "angular_z"),
 }
 
 
@@ -390,11 +390,10 @@ def _annotate(kind, name, ref, *, axes, is_setpoint, **spatial):
                 and axis.kind == AxisKind.COMPONENT
                 and axis.names is not None
             ):
-                if len(axis.names) != len(components) or set(axis.names) != set(
-                    components
-                ):
+                names = set(axis.names)
+                if len(axis.names) != len(names) or not names.issubset(components):
                     raise ValueError(
-                        f"{kind.value} components must be a permutation of {components}"
+                        f"{kind.value} components must be a unique subset of {components}"
                     )
     return annotation
 

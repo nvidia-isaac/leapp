@@ -124,12 +124,15 @@ Validation and the generic constructor
 ======================================
 
 Helpers enforce standard component names for the common quantities listed
-below. If you provide names on a ``COMPONENT`` axis, they must contain exactly
-the names listed for that helper, with no missing, repeated, or additional
-names. Other names raise ``ValueError``. This gives consumers a consistent
+below. If you provide names on a ``COMPONENT`` axis, they may contain any subset
+of the names listed for that helper, with no repeated or additional names.
+Other names raise ``ValueError``. This gives consumers a consistent
 vocabulary for these quantities.
 
-Any ordering of the required names is accepted. You should make sure that order
+Omitted components remain unspecified; they do not imply zero values.
+The label count must still match the tensor dimension size.
+
+Any ordering of the supplied names is accepted. You should make sure that order
 matches what you actually have in your tensor: LEAPP cannot check the physical
 meaning of the values, so incorrect ordering can still pass validation and
 export successfully.
@@ -148,14 +151,14 @@ export successfully.
    * - ``point_cloud``
      - ``x, y, z``
    * - ``frame_twist``
-     - ``vx, vy, vz, wx, wy, wz``
+     - ``x, y, z, angular_x, angular_y, angular_z``
    * - ``frame_linear_velocity``
-     - ``vx, vy, vz``
+     - ``x, y, z``
    * - ``frame_angular_velocity``
-     - ``wx, wy, wz``
+     - ``angular_x, angular_y, angular_z``
 
-For a position, the required names are ``x``, ``y``, and ``z``. These examples
-show accepted permutations and rejected name selections:
+For a position, the allowed names are ``x``, ``y``, and ``z``. These examples
+show accepted subsets and orders, and rejected name selections:
 
 .. tabs::
 
@@ -180,13 +183,19 @@ show accepted permutations and rejected name selections:
              axes=[Axis(AxisKind.COMPONENT, names=["z", "x", "y"])],
          )
 
-         # Rejected (ValueError): velocity labels cannot describe a position.
-         frame_position(
-             "position", xyz,
-             axes=[Axis(AxisKind.COMPONENT, names=["vx", "vy", "vz"])],
+         # Accepted: a planar position with only x and y components.
+         planar_position = frame_position(
+             "position", torch.tensor([1.0, 2.0]),
+             axes=[Axis(AxisKind.COMPONENT, names=["x", "y"])],
          )
 
-         # Rejected (ValueError): z is missing and y appears twice.
+         # Rejected (ValueError): angular labels cannot describe a position.
+         frame_position(
+             "position", xyz,
+             axes=[Axis(AxisKind.COMPONENT, names=["angular_x", "angular_y", "angular_z"])],
+         )
+
+         # Rejected (ValueError): y appears twice.
          frame_position(
              "position", xyz,
              axes=[Axis(AxisKind.COMPONENT, names=["x", "y", "y"])],
@@ -215,8 +224,20 @@ show accepted permutations and rejected name selections:
          - {kind: component, names: [z, x, y]}
          spatial: {reference: null}
 
+         ---
+         # Accepted: planar values ordered x, y
+         name: position
+         kind: frame/position
+         axes:
+         - {kind: component, names: [x, y]}
+         spatial: {reference: null}
+
 These checks apply when names are supplied on a ``COMPONENT`` axis. Helpers do
 not infer missing labels or change the underlying representation.
+
+A planar twist can use ``frame_twist`` with component names
+``["x", "y", "angular_z"]`` and a component dimension of size three.
+Its kind remains ``frame/twist``.
 
 Use ``TensorSemantics`` directly for custom conventions or additional ``extra``
 metadata. For joint positions, the helper is equivalent to:
@@ -257,7 +278,7 @@ For an unordered cloud shaped ``[point, component]``:
 This emits ``kind: point_cloud`` and ``spatial: {reference: camera}``.
 ``"point"`` is a custom axis kind. Batched ``[batch, point, component]`` and
 organized ``[height, width, component]`` layouts can use additional axes.
-Supplied component names must be a permutation of ``x, y, z``.
+Supplied component names may be any unique subset of ``x, y, z``.
 Keep colors and other attributes in separate tensors with an agreed point order.
 The helper preserves the tensor's values, shape, and dtype. Point-count
 variability depends on the exported model's shape support.
