@@ -47,7 +47,7 @@ def execute(backend, engine, device, inspect):
         "torchscript": ("model/values", "model/result", [9, 12, 15, 18]),
         "nativert": ("model/values", "model/output_0", [12, 26, 42, 60]),
     }[backend]
-    values = xp.arange(1, 5, dtype=xp.float32)
+    values = xp.asarray(np.arange(1, 5, dtype=np.float32))
     inputs = {name: values}
     with lrt.Session.open(
         bundle, lrt.SessionOptions(engine=engine, device=device)
@@ -56,7 +56,10 @@ def execute(backend, engine, device, inspect):
         retained = np.from_dlpack(session.run(inputs)[output])
         np.testing.assert_array_equal(retained, expected)
         if backend == "onnx" and engine == "native":
-            assert "libonnxruntime" in Path("/proc/self/maps").read_text()
+            mappings = Path("/proc/self/maps").read_text()
+            assert "libonnxruntime" in mappings
+            if device.startswith("cuda"):
+                assert "libonnxruntime_providers_cuda.so" in mappings
         inspect()
     with peer:
         np.testing.assert_array_equal(
@@ -70,7 +73,7 @@ def execute(backend, engine, device, inspect):
     if backend == "onnx":
         root = Path(os.environ.get("LEAPP_TRITON_FIXTURES", "target/triton-fixtures"))
         convolution = lrt.Bundle.open(root / "convolution.yaml")
-        values = xp.arange(16, dtype=xp.float32).reshape(1, 1, 4, 4)
+        values = xp.asarray(np.arange(16, dtype=np.float32).reshape(1, 1, 4, 4))
         with lrt.Session.open(
             convolution, lrt.SessionOptions(engine=engine, device=device)
         ) as session:
