@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Check TensorRT compilation, caching, profiles, and parameter passthrough."""
+"""Check TensorRT compilation, caching, profiles, and engine-specific options."""
 
 import argparse
 from pathlib import Path
@@ -16,20 +16,26 @@ def check(fixtures, cache, engine):
     right = left * 2
     inputs = {"arithmetic/left": left, "arithmetic/right": right}
     expected = {"arithmetic/sum": left + right, "arithmetic/difference": left - right}
-    for excluded, expect_engine in [("Identity", True), ("Add,Sub", False)]:
-        directory = cache / excluded
+    cases = (
+        [(None, True)]
+        if engine == "triton"
+        else [("Identity", True), ("Add,Sub", False)]
+    )
+    for excluded, expect_engine in cases:
+        directory = cache / (excluded or "default")
         directory.mkdir(parents=True, exist_ok=True)
         parameters = {
             "precision_mode": "FP16",
             "trt_engine_cache_enable": "1",
             "trt_engine_cache_path": str(directory),
             "trt_builder_optimization_level": "0",
-            "trt_op_types_to_exclude": excluded,
             **{
                 f"trt_profile_{kind}_shapes": f"left:{size},right:{size}"
                 for kind, size in [("min", 1), ("opt", 4), ("max", 8)]
             },
         }
+        if excluded is not None:
+            parameters["trt_op_types_to_exclude"] = excluded
         options = lrt.SessionOptions(
             engine=engine, device="cuda:0", onnx_tensorrt={"arithmetic": parameters}
         )
@@ -44,12 +50,24 @@ def check(fixtures, cache, engine):
             if snapshot is not None:
                 assert engines == snapshot, "Cache was rebuilt on warm open"
             snapshot = engines
-        print(f"PASS {engine}: profiles, cache reuse, excluded operators {excluded}")
-    for parameters, expected_error in [
-        ({"precision_mode": "invalid"}, "precision"),
-        ({"unknown_option": "1"}, "Unknown provider option"),
-        ({"unknown_option": ""}, "key/value cannot be empty"),
-    ]:
+        print(f"PASS {engine}: profiles, cache reuse, operator exclusion {excluded}")
+    invalid_options = [({"precision_mode": "invalid"}, "precision")]
+    if engine == "native":
+        invalid_options.extend(
+            [
+                ({"unknown_option": "1"}, "Unknown provider option"),
+                ({"unknown_option": ""}, "key/value cannot be empty"),
+            ]
+        )
+    else:
+        invalid_options.extend(
+            [
+                ({"unknown_option": "1"}, "unknown parameter"),
+                ({"unknown_option": ""}, "unknown parameter"),
+                ({"trt_op_types_to_exclude": "Add,Sub"}, "unknown parameter"),
+            ]
+        )
+    for parameters, expected_error in invalid_options:
         try:
             with lrt.Session.open(
                 bundle,

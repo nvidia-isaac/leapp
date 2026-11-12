@@ -33,7 +33,10 @@ class ErrorCode(IntEnum):
 
 @dataclass(frozen=True)
 class SessionOptions:
-    """Construction-time engine and device placement."""
+    """Construction-time engine and device placement.
+
+    See documentation for onnx_tensorrt options.
+    """
 
     device: str = "cpu"
     output_device: str = "cpu"

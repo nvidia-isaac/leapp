@@ -41,7 +41,7 @@ struct SessionOptions {
   MemoryLocation output_location;
   std::unordered_map<std::string, MemoryLocation> output_overrides;
   // ONNX node -> Triton TensorRT accelerator parameters. Empty parameters
-  // enable SDK defaults.
+  // enable SDK defaults. See documentation for supported options.
   std::unordered_map<std::string, std::unordered_map<std::string, std::string>>
       onnx_tensorrt;
 };

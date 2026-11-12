@@ -53,33 +53,57 @@ fn yaml(text: &str) -> Value {
 
 #[test]
 fn onnx_tensorrt_preserves_per_node_triton_parameters() {
-    let fixture = Fixture::new();
-    let bundle = fixture.open();
     let parameters = HashMap::from([
         ("precision_mode".into(), "FP16".into()),
+        ("max_workspace_size_bytes".into(), "1048576".into()),
+        ("trt_engine_cache_enable".into(), "1".into()),
+        ("trt_engine_cache_path".into(), "cache/policy".into()),
         ("trt_profile_min_shapes".into(), "features:1x3".into()),
+        ("trt_profile_opt_shapes".into(), "features:4x3".into()),
+        ("trt_profile_max_shapes".into(), "features:8x3".into()),
+        ("trt_builder_optimization_level".into(), "0".into()),
         ("trt_op_types_to_exclude".into(), "Identity".into()),
+        ("unknown_option".into(), "1".into()),
     ]);
-    let options = HashMap::from([("a_policy".into(), parameters.clone())]);
-    let mut pipeline = convert_bundle(&bundle, ExecutionDevice::Cuda { device_id: 0 }).unwrap();
-    configure_tensorrt(&mut pipeline, &bundle, &options);
-    assert!(pipeline.models[0].config.optimization.is_none());
-    let accelerator = &pipeline.models[1]
-        .config
-        .optimization
-        .as_ref()
-        .unwrap()
-        .execution_accelerators
-        .as_ref()
-        .unwrap()
-        .gpu_execution_accelerator[0];
-    assert_eq!(accelerator.name, "tensorrt");
-    assert_eq!(accelerator.parameters, parameters);
-    let normalized =
-        crate::session::onnx_tensorrt::provider_options(&accelerator.parameters).unwrap();
+    let normalized = crate::session::onnx_tensorrt::provider_options(&parameters).unwrap();
     assert_eq!(normalized["trt_fp16_enable"], "1");
+    assert_eq!(normalized["trt_max_workspace_size"], "1048576");
     assert_eq!(normalized["trt_profile_min_shapes"], "features:1x3");
     assert_eq!(normalized["trt_op_types_to_exclude"], "Identity");
+    assert_eq!(normalized["unknown_option"], "1");
+
+    for parameters in [
+        parameters,
+        HashMap::new(),
+        HashMap::from([
+            ("precision_mode".into(), "invalid".into()),
+            ("trt_engine_cache_path".into(), "".into()),
+            ("trt_builder_optimization_level".into(), "invalid".into()),
+            ("unknown_option".into(), "".into()),
+        ]),
+    ] {
+        let fixture = Fixture::new();
+        let bundle = fixture.open();
+        let mut pipeline = convert_bundle(&bundle, ExecutionDevice::Cuda { device_id: 0 }).unwrap();
+        configure_tensorrt(
+            &mut pipeline,
+            &bundle,
+            &HashMap::from([("a_policy".into(), parameters.clone())]),
+        );
+        assert!(pipeline.models[0].config.optimization.is_none());
+        let accelerators = &pipeline.models[1]
+            .config
+            .optimization
+            .as_ref()
+            .unwrap()
+            .execution_accelerators
+            .as_ref()
+            .unwrap()
+            .gpu_execution_accelerator;
+        assert_eq!(accelerators.len(), 1);
+        assert_eq!(accelerators[0].name, "tensorrt");
+        assert_eq!(accelerators[0].parameters, parameters);
+    }
 }
 
 #[test]

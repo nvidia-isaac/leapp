@@ -14,25 +14,13 @@ CUDA-enabled LibTorch with the C++11 libstdc++ ABI. CUDA-enabled LibTorch is
 required even for CPU execution. Builds use installed dependencies without
 fetching or installing them. Set `TRITON_ROOT` and `TORCH_ROOT` to their SDK roots.
 
-## ONNX Runtime parameter passthrough
+## ONNX Runtime
 
-The `onnxruntime` wrapper builds Triton's r26.09 ONNX backend with a small patch
-that forwards additional TensorRT options to ORT. Existing Triton aliases remain
-supported; ORT validates new keys and values. Stock Triton adapters retain their
-upstream parameter restrictions. This build fetches pinned upstream sources and
-requires Git, CMake 3.31.8+, RapidJSON development headers, and headers matching
-the installed ONNX Runtime:
-
-```sh
-cmake -S src/engines/triton/backends/onnxruntime -B target/onnxruntime-backend \
-  -DCMAKE_BUILD_TYPE=Release -DTRITON_ROOT="$TRITON_ROOT" \
-  -DORT_INCLUDE_DIR=/path/to/onnxruntime/include -DCUDAToolkit_ROOT="$CUDA_ROOT"
-cmake --build target/onnxruntime-backend -j4
-cmake --install target/onnxruntime-backend --prefix "$PWD/target/plugins"
-```
-
-Make the matching ORT provider libraries discoverable beside the installed
-`backends/onnxruntime/libtriton_onnxruntime.so`.
+Use Triton's stock `backends/onnxruntime/libtriton_onnxruntime.so` with its
+matching ORT libraries. No additional ONNX backend build is required.
+`SessionOptions.onnx_tensorrt` enables TensorRT per ONNX node. See the
+[runtime guide](../../../../README.md#onnx-tensorrt-acceleration) for supported
+parameters and validation behavior.
 
 ## PT2 / NativeRT
 

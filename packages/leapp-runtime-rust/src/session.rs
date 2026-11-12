@@ -43,6 +43,7 @@ pub struct SessionOptions {
     pub engine: EngineKind,
     /// ONNX node names mapped to Triton's TensorRT accelerator parameters.
     /// An entry enables the provider with CUDA fallback; an empty map uses SDK defaults.
+    /// See documentation for supported options.
     pub onnx_tensorrt: HashMap<String, HashMap<String, String>>,
     /// Caller-owned streams by CUDA device ID, used by native GPU execution and
     /// transfers. Missing devices use internal streams. Triton ignores this map.

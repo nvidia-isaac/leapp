@@ -294,12 +294,12 @@ options = lrt.SessionOptions(
 
 Rust and C++ expose the same node-to-parameter maps. An entry enables TensorRT;
 empty parameters use SDK defaults. Unlisted nodes retain their existing execution.
-Parameters follow [Triton's ONNX Runtime accelerator options](https://github.com/triton-inference-server/onnxruntime_backend/blob/r26.09/README.md#onnx-runtime-with-tensorrt-optimization),
+Parameters follow [Triton's ONNX Runtime accelerator options](https://github.com/triton-inference-server/onnxruntime_backend/blob/r26.05/README.md#onnx-runtime-with-tensorrt-optimization),
 including precision, workspace, caching, and min/opt/max profile strings.
-Native execution forwards other options directly to ORT. The packaged Triton
-adapter also forwards them, using a small patch to Triton's ONNX backend;
-unmodified Triton adapters retain their upstream parameter restrictions.
-New provider options require support in the installed ORT version.
+Native execution forwards additional options directly to ORT. Triton forwards
+options to its unmodified ONNX Runtime backend. Each backend validates keys and
+values and rejects unsupported options. ORT-only options such as
+`trt_op_types_to_exclude` require native execution and a supporting ORT version.
 The native engine rejects CUDA graph capture (`trt_cuda_graph_enable`) because
 borrowed runs and peer sessions can use different input and output addresses.
 ONNX Runtime executes supported subgraphs with TensorRT and uses CUDA/CPU fallback
