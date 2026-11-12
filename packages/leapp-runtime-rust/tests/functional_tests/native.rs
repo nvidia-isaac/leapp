@@ -355,6 +355,45 @@ fn forward_edges_share_fixed_storage_and_follow_dependency_order() {
 }
 
 #[test]
+fn private_terminal_outputs_are_not_published() {
+    for device in devices() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut data = fixture("named_ports");
+        data["pipeline"]["data_flow"] = json!({"arithmetic/difference": []});
+        data["pipeline"]["outputs"] = json!({"arithmetic": ["sum"]});
+        let bundle = write_bundle(&data, directory.path());
+        let engine = NativeEngine::load(
+            &bundle,
+            &Graph::new(&bundle).unwrap(),
+            &SessionOptions {
+                engine: crate::EngineKind::Native,
+                device,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let location = execution_location(&engine);
+        let left = placed(&[7f32; 4], &[4], location).unwrap();
+        let right = placed(&[2f32; 4], &[4], location).unwrap();
+        let result = engine
+            .run(
+                &[
+                    ("arithmetic/left", left.view()),
+                    ("arithmetic/right", right.view()),
+                ],
+                &OutputPlacement::default(),
+                &mut HashMap::new(),
+            )
+            .unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result["arithmetic/sum"].to_cpu_vec::<f32>().unwrap(),
+            [9.; 4]
+        );
+    }
+}
+
+#[test]
 fn scalar_and_empty_outputs_use_the_prepared_path() {
     for device in devices() {
         for (name, values, shape) in [
@@ -525,23 +564,18 @@ fn dynamic_outputs_feed_fixed_and_dynamic_nodes_and_recover_after_shape_errors()
             },
         )
         .unwrap();
+        let location = crate::engines::tests::support::execution_location(device);
+        let input = placed(&[1f32; 4], &[4], location).unwrap();
         let first = session
-            .run(&std::collections::HashMap::from([(
-                "first/input",
-                BorrowedTensor::cpu(&[1f32; 4], &[4]).unwrap(),
-            )]))
+            .run(&HashMap::from([("first/input", input.view())]))
             .unwrap();
+        let invalid_shape = placed(&[9f32; 3], &[3], location).unwrap();
         assert!(session
-            .run(&std::collections::HashMap::from([(
-                "first/input",
-                BorrowedTensor::cpu(&[9f32; 3], &[3]).unwrap()
-            )]))
+            .run(&HashMap::from([("first/input", invalid_shape.view())]))
             .is_err());
+        let input = placed(&[3f32; 4], &[4], location).unwrap();
         let second = session
-            .run(&std::collections::HashMap::from([(
-                "first/input",
-                BorrowedTensor::cpu(&[3f32; 4], &[4]).unwrap(),
-            )]))
+            .run(&HashMap::from([("first/input", input.view())]))
             .unwrap();
         assert_eq!(
             first

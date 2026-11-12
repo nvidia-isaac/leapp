@@ -76,7 +76,7 @@ fn external_streams_support_onnx_fixed_dynamic_feedback_and_cpu_transfers() {
                     ExecutionDevice::Cpu => MemoryLocation::Cpu,
                     ExecutionDevice::Cuda { device_id } => MemoryLocation::Cuda { device_id },
                 };
-                if name == "feedback" && location != execution {
+                if location != execution {
                     continue;
                 }
                 let value = placed(&[1_f32, 2., 3., 4.], &[4], location).unwrap();
@@ -133,10 +133,10 @@ fn external_streams_support_torch_fixed_dynamic_and_worker_paths() {
         };
         for name in ["scripted", "dynamic", "forked"] {
             let bundle = super::torch::bundle("jit", name, device);
-            let location = if name == "scripted" {
-                execution
-            } else {
+            let location = if name == "forked" {
                 MemoryLocation::Cpu
+            } else {
+                execution
             };
             let value = placed(&[1_f32, 2., 3., 4.], &[4], location).unwrap();
             let mut inputs = HashMap::from([("model/values", value.view())]);
@@ -149,12 +149,7 @@ fn external_streams_support_torch_fixed_dynamic_and_worker_paths() {
         }
         for name in ["weighted", "reshape"] {
             let bundle = super::torch::bundle("pt2", name, device);
-            let location = if name == "weighted" {
-                execution
-            } else {
-                MemoryLocation::Cpu
-            };
-            let value = placed(&[1_f32, 2., 3., 4.], &[4], location).unwrap();
+            let value = placed(&[1_f32, 2., 3., 4.], &[4], execution).unwrap();
             exercise(
                 &bundle,
                 device,
@@ -172,7 +167,7 @@ fn external_streams_support_tensorrt_fixed_and_dynamic() {
         let data = [1_f32; 8];
         let count = if name == "dynamic_fixed" { 8 } else { 4 };
         for location in [MemoryLocation::Cpu, MemoryLocation::Cuda { device_id: 0 }] {
-            if name == "dynamic_fixed" && location == MemoryLocation::Cpu {
+            if location == MemoryLocation::Cpu {
                 continue;
             }
             let value = placed(&data[..count], &[count as i64], location).unwrap();

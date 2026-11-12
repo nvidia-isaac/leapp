@@ -106,12 +106,8 @@ impl NativeEngine {
             .map(|&id| slots[id].fixed.as_ref().map_or(0, |fixed| fixed.buffer.len))
             .collect();
         let mut input_positions = vec![None; plan.slots.len()];
-        let mut dynamic_state_inputs = Vec::new();
         for (position, &slot) in plan.inputs.values().enumerate() {
             input_positions[slot] = Some(position);
-            if position >= plan.public_inputs && slots[slot].fixed.is_none() {
-                dynamic_state_inputs.push(position);
-            }
         }
         let dynamic_slots = slots
             .iter()
@@ -133,9 +129,9 @@ impl NativeEngine {
             models,
             slots,
             plan,
+            input_positions,
             input_bytes,
             staged_inputs: Vec::new(),
-            dynamic_state_inputs,
             calls,
             dynamic_slots,
             output_bindings: Vec::with_capacity(binding_capacity),
@@ -146,7 +142,7 @@ impl NativeEngine {
         for call in &workspace.plan.calls {
             let mut external_inputs = Vec::new();
             for (position, &id) in call.inputs.iter().enumerate() {
-                if let Some(order) = input_positions[id] {
+                if let Some(order) = workspace.input_positions[id] {
                     external_inputs.push(InputRoute {
                         position,
                         boundary: order,
@@ -184,10 +180,11 @@ impl NativeEngine {
                         workspace.slots[id].terminal && workspace.slots[id].fixed.is_some()
                     }));
             }
-            let input_alignment = if prepared && !external_inputs.is_empty() {
+            let input_alignment = if prepared {
                 workspace.models[call.model].input_alignment()
             } else {
-                0
+                // Dynamic calls borrow Session inputs on the execution device.
+                1
             };
             if input_alignment != 0 {
                 for route in &external_inputs {
@@ -233,7 +230,11 @@ impl NativeEngine {
                 } else {
                     Workspace::run_dynamic
                 },
-                external_inputs,
+                external_inputs: if prepared {
+                    external_inputs
+                } else {
+                    Vec::new()
+                },
             });
         }
 
@@ -351,10 +352,11 @@ struct Workspace {
     models: Vec<Box<dyn BackendPlugin>>,
     slots: Vec<plan::Slot>,
     plan: Arc<Plan>,
+    // Session input position for each boundary slot; None for node outputs.
+    input_positions: Vec<Option<usize>>,
     input_bytes: Vec<usize>,
-    // Fixed at initialization for dynamic calls and backend-required isolation.
+    // Prepared calls whose backend disables input borrowing.
     staged_inputs: Vec<(usize, usize)>,
-    dynamic_state_inputs: Vec<usize>,
     calls: Vec<CallState>,
     dynamic_slots: Vec<usize>,
     output_bindings: Vec<(usize, DLTensor)>,
@@ -454,15 +456,19 @@ impl Workspace {
     fn run_dynamic(
         &mut self,
         index: usize,
-        _inputs: &[(&str, BorrowedTensor<'_>)],
+        inputs: &[(&str, BorrowedTensor<'_>)],
     ) -> anyhow::Result<()> {
         let call = &self.plan.calls[index];
         let inputs = call
             .inputs
             .iter()
-            .map(|&id| self.slots[id].view())
+            .map(|&id| match self.input_positions[id] {
+                Some(position) => Ok(inputs[position].1),
+                None => self.slots[id].view(),
+            })
             .collect::<anyhow::Result<Vec<_>>>()?;
-        // SAFETY: invocation-scoped writable outputs remain alive through completion.
+        // SAFETY: Session inputs, forwarded values and writable outputs remain
+        // alive through backend completion, including errors.
         let outputs = unsafe {
             self.models[call.model].run_dynamic(&inputs, &self.output_bindings, &mut self.transfers)
         }?;
@@ -480,19 +486,12 @@ impl Workspace {
         placement: &OutputPlacement,
         buffers: &mut HashMap<&str, OutputBuffer<'_>>,
     ) -> anyhow::Result<IndexMap<String, SharedTensor>> {
-        for &position in &self.dynamic_state_inputs {
-            // SAFETY: Session owns validated state; only its current copy length
-            // is needed. Fixed private lengths were computed at initialization.
-            self.input_bytes[position] = unsafe {
-                crate::engines::memory::dlpack::layout_unchecked(*inputs[position].1.descriptor())
-            }
-            .1;
-        }
-
-        // Staging routes are fixed at initialization, never selected as a
-        // fallback for incompatible public inputs. Private state is already valid.
+        // Copy session inputs for prepared backends that disable borrowing.
+        // Dynamic calls read Session inputs directly. Initialization records
+        // each (workspace slot, session input index) pair in staged_inputs.
         for &(slot, order) in &self.staged_inputs {
-            // SAFETY: the complete boundary was validated before any staging.
+            // SAFETY: NativeEngine::validate checked public inputs; Session owns
+            // validated private defaults/feedback. input_bytes has current lengths.
             unsafe {
                 self.slots[slot].assign_validated(
                     inputs[order].1,
@@ -502,13 +501,24 @@ impl Workspace {
             }
         }
 
+        // Caller-provided buffers set output destinations; placement selects
+        // locations for outputs returned in newly owned storage.
+        // Own fresh result buffers by slot ID until publication.
         let mut allocated = HashMap::new();
         for index in 0..self.calls.len() {
+            // Rebuild destination overrides, keeping other prepared bindings intact.
+            // TODO: Investigate reusing output bindings to reduce per-run rebuilding.
             self.output_bindings.clear();
+            // Public/feedback outputs only, unlike plan.calls[index].outputs.
+            // Tuple: (node output index, workspace slot ID, qualified port name).
             for &(position, id, ref name) in &self.calls[index].outputs {
                 if let Some(buffer) = buffers.get(name.as_str()) {
+                    // The caller supplied a destination for this named output.
                     self.output_bindings.push((position, *buffer.descriptor()));
                 } else if let Some(fixed) = &self.slots[id].fixed {
+                    // No caller destination; this slot has a fixed-shape tensor.
+                    // Write into independent result storage when locations match;
+                    // otherwise transfer the result after execution.
                     if placement.location(name) == fixed.buffer.location {
                         let buffer = Arc::new(Buffer::allocate_for_copy(
                             fixed.buffer.len,
@@ -521,9 +531,9 @@ impl Workspace {
                     }
                 }
             }
-            let execute = self.calls[index].execute;
-            execute(self, index, inputs)
+            (self.calls[index].execute)(self, index, inputs)
                 .with_context(|| format!("execute node {}", self.plan.calls[index].name))?;
+            // Copy overridden outputs back for downstream consumers.
             for binding in &self.output_bindings {
                 let id = self.plan.calls[index].outputs[binding.0];
                 if !self.slots[id].terminal {
@@ -538,6 +548,7 @@ impl Workspace {
             }
         }
 
+        // Collect owned results; caller-provided destinations are already filled.
         self.plan
             .outputs
             .iter()

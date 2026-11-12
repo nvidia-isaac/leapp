@@ -165,12 +165,11 @@ impl Plan {
             plan.outputs.insert(port.name(), outputs[port]);
         }
 
-        // Match Triton's private terminal publication and branch execution.
+        // Terminal slots keep backend-owned results until invocation cleanup.
         for (name, model) in models {
             for spec in &model.outputs {
                 let port = port_ref(name, spec);
                 if pipeline.data_flow.get(&port).is_none_or(Vec::is_empty) {
-                    plan.outputs.insert(port.name(), outputs[&port]);
                     plan.terminal_outputs.insert(outputs[&port]);
                 }
             }

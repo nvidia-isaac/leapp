@@ -222,11 +222,9 @@ fn nativert_dynamic_shapes_recover_after_execution_errors() {
         for size in [4, 3, 0, 8, 2] {
             let values = vec![size as f32; size];
             let shape = [size as i64];
+            let input = placed(&values, &shape, execution_location(&engine)).unwrap();
             let result = engine.run(
-                &[(
-                    "model/values",
-                    BorrowedTensor::cpu(&values, &shape).unwrap(),
-                )],
+                &[("model/values", input.view())],
                 &OutputPlacement::default(),
                 &mut HashMap::new(),
             );
@@ -330,9 +328,10 @@ fn torch_scalars_empty_tensors_and_dynamic_dtype_transport() {
                 assert!(!engine.workspace.lock().unwrap().models[0].is_prepared());
                 if name == "double" {
                     let values = [1.5f64, 2.25, 3.125, 4.0625];
+                    let input = placed(&values, &[4], execution_location(&engine)).unwrap();
                     let result = engine
                         .run(
-                            &[("model/values", BorrowedTensor::cpu(&values, &[4]).unwrap())],
+                            &[("model/values", input.view())],
                             &OutputPlacement::default(),
                             &mut HashMap::new(),
                         )
@@ -340,9 +339,10 @@ fn torch_scalars_empty_tensors_and_dynamic_dtype_transport() {
                     assert_eq!(result[output].to_cpu_vec::<f64>().unwrap(), values);
                 } else {
                     let values = [1i16, -2, 3, -4];
+                    let input = placed(&values, &[4], execution_location(&engine)).unwrap();
                     let result = engine
                         .run(
-                            &[("model/values", BorrowedTensor::cpu(&values, &[4]).unwrap())],
+                            &[("model/values", input.view())],
                             &OutputPlacement::default(),
                             &mut HashMap::new(),
                         )

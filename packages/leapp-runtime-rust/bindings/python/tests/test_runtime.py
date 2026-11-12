@@ -275,6 +275,10 @@ def test_runtime_tensor_inputs(output_device):
             retained.__dlpack_device__()
             == {"cpu": (1, 0), "pinned": (3, 0), "cuda:0": (2, 0)}[output_device]
         )
+        if ENGINE == "native" and output_device != "cpu":
+            with pytest.raises(lr.RuntimeError, match="execution device"):
+                session.run({"dynamic/input": retained})
+            return
         for _ in range(8):
             result = session.run({"dynamic/input": result["dynamic/output"]})
             assert (
@@ -303,6 +307,8 @@ def test_pinned_pytorch_input(device, legacy):
             return source.__dlpack__(stream=stream)
 
     producer = LegacyProducer() if legacy else source
+    if ENGINE == "native" and device != "cpu":
+        producer = source.to(device)
     with open_session("dynamic", device) as rt:
         result = rt.new_session().run({"dynamic/input": producer})
         np.testing.assert_array_equal(

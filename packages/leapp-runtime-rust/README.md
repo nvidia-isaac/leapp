@@ -109,6 +109,8 @@ finish before returning, and restore the caller's device. It rejects outputs alr
 them. Copying and first exposure are synchronized. An existing `BorrowedTensor` can also be read
 without copying through its safe `as_cpu_slice` method when its storage is on the host.
 Native backends that bind inputs directly require them on the execution device.
+Native dynamic calls also borrow session inputs directly and require them on the
+execution device.
 TensorRT also requires 256-byte aligned addresses, including any DLPack byte
 offset. Incompatible inputs return an error; transfer or align them explicitly.
 Output placement does not change input requirements.

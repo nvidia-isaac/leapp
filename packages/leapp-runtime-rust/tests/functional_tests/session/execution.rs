@@ -357,12 +357,10 @@ fn feedback_advances_per_session_reset_and_failures_are_atomic() {
         let mut session = runtime.new_session().unwrap();
         let run = |session: &mut Session, reshape: &[f32]| {
             let observation = input(&[1f32; 4], &[4], device);
+            let reshape = input(reshape, &[reshape.len() as i64], device);
             session.run(&std::collections::HashMap::from([
                 ("accumulator/observation", observation.view()),
-                (
-                    "reshape/input",
-                    BorrowedTensor::cpu(reshape, &[reshape.len() as i64]).unwrap(),
-                ),
+                ("reshape/input", reshape.view()),
             ]))
         };
         let first = run(&mut session, &[1., 2.]).unwrap();

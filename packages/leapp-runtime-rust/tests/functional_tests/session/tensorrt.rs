@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::support;
-use lrt::dlpack::BorrowedTensor;
 use lrt::{Bundle, ExecutionDevice, MemoryLocation, Session, SessionOptions};
 use std::{env, path::PathBuf};
 use support::{placed, TestTensor};
@@ -76,9 +75,10 @@ fn dynamic_profile_bounds_report_errors_without_poisoning_session() {
     // Both engines accept profile 0; native engine tests also switch profiles.
     for size in [1, 2, 4, 9, 4] {
         let data: Vec<f32> = (0..size).map(|v| v as f32).collect();
+        let input = placed(&data, &[size], MemoryLocation::Cuda { device_id: 0 }).unwrap();
         let result = session.run(&std::collections::HashMap::from([(
             "dynamic/input",
-            BorrowedTensor::cpu(&data, &[size]).unwrap(),
+            input.view(),
         )]));
         if size == 9 {
             assert_eq!(result.err().unwrap().phase(), "execute");

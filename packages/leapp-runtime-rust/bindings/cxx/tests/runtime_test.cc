@@ -338,6 +338,10 @@ void CudaBuffers(const std::filesystem::path& fixtures) {
     for (auto input_type :
          {lrt::MemoryType::kCpu, lrt::MemoryType::kPinnedCpu,
           lrt::MemoryType::kCuda}) {
+      if (TestEngine() == lrt::EngineKind::kNative &&
+          input_type != lrt::MemoryType::kCuda) {
+        continue;
+      }
       const void* input = input_type == lrt::MemoryType::kCpu ? data.data()
                           : input_type == lrt::MemoryType::kPinnedCpu ? pinned
                                                                         : device;

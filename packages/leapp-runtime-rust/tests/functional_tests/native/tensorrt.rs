@@ -204,15 +204,12 @@ fn peer_profiles_match_all_inputs_and_recover_after_rejection() {
                     let (left, right) = cases[(step + index) % cases.len()];
                     let a = vec![index as f32 + 1.; left];
                     let b = vec![index as f32 + 2.; right];
+                    let location = MemoryLocation::Cuda { device_id: 0 };
+                    let a_input = placed(&a, &[left as i64], location).unwrap();
+                    let b_input = placed(&b, &[right as i64], location).unwrap();
                     let result = session.run(&std::collections::HashMap::from([
-                        (
-                            "concat/left",
-                            BorrowedTensor::cpu(&a, &[left as i64]).unwrap(),
-                        ),
-                        (
-                            "concat/right",
-                            BorrowedTensor::cpu(&b, &[right as i64]).unwrap(),
-                        ),
+                        ("concat/left", a_input.view()),
+                        ("concat/right", b_input.view()),
                     ]));
                     if (left, right) == (3, 2) {
                         let error = result.err().unwrap();
@@ -243,7 +240,10 @@ fn shape_control_values_refresh_with_concrete_bundle_dimensions() {
     assert!(!engine.workspace.lock().unwrap().models[0].is_prepared());
     let data = [10f32, 20., 30., 40.];
     let mut retained = Vec::new();
-    for location in locations() {
+    for location in locations()
+        .into_iter()
+        .filter(|&location| location == execution_location(&engine))
+    {
         for (start, end) in [(0i64, 2i64), (1, 3), (2, 4), (0, 5), (1, 4), (1, 3), (0, 2)] {
             let input = placed(&data, &[4], location).unwrap();
             let lower = placed(&[start], &[1], location).unwrap();
@@ -292,8 +292,8 @@ fn data_dependent_outputs_empty_tensors_and_host_shape_outputs() {
                 .filter(|(_, v)| **v != 0.)
                 .map(|(i, _)| i as i64)
                 .collect();
-            let inputs =
-                HashMap::from([("nonzero/data", BorrowedTensor::cpu(&data, &[4]).unwrap())]);
+            let input = placed(&data, &[4], MemoryLocation::Cuda { device_id: 0 }).unwrap();
+            let inputs = HashMap::from([("nonzero/data", input.view())]);
             let result = session.run(&inputs);
             if name == "nonzero_fixed" && expected.len() != 2 {
                 assert_eq!(result.err().unwrap().code(), ErrorCode::InvalidArgument);
@@ -352,10 +352,11 @@ fn data_dependent_outputs_empty_tensors_and_host_shape_outputs() {
     let mut session = Session::open(&bundle("shape"), options()).unwrap();
     for rows in [1, 4, 2] {
         let data = vec![0f32; rows as usize * 2];
+        let input = placed(&data, &[rows, 2], MemoryLocation::Cuda { device_id: 0 }).unwrap();
         let result = session
             .run(&std::collections::HashMap::from([(
                 "shape/data",
-                BorrowedTensor::cpu(&data, &[rows, 2]).unwrap(),
+                input.view(),
             )]))
             .unwrap();
         assert_eq!(

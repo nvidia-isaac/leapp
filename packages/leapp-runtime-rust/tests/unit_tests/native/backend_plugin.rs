@@ -10,7 +10,7 @@ use std::sync::{
 
 // A minimal dynamic-only backend: the defaults provide guarded execution and
 // unsupported prepared calls. No SDK is needed to exercise trait dispatch.
-struct CopyPlugin(Arc<()>);
+struct CopyPlugin(Arc<usize>);
 
 impl BackendPlugin for CopyPlugin {
     fn new_session(&self) -> anyhow::Result<Box<dyn BackendPlugin>> {
@@ -23,6 +23,8 @@ impl BackendPlugin for CopyPlugin {
         outputs: &[(usize, DLTensor)],
         transfers: &mut Transfers,
     ) -> anyhow::Result<Vec<Option<SharedTensor>>> {
+        // The backend must receive the original input allocation.
+        assert_eq!(inputs[0].descriptor().data as usize, *self.0);
         if let Some(output) = outputs.first() {
             let input = inputs[0].as_cpu_slice::<f32>().unwrap();
             unsafe {
@@ -68,7 +70,9 @@ fn plan(nodes: usize) -> Arc<Plan> {
 
 #[test]
 fn dynamic_only_trait_defaults_and_peers_preserve_output_ownership() {
-    let mut model: Box<dyn BackendPlugin> = Box::new(CopyPlugin(Arc::new(())));
+    let mut values = [2f32];
+    let address = Arc::new(values.as_ptr() as usize);
+    let mut model: Box<dyn BackendPlugin> = Box::new(CopyPlugin(address));
     assert!(model.needs_guard());
     assert!(!model.can_prepare());
     assert!(!model.is_prepared());
@@ -105,7 +109,6 @@ fn dynamic_only_trait_defaults_and_peers_preserve_output_ownership() {
             b.slots[0].view().unwrap().descriptor().data
         );
     }
-    let mut values = [2f32];
     let first = parent
         .run(
             &[("input", BorrowedTensor::cpu(&values, &[1]).unwrap())],
