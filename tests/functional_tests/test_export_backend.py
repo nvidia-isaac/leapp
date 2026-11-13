@@ -1657,6 +1657,8 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
     def test_executorch_backend_errors(self):
         """Covers the error paths, the checksum of the ``.pte`` file, and that
         validation runs the program."""
+        from executorch.runtime import Runtime
+
         with self.assertRaises(ValueError):
             ExecuTorchExportBackend(None, {"delegate": "unknown"})
         with self.assertRaises(TypeError):
@@ -1689,9 +1691,39 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         ):
             ExecuTorchExportBackend(None).load(model, sha256sum)
         backend = ExecuTorchExportBackend(None)
-        backend.load(model, sha256sum)
+        with mock.patch.object(
+            Runtime, "load_program", autospec=True, side_effect=Runtime.load_program
+        ) as load_program:
+            backend.load(model, sha256sum)
+        # So XNNPACK packs a weight once, not once per use.
+        self.assertEqual(
+            load_program.call_args.kwargs["backend_options"],
+            {"XnnpackBackend": {"weight_cache_enabled": True}},
+        )
         with self.assertRaisesRegex(ValueError, "Expected 1 inputs, got 2"):
             backend.compiled_model(torch.ones(3), torch.ones(3))
+
+        # A failed lowering leaves no temporary folder behind.
+        made = []
+        mkdtemp = tempfile.mkdtemp
+
+        def recorded_mkdtemp(*args, **kwargs):
+            made.append(mkdtemp(*args, **kwargs))
+            return made[-1]
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        funcB(torch.ones(3))
+        leapp.stop()
+        with (
+            mock.patch("tempfile.mkdtemp", recorded_mkdtemp),
+            mock.patch.object(
+                ExecuTorchExportBackend, "_lower", side_effect=RuntimeError("lowering")
+            ),
+            self.assertRaisesRegex(Exception, "lowering"),
+        ):
+            leapp.compile_graph(visualize=False)
+        self.assertTrue(made)
+        self.assertEqual([path for path in made if os.path.exists(path)], [])
 
         # Validation runs the program, so a program that returns other values fails it.
         run = ExecuTorchProgram.__call__
