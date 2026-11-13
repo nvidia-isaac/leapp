@@ -1013,6 +1013,7 @@ class TestDiagnostics(unittest.TestCase):
                     self.assertIs(passed, registered and cached_output == 4.0)
                     if not registered:
                         self.assertIn("keeps state between calls", hint)
+                        self.assertIn("execution is nondeterministic", hint)
                         self.assertNotIn("inlined as a constant", hint)
                     elif cached_output != 4.0:
                         self.assertIn("inlined as a constant", hint)

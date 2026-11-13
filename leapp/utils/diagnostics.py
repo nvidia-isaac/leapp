@@ -29,8 +29,9 @@ _REENTRY_VALIDATION_HINT = (
 )
 _HIDDEN_STATE_HINT = (
     "Sample 0 passed validation, but replaying it after the other samples gave a "
-    "different result, so the exported model keeps state between calls that was "
-    "not declared. This usually means a buffer allocated outside the node is "
+    "different result. This can indicate that the exported model keeps state "
+    "between calls that was not declared, or that execution is nondeterministic. "
+    "Undeclared state usually means a buffer allocated outside the node is "
     "reset and then accumulated into inside it, for example a Warp array cleared "
     "with zero_() and written with wp.atomic_add. Declare such buffers with "
     "annotate.register_buffer() for this node, or allocate them inside the node. "
