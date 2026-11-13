@@ -1,18 +1,27 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Internal execution contract and shared tensor storage.
+//! Runtime engine selection and the internal execution contract.
 pub(crate) mod error;
 pub(crate) mod memory;
+mod native;
 pub(crate) mod triton;
 
 use crate::{
-    dlpack::{BorrowedTensor, SharedTensor},
+    dlpack::{BorrowedTensor, OutputBuffer, SharedTensor},
     OutputPlacement, RuntimeError,
 };
 use indexmap::IndexMap;
-use memory::OutputPool;
 use std::sync::Arc;
+
+/// Execution engine selected when opening a session.
+/// Defaults to native.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum EngineKind {
+    Triton,
+    #[default]
+    Native,
+}
 
 /// Device used by model instances, independently of input and output storage.
 #[derive(Debug, Clone, Copy, Default)]
@@ -35,26 +44,29 @@ pub enum MemoryLocation {
     },
 }
 
-/// A loaded engine is shared by independent sessions. Calls complete before returning.
+/// Session execution over shared loaded models. Calls complete before returning.
+/// Session output destinations are validated at construction; internal callers
+/// using other placements validate those before execution. Native uses the input
+/// order established by Session: public declarations, then private defaults and
+/// feedback in model declaration order. Session checks names and completeness,
+/// plus supplied output names, declared dtype/shape, and output/output overlap.
+/// Engines validate input/output overlap before execution and never retain buffers.
 pub(crate) trait Engine: Send + Sync {
+    fn new_session(self: Arc<Self>) -> Result<Arc<dyn Engine>, RuntimeError>;
+
     fn run(
         &self,
         inputs: &[(&str, BorrowedTensor<'_>)],
         placement: &OutputPlacement,
-        pool: &Arc<OutputPool>,
+        outputs: &mut std::collections::HashMap<&str, OutputBuffer<'_>>,
     ) -> Result<IndexMap<String, SharedTensor>, RuntimeError>;
     /// Always produce independent, ready storage, even at the same location.
     fn copy(
         &self,
         input: BorrowedTensor<'_>,
         target: MemoryLocation,
-        pool: Option<&OutputPool>,
     ) -> Result<SharedTensor, RuntimeError> {
-        match pool {
-            Some(pool) => pool.copy(input, target),
-            None => memory::dlpack::copy(input, Some(target)),
-        }
-        .map_err(Into::into)
+        memory::dlpack::copy(input, Some(target)).map_err(Into::into)
     }
 }
 
@@ -63,8 +75,15 @@ pub(crate) fn open(
     graph: &crate::session::graph::Graph<'_>,
     options: &crate::SessionOptions,
 ) -> Result<Arc<dyn Engine>, RuntimeError> {
-    triton::open(bundle, graph, options)
+    match options.engine {
+        EngineKind::Triton => triton::open(bundle, graph, options),
+        EngineKind::Native => native::open(bundle, graph, options),
+    }
 }
 
 /// DLPack producer handoff support for language bindings.
 pub(crate) use memory::cuda::HandoffStream;
+
+#[cfg(test)]
+#[path = "../tests/functional_tests/session.rs"]
+pub(crate) mod tests;

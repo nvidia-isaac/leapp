@@ -23,9 +23,10 @@ mod error;
 mod session;
 
 pub use bundle::{Bundle, DataType, Metadata, MetadataValue, PortRef, PortSpec};
-pub use engines::{ExecutionDevice, MemoryLocation};
+pub use engines::memory::cuda::CudaStream;
+pub use engines::{EngineKind, ExecutionDevice, MemoryLocation};
 pub use error::{BundleError, ErrorCode, RuntimeError};
-pub use session::{OutputPlacement, OutputPoolOptions, RunResult, Session, SessionOptions};
+pub use session::{OutputPlacement, RunResult, Session, SessionOptions};
 
 #[cfg(test)]
 extern crate self as lrt;

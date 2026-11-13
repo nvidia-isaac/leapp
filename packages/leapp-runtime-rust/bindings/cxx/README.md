@@ -12,7 +12,7 @@ inspection values; it does not implement another runtime.
 ## Build and install
 
 Linux x86-64 requires Rust 1.88 or newer, CMake 3.22 or newer, a C++20 compiler,
-the Triton and CUDA SDKs, and the selected backend libraries. Run from `packages/leapp-runtime-rust`:
+the CUDA SDK, and the Triton SDK. Run from `packages/leapp-runtime-rust`:
 
 ```sh
 cmake -S bindings/cxx -B target/cxx-build \
@@ -23,6 +23,9 @@ cmake -S bindings/cxx -B target/cxx-build \
 cmake --build target/cxx-build -j
 cmake --install target/cxx-build --prefix /your/sdk
 ```
+
+Both engines are included in the same library. Install the model backends
+you need as described in the [native engine guide](../../README.md#native-engine).
 
 CPU, pinned-host, and CUDA buffers are supported by every build. Native backend
 and SDK libraries remain external dependencies; configure the loader search path
@@ -74,7 +77,11 @@ if (!status.ok()) return status;
 - Open and NewSession require empty destinations. Reset a handle through
   assignment to a default instance before reusing it. Failed operations preserve
   destinations; successful Run/GetTensor replace them.
-- Triton is selected automatically when opening a session.
+- `SessionOptions.engine` selects the runtime engine when opening a session.
+  The linked runtime defaults to `EngineKind::kNative`. Both engines are
+  included; set `engine` explicitly to choose `kTriton` or `kNative`.
+  Invalid engine values return `InvalidArgument` without opening an engine or
+  changing the destination; there is no fallback.
 - Bundle copies share the Rust snapshot and cached C++ inspection values.
   Getter references remain valid while a copy retains that snapshot.
 - Missing model/port getters return `nullptr`. Pipeline input/output maps preserve
@@ -89,8 +96,11 @@ if (!status.ok()) return status;
   and duplicates. Missing models return `nullptr`; empty models return empty
   vectors. References follow the bundle snapshot lifetime.
 - Session is movable and noncopyable. Operations on one session serialize;
-  separate sessions can execute concurrently. `NewSession` shares the loaded
-  engine and construction options but starts from captured initial state.
+  separate sessions may be called concurrently. Native peers share models/weights
+  and own separate fixed buffers, bindings, and execution contexts. ONNX peers
+  can overlap; graphs containing Torch backends or optional ONNX custom operators
+  retain a shared execution guard. `NewSession` shares loaded
+  models and construction options but starts from captured initial state.
   Close waits for that session's active call and releases its engine reference;
   peers remain usable. Poisoned locks are recovered for cleanup, then reported
   as an error; subsequent Close succeeds. `session.bundle()` exposes the retained
@@ -106,14 +116,14 @@ if (!status.ok()) return status;
   share writable storage. Public outputs that also feed back are detached from
   private session state at the configured public location. Never mutate inputs concurrently
   with execution. There are no LEAPP tensor accessors or copy helpers. Allocation
-  pooling belongs to each session; exporting a lease excludes its storage from
-  reuse.
+  belongs to each returned result.
 
-`SessionOptions.output_pool.max_entries` limits cached buffers (default 64).
-Zero disables caching. The byte budget follows bundle output sizes and grows for
-larger dynamic outputs; there is no fixed byte cap. `NewSession` inherits the
-policy with an empty cache. The limit does not restrict live results, and closing
-one session leaves retained outputs and peer sessions valid.
+`Run(inputs, &result, outputs)` writes named outputs into caller-owned buffers.
+Native binds these buffers directly; Triton copies ensemble results into them.
+Only omitted outputs are allocated and returned. Buffers must match the
+output dtype and shape, meet backend device/alignment requirements, and be disjoint
+from inputs and each other. They remain borrowed until return. Their contents are
+unspecified on failure. Calling `Run` without output buffers returns fresh storage.
 
 ## CUDA buffers
 

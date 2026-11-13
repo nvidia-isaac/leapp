@@ -10,17 +10,21 @@ from pathlib import Path
 
 import numpy as np
 import onnx
-from onnx import TensorProto, helper, numpy_helper
+from onnx import helper, numpy_helper
 
 
-def port(name, shape):
-    return {"name": name, "dtype": "float32", "shape": shape, "type": "tensor"}
+def port(name, shape, dtype="float32"):
+    return {"name": name, "dtype": dtype, "shape": shape, "type": "tensor"}
 
 
 def save_model(root, name, inputs, outputs, nodes, initializers=(), external=False):
     def value(spec):
         shape = [None if dim == -1 else dim for dim in spec["shape"]]
-        return helper.make_tensor_value_info(spec["name"], TensorProto.FLOAT, shape)
+        return helper.make_tensor_value_info(
+            spec["name"],
+            helper.np_dtype_to_tensor_dtype(np.dtype(spec["dtype"])),
+            shape,
+        )
 
     graph = helper.make_graph(
         nodes,
@@ -147,6 +151,50 @@ def generate(root):
             },
         },
     )
+    sliced = save_model(
+        root,
+        "slice",
+        [port("data", [4]), port("start", [1], "int64"), port("end", [1], "int64")],
+        [port("output", [2])],
+        [helper.make_node("Slice", ["data", "start", "end"], ["output"])],
+    )
+    write(
+        "slice",
+        {
+            "models": {"slice": sliced},
+            "pipeline": {
+                "data_flow": {},
+                "feedback_flow": {},
+                "inputs": {"slice": ["data", "start", "end"]},
+                "outputs": {"slice": ["output"]},
+                "configs": {},
+            },
+        },
+    )
+    for name, shape in [("named_ports", [4]), ("named_ports_dynamic", [-1])]:
+        model = save_model(
+            root,
+            name,
+            [port("left", shape), port("right", shape)],
+            [port("difference", shape), port("sum", shape)],
+            [
+                helper.make_node("Sub", ["left", "right"], ["difference"]),
+                helper.make_node("Add", ["left", "right"], ["sum"]),
+            ],
+        )
+        write(
+            name,
+            {
+                "models": {"arithmetic": model},
+                "pipeline": {
+                    "data_flow": {},
+                    "feedback_flow": {},
+                    "inputs": {"arithmetic": ["left", "right"]},
+                    "outputs": {"arithmetic": ["difference", "sum"]},
+                    "configs": {},
+                },
+            },
+        )
     for name, shape in [("scalar", []), ("dynamic", [-1]), ("empty", [0])]:
         model = save_model(
             root,
@@ -168,6 +216,29 @@ def generate(root):
                 },
             },
         )
+
+    # Exercise cuDNN in isolated CUDA deployments, beyond elementwise kernels.
+    convolution = save_model(
+        root,
+        "convolution",
+        [port("input", [1, 1, 4, 4])],
+        [port("output", [1, 1, 3, 3])],
+        [helper.make_node("Conv", ["input", "weight"], ["output"])],
+        [numpy_helper.from_array(np.ones((1, 1, 2, 2), dtype=np.float32), "weight")],
+    )
+    write(
+        "convolution",
+        {
+            "models": {"convolution": convolution},
+            "pipeline": {
+                "data_flow": {},
+                "feedback_flow": {},
+                "inputs": {"convolution": ["input"]},
+                "outputs": {"convolution": ["output"]},
+                "configs": {},
+            },
+        },
+    )
 
 
 if __name__ == "__main__":

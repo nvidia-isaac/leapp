@@ -45,7 +45,7 @@ fn leases_preserve_ownership_and_exposure_across_threads() {
     for versioned in [false, true] {
         let (owner, dropped) = producer();
         // SAFETY: the fixture owns ready CPU storage and can be deleted on any thread.
-        let shared = unsafe { SharedTensor::new(owner, None, None).unwrap() };
+        let shared = unsafe { SharedTensor::new(owner, None).unwrap() };
         let saved = shared.to_cpu_vec::<f32>().unwrap();
         assert_eq!(saved, [2., 3.]);
         let descriptor = shared.clone().descriptor().data;
@@ -92,7 +92,6 @@ fn transfer_failures_preserve_the_owner_and_allow_retry() {
     let shared = unsafe {
         SharedTensor::new(
             owner,
-            None,
             Some(Box::new(move |destination| {
                 if copies.fetch_add(1, Ordering::SeqCst) == 0 {
                     return Err("simulated device transfer failure".into());

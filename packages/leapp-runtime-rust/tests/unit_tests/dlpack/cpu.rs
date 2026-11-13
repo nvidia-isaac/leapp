@@ -25,6 +25,13 @@ fn cpu_slices_infer_dtype_and_validate_shape_without_copying() {
     for shape in [&[3][..], &[-1][..], &[i64::MAX, 8][..], &[0, -1][..]] {
         assert!(BorrowedTensor::cpu(&[1i32, 2], shape).is_err());
     }
+    let mut destination = [0_f32; 2];
+    let address = destination.as_mut_ptr().cast();
+    {
+        let output = OutputBuffer::cpu(&mut destination, &[1, 2]).unwrap();
+        assert_eq!(output.descriptor().data, address);
+    }
+    assert!(OutputBuffer::cpu(&mut destination, &[3]).is_err());
 }
 
 #[test]

@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::support;
-use lrt::dlpack::BorrowedTensor;
 use lrt::{Bundle, ExecutionDevice, MemoryLocation, Session, SessionOptions};
 use std::{env, path::PathBuf};
 use support::{placed, TestTensor};
@@ -20,6 +19,7 @@ fn bundle(name: &str) -> Bundle {
 
 fn options() -> SessionOptions {
     SessionOptions {
+        engine: lrt::EngineKind::Triton,
         device: ExecutionDevice::Cuda { device_id: 0 },
         ..Default::default()
     }
@@ -67,11 +67,13 @@ fn ensembles_support_host_and_device_buffers_and_retained_results() {
 fn dynamic_profile_bounds_report_errors_without_poisoning_session() {
     let runtime = Session::open(&bundle("dynamic"), options()).unwrap();
     let mut session = runtime.new_session().unwrap();
-    for size in [1, 4, 8, 9, 4] {
+    // Triton uses optimization profile 0.
+    for size in [1, 2, 4, 9, 4] {
         let data: Vec<f32> = (0..size).map(|v| v as f32).collect();
+        let input = placed(&data, &[size], MemoryLocation::Cuda { device_id: 0 }).unwrap();
         let result = session.run(&std::collections::HashMap::from([(
             "dynamic/input",
-            BorrowedTensor::cpu(&data, &[size]).unwrap(),
+            input.view(),
         )]));
         if size == 9 {
             assert_eq!(result.err().unwrap().phase(), "execute");

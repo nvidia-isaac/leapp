@@ -29,6 +29,23 @@ extern "C" {
 
     fn cudaMemcpy(dst: *mut c_void, src: *const c_void, size: usize, kind: c_int) -> c_int;
 
+    fn cudaMemcpyAsync(
+        dst: *mut c_void,
+        src: *const c_void,
+        size: usize,
+        kind: c_int,
+        stream: *mut c_void,
+    ) -> c_int;
+
+    fn cudaMemcpyPeerAsync(
+        dst: *mut c_void,
+        dst_device: c_int,
+        src: *const c_void,
+        src_device: c_int,
+        size: usize,
+        stream: *mut c_void,
+    ) -> c_int;
+
     fn cudaMemcpyPeer(
         dst: *mut c_void,
         dst_device: c_int,
@@ -46,6 +63,12 @@ extern "C" {
     fn cudaStreamSynchronize(stream: *mut c_void) -> c_int;
 
     fn cudaStreamDestroy(stream: *mut c_void) -> c_int;
+
+    fn cudaEventCreateWithFlags(event: *mut *mut c_void, flags: u32) -> c_int;
+
+    fn cudaEventRecord(event: *mut c_void, stream: *mut c_void) -> c_int;
+
+    fn cudaEventDestroy(event: *mut c_void) -> c_int;
 }
 
 const HOST_ALLOC_PORTABLE: u32 = 1;
@@ -53,6 +76,81 @@ const COPY_HOST_TO_DEVICE: c_int = 1;
 const COPY_DEVICE_TO_HOST: c_int = 2;
 const COPY_DEVICE_TO_DEVICE: c_int = 3;
 const STREAM_NON_BLOCKING: u32 = 1;
+
+/// A caller-owned CUDA stream handle (`cudaStream_t` or `CUstream`).
+///
+/// This wrapper never destroys the stream. Configure it through
+/// [`crate::SessionOptions::cuda_streams`]; peers inherit the same handle.
+#[derive(Debug, Clone, Copy)]
+pub struct CudaStream {
+    raw: *mut c_void,
+}
+
+// SAFETY: construction requires a live, externally retained CUDA handle. Native
+// initialization rejects thread-local streams before any work is submitted.
+unsafe impl Send for CudaStream {}
+unsafe impl Sync for CudaStream {}
+
+impl CudaStream {
+    /// Borrow a native stream without transferring ownership.
+    /// Null and `cudaStreamLegacy` both select CUDA's legacy default stream.
+    /// Native initialization rejects `cudaStreamPerThread` because sessions may
+    /// execute on different host threads. Triton ignores configured streams.
+    ///
+    /// # Safety
+    /// `stream` must be a valid CUDA stream handle or a CUDA default-stream
+    /// sentinel. It must belong to the device's primary context, and its owner
+    /// must retain it whenever any copy of this handle may be used, and until
+    /// every session using it (including peers) is closed or dropped. Keep it
+    /// alive through failed initialization as well. External
+    /// submissions must respect the runtime's borrowed-buffer ownership rules.
+    pub unsafe fn from_raw(stream: *mut c_void) -> Self {
+        Self {
+            // Use an explicit legacy handle even when a consumer was built with
+            // per-thread default-stream semantics; null means "not supplied" in
+            // our private backend ABI.
+            raw: if stream.is_null() {
+                ptr::without_provenance_mut(1)
+            } else {
+                stream
+            },
+        }
+    }
+
+    /// Return the borrowed CUDA handle, with null normalized to `cudaStreamLegacy`.
+    pub fn as_raw(self) -> *mut c_void {
+        self.raw
+    }
+
+    pub(crate) fn validate(self, device: u32) -> Result<()> {
+        if self.raw as usize == 2 {
+            return Err(Error::new(
+                ErrorKind::InvalidArgument,
+                "load",
+                "cudaStreamPerThread cannot be used by sessions that move between host threads",
+            ));
+        }
+        validate(MemoryLocation::Cuda { device_id: device })?;
+        let _device = Device::select(device)?;
+        let mut event = ptr::null_mut();
+        // SAFETY: construction guarantees a live stream. Recording an event
+        // checks that it belongs to the selected runtime context/device, using
+        // CUDA APIs available before cudaStreamGetDevice (CUDA 12.8).
+        unsafe {
+            check(cudaEventCreateWithFlags(&mut event, 2))?; // cudaEventDisableTiming
+            let recorded = check(cudaEventRecord(event, self.raw));
+            let destroyed = check(cudaEventDestroy(event));
+            recorded.map_err(|error| {
+                Error::new(
+                    ErrorKind::InvalidArgument,
+                    "load",
+                    format!("CUDA stream is incompatible with device {device}: {error}"),
+                )
+            })?;
+            destroyed
+        }
+    }
+}
 
 fn check(code: c_int) -> Result<()> {
     if code == 0 {
@@ -83,13 +181,13 @@ pub(crate) fn validate(location: MemoryLocation) -> Result<()> {
     Ok(())
 }
 
-struct Device {
+pub(crate) struct Device {
     previous: c_int,
     changed: bool,
 }
 
 impl Device {
-    fn select(device: u32) -> Result<Self> {
+    pub(crate) fn select(device: u32) -> Result<Self> {
         let device = c_int::try_from(device).map_err(|_| {
             Error::new(
                 ErrorKind::InvalidArgument,
@@ -123,11 +221,7 @@ impl Drop for Device {
     }
 }
 
-pub(crate) fn allocate(
-    len: usize,
-    location: MemoryLocation,
-    zeroed: bool,
-) -> Result<NonNull<u8>> {
+pub(crate) fn allocate(len: usize, location: MemoryLocation, zeroed: bool) -> Result<NonNull<u8>> {
     let mut raw = ptr::null_mut();
     // SAFETY: raw is writable and the caller validated location and allocation size.
     unsafe {
@@ -142,8 +236,8 @@ pub(crate) fn allocate(
                 let _device = Device::select(device_id)?;
                 check(cudaMalloc(&mut raw, len))?;
                 if zeroed {
-                    if let Err(error) = check(cudaMemset(raw, 0, len))
-                        .and_then(|_| check(cudaDeviceSynchronize()))
+                    if let Err(error) =
+                        check(cudaMemset(raw, 0, len)).and_then(|_| check(cudaDeviceSynchronize()))
                     {
                         cudaFree(raw);
                         return Err(error);
@@ -198,13 +292,20 @@ pub(crate) unsafe fn copy(
     }
 }
 
+pub(crate) fn synchronize(device: u32) -> Result<()> {
+    let _device = Device::select(device)?;
+    // SAFETY: synchronize work on the selected device before releasing borrowed storage.
+    unsafe { check(cudaDeviceSynchronize()) }
+}
+
 /// A nonblocking CUDA stream used to receive producer completion dependencies.
 pub(crate) struct HandoffStream {
     stream: *mut c_void,
     device: u32,
+    owned: bool,
 }
 
-// SAFETY: the stream is owned, CUDA supports host-thread handoff, and every
+// SAFETY: the stream is owned or caller-retained, and every
 // operation selects its device. Destruction requires exclusive ownership.
 unsafe impl Send for HandoffStream {}
 
@@ -219,7 +320,20 @@ impl HandoffStream {
         unsafe {
             check(cudaStreamCreateWithFlags(&mut stream, STREAM_NON_BLOCKING))?;
         }
-        Ok(Self { stream, device })
+        Ok(Self {
+            stream,
+            device,
+            owned: true,
+        })
+    }
+
+    /// Borrow a stream already validated during native engine initialization.
+    pub(crate) fn borrowed(device: u32, stream: CudaStream) -> Self {
+        Self {
+            stream: stream.as_raw(),
+            device,
+            owned: false,
+        }
     }
 
     /// Invoke a producer on this stream's device, then restore the caller's device.
@@ -234,21 +348,77 @@ impl HandoffStream {
         Ok(producer())
     }
 
+    /// Copy ready storage and wait only for this stream, including on errors.
+    /// # Safety
+    /// Source/destination must be disjoint, live regions of `len` bytes on the
+    /// declared devices. This stream must belong to the CUDA destination, or
+    /// the source device for device-to-host copies.
+    pub(crate) unsafe fn copy_ready(
+        &self,
+        dst: *mut c_void,
+        target: MemoryLocation,
+        src: *const c_void,
+        source: MemoryLocation,
+        len: usize,
+    ) -> Result<()> {
+        let _device = Device::select(self.device)?;
+        // SAFETY: caller supplies valid regions and retains them through this wait.
+        unsafe {
+            let result = match (source, target) {
+                (
+                    MemoryLocation::Cuda { device_id: from },
+                    MemoryLocation::Cuda { device_id: to },
+                ) if from != to => check(cudaMemcpyPeerAsync(
+                    dst,
+                    to as c_int,
+                    src,
+                    from as c_int,
+                    len,
+                    self.stream,
+                )),
+                (_, MemoryLocation::Cuda { .. }) => check(cudaMemcpyAsync(
+                    dst,
+                    src,
+                    len,
+                    if matches!(source, MemoryLocation::Cuda { .. }) {
+                        COPY_DEVICE_TO_DEVICE
+                    } else {
+                        COPY_HOST_TO_DEVICE
+                    },
+                    self.stream,
+                )),
+                (MemoryLocation::Cuda { .. }, _) => check(cudaMemcpyAsync(
+                    dst,
+                    src,
+                    len,
+                    COPY_DEVICE_TO_HOST,
+                    self.stream,
+                )),
+                _ => unreachable!("CPU copies do not require a CUDA stream"),
+            };
+            let completed = check(cudaStreamSynchronize(self.stream));
+            result.and(completed)
+        }
+    }
+
     /// Handle passed to a DLPack producer's stream argument.
     pub fn address(&self) -> usize {
         self.stream as usize
     }
 
-    /// Wait for producer work before handing data to Triton's internal streams.
+    /// Wait for producer work before handing data to engine execution streams.
     pub fn synchronize(&self) -> std::result::Result<(), crate::RuntimeError> {
         let _device = Device::select(self.device)?;
-        // SAFETY: this object owns a live stream on the selected device.
+        // SAFETY: this object retains or borrows a live stream on the selected device.
         unsafe { check(cudaStreamSynchronize(self.stream)) }.map_err(Into::into)
     }
 }
 
 impl Drop for HandoffStream {
     fn drop(&mut self) {
+        if !self.owned {
+            return;
+        }
         if let Ok(_device) = Device::select(self.device) {
             // SAFETY: this object is the final owner of the stream.
             unsafe {

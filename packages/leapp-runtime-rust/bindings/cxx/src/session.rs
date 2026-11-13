@@ -2,11 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{bundle::BundleHandle, ffi};
-use lrt::{ExecutionDevice, MemoryLocation, RunResult, SessionOptions};
+use lrt::{EngineKind, ExecutionDevice, MemoryLocation, RunResult, SessionOptions};
 
 pub struct SessionHandle(Option<leapp_runtime_bindings::SessionHandle>);
 
 pub struct ResultHandle(Option<RunResult>);
+
+pub fn engine_default() -> ffi::EngineKind {
+    match EngineKind::default() {
+        EngineKind::Native => ffi::EngineKind::Native,
+        EngineKind::Triton => ffi::EngineKind::Triton,
+    }
+}
 
 pub fn session_new() -> Box<SessionHandle> {
     Box::new(SessionHandle(None))
@@ -18,7 +25,7 @@ pub fn result_new() -> Box<ResultHandle> {
 
 pub fn session_open(
     bundle: &BundleHandle,
-    max_entries: usize,
+    engine: ffi::EngineKind,
     device: ffi::Location,
     output_location: ffi::Location,
     overrides: &[ffi::Placement],
@@ -36,8 +43,14 @@ pub fn session_open(
         Ok(_) => return crate::invalid("pinned memory is not an execution device"),
         Err(e) => return e,
     };
-    let mut options = SessionOptions::default();
-    options.output_pool.max_entries = max_entries;
+    let mut options = SessionOptions {
+        engine: match engine {
+            ffi::EngineKind::Triton => EngineKind::Triton,
+            ffi::EngineKind::Native => EngineKind::Native,
+            _ => return crate::invalid("unsupported engine; expected Triton or Native"),
+        },
+        ..SessionOptions::default()
+    };
     options.output_placement.default_location = match location(output_location) {
         Ok(v) => v,
         Err(e) => return e,
@@ -71,10 +84,7 @@ pub fn session_close(session: &SessionHandle) -> ffi::StatusData {
     }
 }
 
-pub fn session_duplicate(
-    session: &SessionHandle,
-    output: &mut SessionHandle,
-) -> ffi::StatusData {
+pub fn session_duplicate(session: &SessionHandle, output: &mut SessionHandle) -> ffi::StatusData {
     if output.0.is_some() {
         return crate::invalid("session destination is not empty");
     }
@@ -95,9 +105,11 @@ pub fn session_reset(session: &SessionHandle) -> ffi::StatusData {
 
 /// # Safety
 /// Inputs must reference live, ready, immutable storage at their declared locations.
+/// Output descriptors must retain live, writable storage and metadata until return.
 pub unsafe fn session_run(
     session: &SessionHandle,
     inputs: &[ffi::Input],
+    buffers: &[ffi::Input],
     output: &mut ResultHandle,
 ) -> ffi::StatusData {
     let Some(session) = &session.0 else {
@@ -131,7 +143,28 @@ pub unsafe fn session_run(
         Ok(v) => v,
         Err(e) => return e,
     };
-    crate::binding_status(session.run(&views).map(|r| {
+    let mut outputs = std::collections::HashMap::new();
+    for buffer in buffers {
+        let ptr = buffer.descriptor as *const lrt::dlpack::DLTensor;
+        if ptr.is_null() {
+            return crate::invalid("null output buffer");
+        }
+        let name = match std::str::from_utf8(&buffer.name) {
+            Ok(name) => name,
+            Err(_) => return crate::invalid("output name is not UTF-8"),
+        };
+        // SAFETY: C++ Run requires live exclusive output storage through completion.
+        let value = match unsafe { lrt::dlpack::OutputBuffer::new(&*ptr) } {
+            Ok(value) => value,
+            Err(error) => {
+                return crate::binding_status(Err(leapp_runtime_bindings::Error::Runtime(error)))
+            }
+        };
+        if outputs.insert(name, value).is_some() {
+            return crate::invalid("duplicate output name");
+        }
+    }
+    crate::binding_status(session.run_into(&views, &mut outputs).map(|r| {
         output.0 = Some(r);
     }))
 }
@@ -144,11 +177,7 @@ pub fn result_names(result: &ResultHandle) -> Vec<String> {
         .unwrap_or_default()
 }
 
-pub fn result_tensor(
-    result: &ResultHandle,
-    name: &[u8],
-    output: &mut usize,
-) -> ffi::StatusData {
+pub fn result_tensor(result: &ResultHandle, name: &[u8], output: &mut usize) -> ffi::StatusData {
     let Some(result) = &result.0 else {
         return crate::invalid("result is empty");
     };

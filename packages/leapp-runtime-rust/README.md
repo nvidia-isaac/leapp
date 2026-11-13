@@ -5,25 +5,44 @@ SPDX-License-Identifier: Apache-2.0
 
 # LEAPP Rust runtime
 
-This package targets Linux and executes exported LEAPP bundles through embedded
-Triton 2.69.0. All builds require the Triton and CUDA runtime SDKs. Rust, Python,
-and C++ expose bundle inspection and synchronous execution.
+This package targets Linux and executes exported LEAPP bundles through either
+embedded Triton 2.69.0 or native backend orchestration. Both engines are included
+in one runtime and support CPU and CUDA execution. Rust, Python, and C++ expose
+the same bundle inspection and synchronous Session API.
 
 ## Installation
 
 Build on Linux with Rust 1.88 or newer, the Triton 2.69.0 SDK, and the CUDA
 runtime SDK. Set `TRITON_ROOT` and `CUDA_ROOT` if they are not installed under
-`/opt/tritonserver` and `/usr/local/cuda`. Make their shared libraries and the
-selected model backends available through `LD_LIBRARY_PATH`.
+`/opt/tritonserver` and `/usr/local/cuda`. Make their shared libraries available
+through `LD_LIBRARY_PATH`. CPU execution also requires the CUDA runtime SDK.
+
+```sh
+cargo build --locked --release
+```
 
 The Cargo package is `leapp-runtime`; its Rust import name is `lrt`.
 See the [Python bindings](bindings/python/README.md) for `import lrt` and the
 [C++ bindings](bindings/cxx/README.md) for the `lrt` namespace and `lrt::runtime`
-CMake target. CPU execution still requires the CUDA runtime SDK.
+CMake target.
 
-Embedded Warp operators in ONNX/PT2 bundles use optional native adapters installed
-beside their Triton backends. See [Warp operators](src/engines/triton/backends/README.md#warp-operators)
-for SDK requirements, installation, and integration tests.
+Install only the model runtimes and plugins required by your bundle and selected
+engine; see [model support](#model-support). They load when a session opens;
+bundle inspection does not load them. Cargo does not download or install these
+runtimes. Adding a backend does not require rebuilding the core binary or
+selecting Cargo features. Running exported bundles does not require Python
+model-export packages.
+
+For native execution, follow the
+[native backend installation guide](src/engines/native/backends/README.md#installation).
+For Triton, use its ONNX Runtime and TensorRT backends and the
+[Torch/Warp plugins](src/engines/triton/backends/README.md).
+`LEAPP_TRITON_BACKENDS` defaults to `$TRITON_ROOT/backends` or
+`/opt/tritonserver/backends`.
+
+Set installation variables before starting the process. Backend dependencies
+must also be discoverable through `LD_LIBRARY_PATH` or the system loader.
+Library-load errors identify the node, library path, and underlying cause.
 
 ## Rust
 
@@ -87,11 +106,12 @@ fixed-width Rust integers and `f32`/`f64`; booleans and half floats use raw desc
 and returns an independent Rust vector. CUDA transfers select the source device,
 finish before returning, and restore the caller's device. It rejects outputs already exposed through
 `descriptor()` or `export()` on any clone, since foreign consumers may still write
-them. Copying and first exposure are synchronized. CPU copies do not exclude the
-original storage from pool reuse. An existing `BorrowedTensor` can also be read
+them. Copying and first exposure are synchronized. An existing `BorrowedTensor` can also be read
 without copying through its safe `as_cpu_slice` method when its storage is on the host.
-CPU-slice inputs work with both CPU and GPU execution; output placement does not
-change the safe input or output-copy APIs.
+Native backends that bind inputs directly require them on the execution device.
+Native dynamic calls also borrow session inputs directly and require them on the
+execution device.
+Output placement does not change input requirements.
 
 Array libraries and CUDA callers can use standard DLPack descriptors through
 `unsafe { BorrowedTensor::new(&descriptor) }`. They must retain the descriptor,
@@ -103,7 +123,7 @@ the receiving consumer must invoke that lease's deleter exactly once.
 See `examples/run.rs` for a complete CPU example.
 
 `SessionOptions` configures execution and output placement. Defaults use CPU
-execution and CPU outputs. Triton is selected automatically:
+execution and CPU outputs. Native is selected by default:
 
 ```rust
 use lrt::{Session, SessionOptions};
@@ -112,10 +132,10 @@ let mut session = Session::open(&bundle, SessionOptions::default())?;
 ```
 
 Set `device` to `ExecutionDevice::Cuda { device_id: 0 }` for GPU execution.
-`LEAPP_TRITON_BACKENDS` selects the backend directory when opening a session,
-falling back to `$TRITON_ROOT/backends` or `/opt/tritonserver/backends`.
-Set installation variables before starting the process. `new_session()` shares
-the already-loaded models without rediscovering them.
+Select Triton with `SessionOptions { engine: EngineKind::Triton, ..Default::default() }`,
+Python `SessionOptions(engine="triton")`, or C++ `EngineKind::kTriton`.
+Both engines are available in the same build, and peers inherit the selection.
+
 `session.info()` borrows the retained bundle snapshot. Every public input must be supplied
 in a `HashMap<&str, BorrowedTensor<'_>>`, using its LEAPP name. Names and
 tensors are borrowed for the call; input map iteration order has no effect on routing. Generated Triton names and internal ports
@@ -136,16 +156,18 @@ state.
 `Session::open(&bundle, options)` loads models and captures initial state.
 `session.new_session()` shares the loaded engine and construction options while
 starting from captured initial state. It does not copy current feedback or reread
-files. Separate sessions can run concurrently with independent feedback; `run`
+files. Separate sessions may be called concurrently with independent feedback;
+the native engine gives each session private fixed workspace buffers. `run`
 borrows one session mutably. `close()` releases only that session's state and
 engine reference. Peers and retained results remain usable. The last engine
-owner stops Triton and removes its temporary repository. Model-internal mutable
-state remains shared, and `reset()` affects only explicit session state.
+owner releases loaded models and workspace storage. Triton additionally stops
+its server and removes the temporary repository. Model-internal state sharing
+depends on the backend, and `reset()` affects only explicit session state.
 
 Tensor exchange uses DLPack 1.0 descriptors directly. The small `dlpack` module
 contains generated ABI definitions and lifetime guards; it has no tensor operations.
-Inputs must use supported numeric dtypes and contiguous layouts. The Triton engine
-honors byte offsets and rejects unsupported layouts before inference. Frameworks
+Inputs must use supported numeric dtypes and contiguous layouts. Both engines
+honor byte offsets and reject unsupported layouts before inference. Frameworks
 or callers perform explicit contiguous copies, dtype conversion, and transfers.
 
 Outputs retain their allocation and metadata independently of the runtime. Exports
@@ -154,24 +176,22 @@ feed back are copied to the requested public location before publication, protec
 private feedback and reset snapshots. Do not mutate an allocation while inference
 or another consumer reads it.
 
-Each session owns its output cache. `SessionOptions::output_pool.max_entries`
-limits cached allocations (default 64); zero disables caching while inference
-continues to allocate normally. The byte budget is the bundle's largest static
-output size multiplied by this entry limit, and grows when execution produces a
-larger dynamic output. There is no fixed byte cap or eager allocation. This policy
-limits cache retention, not memory held by models, live outputs, or feedback.
-`new_session()` inherits the policy with an empty cache; close releases cached
-references while retained outputs stay valid.
-
-Reuse matches byte size and memory location and requires exclusive ownership,
-including no weak owners. Descriptor access or DLPack export permanently excludes
-an allocation from reuse because foreign GPU work may outlive its lease. Safe
-`to_cpu_vec` copies preserve reuse eligibility. Public feedback copies use the
-same cache; retained results and feedback always prevent reuse.
+`run(inputs)` returns freshly allocated outputs. Use `run_into(inputs, &mut outputs)`
+with named `dlpack::OutputBuffer` values to write into caller-owned storage.
+Native backends bind these buffers directly. Triton copies ensemble results into
+them; supplying buffers does not eliminate Triton's intermediate output storage.
+`OutputBuffer::cpu` borrows a mutable CPU slice; other allocations use its unsafe
+DLPack constructor. Supplied buffers must match the output dtype and shape, meet
+backend device/alignment requirements, and be disjoint from inputs and each other.
+Only outputs without supplied buffers appear in the returned `RunResult`.
+A backend may reject a data-dependent output buffer if it requires more capacity
+than the tensor's final shape.
+On failure, supplied buffer contents are unspecified; feedback does not advance.
 
 `SessionOptions::output_placement` sets a default location and per-output
-overrides keyed by public LEAPP names at construction. `run` accepts only inputs.
-New sessions inherit this placement, and every output uses its exact requested location.
+overrides keyed by public LEAPP names at construction.
+New sessions inherit this placement. Allocated outputs use the requested location;
+supplied buffers determine their own storage location.
 Initial state, default inputs, and private feedback stay on the execution device.
 Public outputs retain their requested location, including outputs also used as
 feedback.
@@ -183,69 +203,84 @@ A runnable example uses the generated policy fixture:
 cargo run --locked --example run -- target/triton-fixtures/policy.yaml
 ```
 
+### Caller-owned CUDA streams
+
+Rust callers can set `SessionOptions.cuda_streams` to a map from CUDA device ID
+to `CudaStream`. Construct each borrowed handle with
+`unsafe { CudaStream::from_raw(raw_stream) }` from a `cudaStream_t` or `CUstream`.
+Native execution and transfers use these streams; missing entries use internal
+streams. Triton ignores the option. Python and C++ do not yet expose it.
+
+Keep each stream and its primary context alive until the session and all peers
+are closed or destroyed. Initialization validates stream/device compatibility.
+Null and `cudaStreamLegacy` select the legacy default stream;
+`cudaStreamPerThread` is unsupported because sessions may move between threads.
+Inputs must already be ready, and `run()` completes before returning.
+
+Peers inherit supplied streams. ONNX peers share their configured compute stream
+and its ordering. Backends may use auxiliary streams with synchronization.
+
 ## Model support
 
-Session setup validates graph routing and converts the bundle to a temporary
-Triton model repository. The loaded Triton version must be 2.69.0. ONNX models
-use Triton's ONNX Runtime backend. Unsupported backends fail when opening a
-session; bundle inspection still accepts custom backend names.
+The engines support the following exported artifacts and mixed-backend graphs.
+Unsupported backends fail when opening a session; bundle inspection still accepts
+custom backend names. Models must be exported before use; the runtime does not
+compile them.
 
-## PT2 execution
+| Model | Bundle backend | Execution device | Required model runtime |
+| --- | --- | --- | --- |
+| ONNX | `onnx` | CPU or CUDA | ONNX Runtime; CUDA providers and cuDNN for GPU |
+| TorchScript | `jit`, `jit-script`, `jit-trace` | CPU or CUDA | CUDA-enabled LibTorch |
+| Exported program | `pt2` | CPU or CUDA | CUDA-enabled LibTorch and matching NativeRT |
+| TensorRT engine (Triton only) | `trt`, `tensorrt` | CUDA | TensorRT compatible with the engine and GPU |
 
-The runtime configures PT2 artifacts for an externally installed `leapp_pt2`
-Triton backend. Set `LEAPP_TRITON_BACKENDS` to a directory containing
-`leapp_pt2/libtriton_leapp_pt2.so` and any other backends used by the bundle.
-Backend implementations and their dependencies are installed separately. See
-the [plugin build guide](src/engines/triton/backends/README.md) to build `leapp_pt2` from source.
+ONNX ports are matched by name, independently of bundle declaration order.
 
-PT2 inputs and outputs follow exported-program order. Archive devices must match
-the selected model instance. The runtime supplies feedback, default inputs, and
-output placement through the same session API used for ONNX models.
+### Native engine
 
-## TorchScript execution
+Native sessions share loaded models and weights, with private reusable workspace
+buffers. Eligible inputs are borrowed directly on ONNX, TorchScript, and NativeRT
+(CPU/GPU). Copies remain where needed to protect caller inputs,
+isolate feedback, or satisfy output placement. Returned results own storage
+independent of the workspace.
 
-The runtime configures scripted and traced artifacts for an externally installed
-`leapp_torchscript` Triton backend. Install
-`leapp_torchscript/libtriton_leapp_torchscript.so` beneath the runtime's backend
-directory, with its dependencies discoverable by the dynamic loader. See the
-[plugin build guide](src/engines/triton/backends/README.md#torchscript) for source builds.
+Peers may run concurrently, but TorchScript, NativeRT, and Warp models
+serialize execution across peers. Nodes within one graph
+execute sequentially. Each peer requires memory for its workspace and execution
+resources. See the [installation guide](src/engines/native/backends/README.md#installation)
+for backend setup, and the
+[contributor notes](src/engines/native/backends/README.md#adding-a-backend) to add a backend.
 
-Models accept positional tensor arguments and return a tensor or a flat tuple
-of tensors. Conversion maps YAML port order to `INPUT__0`, `INPUT__1`, and
-`OUTPUT__0`, `OUTPUT__1`; public LEAPP names remain unchanged. Session reset
-restores explicit feedback and default inputs, without resetting model-internal
-mutable state.
+### PT2 execution
 
-## TensorRT engines
+PT2 uses raw `torch.export.save` archives with tensor-only inputs and outputs in
+exported-program order. AOTInductor and CUDA Triton delegates are unsupported.
+The native engine places the graph and weights on the selected device; for the
+Triton engine, archive devices must match the selected model instance.
 
-Bundles can reference prebuilt serialized TensorRT engines with `backend: trt`
-or its `tensorrt` alias:
+### TorchScript execution
 
-```yaml
-parameters:
-  backend: trt
-  model_path: policy.engine
-```
+Scripted and traced models accept positional tensor inputs and return a tensor or
+flat tuple of tensors. The native engine also accepts a flat tensor list.
+Bundle port order determines argument order; public LEAPP names remain unchanged.
+Model-internal mutations are shared between peers and are not reset by `reset()`.
 
-The artifact filename is preserved through `default_model_filename`, so `.plan`
-and `.engine` files work without renaming. The converter emits `backend:
-tensorrt`, `platform: tensorrt_plan`, `max_batch_size: 0`, and a GPU instance
-for the selected `ExecutionDevice::Cuda`. Port names, dtypes, and shapes must
-describe the engine's I/O. Triton validates engine compatibility and input
-shapes; the Rust runtime neither builds engines nor inspects their payloads.
+### TensorRT engines
 
-Install the supplied plugin at
-`<backend_directory>/tensorrt/libtriton_tensorrt.so`, with its TensorRT and CUDA
-dependencies available to the loader. Execution uses `SessionOptions`,
-`Session`, output placement, feedback, and reset APIs. CPU, pinned-host, and
-CUDA input/output buffers are supported by the Triton engine. TensorRT
-model execution always requires a GPU.
+The Triton engine accepts prebuilt `.plan` and `.engine` artifacts. The native
+engine does not support TensorRT engines. Port names, shapes, and dtypes must
+match the engine's I/O. Triton executes them on CUDA; inputs and outputs may use
+CPU, pinned-host, or CUDA memory. Engines must be compatible with the deployed
+TensorRT version and GPU. Triton uses optimization profile 0; shape-tensor,
+additional-profile, and external custom-plugin configuration are not exposed.
 
-Dynamic dimensions use the engine's first optimization profile (profile 0). This
-integration targets ordinary tensor I/O. Shape-tensor configuration, selection
-of additional profiles, custom TensorRT plugins, and automatic engine
-compilation are not exposed.
+### Native Warp support
 
-Engines must match the deployed TensorRT version and GPU. The runtime does not
-compile models. See [AGENTS.md](AGENTS.md) for contributor layout and validation
-commands.
+Both engines support embedded Warp operators in ONNX and PT2 through optional
+adapters. Replay requires CUDA device 0 even for CPU model placement. Warm each
+model serially before concurrent use. These adapters do not support Warp operators
+in TorchScript or TensorRT artifacts.
+
+See [native adapter installation](src/engines/native/backends/README.md#warp-operators)
+or [Triton adapter installation](src/engines/triton/backends/README.md#warp-operators).
+For contributor layout and validation commands, see [AGENTS.md](AGENTS.md).

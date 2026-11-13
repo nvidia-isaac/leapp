@@ -81,6 +81,16 @@ impl ManagedTensor {
         }
     }
 
+    /// Producer flags; legacy leases have no flags.
+    pub fn flags(&self) -> Result<u64, &'static str> {
+        self.descriptor()?;
+        Ok(match &self.0 {
+            ManagedTensorPointer::Legacy(_) => 0,
+            // SAFETY: adoption and descriptor() checked the supported version.
+            ManagedTensorPointer::Versioned(p) => unsafe { p.as_ref().flags },
+        })
+    }
+
     /// Return the raw lease, transferring responsibility for invoking its deleter.
     pub fn into_raw(self) -> (*mut std::ffi::c_void, bool) {
         match &ManuallyDrop::new(self).0 {
@@ -131,6 +141,68 @@ impl<'a> BorrowedTensor<'a> {
         &self.descriptor
     }
 }
+/// An exclusive, caller-owned output allocation borrowed for synchronous inference.
+/// The runtime never owns or retains this storage after the call.
+pub struct OutputBuffer<'a> {
+    descriptor: DLTensor,
+    pub(crate) bytes: usize,
+    lifetime: PhantomData<&'a mut [u8]>,
+}
+
+impl<'a> OutputBuffer<'a> {
+    /// Borrow a writable contiguous DLPack allocation.
+    /// # Safety
+    /// Metadata and allocation must be valid for the declared lifetime and sizes.
+    /// Shape and stride metadata must remain unchanged for the borrow.
+    /// Storage must be writable and ready, with no concurrent access while inference
+    /// uses it. Overlap with inputs or other outputs is rejected before execution.
+    pub unsafe fn new(descriptor: &'a DLTensor) -> Result<Self, crate::RuntimeError> {
+        // SAFETY: validation reads metadata only; the caller supplies valid pointers.
+        crate::engines::memory::dlpack::location(descriptor.device)?;
+        let bytes = unsafe { crate::engines::memory::dlpack::layout_metadata(*descriptor) }?.1;
+        Ok(Self {
+            descriptor: *descriptor,
+            bytes,
+            lifetime: PhantomData,
+        })
+    }
+
+    pub fn descriptor(&self) -> &DLTensor {
+        &self.descriptor
+    }
+
+    pub(crate) fn address(&self) -> usize {
+        self.descriptor.data as usize + self.descriptor.byte_offset as usize
+    }
+
+    pub(crate) fn shape(&self) -> &[i64] {
+        if self.descriptor.ndim == 0 {
+            &[]
+        } else {
+            // SAFETY: construction checked the immutable metadata for this borrow.
+            unsafe {
+                std::slice::from_raw_parts(self.descriptor.shape, self.descriptor.ndim as usize)
+            }
+        }
+    }
+
+    pub(crate) fn location(&self) -> crate::MemoryLocation {
+        crate::engines::memory::dlpack::location(self.descriptor.device)
+            .expect("validated output device")
+    }
+
+    /// # Safety
+    /// A completed backend call must have initialized every byte.
+    pub(crate) unsafe fn borrow(&self) -> BorrowedTensor<'_> {
+        unsafe { BorrowedTensor::new(&self.descriptor) }
+    }
+}
+// SAFETY: the exclusive borrow and synchronous completion also apply across threads.
+unsafe impl Send for OutputBuffer<'_> {}
+// SAFETY: shared methods inspect only immutable metadata. Storage access requires
+// the exclusive run borrow or an explicit unsafe readiness contract.
+unsafe impl Sync for OutputBuffer<'_> {}
+
 // SAFETY: constructors require or retain immutable, ready storage for the borrow;
 // it never transfers or invokes the producer's deleter.
 unsafe impl Send for BorrowedTensor<'_> {}
@@ -146,7 +218,6 @@ struct ThreadSafeTensorOwner {
     owner: ManagedTensor,
     exposed: Mutex<bool>,
     copy_to_cpu: Option<Box<CopyToCpu>>,
-    on_expose: Option<Box<dyn Fn() + Send + Sync>>,
 }
 // SAFETY: SharedTensor::new requires thread-independent metadata lifetime and cleanup.
 unsafe impl Send for ThreadSafeTensorOwner {}
@@ -159,15 +230,12 @@ impl SharedTensor {
     /// reads, with no writes except through this owner's exposed descriptors or
     /// exports. Internal unsafe users must not race with CPU copies. This is not
     /// automatically true for foreign producers; imported leases stay `ManagedTensor`.
-    /// `on_expose`, when present, runs before exposing pointers through descriptor
-    /// access or export. It must be idempotent and must not modify the descriptor.
     /// `copy_to_cpu`, when supplied, must copy exactly the descriptor's contiguous
     /// bytes, complete all transfer work before returning, and retain its source.
     /// It must not expose the allocation or re-enter this owner. Without it, only
     /// host-accessible storage supports safe copies.
     pub unsafe fn new(
         owner: ManagedTensor,
-        on_expose: Option<Box<dyn Fn() + Send + Sync>>,
         copy_to_cpu: Option<Box<CopyToCpu>>,
     ) -> Result<Self, &'static str> {
         owner.descriptor()?;
@@ -175,17 +243,13 @@ impl SharedTensor {
             owner,
             exposed: Mutex::new(false),
             copy_to_cpu,
-            on_expose,
         })))
     }
 
-    /// Expose the descriptor, notifying the producer before releasing any pointers.
+    /// Expose the descriptor, excluding subsequent safe CPU copies on every clone.
     pub fn descriptor(&self) -> &DLTensor {
         // Serialize the first exposure against safe CPU reads on every clone.
         *self.0.exposed.lock().unwrap_or_else(|e| e.into_inner()) = true;
-        if let Some(notify) = &self.0.on_expose {
-            notify();
-        }
         self.0.owner.descriptor().expect("validated ABI")
     }
 

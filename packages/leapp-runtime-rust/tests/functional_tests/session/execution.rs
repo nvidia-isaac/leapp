@@ -3,9 +3,7 @@
 
 use super::support;
 use lrt::dlpack::BorrowedTensor;
-use lrt::{
-    Bundle, ErrorCode, ExecutionDevice, MemoryLocation, RunResult, Session, SessionOptions,
-};
+use lrt::{Bundle, ErrorCode, ExecutionDevice, MemoryLocation, RunResult, Session, SessionOptions};
 use serde_json::{json, Value};
 use std::{env, fs, path::PathBuf, thread};
 use support::TestTensor;
@@ -20,6 +18,7 @@ fn fixtures(kind: &str) -> PathBuf {
 
 fn options(device: ExecutionDevice) -> SessionOptions {
     SessionOptions {
+        engine: support::engine(),
         device,
         ..Default::default()
     }
@@ -43,13 +42,92 @@ fn values(result: &RunResult, name: &str) -> Vec<f32> {
     result.get(name).unwrap().to_cpu_vec().unwrap()
 }
 
-fn step(session: &mut Session, value: f32) -> RunResult {
+fn input<T: lrt::dlpack::CpuElement>(
+    values: &[T],
+    shape: &[i64],
+    device: ExecutionDevice,
+) -> lrt::dlpack::SharedTensor {
+    let location = match device {
+        ExecutionDevice::Cpu => MemoryLocation::Cpu,
+        ExecutionDevice::Cuda { device_id } => MemoryLocation::Cuda { device_id },
+    };
+    support::placed(values, shape, location).unwrap()
+}
+
+fn step(session: &mut Session, value: f32, device: ExecutionDevice) -> RunResult {
+    let input = input(&[value; 4], &[4], device);
     session
         .run(&std::collections::HashMap::from([(
             "accumulator/observation",
-            BorrowedTensor::cpu(&[value; 4], &[4]).unwrap(),
+            input.view(),
         )]))
         .unwrap()
+}
+
+#[test]
+fn runtime_engine_selection_and_independent_feedback() {
+    use lrt::EngineKind;
+
+    assert_eq!(SessionOptions::default().engine, EngineKind::Native);
+    let bundle = Bundle::open(fixtures("triton").join("feedback.yaml")).unwrap();
+    for device in devices() {
+        // Finish the default session before opening explicit engines: separate
+        // embedded Triton servers share process-global memory managers.
+        {
+            let mut session = Session::open(
+                &bundle,
+                SessionOptions {
+                    device,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                values(&step(&mut session, 1., device), "accumulator/next"),
+                [1.; 4]
+            );
+            let mut peer = session.new_session().unwrap();
+            drop(session);
+            assert_eq!(
+                values(&step(&mut peer, 3., device), "accumulator/next"),
+                [3.; 4]
+            );
+        }
+        let mut sessions = Vec::new();
+        for engine in [EngineKind::Triton, EngineKind::Native] {
+            let result = Session::open(
+                &bundle,
+                SessionOptions {
+                    engine,
+                    device,
+                    ..Default::default()
+                },
+            );
+            sessions.push(result.unwrap());
+        }
+        // Keep both engines alive and interleave their independent feedback updates.
+        for expected in [1., 2.] {
+            for session in &mut sessions {
+                assert_eq!(
+                    values(&step(session, 1., device), "accumulator/next"),
+                    [expected; 4]
+                );
+            }
+        }
+        let peers: Vec<_> = sessions.iter().map(|s| s.new_session().unwrap()).collect();
+        drop(sessions);
+        for mut peer in peers {
+            assert_eq!(
+                values(&step(&mut peer, 3., device), "accumulator/next"),
+                [3.; 4]
+            );
+            peer.reset().unwrap();
+            assert_eq!(
+                values(&step(&mut peer, 1., device), "accumulator/next"),
+                [1.; 4]
+            );
+        }
+    }
 }
 
 // Modified fixtures keep artifact references absolute while their YAML remains temporary.
@@ -72,15 +150,76 @@ fn bundle(value: &Value, directory: &tempfile::TempDir) -> Bundle {
 
 fn initial(value: &mut Value, directory: &tempfile::TempDir, port: &str, data: &[f32]) {
     let bytes: Vec<_> = data.iter().flat_map(|v| v.to_le_bytes()).collect();
-    let tensor = safetensors::tensor::TensorView::new(
-        safetensors::Dtype::F32,
-        vec![data.len()],
-        &bytes,
-    )
-    .unwrap();
+    let tensor =
+        safetensors::tensor::TensorView::new(safetensors::Dtype::F32, vec![data.len()], &bytes)
+            .unwrap();
     let path = directory.path().join("initial.safetensors");
     safetensors::serialize_to_file([(port, tensor)], None, &path).unwrap();
     value["pipeline"]["initial_values"] = json!(path);
+}
+
+#[test]
+fn onnx_ports_bind_by_name_for_all_declaration_orders() {
+    for device in devices() {
+        for name in ["named_ports", "named_ports_dynamic"] {
+            for (reverse_inputs, reverse_outputs) in
+                [(false, false), (true, false), (false, true), (true, true)]
+            {
+                let directory = tempfile::tempdir().unwrap();
+                let mut data = fixture(name);
+                for (ports, reverse) in [("inputs", reverse_inputs), ("outputs", reverse_outputs)] {
+                    if reverse {
+                        data["models"]["arithmetic"][ports]
+                            .as_array_mut()
+                            .unwrap()
+                            .reverse();
+                    }
+                }
+                let mut session =
+                    Session::open(&bundle(&data, &directory), options(device)).unwrap();
+                let mut retained = Vec::new();
+                for (step, dynamic_length) in [4, 2, 7].into_iter().enumerate() {
+                    let length = if name == "named_ports" {
+                        4
+                    } else {
+                        dynamic_length
+                    };
+                    let left: Vec<f32> =
+                        (0..length).map(|i| i as f32 + 7.0 + step as f32).collect();
+                    let right = vec![2.0 + step as f32 * 3.0; length];
+                    let shape = [length as i64];
+                    let right_input = input(&right, &shape, device);
+                    let left_input = input(&left, &shape, device);
+                    let result = session
+                        .run(&std::collections::HashMap::from([
+                            ("arithmetic/right", right_input.view()),
+                            ("arithmetic/left", left_input.view()),
+                        ]))
+                        .unwrap();
+                    let expected = [
+                        left.iter()
+                            .zip(&right)
+                            .map(|(a, b)| a - b)
+                            .collect::<Vec<_>>(),
+                        left.iter()
+                            .zip(&right)
+                            .map(|(a, b)| a + b)
+                            .collect::<Vec<_>>(),
+                    ];
+                    for (port, expected) in ["difference", "sum"].into_iter().zip(&expected) {
+                        assert_eq!(values(&result, &format!("arithmetic/{port}")), *expected,
+                            "{device:?} {name}: inputs reversed={reverse_inputs}, outputs reversed={reverse_outputs}");
+                    }
+                    retained.push((result, expected));
+                }
+                session.close();
+                for (result, expected) in retained {
+                    assert_eq!(values(&result, "arithmetic/difference"), expected[0]);
+                    assert_eq!(values(&result, "arithmetic/sum"), expected[1]);
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -90,16 +229,12 @@ fn public_names_results_and_lifetimes() {
         assert_eq!(runtime.info().pipeline_outputs()[0].name(), "policy/action");
         let mut session = runtime.new_session().unwrap();
         drop(runtime);
+        let bias = input(&[10f32, 20., 30., 40.], &[4], device);
+        let observation = input(&[1f32, 2., 3., 4.], &[4], device);
         let result = session
             .run(&std::collections::HashMap::from([
-                (
-                    "policy/bias",
-                    BorrowedTensor::cpu(&[10f32, 20., 30., 40.], &[4]).unwrap(),
-                ),
-                (
-                    "preprocess/observation",
-                    BorrowedTensor::cpu(&[1f32, 2., 3., 4.], &[4]).unwrap(),
-                ),
+                ("policy/bias", bias.view()),
+                ("preprocess/observation", observation.view()),
             ]))
             .unwrap();
         assert_eq!(
@@ -221,15 +356,11 @@ fn feedback_advances_per_session_reset_and_failures_are_atomic() {
         fs::remove_file(directory.path().join("initial.safetensors")).unwrap();
         let mut session = runtime.new_session().unwrap();
         let run = |session: &mut Session, reshape: &[f32]| {
+            let observation = input(&[1f32; 4], &[4], device);
+            let reshape = input(reshape, &[reshape.len() as i64], device);
             session.run(&std::collections::HashMap::from([
-                (
-                    "accumulator/observation",
-                    BorrowedTensor::cpu(&[1f32; 4], &[4]).unwrap(),
-                ),
-                (
-                    "reshape/input",
-                    BorrowedTensor::cpu(reshape, &[reshape.len() as i64]).unwrap(),
-                ),
+                ("accumulator/observation", observation.view()),
+                ("reshape/input", reshape.view()),
             ]))
         };
         let first = run(&mut session, &[1., 2.]).unwrap();
@@ -269,7 +400,10 @@ fn feedback_zero_initialization_and_concurrent_sessions() {
             thread::spawn(move || {
                 for iteration in 1..=4 {
                     assert_eq!(
-                        values(&step(&mut session, i as f32), "accumulator/next"),
+                        values(
+                            &step(&mut session, i as f32, ExecutionDevice::Cpu),
+                            "accumulator/next"
+                        ),
                         [(i * iteration) as f32; 4]
                     );
                 }
@@ -297,16 +431,12 @@ fn hidden_feedback_fanout_and_default_inputs() {
             .new_session()
             .unwrap();
         for expected in [10., 11., 12.] {
+            let observation = input(&[1f32; 4], &[4], device);
+            let follower = input(&[10f32; 4], &[4], device);
             let result = session
                 .run(&std::collections::HashMap::from([
-                    (
-                        "accumulator/observation",
-                        BorrowedTensor::cpu(&[1f32; 4], &[4]).unwrap(),
-                    ),
-                    (
-                        "follower/observation",
-                        BorrowedTensor::cpu(&[10f32; 4], &[4]).unwrap(),
-                    ),
+                    ("accumulator/observation", observation.view()),
+                    ("follower/observation", follower.view()),
                 ]))
                 .unwrap();
             assert_eq!(result.iter().count(), 1);
@@ -321,10 +451,11 @@ fn hidden_feedback_fanout_and_default_inputs() {
                 .unwrap()
                 .new_session()
                 .unwrap();
+            let observation = input(&[1f32; 4], &[4], device);
             let result = session
                 .run(&std::collections::HashMap::from([(
                     "preprocess/observation",
-                    BorrowedTensor::cpu(&[1f32; 4], &[4]).unwrap(),
+                    observation.view(),
                 )]))
                 .unwrap();
             let bias = if seeded { 10. } else { 0. };
@@ -337,7 +468,27 @@ fn hidden_feedback_fanout_and_default_inputs() {
 }
 
 #[test]
-fn dynamic_state_requires_initial_shape() {
+fn initial_state_requires_compatible_dtype_and_shape() {
+    for (dtype, shape) in [
+        (safetensors::Dtype::F32, vec![3]),
+        (safetensors::Dtype::F32, vec![2, 2]),
+        (safetensors::Dtype::I32, vec![4]),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut data = fixture("feedback");
+        let bytes = vec![0u8; shape.iter().product::<usize>() * 4];
+        let tensor = safetensors::tensor::TensorView::new(dtype, shape, &bytes).unwrap();
+        let path = directory.path().join("initial.safetensors");
+        safetensors::serialize_to_file([("accumulator/state", tensor)], None, &path).unwrap();
+        data["pipeline"]["initial_values"] = json!(path);
+        let error = Session::open(&bundle(&data, &directory), options(ExecutionDevice::Cpu))
+            .err()
+            .unwrap();
+        assert_eq!(error.phase(), "state");
+        assert!(error
+            .to_string()
+            .contains("initial value accumulator/state does not match declared dtype/shape"));
+    }
     let directory = tempfile::tempdir().unwrap();
     let mut data = fixture("feedback");
     for direction in ["inputs", "outputs"] {
@@ -363,7 +514,10 @@ fn dynamic_state_requires_initial_shape() {
         .new_session()
         .unwrap();
     assert_eq!(
-        values(&step(&mut session, 1.), "accumulator/next"),
+        values(
+            &step(&mut session, 1., ExecutionDevice::Cpu),
+            "accumulator/next"
+        ),
         [11.; 4]
     );
 }
@@ -378,7 +532,7 @@ fn failed_backend_load_reports_an_error() {
         let status = std::process::Command::new(env::current_exe().unwrap())
             .args([
                 "--exact",
-                "engines::triton::tests::execution::failed_backend_load_reports_an_error",
+                "engines::tests::execution::failed_backend_load_reports_an_error",
                 "--test-threads=1",
             ])
             .env(CHILD, "1")
@@ -394,7 +548,11 @@ fn failed_backend_load_reports_an_error() {
         .err()
         .unwrap();
     assert_eq!(error.phase(), "load");
-    assert!(error.to_string().contains("failed to load"));
+    let expected = match support::engine() {
+        lrt::EngineKind::Triton => "failed to load",
+        lrt::EngineKind::Native => "incompatible dtype or shape",
+    };
+    assert!(error.to_string().contains(expected));
 }
 
 #[test]
@@ -405,15 +563,15 @@ fn public_pt2_execution() {
             ExecutionDevice::Cpu => "cpu",
             _ => "cuda",
         };
-        let bundle =
-            Bundle::open(fixtures("pt2").join(format!("weighted_{suffix}.yaml"))).unwrap();
+        let bundle = Bundle::open(fixtures("pt2").join(format!("weighted_{suffix}.yaml"))).unwrap();
         let runtime = Session::open(&bundle, options(device)).unwrap();
         let mut session = runtime.new_session().unwrap();
         let name = bundle.pipeline_inputs()[0].name();
+        let input = input(&[1f32, 2., 3., 4.], &[4], device);
         let result = session
             .run(&std::collections::HashMap::from([(
                 name.as_str(),
-                BorrowedTensor::cpu(&[1f32, 2., 3., 4.], &[4]).unwrap(),
+                input.view(),
             )]))
             .unwrap();
         assert_eq!(values(&result, "model/output_0"), [12., 26., 42., 60.]);

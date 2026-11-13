@@ -6,12 +6,12 @@ mod request;
 pub(super) mod sys;
 
 use crate::engines::triton::{BorrowedTensor, Error, ErrorKind, Result, SharedTensor};
-use crate::{engines::memory::OutputPool, OutputPlacement};
+use crate::OutputPlacement;
 use error::{check, cstring, Handle};
-use std::{os::unix::ffi::OsStrExt, path::Path, ptr, sync::Arc};
+use std::{os::unix::ffi::OsStrExt, path::Path, ptr};
 
 impl OutputPlacement {
-    fn validate(&self) -> Result<()> {
+    pub(super) fn validate(&self) -> Result<()> {
         self.default_location.validate()?;
         for location in self.overrides.values() {
             location.validate()?;
@@ -38,8 +38,7 @@ unsafe impl Sync for Server {}
 impl Server {
     /// Load the supplied repository using Triton 2.69.0 and compatible backends.
     /// Keep the repository and linked artifacts alive until this object is dropped.
-    /// Output allocations are retained by managed DLPack leases. Unexposed, idle
-    /// allocations may be reused by the calling session's pool.
+    /// Every request uses caller buffers or fresh allocations retained by DLPack leases.
     pub fn open(repository: &Path, backend_directory: &Path) -> Result<Self> {
         let repository = cstring(repository.as_os_str().as_bytes(), "load")?;
         let backend = cstring(backend_directory.as_os_str().as_bytes(), "load")?;
@@ -71,10 +70,7 @@ impl Server {
                 "load",
             )?;
             check(
-                sys::TRITONSERVER_ServerOptionsSetBackendDirectory(
-                    options.ptr,
-                    backend.as_ptr(),
-                ),
+                sys::TRITONSERVER_ServerOptionsSetBackendDirectory(options.ptr, backend.as_ptr()),
                 "load",
             )?;
             check(
@@ -92,8 +88,10 @@ impl Server {
                 sys::TRITONSERVER_ServerOptionsSetModelLoadRetryCount(options.ptr, 0),
                 "load",
             )?;
+            // Retain failed model status long enough to report the underlying
+            // loader error. Readiness below still rejects partial repositories.
             check(
-                sys::TRITONSERVER_ServerOptionsSetExitOnError(options.ptr, true),
+                sys::TRITONSERVER_ServerOptionsSetExitOnError(options.ptr, false),
                 "load",
             )?;
             check(
@@ -140,10 +138,22 @@ impl Server {
                 "load",
             )?;
             if !ready {
+                let mut index = Handle::empty(sys::TRITONSERVER_MessageDelete);
+                // Zero flags includes unavailable models and their load reasons.
+                check(
+                    sys::TRITONSERVER_ServerModelIndex(runtime.server.ptr, 0, &mut index.ptr),
+                    "load",
+                )?;
+                check(
+                    sys::TRITONSERVER_MessageSerializeToJson(index.ptr, &mut json, &mut size),
+                    "load",
+                )?;
+                let diagnostic =
+                    String::from_utf8_lossy(std::slice::from_raw_parts(json.cast::<u8>(), size));
                 return Err(Error::new(
                     ErrorKind::Internal,
                     "load",
-                    "Triton repository is not ready",
+                    format!("Triton failed to load all models; repository status: {diagnostic}"),
                 ));
             }
         }
@@ -153,21 +163,35 @@ impl Server {
     /// Run a numeric, single-response model, requesting every output.
     /// Input storage remains borrowed until request release. Returned outputs
     /// own their storage and can outlive this runtime. Placement never falls back.
+    /// The caller validates immutable placement before inference.
     pub fn infer(
         &self,
         model_name: &str,
         inputs: &[(&str, BorrowedTensor<'_>)],
         placement: &OutputPlacement,
-        pool: &Arc<OutputPool>,
+        buffers: &mut std::collections::HashMap<&str, crate::dlpack::OutputBuffer<'_>>,
     ) -> Result<Vec<(String, SharedTensor)>> {
-        placement.validate()?;
         let model = cstring(model_name, "execute")?;
         let names = inputs
             .iter()
             .map(|(name, _)| cstring(name, "execute"))
             .collect::<Result<Vec<_>>>()?;
         let mut request = Handle::empty(sys::TRITONSERVER_InferenceRequestDelete);
-        let state = Box::new(request::State::new(placement.clone(), pool.clone()));
+        // CUDA ordinals are contiguous: checking the largest validates every
+        // supplied device with one query, independent of the output count.
+        if let Some(device_id) = buffers
+            .values()
+            .filter_map(|buffer| match buffer.location() {
+                crate::MemoryLocation::Cuda { device_id } => Some(device_id),
+                _ => None,
+            })
+            .max()
+        {
+            crate::MemoryLocation::Cuda { device_id }.validate()?;
+        }
+        // Callback state borrows the original DLPack views through synchronous
+        // completion; no duplicate output descriptors or shape/name copies.
+        let state = Box::new(request::State::new(placement, buffers));
         let userp = (&*state as *const request::State).cast_mut().cast();
 
         const SELECTED_VERSION: i64 = -1;
@@ -203,11 +227,28 @@ impl Server {
                 "execute",
             )?;
             for ((_, input), name) in inputs.iter().zip(&names) {
-                crate::engines::triton::memory::dlpack::append_input(
+                let len = crate::engines::triton::memory::dlpack::append_input(
                     request.ptr,
                     name.as_ptr(),
                     *input,
                 )?;
+                let source = input.descriptor();
+                for target in state.targets.values() {
+                    if crate::engines::memory::dlpack::ranges_overlap(
+                        source.device,
+                        source.data as usize + source.byte_offset as usize,
+                        len,
+                        target.descriptor().device,
+                        target.address(),
+                        target.bytes,
+                    ) {
+                        return Err(Error::new(
+                            ErrorKind::InvalidArgument,
+                            "execute",
+                            "output buffer overlaps an input",
+                        ));
+                    }
+                }
             }
             check(
                 sys::TRITONSERVER_InferenceRequestSetReleaseCallback(
@@ -240,7 +281,7 @@ impl Server {
         }
         // No early return may release input borrows or callback state before this wait.
         let response = state.wait()?;
-        request::outputs(&response, placement)
+        request::outputs(&response, placement, state.targets)
     }
 }
 

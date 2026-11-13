@@ -12,10 +12,10 @@ Use `name.rs` beside `name/` directories, rather than `mod.rs`.
 
 - `src/bundle/`: immutable bundle inspection and validation.
 - `src/session.rs` and `src/session/`: public execution API, graph routing,
-  initial values, feedback, and session-owned output caches.
-- `src/engines.rs`: private engine contract; Triton is selected automatically.
+  initial values, feedback, and caller-provided outputs.
+- `src/engines.rs`: private engine contract; native is selected by default.
 - `src/engines/memory*`: reusable CPU, pinned-host, and CUDA allocations, copies,
-  DLPack validation, and output pooling. Keep engine SDK types out of this code.
+  DLPack validation, and output allocation. Keep engine SDK types out of this code.
 - `src/engines/triton/`: conversion, model repositories, native requests, and
   Triton-specific datatype and memory tags.
 - `src/dlpack/`: ABI, leases, and ownership guards.
@@ -83,8 +83,9 @@ a machine without the SDKs, use `LEAPP_ANALYSIS_ONLY=1 cargo check --locked
 
 Optional backend fixtures use `generate_pt2_models.py`,
 `generate_torchscript_models.py`, and `generate_tensorrt_models.py` under
-`tests/generators/`, each with `--output`. TensorRT also accepts
-`--trtexec /usr/bin/trtexec`; build its fixtures on the target GPU.
+`tests/generators/`, each with `--output`. TensorRT fixtures are for Triton only.
+Its generator accepts `--trtexec /usr/bin/trtexec`; build its fixtures on the
+target GPU.
 Set `LEAPP_PT2_FIXTURES`, `LEAPP_TORCHSCRIPT_FIXTURES`, or
 `LEAPP_TENSORRT_FIXTURES` and run the matching ignored integration tests:
 
@@ -92,11 +93,47 @@ Set `LEAPP_PT2_FIXTURES`, `LEAPP_TORCHSCRIPT_FIXTURES`, or
 cargo test --locked public_pt2 -- --ignored --test-threads=1
 cargo test --locked engines::triton::tests::nativert -- --ignored --test-threads=1
 cargo test --locked engines::triton::tests::torchscript -- --ignored --test-threads=1
-cargo test --locked engines::triton::tests::tensorrt -- --ignored --test-threads=1
+cargo test --locked engines::tests::tensorrt -- --ignored --test-threads=1
 ```
+
+For Warp, install the adapters as described in `src/engines/triton/backends/README.md`.
+Generate `tests/generators/generate_warp_models.py` fixtures, set
+`LEAPP_WARP_FIXTURES` and an empty `WARP_APIC_TMPDIR`, then run
+`LEAPP_TEST_ENGINE=triton cargo test --locked engines::tests::warp -- --ignored --test-threads=1`.
+Repeat with `LEAPP_TEST_ENGINE=native` to exercise native execution.
+This covers ONNX/PT2 CPU and GPU instances, CPU/pinned/CUDA output placement,
+changed inputs, retained results, peer sessions, and unload.
+Warp replay requires CUDA even with CPU model instances.
 
 The Python and C++ binding READMEs describe building and testing each adapter.
 Also verify the installed C++ SDK with `bindings/cxx/tests/consumer` so installed
 headers and CMake targets work without generated bridge headers or Rust sources.
-Pool changes must preserve retained/weak owners, exposure exclusion, byte offsets,
-failed-copy cleanup, independent peer caches, and CPU/pinned/CUDA behavior.
+Output changes must preserve retained owners, byte offsets, failure cleanup,
+feedback isolation, and CPU/pinned/CUDA behavior.
+
+### Minimal backend installations
+
+Use isolated environments where unrelated model SDKs and libraries are absent,
+not just excluded from the backend directory. Build the core runtime and bindings
+with only Triton/CUDA and their system dependencies; reuse those exact binaries
+for ONNX-only, TensorRT-only, LibTorch-only, and LibTorch/NativeRT installations.
+Build each custom plugin inside its corresponding environment. Warp is optional
+and should be omitted from this matrix.
+
+Generate all four fixture sets before isolation and set `LEAPP_TRITON_FIXTURES`,
+`LEAPP_TORCHSCRIPT_FIXTURES`, `LEAPP_PT2_FIXTURES`, and `LEAPP_TENSORRT_FIXTURES`.
+With the Python binding and NumPy installed (plus CuPy for native CUDA inputs),
+run for each engine:
+
+```sh
+python tests/deployment/check_installation.py --backend onnx --engine native --cuda
+python tests/deployment/check_installation.py --backend onnx --engine triton --cuda
+```
+
+Replace `onnx` with `torchscript`, `nativert`, or `tensorrt` in their installations,
+or `none` to check startup, inspection, and missing-backend errors without any
+model runtime. TensorRT installations require `--engine triton --cuda`.
+`--cuda` adds GPU execution for the other backends. The ONNX
+check includes convolution to exercise cuDNN on CUDA. Also run the applicable
+Rust integration tests and the installed C++ SDK checks. Audit
+shared-library dependencies and binary hashes to confirm isolation and reuse.

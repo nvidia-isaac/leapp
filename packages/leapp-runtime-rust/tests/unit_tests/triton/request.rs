@@ -132,10 +132,14 @@ impl Drop for Allocation {
     }
 }
 
-fn test_state() -> State {
+fn test_state() -> State<'static> {
+    static PLACEMENT: std::sync::OnceLock<OutputPlacement> = std::sync::OnceLock::new();
+    static OUTPUTS: std::sync::OnceLock<
+        std::collections::HashMap<&str, crate::dlpack::OutputBuffer<'static>>,
+    > = std::sync::OnceLock::new();
     State::new(
-        OutputPlacement::default(),
-        Arc::new(OutputPool::new(crate::OutputPoolOptions::default(), 0)),
+        PLACEMENT.get_or_init(Default::default),
+        OUTPUTS.get_or_init(Default::default),
     )
 }
 
@@ -149,7 +153,6 @@ fn callback_release_preserves_retained_storage() {
     let second = Allocation::new(&state, 16).unwrap();
     assert_ne!(second.data, pointer);
     drop(retained);
-    assert_eq!(Allocation::new(&state, 16).unwrap().data, pointer);
 }
 
 #[test]

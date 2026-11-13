@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use lrt::dlpack::BorrowedTensor;
+use lrt::dlpack::{BorrowedTensor, OutputBuffer};
 use lrt::{Bundle, ErrorCode, RunResult, RuntimeError, Session, SessionOptions};
 use std::{collections::HashMap, fmt, sync::Mutex};
 
@@ -96,10 +96,17 @@ impl SessionHandle {
         }
     }
     pub fn run(&self, inputs: &HashMap<&str, BorrowedTensor<'_>>) -> Result<RunResult, Error> {
+        self.run_into(inputs, &mut HashMap::new())
+    }
+    pub fn run_into(
+        &self,
+        inputs: &HashMap<&str, BorrowedTensor<'_>>,
+        outputs: &mut HashMap<&str, OutputBuffer<'_>>,
+    ) -> Result<RunResult, Error> {
         self.session
             .lock()
             .map_err(|_| Error::Lock)?
-            .run(inputs)
+            .run_into(inputs, outputs)
             .map_err(Error::Runtime)
     }
     pub fn reset(&self) -> Result<(), Error> {

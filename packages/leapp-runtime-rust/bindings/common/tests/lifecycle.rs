@@ -35,7 +35,11 @@ mod lifecycle {
         assert!(!session.is_open().unwrap());
         assert!(session.info().model_names().is_empty());
         session.close().unwrap();
-        peer.run(&std::collections::HashMap::new()).unwrap();
+        peer.run_into(
+            &std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
+        )
+        .unwrap();
         peer.close().unwrap();
         assert!(owner.upgrade().is_none());
     }
@@ -43,6 +47,7 @@ mod lifecycle {
 use lifecycle::{Error, SessionHandle};
 pub mod dlpack {
     pub type BorrowedTensor<'a> = &'a [u8];
+    pub type OutputBuffer<'a> = &'a mut [u8];
 }
 pub type RunResult = ();
 pub struct SessionOptions(Arc<()>);
@@ -99,6 +104,13 @@ impl Session {
     }
     pub fn reset(&mut self) -> Result<(), RuntimeError> {
         self.reset_check()
+    }
+    pub fn run_into(
+        &mut self,
+        inputs: &HashMap<&str, dlpack::BorrowedTensor<'_>>,
+        _: &mut HashMap<&str, dlpack::OutputBuffer<'_>>,
+    ) -> Result<(), RuntimeError> {
+        self.run(inputs)
     }
     pub fn run(
         &mut self,

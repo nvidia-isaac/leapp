@@ -37,7 +37,7 @@ pub(crate) fn initial_inputs(
                 )
             })
             .collect();
-        // Read consumed initial values once. Inspection owns metadata validation.
+        // Read and validate consumed initial values once, before runtime use.
         let bytes = if ports
             .iter()
             .any(|p| bundle.0.initial_values.contains_key(p))
@@ -70,6 +70,18 @@ pub(crate) fn initial_inputs(
                         .map(i64::try_from)
                         .collect::<Result<Vec<_>, _>>()?;
                     let dtype = initial_dtype(value.dtype())?;
+                    let expected = bundle
+                        .input_info(&port.node, &port.port)
+                        .context("missing state input")?;
+                    ensure!(
+                        dtype == expected.dtype
+                            && shape.len() == expected.shape.len()
+                            && shape
+                                .iter()
+                                .zip(&expected.shape)
+                                .all(|(&actual, &expected)| expected == -1 || actual == expected),
+                        "initial value {port} does not match declared dtype/shape"
+                    );
                     copy_initial(value.data(), dtype, &shape, location, engine)?
                 } else {
                     zero_input(bundle, &port, location, engine)?
@@ -157,7 +169,7 @@ fn copy_initial(
         byte_offset: 0,
     };
     // SAFETY: bytes and shape remain borrowed until the synchronous engine copy completes.
-    Ok(engine.copy(unsafe { BorrowedTensor::new(&descriptor) }, location, None)?)
+    Ok(engine.copy(unsafe { BorrowedTensor::new(&descriptor) }, location)?)
 }
 
 pub(super) fn dl_dtype(dtype: DataType) -> DLDataType {

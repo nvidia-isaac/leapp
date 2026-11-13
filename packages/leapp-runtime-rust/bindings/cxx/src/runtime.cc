@@ -145,6 +145,11 @@ Metadata Field(const wire::BundleHandle& bundle, wire::MetadataField field,
 
 }  // namespace
 
+EngineKind detail::DefaultEngine() noexcept {
+  return wire::engine_default() == wire::EngineKind::Native
+      ? lrt::EngineKind::kNative : lrt::EngineKind::kTriton;
+}
+
 const Metadata* Metadata::Find(std::string_view key) const {
   const auto* mapping = std::get_if<Mapping>(&value);
   if (mapping == nullptr) {
@@ -361,6 +366,17 @@ Status Session::Open(const Bundle& bundle, const SessionOptions& options,
   if (session == nullptr || session->data_ || !bundle.is_valid()) {
     return Invalid("expected a valid bundle and an empty session destination");
   }
+  wire::EngineKind engine;
+  switch (options.engine) {
+    case EngineKind::kTriton:
+      engine = wire::EngineKind::Triton;
+      break;
+    case EngineKind::kNative:
+      engine = wire::EngineKind::Native;
+      break;
+    default:
+      return Invalid("unsupported engine; expected EngineKind::kTriton or EngineKind::kNative");
+  }
   MemoryLocation location;
   switch (options.device) {
     case ExecutionDevice::kCpu:
@@ -378,10 +394,10 @@ Status Session::Open(const Bundle& bundle, const SessionOptions& options,
     overrides.push_back({OwnedBytes(name), Location(location)});
   }
   auto data = std::make_unique<Data>();
-  auto status = Convert(wire::session_open(
-      *bundle.data_->handle, options.output_pool.max_entries, Location(location),
-      Location(options.output_location),
-      {overrides.data(), overrides.size()}, *data->handle));
+  auto status = Convert(
+      wire::session_open(*bundle.data_->handle, engine, Location(location),
+                         Location(options.output_location),
+                         {overrides.data(), overrides.size()}, *data->handle));
   if (!status.ok()) {
     return status;
   }
@@ -413,25 +429,27 @@ Status Session::Reset() {
                : Invalid("session is empty");
 }
 
-Status Session::Run(std::span<const NamedTensor> inputs,
-                    RunResult* result) {
+Status Session::Run(std::span<const NamedTensor> inputs, RunResult* result,
+                    std::span<const NamedTensor> outputs) {
   if (!data_ || result == nullptr) {
     return Invalid("expected a session and result destination");
   }
   // Only descriptors cross the bridge; tensor data remains in caller-owned
   // storage.
-  std::vector<wire::Input> views;
-  views.reserve(inputs.size());
-  for (const auto& [name, tensor] : inputs) {
-    wire::Input input{};
-    input.name = OwnedBytes(name);
-    input.descriptor = reinterpret_cast<uintptr_t>(tensor);
-    views.push_back(std::move(input));
-  }
+  const auto encode = [](std::span<const NamedTensor> tensors) {
+    std::vector<wire::Input> views;
+    views.reserve(tensors.size());
+    for (const auto& [name, tensor] : tensors) {
+      views.push_back({OwnedBytes(name), reinterpret_cast<uintptr_t>(tensor)});
+    }
+    return views;
+  };
+  const auto views = encode(inputs);
+  const auto buffers = encode(outputs);
   auto handle = wire::result_new();
   auto status =
       Convert(wire::session_run(*data_->handle, {views.data(), views.size()},
-                                *handle));
+                                {buffers.data(), buffers.size()}, *handle));
   if (!status.ok()) {
     return status;
   }

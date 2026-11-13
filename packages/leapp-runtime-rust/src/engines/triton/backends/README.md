@@ -5,11 +5,8 @@ independently of Cargo and install beneath a backend directory selected by
 the `LEAPP_TRITON_BACKENDS` environment variable. Applications use the same
 `lrt::Session` API as ONNX bundles; see the [runtime guide](../../../../README.md).
 
-Outputs use the calling session's pool. Set `SessionOptions.output_pool.max_entries`
-once at initialization (default 64; zero disables caching). New sessions share
-loaded models and inherit this limit with separate, empty pools. Retained outputs
-remain valid across later calls and session closure. Buffer sizes follow the
-bundle and actual dynamic outputs, with no fixed byte cap.
+Outputs use caller-provided buffers or fresh allocations. Retained allocated
+outputs remain valid across later calls and session closure.
 
 Build commands below run from `packages/leapp-runtime-rust`. Supply Linux,
 CMake 3.24+, a C++20 compiler, nlohmann_json 3.11+, Triton 2.69.0, CUDA, and
@@ -96,6 +93,8 @@ keeping replay tensors on the GPU; CPU models retain host staging. The embedded
 archive is copied to host once when loading. Warm each model serially before
 concurrent inference.
 PT2 model unload releases expired Warp cache entries while preserving live models.
+Retained Warp results remain valid across subsequent runs and session closure;
+the adapters continue to own their internal replay buffers.
 
 Install the adapters and link them beside the backends under
 `LEAPP_TRITON_BACKENDS`. Use local backend directories as above so the links do
@@ -126,6 +125,7 @@ Generate and run the optional integration fixtures from this package directory:
 python tests/generators/generate_warp_models.py --output target/warp-fixtures
 export LEAPP_WARP_FIXTURES="$PWD/target/warp-fixtures"
 export WARP_APIC_TMPDIR="$(mktemp -d)"
+LEAPP_TEST_ENGINE=triton cargo test --locked engines::tests::warp -- --ignored --test-threads=1
 cargo test --locked engines::triton::tests::warp -- --ignored --test-threads=1
 ```
 
@@ -149,7 +149,7 @@ ctest --test-dir target/torchscript-backend --output-on-failure
 ./target/torchscript-backend/torchscript_backend_test cuda
 cmake --install target/torchscript-backend --prefix "$PWD/target/plugins"
 python tests/generators/generate_torchscript_models.py --output target/torchscript-fixtures
-cargo test --locked engines::triton::tests::torchscript -- --ignored --test-threads=1
+cargo test --locked engines::tests::torchscript -- --ignored --test-threads=1
 ```
 
 The installed library is

@@ -1,7 +1,8 @@
 # Python bindings
 
 PyO3 bindings to the Rust bundle and synchronous runtime APIs. Linux x86-64
-requires the Triton SDK, CUDA runtime, and selected backend libraries at runtime.
+requires the Triton and CUDA runtime SDKs. Both Triton and native execution
+are included in the same extension.
 NumPy is a package dependency; PyTorch and CuPy are optional DLPack
 producers/consumers.
 
@@ -12,6 +13,11 @@ python -m pip install maturin
 maturin build --release --manifest-path bindings/python/Cargo.toml --auditwheel skip
 python -m pip install target/wheels/leapp_runtime-*.whl
 ```
+
+Install the model backends you need as described in the
+[native engine guide](../../README.md#native-engine). ONNX, TorchScript, and
+NativeRT support CPU and CUDA execution. Precompiled TensorRT engines require
+the Triton engine and CUDA.
 
 Set `TRITON_ROOT` and `CUDA_ROOT` when their SDKs are not in
 `/opt/tritonserver` and `/usr/local/cuda`. Make the SDK and backend dependencies
@@ -24,7 +30,7 @@ import numpy as np
 import lrt as lr
 
 bundle = lr.Bundle.open("exports/policy.yaml")
-options = lr.SessionOptions(device="cuda:0", output_device="cpu")
+options = lr.SessionOptions(device="cpu", output_device="cpu")
 with lr.Session.open(bundle, options) as session:
     result = session.run(
         {"preprocess/obs": np.zeros(18, dtype=np.float32)},
@@ -52,10 +58,12 @@ that implement this protocol; older array interfaces and framework-specific
 fallbacks are not supported.
 
 All inputs must be C-contiguous with supported native-endian numeric dtypes.
+Direct native input binding requires tensors on the execution device; use CUDA
+arrays for CUDA execution. Transfer incompatible inputs explicitly.
 Materialize noncontiguous inputs explicitly, for example `np.ascontiguousarray(x)`,
 `x.contiguous()` in PyTorch, or `cp.ascontiguousarray(x)`. Read-only inputs are
 accepted when their producer can export them through DLPack; producer export
-errors are propagated. Input leases remain alive until Triton releases the request.
+errors are propagated. Input leases remain alive until the synchronous engine call completes.
 Do not modify or resize input storage during a call.
 
 CUDA producers hand work to an engine-owned stream per device. After importing
@@ -74,30 +82,35 @@ use its `copy()` when a writable NumPy array is required.
 Exports support `copy=False` and `copy=None`. Explicit `copy=True` and cross-device
 export requests raise `BufferError`; perform those operations in the consumer.
 There is no `Tensor`, `DLPackView`, `.numpy()`, or `.dlpack_view()` convenience API.
-The session may recycle unexposed storage after all owners release it. Descriptor
-access or DLPack export permanently excludes that allocation from reuse. Retain the
-consumer's DLPack owner until all its uses complete, including work on CUDA streams.
+Retain the consumer's DLPack owner until all its uses complete, including work on
+CUDA streams.
 
 `Session.run`, loading, reset and close release the GIL while doing native work.
-Calls on one session serialize; separate sessions may run concurrently.
-`session.new_session()` shares the loaded engine and construction options, but
+Calls on one session serialize. Separate sessions may be called concurrently;
+native peers own separate fixed buffers/bindings and share loaded models and weights.
+ONNX peers can overlap. Graphs containing Torch backends or optional
+ONNX custom operators retain a shared execution guard.
+`session.new_session()` shares loaded models and construction options, but
 starts from captured initial state rather than the source's current feedback.
 `Session.close()` waits for that session's active call and is idempotent. Other
 sessions remain usable. Results, arrays, DLPack allocations and bundle metadata
 remain valid after close. Context-manager exit closes only its session.
 
-`SessionOptions` configures execution and output placement at construction;
-`run` takes only inputs. Triton is selected automatically.
+`SessionOptions` selects the engine and output placement at construction;
+`run` accepts inputs and optional output buffers. The default is `engine="native"`;
+set `engine` to `"triton"` or `"native"` to select either engine in the same extension.
+Unknown engine names raise `ValueError` when opening the session.
 Set `output_device` to `"cpu"`, `"pinned"`, or `"cuda:N"` and use `output_overrides`
 for individual public outputs. Configure the engine installation before starting
 Python, as described in the
 [runtime guide](../../README.md#synchronous-execution).
 
-Set `output_pool=lr.OutputPoolOptions(max_entries=64)` to configure retained
-buffer count; zero disables caching. Each session has its own cache, including
-peers from `new_session()`. Its byte budget follows bundle output sizes and grows
-for larger dynamic outputs, with no fixed byte cap. Caching does not limit live
-results, and retained outputs survive close.
+`session.run(inputs, outputs={"policy/action": action_buffer})` writes supplied
+outputs into writable DLPack buffers. Native binds these buffers directly;
+Triton copies ensemble results into them. Buffers must match the output dtype
+and shape, meet backend device/alignment requirements, and not overlap inputs or
+other outputs. Only omitted outputs are allocated and returned. Without `outputs`,
+every returned output has fresh storage. Buffer contents are unspecified on error.
 
 Bundle and execution failures raise `BundleError` and `RuntimeError` with
 `code`, `phase`, and `message`; bundle errors also include `path`.

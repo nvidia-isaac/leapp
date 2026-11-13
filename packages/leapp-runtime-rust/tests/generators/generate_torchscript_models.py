@@ -22,6 +22,11 @@ class Weighted(torch.nn.Module):
         return values * self.weight + bias, values.reshape(2, 2).t()
 
 
+class AliasIdentity(torch.nn.Module):
+    def forward(self, values, other):
+        return values + 1 if values is other else values + 2
+
+
 class Mutating(torch.nn.Module):
     def forward(self, values):
         values.add_(2)
@@ -63,6 +68,22 @@ class Forked(torch.nn.Module):
 class Integer(torch.nn.Module):
     def forward(self, values):
         return values + 1
+
+
+class Identity(torch.nn.Module):
+    def forward(self, values):
+        return values
+
+
+class Retaining(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.register_buffer("previous", torch.zeros(4))
+
+    def forward(self, values):
+        previous = self.previous
+        self.previous = values
+        return previous
 
 
 def bundle(model, node="model"):
@@ -110,6 +131,15 @@ def generate(root):
         weighted = export(name, Weighted(), inputs, outputs, (values, bias), traced)
         write(name, bundle(weighted))
 
+    write(
+        "alias_identity",
+        bundle(
+            export(
+                "alias_identity", AliasIdentity(), inputs, outputs[:1], (values, bias)
+            )
+        ),
+    )
+
     expected = [t.flatten().tolist() for t in Weighted()(values, bias)]
     (root / "expected.json").write_text(json.dumps(expected) + "\n")
     for name, module, dtype, input_shape, output_shape in [
@@ -117,6 +147,11 @@ def generate(root):
         ("dynamic", Reshape(), "float32", [-1], [-1, 2]),
         ("integer", Integer(), "int64", [4], [4]),
         ("forked", Forked(), "float32", [4], [4]),
+        ("scalar", Identity(), "float32", [], []),
+        ("empty", Identity(), "float32", [0], [0]),
+        ("double", Identity(), "float64", [4], [4]),
+        ("short", Identity(), "int16", [4], [4]),
+        ("retaining", Retaining(), "float32", [4], [4]),
     ]:
         source = dict(port("values", input_shape), dtype=dtype)
         target = dict(port("result", output_shape), dtype=dtype)

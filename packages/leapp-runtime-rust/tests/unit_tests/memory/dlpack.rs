@@ -32,6 +32,15 @@ fn contiguous_offsets_scalars_and_empty_storage() {
         layout(unsafe { BorrowedTensor::new(&t) }).unwrap(),
         (&[0][..], 0)
     );
+    // Compute element count before multiplying by dtype width: a large leading
+    // dimension followed by zero still describes empty storage without overflow.
+    let mut empty_shape = [i64::MAX, 0];
+    t.ndim = 2;
+    t.shape = empty_shape.as_mut_ptr();
+    let empty = unsafe { BorrowedTensor::new(&t) };
+    assert_eq!(layout(empty).unwrap().1, 0);
+    // SAFETY: layout just checked this unchanged descriptor.
+    assert_eq!(unsafe { layout_unchecked(*empty.descriptor()) }.1, 0);
 }
 
 #[test]

@@ -68,6 +68,8 @@ class Session:
     def run(
         self,
         inputs: Mapping[str, Any],
+        *,
+        outputs: Mapping[str, Any] | None = None,
     ) -> RunResult: ...
     def reset(self) -> None: ...
 

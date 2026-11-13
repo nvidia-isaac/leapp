@@ -1,7 +1,7 @@
 # Copyright 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build TensorRT engines and bundles for execution tests on the target GPU."""
+"""Build TensorRT engines and bundles for Triton tests on the target GPU."""
 
 import argparse
 import json
@@ -15,8 +15,9 @@ def generate(root, trtexec):
     root = root.resolve()
     source = root / "onnx"
     generate_onnx(source)
+
     engines = {}
-    for name in ["preprocess", "policy", "dynamic"]:
+    for name in ["preprocess", "policy", "accumulator", "dynamic"]:
         directory = root / name
         directory.mkdir(parents=True, exist_ok=True)
         engine = directory / ("policy.engine" if name == "policy" else "model.plan")
@@ -26,11 +27,15 @@ def generate(root, trtexec):
             f"--saveEngine={engine}",
             "--skipInference",
             "--noTF32",
+            "--builderOptimizationLevel=0",
+            "--profilingVerbosity=none",
         ]
         if name == "dynamic":
-            command.extend(
-                ["--minShapes=input:1", "--optShapes=input:4", "--maxShapes=input:8"]
-            )
+            command += [
+                "--minShapes=input:1",
+                "--optShapes=input:2",
+                "--maxShapes=input:4",
+            ]
         subprocess.run(command, check=True)
         engines[name] = engine.relative_to(root).as_posix()
 
@@ -46,6 +51,7 @@ def generate(root, trtexec):
 
     write("policy", "policy", {"preprocess", "policy"})
     write("mixed", "policy", {"policy"})
+    write("feedback", "feedback", {"accumulator"})
     write("dynamic", "dynamic", {"dynamic"})
 
 
