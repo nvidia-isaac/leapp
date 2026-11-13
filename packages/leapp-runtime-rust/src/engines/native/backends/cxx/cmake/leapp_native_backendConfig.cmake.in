@@ -1,0 +1,3 @@
+@PACKAGE_INIT@
+include("${CMAKE_CURRENT_LIST_DIR}/leapp_native_backendTargets.cmake")
+check_required_components(leapp_native_backend)

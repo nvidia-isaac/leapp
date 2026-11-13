@@ -155,151 +155,165 @@ pub type TRITONSERVER_InferenceResponseCompleteFn_t = Option<
         userp: *mut std::ffi::c_void,
     ) -> (),
 >;
-extern "C" {
-    pub fn TRITONSERVER_ApiVersion(major: *mut u32, minor: *mut u32) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_ServerMetadata(
+pub struct TritonApi {
+    pub TRITONSERVER_ApiVersion:
+        unsafe extern "C" fn(major: *mut u32, minor: *mut u32) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_ServerMetadata: unsafe extern "C" fn(
         server: *mut TRITONSERVER_Server,
         server_metadata: *mut *mut TRITONSERVER_Message,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_ServerModelIndex(
+    ) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_ServerModelIndex: unsafe extern "C" fn(
         server: *mut TRITONSERVER_Server,
         flags: u32,
         model_index: *mut *mut TRITONSERVER_Message,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_MessageSerializeToJson(
+    ) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_MessageSerializeToJson: unsafe extern "C" fn(
         message: *mut TRITONSERVER_Message,
         base: *mut *const std::ffi::c_char,
         byte_size: *mut usize,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_MessageDelete(
-        message: *mut TRITONSERVER_Message,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_ErrorNew(
+    ) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_MessageDelete:
+        unsafe extern "C" fn(message: *mut TRITONSERVER_Message) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_ErrorNew: unsafe extern "C" fn(
         code: TRITONSERVER_Error_Code,
         msg: *const std::ffi::c_char,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_ErrorDelete(error: *mut TRITONSERVER_Error) -> ();
-    pub fn TRITONSERVER_ErrorCode(error: *mut TRITONSERVER_Error) -> TRITONSERVER_Error_Code;
-    pub fn TRITONSERVER_ErrorMessage(error: *mut TRITONSERVER_Error) -> *const std::ffi::c_char;
-    pub fn TRITONSERVER_ServerOptionsNew(
+    ) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_ErrorDelete: unsafe extern "C" fn(error: *mut TRITONSERVER_Error) -> (),
+    pub TRITONSERVER_ErrorCode:
+        unsafe extern "C" fn(error: *mut TRITONSERVER_Error) -> TRITONSERVER_Error_Code,
+    pub TRITONSERVER_ErrorMessage:
+        unsafe extern "C" fn(error: *mut TRITONSERVER_Error) -> *const std::ffi::c_char,
+    pub TRITONSERVER_ServerOptionsNew: unsafe extern "C" fn(
         options: *mut *mut TRITONSERVER_ServerOptions,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_ServerOptionsDelete(
-        options: *mut TRITONSERVER_ServerOptions,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_ServerOptionsSetModelRepositoryPath(
-        options: *mut TRITONSERVER_ServerOptions,
-        model_repository_path: *const std::ffi::c_char,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_ServerOptionsSetBackendDirectory(
-        options: *mut TRITONSERVER_ServerOptions,
-        backend_dir: *const std::ffi::c_char,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_ServerOptionsSetModelControlMode(
-        options: *mut TRITONSERVER_ServerOptions,
-        mode: TRITONSERVER_ModelControlMode,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_ServerOptionsSetStrictModelConfig(
-        options: *mut TRITONSERVER_ServerOptions,
-        strict: bool,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_ServerOptionsSetModelLoadRetryCount(
-        options: *mut TRITONSERVER_ServerOptions,
-        retry_count: std::ffi::c_uint,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_ServerOptionsSetExitOnError(
+    ) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_ServerOptionsDelete:
+        unsafe extern "C" fn(options: *mut TRITONSERVER_ServerOptions) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_ServerOptionsSetModelRepositoryPath:
+        unsafe extern "C" fn(
+            options: *mut TRITONSERVER_ServerOptions,
+            model_repository_path: *const std::ffi::c_char,
+        ) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_ServerOptionsSetBackendDirectory:
+        unsafe extern "C" fn(
+            options: *mut TRITONSERVER_ServerOptions,
+            backend_dir: *const std::ffi::c_char,
+        ) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_ServerOptionsSetModelControlMode:
+        unsafe extern "C" fn(
+            options: *mut TRITONSERVER_ServerOptions,
+            mode: TRITONSERVER_ModelControlMode,
+        ) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_ServerOptionsSetStrictModelConfig:
+        unsafe extern "C" fn(
+            options: *mut TRITONSERVER_ServerOptions,
+            strict: bool,
+        ) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_ServerOptionsSetModelLoadRetryCount:
+        unsafe extern "C" fn(
+            options: *mut TRITONSERVER_ServerOptions,
+            retry_count: std::ffi::c_uint,
+        ) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_ServerOptionsSetExitOnError: unsafe extern "C" fn(
         options: *mut TRITONSERVER_ServerOptions,
         exit: bool,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_ServerOptionsSetLogInfo(
+    )
+        -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_ServerOptionsSetLogInfo: unsafe extern "C" fn(
         options: *mut TRITONSERVER_ServerOptions,
         log: bool,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_ServerOptionsSetLogWarn(
+    ) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_ServerOptionsSetLogWarn: unsafe extern "C" fn(
         options: *mut TRITONSERVER_ServerOptions,
         log: bool,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_ServerNew(
+    ) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_ServerNew: unsafe extern "C" fn(
         server: *mut *mut TRITONSERVER_Server,
         options: *mut TRITONSERVER_ServerOptions,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_ServerDelete(server: *mut TRITONSERVER_Server) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_ServerIsReady(
+    ) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_ServerDelete:
+        unsafe extern "C" fn(server: *mut TRITONSERVER_Server) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_ServerIsReady: unsafe extern "C" fn(
         server: *mut TRITONSERVER_Server,
         ready: *mut bool,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_ServerModelTransactionProperties(
-        server: *mut TRITONSERVER_Server,
-        model_name: *const std::ffi::c_char,
-        model_version: i64,
-        txn_flags: *mut u32,
-        voidp: *mut *mut std::ffi::c_void,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_ResponseAllocatorNew(
+    ) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_ServerModelTransactionProperties:
+        unsafe extern "C" fn(
+            server: *mut TRITONSERVER_Server,
+            model_name: *const std::ffi::c_char,
+            model_version: i64,
+            txn_flags: *mut u32,
+            voidp: *mut *mut std::ffi::c_void,
+        ) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_ResponseAllocatorNew: unsafe extern "C" fn(
         allocator: *mut *mut TRITONSERVER_ResponseAllocator,
         alloc_fn: TRITONSERVER_ResponseAllocatorAllocFn_t,
         release_fn: TRITONSERVER_ResponseAllocatorReleaseFn_t,
         start_fn: TRITONSERVER_ResponseAllocatorStartFn_t,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_ResponseAllocatorDelete(
+    ) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_ResponseAllocatorDelete: unsafe extern "C" fn(
         allocator: *mut TRITONSERVER_ResponseAllocator,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_ResponseAllocatorSetQueryFunction(
-        allocator: *mut TRITONSERVER_ResponseAllocator,
-        query_fn: TRITONSERVER_ResponseAllocatorQueryFn_t,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_InferenceRequestNew(
+    ) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_ResponseAllocatorSetQueryFunction:
+        unsafe extern "C" fn(
+            allocator: *mut TRITONSERVER_ResponseAllocator,
+            query_fn: TRITONSERVER_ResponseAllocatorQueryFn_t,
+        ) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_InferenceRequestNew: unsafe extern "C" fn(
         inference_request: *mut *mut TRITONSERVER_InferenceRequest,
         server: *mut TRITONSERVER_Server,
         model_name: *const std::ffi::c_char,
         model_version: i64,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_InferenceRequestDelete(
+    ) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_InferenceRequestDelete: unsafe extern "C" fn(
         inference_request: *mut TRITONSERVER_InferenceRequest,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_InferenceRequestAddInput(
+    ) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_InferenceRequestAddInput: unsafe extern "C" fn(
         inference_request: *mut TRITONSERVER_InferenceRequest,
         name: *const std::ffi::c_char,
         datatype: TRITONSERVER_DataType,
         shape: *const i64,
         dim_count: u64,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_InferenceRequestAppendInputData(
-        inference_request: *mut TRITONSERVER_InferenceRequest,
-        name: *const std::ffi::c_char,
-        base: *const std::ffi::c_void,
-        byte_size: usize,
-        memory_type: TRITONSERVER_MemoryType,
-        memory_type_id: i64,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_InferenceRequestSetReleaseCallback(
-        inference_request: *mut TRITONSERVER_InferenceRequest,
-        request_release_fn: TRITONSERVER_InferenceRequestReleaseFn_t,
-        request_release_userp: *mut std::ffi::c_void,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_InferenceRequestSetResponseCallback(
-        inference_request: *mut TRITONSERVER_InferenceRequest,
-        response_allocator: *mut TRITONSERVER_ResponseAllocator,
-        response_allocator_userp: *mut std::ffi::c_void,
-        response_fn: TRITONSERVER_InferenceResponseCompleteFn_t,
-        response_userp: *mut std::ffi::c_void,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_ServerInferAsync(
+    ) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_InferenceRequestAppendInputData:
+        unsafe extern "C" fn(
+            inference_request: *mut TRITONSERVER_InferenceRequest,
+            name: *const std::ffi::c_char,
+            base: *const std::ffi::c_void,
+            byte_size: usize,
+            memory_type: TRITONSERVER_MemoryType,
+            memory_type_id: i64,
+        ) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_InferenceRequestSetReleaseCallback:
+        unsafe extern "C" fn(
+            inference_request: *mut TRITONSERVER_InferenceRequest,
+            request_release_fn: TRITONSERVER_InferenceRequestReleaseFn_t,
+            request_release_userp: *mut std::ffi::c_void,
+        ) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_InferenceRequestSetResponseCallback:
+        unsafe extern "C" fn(
+            inference_request: *mut TRITONSERVER_InferenceRequest,
+            response_allocator: *mut TRITONSERVER_ResponseAllocator,
+            response_allocator_userp: *mut std::ffi::c_void,
+            response_fn: TRITONSERVER_InferenceResponseCompleteFn_t,
+            response_userp: *mut std::ffi::c_void,
+        ) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_ServerInferAsync: unsafe extern "C" fn(
         server: *mut TRITONSERVER_Server,
         inference_request: *mut TRITONSERVER_InferenceRequest,
         trace: *mut TRITONSERVER_InferenceTrace,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_InferenceResponseDelete(
+    ) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_InferenceResponseDelete: unsafe extern "C" fn(
         inference_response: *mut TRITONSERVER_InferenceResponse,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_InferenceResponseError(
+    ) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_InferenceResponseError: unsafe extern "C" fn(
         inference_response: *mut TRITONSERVER_InferenceResponse,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_InferenceResponseOutputCount(
+    ) -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_InferenceResponseOutputCount: unsafe extern "C" fn(
         inference_response: *mut TRITONSERVER_InferenceResponse,
         count: *mut u32,
-    ) -> *mut TRITONSERVER_Error;
-    pub fn TRITONSERVER_InferenceResponseOutput(
+    )
+        -> *mut TRITONSERVER_Error,
+    pub TRITONSERVER_InferenceResponseOutput: unsafe extern "C" fn(
         inference_response: *mut TRITONSERVER_InferenceResponse,
         index: u32,
         name: *mut *const std::ffi::c_char,
@@ -311,5 +325,77 @@ extern "C" {
         memory_type: *mut TRITONSERVER_MemoryType,
         memory_type_id: *mut i64,
         userp: *mut *mut std::ffi::c_void,
-    ) -> *mut TRITONSERVER_Error;
+    ) -> *mut TRITONSERVER_Error,
+    _library: libloading::Library,
+}
+impl TritonApi {
+    pub(super) unsafe fn load(library: libloading::Library) -> Result<Self, libloading::Error> {
+        // SAFETY: the caller supplies the pinned Triton library; signatures come from its header.
+        unsafe {
+            Ok(Self {
+                TRITONSERVER_ApiVersion: *library.get(b"TRITONSERVER_ApiVersion\0")?,
+                TRITONSERVER_ServerMetadata: *library.get(b"TRITONSERVER_ServerMetadata\0")?,
+                TRITONSERVER_ServerModelIndex: *library.get(b"TRITONSERVER_ServerModelIndex\0")?,
+                TRITONSERVER_MessageSerializeToJson: *library
+                    .get(b"TRITONSERVER_MessageSerializeToJson\0")?,
+                TRITONSERVER_MessageDelete: *library.get(b"TRITONSERVER_MessageDelete\0")?,
+                TRITONSERVER_ErrorNew: *library.get(b"TRITONSERVER_ErrorNew\0")?,
+                TRITONSERVER_ErrorDelete: *library.get(b"TRITONSERVER_ErrorDelete\0")?,
+                TRITONSERVER_ErrorCode: *library.get(b"TRITONSERVER_ErrorCode\0")?,
+                TRITONSERVER_ErrorMessage: *library.get(b"TRITONSERVER_ErrorMessage\0")?,
+                TRITONSERVER_ServerOptionsNew: *library.get(b"TRITONSERVER_ServerOptionsNew\0")?,
+                TRITONSERVER_ServerOptionsDelete: *library
+                    .get(b"TRITONSERVER_ServerOptionsDelete\0")?,
+                TRITONSERVER_ServerOptionsSetModelRepositoryPath: *library
+                    .get(b"TRITONSERVER_ServerOptionsSetModelRepositoryPath\0")?,
+                TRITONSERVER_ServerOptionsSetBackendDirectory: *library
+                    .get(b"TRITONSERVER_ServerOptionsSetBackendDirectory\0")?,
+                TRITONSERVER_ServerOptionsSetModelControlMode: *library
+                    .get(b"TRITONSERVER_ServerOptionsSetModelControlMode\0")?,
+                TRITONSERVER_ServerOptionsSetStrictModelConfig: *library
+                    .get(b"TRITONSERVER_ServerOptionsSetStrictModelConfig\0")?,
+                TRITONSERVER_ServerOptionsSetModelLoadRetryCount: *library
+                    .get(b"TRITONSERVER_ServerOptionsSetModelLoadRetryCount\0")?,
+                TRITONSERVER_ServerOptionsSetExitOnError: *library
+                    .get(b"TRITONSERVER_ServerOptionsSetExitOnError\0")?,
+                TRITONSERVER_ServerOptionsSetLogInfo: *library
+                    .get(b"TRITONSERVER_ServerOptionsSetLogInfo\0")?,
+                TRITONSERVER_ServerOptionsSetLogWarn: *library
+                    .get(b"TRITONSERVER_ServerOptionsSetLogWarn\0")?,
+                TRITONSERVER_ServerNew: *library.get(b"TRITONSERVER_ServerNew\0")?,
+                TRITONSERVER_ServerDelete: *library.get(b"TRITONSERVER_ServerDelete\0")?,
+                TRITONSERVER_ServerIsReady: *library.get(b"TRITONSERVER_ServerIsReady\0")?,
+                TRITONSERVER_ServerModelTransactionProperties: *library
+                    .get(b"TRITONSERVER_ServerModelTransactionProperties\0")?,
+                TRITONSERVER_ResponseAllocatorNew: *library
+                    .get(b"TRITONSERVER_ResponseAllocatorNew\0")?,
+                TRITONSERVER_ResponseAllocatorDelete: *library
+                    .get(b"TRITONSERVER_ResponseAllocatorDelete\0")?,
+                TRITONSERVER_ResponseAllocatorSetQueryFunction: *library
+                    .get(b"TRITONSERVER_ResponseAllocatorSetQueryFunction\0")?,
+                TRITONSERVER_InferenceRequestNew: *library
+                    .get(b"TRITONSERVER_InferenceRequestNew\0")?,
+                TRITONSERVER_InferenceRequestDelete: *library
+                    .get(b"TRITONSERVER_InferenceRequestDelete\0")?,
+                TRITONSERVER_InferenceRequestAddInput: *library
+                    .get(b"TRITONSERVER_InferenceRequestAddInput\0")?,
+                TRITONSERVER_InferenceRequestAppendInputData: *library
+                    .get(b"TRITONSERVER_InferenceRequestAppendInputData\0")?,
+                TRITONSERVER_InferenceRequestSetReleaseCallback: *library
+                    .get(b"TRITONSERVER_InferenceRequestSetReleaseCallback\0")?,
+                TRITONSERVER_InferenceRequestSetResponseCallback: *library
+                    .get(b"TRITONSERVER_InferenceRequestSetResponseCallback\0")?,
+                TRITONSERVER_ServerInferAsync: *library.get(b"TRITONSERVER_ServerInferAsync\0")?,
+                TRITONSERVER_InferenceResponseDelete: *library
+                    .get(b"TRITONSERVER_InferenceResponseDelete\0")?,
+                TRITONSERVER_InferenceResponseError: *library
+                    .get(b"TRITONSERVER_InferenceResponseError\0")?,
+                TRITONSERVER_InferenceResponseOutputCount: *library
+                    .get(b"TRITONSERVER_InferenceResponseOutputCount\0")?,
+                TRITONSERVER_InferenceResponseOutput: *library
+                    .get(b"TRITONSERVER_InferenceResponseOutput\0")?,
+                _library: library,
+            })
+        }
+    }
 }

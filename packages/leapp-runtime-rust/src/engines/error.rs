@@ -9,6 +9,7 @@ pub enum ErrorKind {
     InvalidArgument,
     NotFound,
     Unsupported,
+    Io,
     Internal,
 }
 
@@ -24,11 +25,7 @@ pub struct Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
-    pub(crate) fn new(
-        kind: ErrorKind,
-        phase: &'static str,
-        message: impl Into<String>,
-    ) -> Self {
+    pub(crate) fn new(kind: ErrorKind, phase: &'static str, message: impl Into<String>) -> Self {
         Self {
             kind,
             phase,
@@ -61,6 +58,7 @@ impl From<Error> for crate::RuntimeError {
             ErrorKind::InvalidArgument => crate::ErrorCode::InvalidArgument,
             ErrorKind::NotFound => crate::ErrorCode::NotFound,
             ErrorKind::Unsupported => crate::ErrorCode::Unsupported,
+            ErrorKind::Io => crate::ErrorCode::Io,
             ErrorKind::Internal => crate::ErrorCode::Internal,
         };
         Self::classified(code, error.phase(), error.into())

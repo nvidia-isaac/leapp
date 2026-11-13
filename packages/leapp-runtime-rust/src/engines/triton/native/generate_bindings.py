@@ -109,15 +109,27 @@ for short in callbacks:
     out.append(
         f'pub type {name} = Option<unsafe extern "C" fn({args(m[2])}) -> {ty(m[1])}>;'
     )
-out.append('extern "C" {')
+out.append("pub struct TritonApi {")
 for short in functions:
     name = "TRITONSERVER_" + short
     m = re.search(
         r"TRITONSERVER_DECLSPEC\s+([^;]+?)\b" + name + r"\s*\((.*?)\);", s, flags=re.S
     )
     assert m, name
-    out.append(f"pub fn {name}({args(m[2])}) -> {ty(m[1])};")
-out.append("}")
+    out.append(f'pub {name}: unsafe extern "C" fn({args(m[2])}) -> {ty(m[1])},')
+out.append("_library: libloading::Library,\n}")
+out.append("impl TritonApi {")
+out.append(
+    "pub(super) unsafe fn load(library: libloading::Library) -> Result<Self, libloading::Error> {"
+)
+out.append(
+    "// SAFETY: the caller supplies the pinned Triton library; signatures come from its header."
+)
+out.append("unsafe { Ok(Self {")
+for short in functions:
+    name = "TRITONSERVER_" + short
+    out.append(f'{name}: *library.get(b"{name}\\0")?,')
+out.append("_library: library,\n}) }\n}\n}")
 for name in sorted(used):
     if re.search(r"^struct " + name + r";", s, re.M):
         out.insert(2, f"#[repr(C)] pub struct {name} {{ _private: [u8; 0] }}")

@@ -1,8 +1,8 @@
 # Python bindings
 
-PyO3 bindings to the Rust bundle and synchronous runtime APIs. Linux x86-64
-requires the Triton and CUDA runtime SDKs. Both Triton and native execution
-are included in the same extension.
+PyO3 bindings to the Rust bundle and synchronous runtime APIs on Linux.
+Both Triton and native execution are included in the same extension; building
+and importing it require neither the Triton nor the CUDA SDK.
 NumPy is a package dependency; PyTorch and CuPy are optional DLPack
 producers/consumers.
 
@@ -15,15 +15,16 @@ python -m pip install target/wheels/leapp_runtime-*.whl
 ```
 
 Install the model backends you need as described in the
-[native engine guide](../../README.md#native-engine). ONNX, TorchScript, and
+[model support guide](../../README.md#model-support). ONNX, TorchScript, and
 NativeRT support CPU and CUDA execution. Precompiled TensorRT engines require
 the Triton engine and CUDA.
 
-Set `TRITON_ROOT` and `CUDA_ROOT` when their SDKs are not in
-`/opt/tritonserver` and `/usr/local/cuda`. Make the SDK and backend dependencies
-available through `LD_LIBRARY_PATH`. The wheel deliberately does not redistribute
-NVIDIA libraries. CUDA support is always included; CPU execution and CPU buffers
-remain available in the same extension.
+Triton and CUDA libraries load only when needed. Set `TRITON_ROOT` and
+`CUDA_ROOT` for explicit installations, and make their dependencies available
+through `LD_LIBRARY_PATH`. Native CPU ONNX with CPU I/O can run without either
+library; the current Torch plugins still require CUDA even for CPU execution.
+The wheel does not redistribute model runtimes or NVIDIA libraries. See the
+[runtime installation guide](../../README.md#installation) for library discovery.
 
 ```python
 import numpy as np

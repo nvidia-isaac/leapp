@@ -10,13 +10,14 @@ find_program(CARGO_EXECUTABLE cargo REQUIRED)
 option(LEAPP_TEST_CUDA "Run integration tests on CUDA device 0" OFF)
 include("${CMAKE_CURRENT_SOURCE_DIR}/../../src/engines/cxx.cmake")
 
+set(LEAPP_NATIVE_INCLUDE_DIR
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/engines/native/backends/include")
 set(RUST_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/cargo")
 set(RUST_LIBRARY "${RUST_TARGET_DIR}/release/libleapp_runtime_cxx.a")
 
 # Cargo tracks Rust sources and dependencies; this also refreshes generated headers.
 add_custom_target(leapp_runtime_rust
   COMMAND "${CMAKE_COMMAND}" -E env --unset=MAKEFLAGS --unset=MFLAGS
-          ${LEAPP_ENGINE_ENV}
           "${CARGO_EXECUTABLE}" build --locked --release
           --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
           --target-dir "${RUST_TARGET_DIR}"
@@ -31,10 +32,11 @@ set_target_properties(leapp_runtime PROPERTIES EXPORT_NAME runtime
 target_compile_features(leapp_runtime PUBLIC cxx_std_20)
 target_include_directories(leapp_runtime
   PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+         "$<BUILD_INTERFACE:${LEAPP_NATIVE_INCLUDE_DIR}>"
          "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../src/dlpack/include>"
          "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
   PRIVATE "${RUST_TARGET_DIR}/cxxbridge")
-target_link_libraries(leapp_runtime PRIVATE "${RUST_LIBRARY}" ${LEAPP_ENGINE_LIBRARIES}
+target_link_libraries(leapp_runtime PRIVATE "${RUST_LIBRARY}"
   Threads::Threads ${CMAKE_DL_LIBS} m rt util)
 target_link_options(leapp_runtime PRIVATE "-Wl,--exclude-libs,ALL" "-Wl,--no-undefined")
 target_compile_options(leapp_runtime PRIVATE -Wall -Wextra -Wpedantic -Werror -fno-exceptions)
@@ -42,6 +44,9 @@ target_compile_options(leapp_runtime PRIVATE -Wall -Wextra -Wpedantic -Werror -f
 install(TARGETS leapp_runtime EXPORT leapp_runtimeTargets
   LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
 install(DIRECTORY include/leapp DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+install(FILES "${LEAPP_NATIVE_INCLUDE_DIR}/leapp/data_type.h"
+              "${LEAPP_NATIVE_INCLUDE_DIR}/leapp/status.h"
+  DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/leapp")
 install(DIRECTORY ../../src/dlpack/include/dlpack DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 install(EXPORT leapp_runtimeTargets NAMESPACE lrt::
   DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/leapp_runtime")
@@ -67,8 +72,14 @@ if(BUILD_TESTING)
   add_executable(leapp_cxx_test tests/runtime_test.cc)
   target_link_libraries(leapp_cxx_test PRIVATE lrt::runtime Threads::Threads)
   target_compile_options(leapp_cxx_test PRIVATE -Wall -Wextra -Wpedantic -Werror -fno-exceptions)
-  target_include_directories(leapp_cxx_test PRIVATE ${LEAPP_ENGINE_TEST_INCLUDES})
-  target_link_libraries(leapp_cxx_test PRIVATE ${LEAPP_ENGINE_LIBRARIES})
+  if(LEAPP_TEST_CUDA)
+    if(CUDA_ROOT)
+      set(CUDAToolkit_ROOT "${CUDA_ROOT}")
+    endif()
+    find_package(CUDAToolkit REQUIRED)
+    target_compile_definitions(leapp_cxx_test PRIVATE LEAPP_TEST_CUDA)
+    target_link_libraries(leapp_cxx_test PRIVATE CUDA::cudart)
+  endif()
   set(LEAPP_FIXTURES "${CMAKE_CURRENT_SOURCE_DIR}/../../target/triton-fixtures"
       CACHE PATH "Generated ONNX fixture directory")
   add_test(NAME leapp_cxx COMMAND leapp_cxx_test

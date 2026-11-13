@@ -12,10 +12,8 @@ the same bundle inspection and synchronous Session API.
 
 ## Installation
 
-Build on Linux with Rust 1.88 or newer, the Triton 2.69.0 SDK, and the CUDA
-runtime SDK. Set `TRITON_ROOT` and `CUDA_ROOT` if they are not installed under
-`/opt/tritonserver` and `/usr/local/cuda`. Make their shared libraries available
-through `LD_LIBRARY_PATH`. CPU execution also requires the CUDA runtime SDK.
+Build on Linux with Rust 1.88 or newer. Building the core runtime does not
+require the Triton or CUDA SDKs.
 
 ```sh
 cargo build --locked --release
@@ -26,11 +24,15 @@ See the [Python bindings](bindings/python/README.md) for `import lrt` and the
 [C++ bindings](bindings/cxx/README.md) for the `lrt` namespace and `lrt::runtime`
 CMake target.
 
+Native C++ backend authors can start with
+[`BackendPlugin`](src/engines/native/backends/include/leapp/native/backend_plugin.h) and the
+[backend contribution guide](src/engines/native/backends/README.md#adding-a-backend).
+
 Install only the model runtimes and plugins required by your bundle and selected
 engine; see [model support](#model-support). They load when a session opens;
 bundle inspection does not load them. Cargo does not download or install these
-runtimes. Adding a backend does not require rebuilding the core binary or
-selecting Cargo features. Running exported bundles does not require Python
+runtimes. Installing a supported backend does not require rebuilding the core
+binary or selecting Cargo features. Running exported bundles does not require Python
 model-export packages.
 
 For native execution, follow the
@@ -40,9 +42,17 @@ For Triton, use its ONNX Runtime and TensorRT backends and the
 `LEAPP_TRITON_BACKENDS` defaults to `$TRITON_ROOT/backends` or
 `/opt/tritonserver/backends`.
 
-Set installation variables before starting the process. Backend dependencies
-must also be discoverable through `LD_LIBRARY_PATH` or the system loader.
-Library-load errors identify the node, library path, and underlying cause.
+Triton loads only when selected. CUDA loads when GPU execution, transfers,
+pinned-memory allocation, or supplied CUDA streams require it. Native CPU ONNX
+execution with CPU inputs and outputs needs only a CPU-compatible ONNX Runtime.
+The current Torch plugins, TensorRT, and Warp still require their CUDA libraries.
+
+Set `TRITON_ROOT` or `CUDA_ROOT` to select an explicit installation. Otherwise,
+the runtime uses the system loader, then `/opt/tritonserver` or `/usr/local/cuda`.
+Set installation variables before starting the process; loaded libraries remain
+in use for its lifetime. Backend dependencies must also be discoverable through
+`LD_LIBRARY_PATH` or the system loader. Load errors include the library and cause;
+the runtime does not fall back to another engine or device.
 
 ## Rust
 

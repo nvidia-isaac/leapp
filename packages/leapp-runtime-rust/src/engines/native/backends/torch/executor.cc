@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
 // All rights reserved. SPDX-License-Identifier: Apache-2.0
 
+#include "torch/executor.h"
+
 #include <ATen/core/grad_mode.h>
 #include <c10/core/DeviceGuard.h>
 #include <c10/cuda/CUDAException.h>
@@ -10,16 +12,19 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
-#include "../bridge/api.h"
 #include "../bridge/cuda.h"
-#include "model.h"
+#include "torch/model.h"
 
 namespace leapp_torch::native {
 
 namespace cuda = leapp_native::cuda;
-namespace adapter = leapp_native::bridge;
+namespace adapter = leapp_native::tensors;
 using adapter::View;
 
 struct Call;
@@ -27,10 +32,11 @@ struct Outputs;
 
 namespace {
 
-constexpr std::array types{at::kBool,    at::kByte, at::kUInt16, at::kUInt32,
-                           at::kUInt64,  at::kChar, at::kShort,  at::kInt,
-                           at::kLong,    at::kHalf, at::kFloat,  at::kDouble,
-                           at::kBFloat16};
+constexpr std::array<at::ScalarType, 13> types = {
+    at::kBool,  at::kByte,   at::kUInt16,   at::kUInt32, at::kUInt64,
+    at::kChar,  at::kShort,  at::kInt,      at::kLong,   at::kHalf,
+    at::kFloat, at::kDouble, at::kBFloat16,
+};
 
 at::Device device(int32_t id) {
   return id < 0 ? at::Device(at::kCPU) : at::Device(at::kCUDA, id);
@@ -124,8 +130,7 @@ struct Context {
   };
 
   Context(const std::string& path, int32_t id, cudaStream_t external,
-          std::span<const Port> in,
-          std::span<const Port> out)
+          std::span<const Port> in, std::span<const Port> out)
       : target(device(id)),
         external_stream(external),
         inputs(in.begin(), in.end()),
@@ -142,9 +147,12 @@ struct Context {
   }
 
   explicit Context(const Context& source)
-      : target(source.target), external_stream(source.external_stream),
-        model(source.model), plan(source.plan),
-        inputs(source.inputs), outputs(source.outputs) {
+      : target(source.target),
+        external_stream(source.external_stream),
+        model(source.model),
+        plan(source.plan),
+        inputs(source.inputs),
+        outputs(source.outputs) {
     if (target.is_cuda()) {
       stream = std::make_unique<cuda::Stream>(target.index(), external_stream);
     }
@@ -259,6 +267,7 @@ struct Call {
   void run(std::span<const View> views,
            std::span<const adapter::InputRoute> routes,
            std::span<const adapter::OutputBinding> outputs);
+
   size_t input_alignment() const {
     return !context.plan.background_work &&
            std::all_of(context.plan.access.begin(), context.plan.access.end(),
@@ -268,10 +277,8 @@ struct Call {
   }
 };
 
-struct Outputs {
+struct Outputs : adapter::Outputs {
   std::vector<at::Tensor> values;
-  std::vector<std::vector<int64_t>> shapes;
-  std::vector<adapter::View> views;
 };
 
 std::unique_ptr<Call> Context::prepare(std::span<const View> inputs,
@@ -339,22 +346,11 @@ std::unique_ptr<Outputs> Context::run_dynamic(
   // Raw Rust views cannot represent strides or Torch's lazy negative bit.
   // Materialize those before exposing storage; ordinary contiguous values stay
   // borrowed until Rust snapshots them before returning.
-  outputs->shapes.reserve(outputs->values.size() - bindings.size());
-  // Retain port positions; Rust skips the empty entries for supplied outputs.
-  outputs->views.resize(outputs->values.size());
   for (size_t i = 0; i < outputs->values.size(); ++i) {
     if (std::none_of(bindings.begin(), bindings.end(), [i](const auto& output) {
           return output.position == i;
         })) {
-      auto& value = outputs->values[i];
-      value = value.resolve_neg().contiguous();
-      outputs->shapes.emplace_back(value.sizes().begin(), value.sizes().end());
-      const auto& shape = outputs->shapes.back();
-      outputs->views[i] = {
-          {nullptr, 0, this->outputs[i].dtype, shape.data(), shape.size()},
-          reinterpret_cast<uintptr_t>(value.data_ptr()),
-          value.nbytes(),
-          value.is_cuda() ? value.get_device() : -1};
+      outputs->values[i] = outputs->values[i].resolve_neg().contiguous();
     }
   }
   execution.finish();
@@ -380,107 +376,65 @@ std::vector<Port> ports(std::span<const adapter::Port> values) {
   return result;
 }
 
-// Load once. Peers share the model/weights and own their invocation resources.
-// Rust holds a graph-wide guard through execution and output isolation.
-struct Factory {
-  Factory(const std::string& path, int32_t device, cudaStream_t stream,
-          std::span<const adapter::Port> inputs,
-          std::span<const adapter::Port> outputs)
-      : context(std::make_unique<Context>(path, device, stream, ports(inputs),
-                                          ports(outputs))) {}
+}  // namespace
 
-  bool requires_dynamic() const { return false; }
-
-  std::unique_ptr<Context> create_session() {
-    return std::make_unique<Context>(*context);
-  }
+struct Executor::State {
+  explicit State(std::unique_ptr<Context> source)
+      : context(std::move(source)) {}
 
   std::unique_ptr<Context> context;
+  std::unique_ptr<Call> call;
 };
 
-template <typename F>
-char* invoke(F&& function) noexcept {
-  try {
-    function();
-    return nullptr;
-  } catch (const std::exception& error) {
-    auto* message = ::strdup(error.what());
-    if (!message) {
-      std::abort();
-    }
-    return message;
-  } catch (...) {
-    auto* message = ::strdup("unknown Torch failure");
-    if (!message) {
-      std::abort();
-    }
-    return message;
+Executor::Executor(const std::string& path, int32_t device, void* stream,
+                   std::span<const adapter::Port> inputs,
+                   std::span<const adapter::Port> outputs) {
+  state_ = std::make_unique<State>(
+      std::make_unique<Context>(path, device, static_cast<cudaStream_t>(stream),
+                                ports(inputs), ports(outputs)));
+}
+
+Executor::Executor(std::unique_ptr<State> state) : state_(std::move(state)) {}
+
+Executor::~Executor() = default;
+
+std::unique_ptr<Executor> Executor::new_session() const {
+  return std::unique_ptr<Executor>(new Executor(
+      std::make_unique<State>(std::make_unique<Context>(*state_->context))));
+}
+
+bool Executor::is_prepared() const noexcept { return state_->call != nullptr; }
+
+size_t Executor::input_alignment() const noexcept {
+  return state_->call ? state_->call->input_alignment() : 0;
+}
+
+void Executor::prepare(std::span<const adapter::View> inputs,
+                       std::span<const adapter::View> outputs) {
+  state_->call = state_->context->prepare(inputs, outputs);
+}
+
+void Executor::run(std::span<const adapter::View> inputs,
+                   std::span<const adapter::InputRoute> routes,
+                   std::span<const adapter::OutputBinding> outputs) {
+  state_->call->run(inputs, routes, outputs);
+}
+
+std::unique_ptr<adapter::Outputs> Executor::run_dynamic(
+    std::span<const adapter::View> inputs,
+    std::span<const adapter::OutputBinding> outputs) {
+  auto result = state_->context->run_dynamic(inputs, outputs);
+  result->views.reserve(result->values.size());
+  for (size_t i = 0; i < result->values.size(); ++i) {
+    const auto& tensor = result->values[i];
+    result->views.push_back(
+        {{nullptr, 0, state_->context->outputs[i].dtype, tensor.sizes().data(),
+          static_cast<size_t>(tensor.dim())},
+         reinterpret_cast<uintptr_t>(tensor.data_ptr()),
+         tensor.nbytes(),
+         tensor.is_cuda() ? tensor.get_device() : -1});
   }
+  return result;
 }
 
-const adapter::Api api{
-    [](const char* path, int32_t device, void* stream,
-       const adapter::Port* inputs, size_t input_count,
-       const adapter::Port* outputs, size_t output_count,
-       void** value) noexcept {
-      return invoke([&] {
-        *value = new Factory(path, device, static_cast<cudaStream_t>(stream),
-                             {inputs, input_count}, {outputs, output_count});
-      });
-    },
-    [](void* value) noexcept { delete static_cast<Factory*>(value); },
-    [](const void* value) noexcept {
-      return static_cast<const Factory*>(value)->requires_dynamic();
-    },
-    [](void* model, void** value) noexcept {
-      return invoke([&] {
-        *value = static_cast<Factory*>(model)->create_session().release();
-      });
-    },
-    [](void* value) noexcept { delete static_cast<Context*>(value); },
-    [](void* session, const adapter::View* inputs, size_t input_count,
-       const adapter::View* outputs, size_t output_count,
-       void** value) noexcept {
-      return invoke([&] {
-        *value = static_cast<Context*>(session)
-                     ->prepare({inputs, input_count}, {outputs, output_count})
-                     .release();
-      });
-    },
-    [](void* value) noexcept { delete static_cast<Call*>(value); },
-    [](const void* value) noexcept {
-      return static_cast<const Call*>(value)->input_alignment();
-    },
-    [](void* call, const adapter::View* inputs, size_t count,
-       const adapter::InputRoute* routes, size_t route_count,
-       const adapter::OutputBinding* outputs, size_t output_count) noexcept {
-      return invoke([&] {
-        static_cast<Call*>(call)->run({inputs, count}, {routes, route_count},
-                                      {outputs, output_count});
-      });
-    },
-    [](void* session, const adapter::View* inputs, size_t count,
-       const adapter::OutputBinding* outputs, size_t output_count,
-       void** value) noexcept {
-      return invoke([&] {
-        *value = static_cast<Context*>(session)
-                     ->run_dynamic({inputs, count}, {outputs, output_count})
-                     .release();
-      });
-    },
-    [](void* value) noexcept { delete static_cast<Outputs*>(value); },
-    [](const void* value, size_t* count) noexcept {
-      const auto& views = static_cast<const Outputs*>(value)->views;
-      *count = views.size();
-      return views.data();
-    },
-    [](char* message) noexcept { std::free(message); }};
-
-}  // namespace
 }  // namespace leapp_torch::native
-
-extern "C" __attribute__((visibility("default")))
-const leapp_native::bridge::Api*
-LEAPP_TORCH_ENTRY() noexcept {
-  return &leapp_torch::native::api;
-}
