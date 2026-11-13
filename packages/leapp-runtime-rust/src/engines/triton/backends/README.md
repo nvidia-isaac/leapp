@@ -1,18 +1,26 @@
-# Torch backend plugins
+# Triton backend plugins
 
-These plugins execute PyTorch artifacts through Triton's backend API. They build
-independently of Cargo and install beneath a backend directory selected by
+The Torch plugins execute PyTorch artifacts through Triton's backend API.
+They build independently of Cargo and install beneath a backend directory selected by
 the `LEAPP_TRITON_BACKENDS` environment variable. Applications use the same
 `lrt::Session` API as ONNX bundles; see the [runtime guide](../../../../README.md).
 
 Outputs use caller-provided buffers or fresh allocations. Retained allocated
 outputs remain valid across later calls and session closure.
 
-Build commands below run from `packages/leapp-runtime-rust`. Supply Linux,
+Torch build commands below run from `packages/leapp-runtime-rust`. Supply Linux,
 CMake 3.24+, a C++20 compiler, nlohmann_json 3.11+, Triton 2.69.0, CUDA, and
 CUDA-enabled LibTorch with the C++11 libstdc++ ABI. CUDA-enabled LibTorch is
 required even for CPU execution. Builds use installed dependencies without
 fetching or installing them. Set `TRITON_ROOT` and `TORCH_ROOT` to their SDK roots.
+
+## ONNX Runtime
+
+Use Triton's stock `backends/onnxruntime/libtriton_onnxruntime.so` with its
+matching ORT libraries. No additional ONNX backend build is required.
+`SessionOptions.onnx_tensorrt` enables TensorRT per ONNX node. See the
+[runtime guide](../../../../README.md#onnx-tensorrt-acceleration) for supported
+parameters and validation behavior.
 
 ## PT2 / NativeRT
 

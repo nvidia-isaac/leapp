@@ -38,6 +38,11 @@ Use ONNX Runtime supporting API 24, installed at the path above or selected with
 plugin build. For GPU execution, install the CUDA provider libraries beside ONNX
 Runtime and make their CUDA/cuDNN dependencies discoverable.
 
+For optional TensorRT acceleration, also install
+`libonnxruntime_providers_tensorrt.so` beside ONNX Runtime, with matching TensorRT
+runtime, parser, plugin, and builder-resource libraries. Configure
+[`SessionOptions.onnx_tensorrt`](../../../../README.md#onnx-tensorrt-acceleration).
+
 ### TorchScript
 
 Set `TORCH_ROOT` to a CUDA-enabled LibTorch SDK containing `include/` and `lib/`,

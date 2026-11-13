@@ -23,12 +23,14 @@ pub fn result_new() -> Box<ResultHandle> {
     Box::new(ResultHandle(None))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn session_open(
     bundle: &BundleHandle,
     engine: ffi::EngineKind,
     device: ffi::Location,
     output_location: ffi::Location,
     overrides: &[ffi::Placement],
+    onnx_tensorrt: &[ffi::OnnxTensorRT],
     output: &mut SessionHandle,
 ) -> ffi::StatusData {
     if output.0.is_some() {
@@ -70,6 +72,23 @@ pub fn session_open(
         options.output_placement.overrides.insert(name, location);
     }
     options.device = device;
+    for entry in onnx_tensorrt {
+        let node = match std::str::from_utf8(&entry.node) {
+            Ok(v) => v.to_owned(),
+            Err(_) => return crate::invalid("ONNX TensorRT node name is not UTF-8"),
+        };
+        let mut parameters = std::collections::HashMap::new();
+        for parameter in &entry.parameters {
+            let (Ok(key), Ok(value)) = (
+                std::str::from_utf8(&parameter.key),
+                std::str::from_utf8(&parameter.value),
+            ) else {
+                return crate::invalid("TensorRT parameter key or value is not UTF-8");
+            };
+            parameters.insert(key.to_owned(), value.to_owned());
+        }
+        options.onnx_tensorrt.insert(node, parameters);
+    }
     crate::binding_status(
         leapp_runtime_bindings::SessionHandle::open(bundle, options).map(|runtime| {
             output.0 = Some(runtime);

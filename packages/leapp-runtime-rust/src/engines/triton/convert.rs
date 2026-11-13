@@ -19,13 +19,39 @@ use crate::{
     Bundle, ExecutionDevice, PortRef, PortSpec,
 };
 use anyhow::{Context, Result};
-use proto::model_config::{model_ensembling::Step, ModelConfig, ModelEnsembling};
+use proto::model_config::{
+    model_ensembling::Step, model_optimization_policy::execution_accelerators::Accelerator,
+    ModelConfig, ModelEnsembling,
+};
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
 };
 
 const MODEL_VERSION: i64 = 1;
+
+pub(super) fn configure_tensorrt(
+    pipeline: &mut TritonPipeline,
+    bundle: &Bundle,
+    options: &HashMap<String, HashMap<String, String>>,
+) {
+    for (node, model) in bundle.0.description.models.keys().zip(&mut pipeline.models) {
+        if let Some(parameters) = options.get(node) {
+            model
+                .config
+                .optimization
+                .mut_or_insert_default()
+                .execution_accelerators
+                .mut_or_insert_default()
+                .gpu_execution_accelerator
+                .push(Accelerator {
+                    name: "tensorrt".into(),
+                    parameters: parameters.clone(),
+                    ..Default::default()
+                });
+        }
+    }
+}
 
 pub(super) fn configure_plugins(
     pipeline: &mut TritonPipeline,
