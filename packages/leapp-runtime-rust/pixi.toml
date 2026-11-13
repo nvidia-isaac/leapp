@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[workspace]
+name = "leapp-runtime-build"
+channels = ["conda-forge"]
+platforms = ["linux-64", "linux-aarch64"]
+requires-pixi = ">=0.84.0"
+
+# This environment is for producers. Consumer manifests are generated separately
+# so installing a backend never installs compilers or packaging tools.
+[dependencies]
+python = "3.12.*"
+rust = "=1.99.0"
+cmake = ">=3.28,<5"
+ninja = "1.*"
+maturin = ">=1.9,<2"
+pip = "*"
+rattler-build = "=0.80.0"
+py-lief = "=1.0.0"
+pyyaml = "6.*"
+ruff = "=0.17.1"
+
+[tasks]
+build-runtime = "python packaging/build.py"
+package-runtime = "python packaging/channel.py"
+consumer = "python packaging/consumer.py"
+check-packages = "python tests/deployment/check_packages.py"
+build-sdist = "python packaging/build_sdist.py"

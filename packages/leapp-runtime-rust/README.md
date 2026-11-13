@@ -12,6 +12,16 @@ the same bundle inspection and synchronous Session API.
 
 ## Installation
 
+The core is distributed as the `leapp-runtime` Cargo crate and Python package.
+C++ consumers build the source with CMake and link `lrt::runtime`. Pixi provisions
+the selected backend libraries independently; see the
+[packaging guide](packaging/README.md). Backend recipes currently produce local
+channels. Until the first registry release, use the source-build commands below.
+
+For a published Rust release, add `leapp-runtime = "0.1"` to `[dependencies]`.
+Python users install `leapp-runtime` from PyPI and import `lrt`. Core packages
+include both orchestration engines and require no model SDKs at installation.
+
 Build on Linux with Rust 1.88 or newer. Building the core runtime does not
 require the Triton or CUDA SDKs.
 
@@ -278,8 +288,9 @@ Model-internal mutations are shared between peers and are not reset by `reset()`
 ### ONNX TensorRT acceleration
 
 Both engines accept per-node TensorRT accelerator parameters through
-`SessionOptions.onnx_tensorrt`. Install an ONNX Runtime TensorRT provider
-with its TensorRT dependencies beside the ONNX Runtime library.
+`SessionOptions.onnx_tensorrt`. Install the optional
+[`leapp-onnx-tensorrt` package](packaging/README.md), or an ONNX Runtime TensorRT
+provider with its TensorRT dependencies beside the ONNX Runtime library.
 
 ```python
 options = lrt.SessionOptions(

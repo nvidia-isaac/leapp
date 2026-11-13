@@ -35,7 +35,7 @@ def fixture(backend, device="cpu"):
     return lrt.Bundle.open(root / f"{filename}.yaml")
 
 
-def execute(backend, engine, device):
+def execute(backend, engine, device, inspect):
     xp = np
     if engine == "native" and device.startswith("cuda"):
         import cupy as xp
@@ -47,7 +47,7 @@ def execute(backend, engine, device):
         "torchscript": ("model/values", "model/result", [9, 12, 15, 18]),
         "nativert": ("model/values", "model/output_0", [12, 26, 42, 60]),
     }[backend]
-    values = xp.arange(1, 5, dtype=xp.float32)
+    values = xp.asarray(np.arange(1, 5, dtype=np.float32))
     inputs = {name: values}
     with lrt.Session.open(
         bundle, lrt.SessionOptions(engine=engine, device=device)
@@ -55,6 +55,12 @@ def execute(backend, engine, device):
         peer = session.new_session()
         retained = np.from_dlpack(session.run(inputs)[output])
         np.testing.assert_array_equal(retained, expected)
+        if backend == "onnx" and engine == "native":
+            mappings = Path("/proc/self/maps").read_text()
+            assert "libonnxruntime" in mappings
+            if device.startswith("cuda"):
+                assert "libonnxruntime_providers_cuda.so" in mappings
+        inspect()
     with peer:
         np.testing.assert_array_equal(
             np.from_dlpack(peer.run(inputs)[output]), expected
@@ -67,7 +73,7 @@ def execute(backend, engine, device):
     if backend == "onnx":
         root = Path(os.environ.get("LEAPP_TRITON_FIXTURES", "target/triton-fixtures"))
         convolution = lrt.Bundle.open(root / "convolution.yaml")
-        values = xp.arange(16, dtype=xp.float32).reshape(1, 1, 4, 4)
+        values = xp.asarray(np.arange(16, dtype=np.float32).reshape(1, 1, 4, 4))
         with lrt.Session.open(
             convolution, lrt.SessionOptions(engine=engine, device=device)
         ) as session:
@@ -76,7 +82,53 @@ def execute(backend, engine, device):
                 np.from_dlpack(result["convolution/output"]),
                 [[[[10, 14, 18], [26, 30, 34], [42, 46, 50]]]],
             )
+            inspect()
         print(f"PASS {engine}/{backend}/{device}: convolution")
+
+
+def execute_mixed(engine, inspect):
+    xp = np
+    if engine == "native":
+        import cupy as xp
+
+    root = Path(os.environ.get("LEAPP_TENSORRT_FIXTURES", "target/tensorrt-fixtures"))
+    with lrt.Session.open(
+        lrt.Bundle.open(root / "mixed.yaml"),
+        lrt.SessionOptions(engine=engine, device="cuda:0"),
+    ) as session:
+        result = session.run(
+            {
+                "preprocess/observation": xp.arange(1, 5, dtype=xp.float32),
+                "policy/bias": xp.arange(10, 50, 10, dtype=xp.float32),
+            }
+        )
+        np.testing.assert_array_equal(
+            np.from_dlpack(result["policy/action"]), [14, 29, 46, 65]
+        )
+        inspect()
+    print(f"PASS {engine}/onnx+tensorrt/cuda: mixed graph")
+
+
+def execute_warp(backend, engine, inspect):
+    root = Path(os.environ["LEAPP_WARP_FIXTURES"])
+    values = np.arange(12, dtype=np.float32).reshape(4, 3)
+    gains = np.arange(1, 5, dtype=np.int32)
+    for device in ["cpu", "cuda:0"]:
+        fixture = (
+            "warp_onnx"
+            if backend == "onnx"
+            else "warp_pt2_" + ("cpu" if device == "cpu" else "cuda")
+        )
+        with lrt.Session.open(
+            lrt.Bundle.open(root / f"{fixture}.yaml"),
+            lrt.SessionOptions(engine=engine, device=device),
+        ) as session:
+            result = session.run({"model/x": values, "model/gain": gains})
+            np.testing.assert_array_equal(
+                np.from_dlpack(result["model/result"]), values * gains[:, None] + 4
+            )
+            inspect()
+        print(f"PASS {engine}/warp-{backend}/{device}")
 
 
 def check_unloaded(without_triton, without_cuda):
@@ -105,27 +157,34 @@ def missing_dependency(options, library, run=False):
     print(f"PASS missing {library}: requested operation returns a dependency error")
 
 
-def main():
+def main(inspect=lambda: None, argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--backend",
         choices=["none", "onnx", "torchscript", "nativert", "tensorrt"],
         required=True,
+        nargs="+",
     )
     parser.add_argument("--engine", choices=["native", "triton"], required=True)
     parser.add_argument("--cuda", action="store_true")
     parser.add_argument("--without-triton", action="store_true")
     parser.add_argument("--without-cuda", action="store_true")
-    args = parser.parse_args()
-    if args.backend == "tensorrt":
+    parser.add_argument(
+        "--installed-only",
+        action="store_true",
+        help="Only require fixtures for selected backends; skip missing-backend checks.",
+    )
+    args = parser.parse_args(argv)
+    if "tensorrt" in args.backend:
         if args.engine != "triton":
             parser.error("precompiled TensorRT engines require --engine triton")
         if not args.cuda:
             parser.error("TensorRT execution requires --cuda")
+
     if args.without_triton and args.engine != "native":
         parser.error("--without-triton requires --engine native")
     if args.without_cuda and (
-        args.cuda or args.engine != "native" or args.backend != "onnx"
+        args.cuda or args.engine != "native" or args.backend != ["onnx"]
     ):
         parser.error("--without-cuda requires native CPU ONNX")
 
@@ -145,9 +204,11 @@ def main():
     # Even absent backends must permit bundle inspection. A CPU session would
     # reject TensorRT placement before reaching its loader, so use CUDA there.
     for backend in ["onnx", "torchscript", "nativert", "tensorrt"]:
+        if args.installed_only and backend not in args.backend:
+            continue
         bundle = fixture(backend)
         assert bundle.model_names(), backend
-        if backend == args.backend or (
+        if backend in args.backend or (
             backend == "tensorrt" and (not args.cuda or args.engine == "native")
         ):
             continue
@@ -162,12 +223,17 @@ def main():
             assert any(node in str(error) for node in bundle.model_names()), str(error)
         print(f"PASS {args.engine}/{backend}: inspection and missing-backend error")
 
-    if args.backend != "none":
-        devices = [] if args.backend == "tensorrt" else ["cpu"]
+    for backend in args.backend:
+        if backend == "none":
+            continue
+        devices = [] if backend == "tensorrt" else ["cpu"]
         if args.cuda:
             devices.append("cuda:0")
         for device in devices:
-            execute(args.backend, args.engine, device)
+            execute(backend, args.engine, device, inspect)
+
+    if {"onnx", "tensorrt"} <= set(args.backend):
+        execute_mixed(args.engine, inspect)
     check_unloaded(args.without_triton, args.without_cuda)
 
 

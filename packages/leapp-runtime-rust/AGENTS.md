@@ -69,10 +69,16 @@ Core builds and checks require no Triton or CUDA SDK. Run from this package:
 ```sh
 cargo check --locked --workspace --all-targets
 cargo clippy --locked --workspace --all-targets -- -D warnings
-cargo test --locked --test bundle --test dlpack --test binding_lifecycle
+cargo test --locked --test bundle --test dlpack
+cargo test --locked -p leapp-runtime-bindings --test binding_lifecycle
 cargo test --locked --lib engines::memory:: -- --test-threads=1
 RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --no-deps
 ```
+
+Build source archives with `packaging/build_sdist.py` (Python 3.12+) so their
+lockfile matches Maturin's reduced workspace.
+Runtime versions remain independent of the exporter; update the manifests,
+CMake version and Cargo lock together when preparing a requested release.
 
 For execution coverage, install the selected runtimes and generate fixtures:
 
@@ -144,8 +150,10 @@ python tests/deployment/check_installation.py --backend onnx --engine native --w
 Replace `onnx` with `torchscript`, `nativert`, or `tensorrt` in their installations,
 or `none` to check startup, inspection, and missing-backend errors without any
 model runtime. TensorRT installations require `--engine triton --cuda`.
-`--cuda` adds GPU execution for the other backends. The ONNX
-check includes convolution to exercise cuDNN on CUDA. Also run the applicable
+`--cuda` adds GPU execution for the other backends. The ONNX check includes
+convolution to exercise cuDNN on CUDA. Package smoke tests can use
+`--installed-only` with fixtures for just the selected backends; the full matrix
+should omit it to retain missing-backend checks. Also run the applicable
 Rust integration tests and the installed C++ SDK checks. Audit
 shared-library dependencies, loaded-library maps, and binary hashes to confirm
 isolation and reuse. Use separate processes for loader cases: successful library
