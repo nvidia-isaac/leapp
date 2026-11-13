@@ -20,6 +20,8 @@ import torch
 import leapp
 from leapp.leapp import _MANAGER as annotate
 from leapp.leapp_graph.datatypes import promote_in_place
+from leapp.leapp_graph.leapp_node import LeappNode
+from leapp.utils.diagnostics import export_error_hint
 from leapp.utils.logging import _get_logger
 from .base import LEAPPFunctionalTestBase
 
@@ -966,6 +968,72 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             self.assertIn(
                 "Cannot reuse a node name from a different call site.", str(e)
             )
+
+
+class _DiagnosticCounter(torch.nn.Module):
+    def __init__(self, registered):
+        super().__init__()
+        if registered:
+            self.register_buffer("counter", torch.zeros(1))
+        else:
+            self.counter = torch.zeros(1)
+
+    def forward(self, x):
+        self.counter.add_(1)
+        return x + self.counter
+
+
+class TestDiagnostics(unittest.TestCase):
+    """Check diagnostic selection on CPU without exporting a backend."""
+
+    @staticmethod
+    def _validation_node(model, *, initial_output=2.0, cached_output=4.0):
+        node = LeappNode("diagnostics")
+        node._max_cached_io = 1
+        inputs = node.add_input("x", "x", torch.tensor([1.0]))
+        outputs = node.add_output("y", "y", torch.tensor([initial_output]))
+        inputs[0].cached_values[0] = torch.tensor([2.0])
+        outputs[0].cached_values[0] = torch.tensor([cached_output])
+        node._cache_write_idx = 1
+        node.export_backend.compiled_model = model
+        return node
+
+    def test_validation_hint_preserves_buffer_restoration_and_replay_precedence(self):
+        """A hidden counter overrides the re-entry hint even when a cached sample
+        fails. A registered counter is restored for replay and must not produce
+        the hidden-state hint.
+        """
+        for registered in (True, False):
+            for cached_output in (4.0, 10.0):
+                with self.subTest(registered=registered, cached_output=cached_output):
+                    node = self._validation_node(
+                        _DiagnosticCounter(registered), cached_output=cached_output
+                    )
+                    passed, hint = node.validate_compiled_model()
+                    self.assertIs(passed, registered and cached_output == 4.0)
+                    if not registered:
+                        self.assertIn("keeps state between calls", hint)
+                        self.assertNotIn("inlined as a constant", hint)
+                    elif cached_output != 4.0:
+                        self.assertIn("inlined as a constant", hint)
+                        self.assertNotIn("keeps state between calls", hint)
+                    else:
+                        self.assertIsNone(hint)
+
+    def test_initial_validation_failure_has_no_reentry_hint(self):
+        node = self._validation_node(_DiagnosticCounter(True), initial_output=10.0)
+        self.assertEqual(node.validate_compiled_model(), (False, None))
+
+    def test_export_error_hint_terminates_cyclic_exception_chains(self):
+        for chain in ("__cause__", "__context__"):
+            with self.subTest(chain=chain):
+                outer = RuntimeError("export wrapper failed")
+                inner = RuntimeError("unrelated failure")
+                setattr(outer, chain, inner)
+                setattr(inner, chain, outer)
+                self.assertIsNone(
+                    export_error_hint(outer, node_name="policy", backend="pt2")
+                )
 
 
 if __name__ == "__main__":
