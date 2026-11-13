@@ -36,7 +36,6 @@ struct Loaded {
     model: *mut c_void,
     guarded: bool,
     location: MemoryLocation,
-    output_alignment: usize,
 }
 
 // SAFETY: the backend permits concurrent shared-model access or requires the
@@ -78,7 +77,6 @@ impl Model {
             model: ptr::null_mut(),
             guarded,
             location,
-            output_alignment: if backend == "tensorrt" { 256 } else { 1 },
         };
         let path = CString::new(spec.parameters.model_path.as_os_str().as_encoded_bytes())?;
         let inputs: Vec<_> = spec.inputs.iter().map(port).collect();
@@ -146,10 +144,6 @@ impl BackendPlugin for Model {
         } else {
             unsafe { (self.loaded.library.api.input_alignment)(self.prepared) }
         }
-    }
-
-    fn output_alignment(&self) -> usize {
-        self.loaded.output_alignment
     }
 
     /// # Safety
@@ -308,11 +302,6 @@ impl BackendPlugin for Model {
                 })
                 .collect()
         }
-    }
-
-    #[cfg(test)]
-    fn execution_identity(&self) -> Option<usize> {
-        Some(self.session as usize)
     }
 
     #[cfg(test)]

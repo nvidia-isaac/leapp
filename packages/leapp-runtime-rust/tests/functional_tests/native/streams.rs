@@ -160,27 +160,6 @@ fn external_streams_support_torch_fixed_dynamic_and_worker_paths() {
 }
 
 #[test]
-#[ignore = "requires native TensorRT backend and generated engines"]
-fn external_streams_support_tensorrt_fixed_and_dynamic() {
-    for name in ["dynamic_fixed", "dynamic"] {
-        let bundle = super::tensorrt::bundle(name);
-        let data = [1_f32; 8];
-        let count = if name == "dynamic_fixed" { 8 } else { 4 };
-        for location in [MemoryLocation::Cpu, MemoryLocation::Cuda { device_id: 0 }] {
-            if location == MemoryLocation::Cpu {
-                continue;
-            }
-            let value = placed(&data[..count], &[count as i64], location).unwrap();
-            exercise(
-                &bundle,
-                ExecutionDevice::Cuda { device_id: 0 },
-                &HashMap::from([("dynamic/input", value.view())]),
-            );
-        }
-    }
-}
-
-#[test]
 #[ignore = "requires Warp adapters, CUDA, and generated Warp fixtures"]
 fn external_streams_support_warp_gpu_replay() {
     let root = PathBuf::from(std::env::var_os("LEAPP_WARP_FIXTURES").unwrap());

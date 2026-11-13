@@ -164,8 +164,8 @@ mod tests {
     #[test]
     fn missing_backend_has_an_actionable_unsupported_error() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("tensorrt/libleapp_tensorrt.so");
-        let error = Library::open(&path, "tensorrt").err().unwrap();
+        let path = directory.path().join("torchscript/libleapp_torchscript.so");
+        let error = Library::open(&path, "torchscript").err().unwrap();
 
         assert_eq!(
             error.downcast_ref::<Error>().unwrap().kind(),

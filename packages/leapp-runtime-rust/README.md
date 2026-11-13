@@ -111,8 +111,6 @@ without copying through its safe `as_cpu_slice` method when its storage is on th
 Native backends that bind inputs directly require them on the execution device.
 Native dynamic calls also borrow session inputs directly and require them on the
 execution device.
-TensorRT also requires 256-byte aligned addresses, including any DLPack byte
-offset. Incompatible inputs return an error; transfer or align them explicitly.
 Output placement does not change input requirements.
 
 Array libraries and CUDA callers can use standard DLPack descriptors through
@@ -224,7 +222,7 @@ and its ordering. Backends may use auxiliary streams with synchronization.
 
 ## Model support
 
-Both engines support the following exported artifacts and mixed-backend graphs.
+The engines support the following exported artifacts and mixed-backend graphs.
 Unsupported backends fail when opening a session; bundle inspection still accepts
 custom backend names. Models must be exported before use; the runtime does not
 compile them.
@@ -234,7 +232,7 @@ compile them.
 | ONNX | `onnx` | CPU or CUDA | ONNX Runtime; CUDA providers and cuDNN for GPU |
 | TorchScript | `jit`, `jit-script`, `jit-trace` | CPU or CUDA | CUDA-enabled LibTorch |
 | Exported program | `pt2` | CPU or CUDA | CUDA-enabled LibTorch and matching NativeRT |
-| TensorRT engine | `trt`, `tensorrt` | CUDA | TensorRT compatible with the engine and GPU |
+| TensorRT engine (Triton only) | `trt`, `tensorrt` | CUDA | TensorRT compatible with the engine and GPU |
 
 ONNX ports are matched by name, independently of bundle declaration order.
 
@@ -242,7 +240,7 @@ ONNX ports are matched by name, independently of bundle declaration order.
 
 Native sessions share loaded models and weights, with private reusable workspace
 buffers. Eligible inputs are borrowed directly on ONNX, TorchScript, and NativeRT
-(CPU/GPU), and TensorRT (GPU). Copies remain where needed to protect caller inputs,
+(CPU/GPU). Copies remain where needed to protect caller inputs,
 isolate feedback, or satisfy output placement. Returned results own storage
 independent of the workspace.
 
@@ -269,20 +267,12 @@ Model-internal mutations are shared between peers and are not reset by `reset()`
 
 ### TensorRT engines
 
-Both engines accept prebuilt `.plan` and `.engine` artifacts. Port names, shapes,
-and dtypes must describe the engine's I/O. Models execute on CUDA; inputs and
-outputs may use CPU, pinned-host, or CUDA memory. Engines must be compatible with
-the deployed TensorRT version and GPU.
-
-Native execution supports dynamic dimensions, fixed-size int32/int64 shape controls,
-host shape outputs, and data-dependent outputs, selecting the first compatible
-optimization profile. I/O must be linear, unvectorized, and non-aliased. Supported dtypes are
-bool, uint8, int8, int32, int64, float16, float32, and bfloat16. Triton uses profile
-0; its shape-tensor and additional-profile configuration are not exposed.
-External custom-plugin configuration is not supported by either integration.
-
-Each native session owns its TensorRT execution context, including RNG state.
-New peers start with fresh context state; `reset()` does not reset it.
+The Triton engine accepts prebuilt `.plan` and `.engine` artifacts. The native
+engine does not support TensorRT engines. Port names, shapes, and dtypes must
+match the engine's I/O. Triton executes them on CUDA; inputs and outputs may use
+CPU, pinned-host, or CUDA memory. Engines must be compatible with the deployed
+TensorRT version and GPU. Triton uses optimization profile 0; shape-tensor,
+additional-profile, and external custom-plugin configuration are not exposed.
 
 ### Native Warp support
 

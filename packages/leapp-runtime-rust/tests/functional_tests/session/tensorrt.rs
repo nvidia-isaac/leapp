@@ -19,7 +19,7 @@ fn bundle(name: &str) -> Bundle {
 
 fn options() -> SessionOptions {
     SessionOptions {
-        engine: support::engine(),
+        engine: lrt::EngineKind::Triton,
         device: ExecutionDevice::Cuda { device_id: 0 },
         ..Default::default()
     }
@@ -37,13 +37,8 @@ fn ensembles_support_host_and_device_buffers_and_retained_results() {
 
         let mut retained = None;
         for location in locations() {
-            let input_location = if support::engine() == lrt::EngineKind::Native {
-                MemoryLocation::Cuda { device_id: 0 }
-            } else {
-                location
-            };
-            let observation = placed(&[1f32, 2., 3., 4.], &[4], input_location).unwrap();
-            let bias = placed(&[10f32, 20., 30., 40.], &[4], input_location).unwrap();
+            let observation = placed(&[1f32, 2., 3., 4.], &[4], location).unwrap();
+            let bias = placed(&[10f32, 20., 30., 40.], &[4], location).unwrap();
             let mut options = options();
             options.output_placement.default_location = location;
             let mut session = Session::open(runtime.info(), options).unwrap();
@@ -72,7 +67,7 @@ fn ensembles_support_host_and_device_buffers_and_retained_results() {
 fn dynamic_profile_bounds_report_errors_without_poisoning_session() {
     let runtime = Session::open(&bundle("dynamic"), options()).unwrap();
     let mut session = runtime.new_session().unwrap();
-    // Both engines accept profile 0; native engine tests also switch profiles.
+    // Triton uses optimization profile 0.
     for size in [1, 2, 4, 9, 4] {
         let data: Vec<f32> = (0..size).map(|v| v as f32).collect();
         let input = placed(&data, &[size], MemoryLocation::Cuda { device_id: 0 }).unwrap();

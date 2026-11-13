@@ -30,7 +30,6 @@ Install the libraries needed by your bundle at these relative paths:
 | ONNX | `onnxruntime/libonnxruntime.so` |
 | TorchScript | `torchscript/libleapp_torchscript.so` |
 | NativeRT | `nativert/libleapp_nativert_backend.so` |
-| TensorRT | `tensorrt/libleapp_tensorrt.so` |
 
 ### ONNX
 
@@ -69,21 +68,6 @@ cmake -S src/engines/native/backends/nativert -B target/native-nativert \
 cmake --build target/native-nativert -j4
 cmake --install target/native-nativert
 ```
-
-### TensorRT
-
-Use TensorRT 10.16 or newer 10.x headers/libraries and CUDA.
-
-```sh
-cmake -S src/engines/native/backends/tensorrt -B target/tensorrt-backend \
-  -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$LEAPP_NATIVE_BACKENDS" \
-  -DTENSORRT_ROOT=/path/to/TensorRT -DCUDA_ROOT=/usr/local/cuda
-cmake --build target/tensorrt-backend -j
-cmake --install target/tensorrt-backend
-```
-
-See [TensorRT model support](../../../../README.md#tensorrt-engines) for engine
-compatibility and I/O limits.
 
 ### Warp operators
 

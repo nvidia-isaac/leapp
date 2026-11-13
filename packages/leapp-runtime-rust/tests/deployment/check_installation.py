@@ -89,15 +89,20 @@ def main():
     parser.add_argument("--engine", choices=["native", "triton"], required=True)
     parser.add_argument("--cuda", action="store_true")
     args = parser.parse_args()
-    if args.backend == "tensorrt" and not args.cuda:
-        parser.error("TensorRT execution requires --cuda")
+    if args.backend == "tensorrt":
+        if args.engine != "triton":
+            parser.error("precompiled TensorRT engines require --engine triton")
+        if not args.cuda:
+            parser.error("TensorRT execution requires --cuda")
 
     # Even absent backends must permit bundle inspection. A CPU session would
     # reject TensorRT placement before reaching its loader, so use CUDA there.
     for backend in ["onnx", "torchscript", "nativert", "tensorrt"]:
         bundle = fixture(backend)
         assert bundle.model_names(), backend
-        if backend == args.backend or (backend == "tensorrt" and not args.cuda):
+        if backend == args.backend or (
+            backend == "tensorrt" and (not args.cuda or args.engine == "native")
+        ):
             continue
         device = "cuda:0" if backend == "tensorrt" else "cpu"
         try:

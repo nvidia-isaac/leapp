@@ -7,27 +7,23 @@ use serde_json::{json, Value};
 use std::{collections::HashMap, env, fs, os::unix::fs::symlink, path::Path, process::Command};
 
 const CASE: &str = "LEAPP_TEST_BACKEND_LOAD_CASE";
-const BACKENDS: &[(&str, &str, &str)] = &[
+const BACKENDS: &[(&str, Option<&str>, &str)] = &[
     (
         "onnx",
-        "onnxruntime/libonnxruntime.so",
+        Some("onnxruntime/libonnxruntime.so"),
         "onnxruntime/libtriton_onnxruntime.so",
     ),
     (
         "jit",
-        "torchscript/libleapp_torchscript.so",
+        Some("torchscript/libleapp_torchscript.so"),
         "leapp_torchscript/libtriton_leapp_torchscript.so",
     ),
     (
         "pt2",
-        "nativert/libleapp_nativert_backend.so",
+        Some("nativert/libleapp_nativert_backend.so"),
         "leapp_pt2/libtriton_leapp_pt2.so",
     ),
-    (
-        "trt",
-        "tensorrt/libleapp_tensorrt.so",
-        "tensorrt/libtriton_tensorrt.so",
-    ),
+    ("trt", None, "tensorrt/libtriton_tensorrt.so"),
 ];
 
 fn fixture(root: &Path, backend: &str) -> std::path::PathBuf {
@@ -147,12 +143,12 @@ fn backend_load_errors_identify_the_node_and_library() {
             .err()
             .expect("backend must fail loading");
         assert_eq!(error.phase(), "load");
-        let (_, native, triton) = BACKENDS
+        let &(_, native, triton) = BACKENDS
             .iter()
             .find(|(name, _, _)| *name == backend)
             .unwrap();
         let (variable, library) = if engine == "native" {
-            ("LEAPP_NATIVE_BACKENDS", native)
+            ("LEAPP_NATIVE_BACKENDS", native.unwrap())
         } else {
             ("LEAPP_TRITON_BACKENDS", triton)
         };
@@ -178,13 +174,15 @@ fn backend_load_errors_identify_the_node_and_library() {
     let mut failed = Vec::new();
     for engine in ["native", "triton"] {
         for &(backend, native, triton) in BACKENDS {
-            if backend == "trt" && env::var("LEAPP_TEST_CUDA").as_deref() != Ok("1") {
+            if (engine == "native" && native.is_none())
+                || (backend == "trt" && env::var("LEAPP_TEST_CUDA").as_deref() != Ok("1"))
+            {
                 continue;
             }
             for fault in ["missing", "invalid", "dependency"] {
                 let root = tempfile::tempdir().unwrap();
                 let (directory, library) = if engine == "native" {
-                    ("native", native)
+                    ("native", native.unwrap())
                 } else {
                     ("triton", triton)
                 };
@@ -259,12 +257,10 @@ fn unrelated_backends_do_not_affect_onnx_execution() {
     ] {
         let root = tempfile::tempdir().unwrap();
         for &(_, native, triton) in BACKENDS {
-            for path in [
-                root.path().join("native").join(native),
-                root.path().join("triton").join(triton),
-            ] {
-                broken_library(&path, fault);
+            if let Some(library) = native {
+                broken_library(&root.path().join("native").join(library), fault);
             }
+            broken_library(&root.path().join("triton").join(triton), fault);
         }
         if engine == "native" {
             let library = env::var_os("ORT_DYLIB_PATH")

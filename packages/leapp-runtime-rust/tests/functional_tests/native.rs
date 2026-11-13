@@ -506,21 +506,30 @@ fn unsupported_backends_are_rejected_before_any_model_is_loaded() {
     let mut data = policy_copy(directory.path());
     // The earlier ONNX model would fail to load if backend validation were late.
     fs::write(directory.path().join("policy/model.onnx"), b"invalid ONNX").unwrap();
-    data["models"]["preprocess"]["parameters"]["backend"] = json!("unsupported-test-backend");
-    let bundle = write_bundle(&data, directory.path());
-    let error = Session::open(
-        &bundle,
-        SessionOptions {
-            engine: crate::EngineKind::Native,
-            ..Default::default()
-        },
-    )
-    .err()
-    .unwrap();
-    assert_eq!(error.code(), ErrorCode::Unsupported);
-    assert_eq!(error.phase(), "load");
-    assert!(error.to_string().contains("preprocess"));
-    assert!(error.to_string().contains("unsupported-test-backend"));
+    for backend in ["unsupported-test-backend", "trt", "tensorrt"] {
+        data["models"]["preprocess"]["parameters"]["backend"] = json!(backend);
+        let bundle = write_bundle(&data, directory.path());
+        for device in devices() {
+            let error = Session::open(
+                &bundle,
+                SessionOptions {
+                    engine: crate::EngineKind::Native,
+                    device,
+                    ..Default::default()
+                },
+            )
+            .err()
+            .unwrap();
+            assert_eq!(error.code(), ErrorCode::Unsupported);
+            assert_eq!(error.phase(), "load");
+            assert!(error.to_string().contains("preprocess"));
+            assert!(error.to_string().contains(if backend == "tensorrt" {
+                "trt"
+            } else {
+                backend
+            }));
+        }
+    }
 }
 
 #[test]
@@ -595,9 +604,6 @@ fn dynamic_outputs_feed_fixed_and_dynamic_nodes_and_recover_after_shape_errors()
         );
     }
 }
-
-#[path = "native/tensorrt.rs"]
-mod tensorrt;
 
 #[path = "native/torch.rs"]
 mod torch;
