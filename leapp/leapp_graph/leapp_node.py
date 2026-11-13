@@ -614,7 +614,11 @@ class LeappNode:
                 all_match = False
                 replay_failed = True
 
-        error_hint = validation_hint(sample_passed, replay_failed=replay_failed)
+        error_hint = validation_hint(
+            sample_passed,
+            replay_failed=replay_failed,
+            mismatches=set().union(*sample_mismatches.values()),
+        )
         if error_hint is not None:
             _get_logger().warning(f"  {self.name}: {error_hint}")
 

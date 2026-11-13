@@ -38,6 +38,12 @@ _HIDDEN_STATE_HINT = (
     "Declare state that should carry over between calls with "
     "annotate.state_tensors() and annotate.update_state()."
 )
+_TF32_HINT = (
+    "On an NVIDIA GPU, numerical differences can come from TF32 settings that "
+    "differ between capture and validation. If TF32 may be involved, set "
+    "NVIDIA_TF32_OVERRIDE=0 before starting Python, then repeat capture, export, "
+    "and validation."
+)
 
 
 def export_error_hint(error: Exception, *, node_name: str, backend: str) -> str | None:
@@ -52,13 +58,23 @@ def export_error_hint(error: Exception, *, node_name: str, backend: str) -> str 
 
 
 def validation_hint(
-    sample_passed: dict[int, bool], *, replay_failed: bool
+    sample_passed: dict[int, bool],
+    *,
+    replay_failed: bool,
+    mismatches: set[str],
 ) -> str | None:
-    """Explain a replay failure first, otherwise a failure confined to re-entry."""
+    """Explain a replay failure first, otherwise a failure confined to re-entry.
+
+    Add the TF32 hint when the samples' only ``mismatches`` are values beyond the
+    tolerance.
+    """
+    hints = []
     if replay_failed:
-        return _HIDDEN_STATE_HINT
-    if sample_passed.get(0) and any(
+        hints.append(_HIDDEN_STATE_HINT)
+    elif sample_passed.get(0) and any(
         not passed for index, passed in sample_passed.items() if index > 0
     ):
-        return _REENTRY_VALIDATION_HINT
-    return None
+        hints.append(_REENTRY_VALIDATION_HINT)
+    if mismatches == {"tolerance"}:
+        hints.append(_TF32_HINT)
+    return " ".join(hints) or None

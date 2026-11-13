@@ -22,7 +22,7 @@ import leapp
 from leapp.leapp import _MANAGER as annotate
 from leapp.leapp_graph.datatypes import promote_in_place
 from leapp.leapp_graph.leapp_node import LeappNode
-from leapp.utils.diagnostics import export_error_hint
+from leapp.utils.diagnostics import _TF32_HINT, export_error_hint
 from leapp.utils.logging import _get_logger
 from .base import LEAPPFunctionalTestBase
 
@@ -1021,9 +1021,23 @@ class TestDiagnostics(unittest.TestCase):
                         self.assertNotIn("keeps state between calls", hint)
                     else:
                         self.assertIsNone(hint)
+                    if hint is not None:
+                        self.assertEqual(
+                            hint.endswith(_TF32_HINT), cached_output != 4.0
+                        )
 
     def test_initial_validation_failure_has_no_reentry_hint(self):
         node = self._validation_node(_DiagnosticCounter(True), initial_output=10.0)
+        self.assertEqual(node.validate_compiled_model(), (False, _TF32_HINT))
+        self.assertIn("NVIDIA_TF32_OVERRIDE=0 before starting Python", _TF32_HINT)
+
+    def test_validation_has_no_tf32_hint_for_nan(self):
+        """NaN in one sample keeps the TF32 hint out, even next to a tolerance miss
+        in another."""
+        node = self._validation_node(
+            lambda x: torch.where(x > 1.5, x * float("nan"), x + 1.0),
+            initial_output=10.0,
+        )
         self.assertEqual(node.validate_compiled_model(), (False, None))
 
     def test_validation_rejects_output_shape_mismatches(self):
