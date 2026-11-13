@@ -10,6 +10,8 @@ find_program(CARGO_EXECUTABLE cargo REQUIRED)
 option(LEAPP_TEST_CUDA "Run integration tests on CUDA device 0" OFF)
 include("${CMAKE_CURRENT_SOURCE_DIR}/../../src/engines/cxx.cmake")
 
+set(LEAPP_NATIVE_INCLUDE_DIR
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/engines/native/backends/include")
 set(RUST_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/cargo")
 set(RUST_LIBRARY "${RUST_TARGET_DIR}/release/libleapp_runtime_cxx.a")
 
@@ -30,6 +32,7 @@ set_target_properties(leapp_runtime PROPERTIES EXPORT_NAME runtime
 target_compile_features(leapp_runtime PUBLIC cxx_std_20)
 target_include_directories(leapp_runtime
   PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+         "$<BUILD_INTERFACE:${LEAPP_NATIVE_INCLUDE_DIR}>"
          "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../src/dlpack/include>"
          "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
   PRIVATE "${RUST_TARGET_DIR}/cxxbridge")
@@ -41,6 +44,9 @@ target_compile_options(leapp_runtime PRIVATE -Wall -Wextra -Wpedantic -Werror -f
 install(TARGETS leapp_runtime EXPORT leapp_runtimeTargets
   LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
 install(DIRECTORY include/leapp DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+install(FILES "${LEAPP_NATIVE_INCLUDE_DIR}/leapp/data_type.h"
+              "${LEAPP_NATIVE_INCLUDE_DIR}/leapp/status.h"
+  DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/leapp")
 install(DIRECTORY ../../src/dlpack/include/dlpack DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 install(EXPORT leapp_runtimeTargets NAMESPACE lrt::
   DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/leapp_runtime")

@@ -3,12 +3,10 @@
 
 //! Native backend registration and the per-workspace execution contract.
 //!
-//! See `backends/README.md` for the contribution workflow and C ABI.
+//! See `backends/README.md` for the Rust/C++ contribution workflow.
 
 mod bridge;
-mod nativert;
 mod onnx;
-mod torchscript;
 
 use super::Transfers;
 use crate::{
@@ -19,7 +17,7 @@ use crate::{
 use anyhow::Result;
 
 /// A prepared argument replaced by an invocation-scoped Session input.
-/// Keep this layout paired with bridge/api.h.
+/// Keep this layout paired with the private C++ adapter ABI.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub(super) struct InputRoute {
@@ -138,7 +136,6 @@ pub(super) trait BackendPlugin: Send {
         transfers: &mut Transfers,
     ) -> Result<Vec<Option<SharedTensor>>>;
 
-    // Ownership diagnostics are test-only, not part of plugin execution/ABI.
     #[cfg(test)]
     fn loaded_identity(&self) -> usize;
 
@@ -167,12 +164,28 @@ const BACKENDS: &[Backend] = &[
     Backend {
         name: "jit",
         validate: |_, _| Ok(()),
-        load: |spec, location, stream| Ok(Box::new(torchscript::load(spec, location, stream)?)),
+        load: |spec, location, stream| {
+            bridge::load(
+                spec,
+                location,
+                stream,
+                "torchscript",
+                "libleapp_torchscript.so",
+            )
+        },
     },
     Backend {
         name: "pt2",
         validate: |_, _| Ok(()),
-        load: |spec, location, stream| Ok(Box::new(nativert::load(spec, location, stream)?)),
+        load: |spec, location, stream| {
+            bridge::load(
+                spec,
+                location,
+                stream,
+                "nativert",
+                "libleapp_nativert_backend.so",
+            )
+        },
     },
 ];
 
@@ -215,6 +228,7 @@ pub(super) fn error(phase: &'static str, source: anyhow::Error) -> RuntimeError 
             ErrorKind::InvalidArgument => ErrorCode::InvalidArgument,
             ErrorKind::NotFound => ErrorCode::NotFound,
             ErrorKind::Unsupported => ErrorCode::Unsupported,
+            ErrorKind::Io => ErrorCode::Io,
             ErrorKind::Internal => ErrorCode::Internal,
         }
     } else if let Some(error) = source.downcast_ref::<ort::Error>() {

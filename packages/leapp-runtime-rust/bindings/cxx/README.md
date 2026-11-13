@@ -9,6 +9,10 @@ feedback, and tensor storage. `bindings/common` shares session locking and expli
 session closure with Python. The C++ facade translates descriptors and retains
 inspection values; it does not implement another runtime.
 
+For native backend authoring, use the separate
+[`lrt::native_backend` SDK](../../src/engines/native/backends/README.md#adding-a-backend).
+It does not require the C++ consumer facade.
+
 ## Build and install
 
 Building on Linux requires Rust 1.88 or newer, CMake 3.22 or newer, and a C++20

@@ -24,11 +24,15 @@ See the [Python bindings](bindings/python/README.md) for `import lrt` and the
 [C++ bindings](bindings/cxx/README.md) for the `lrt` namespace and `lrt::runtime`
 CMake target.
 
+Native C++ backend authors can start with
+[`BackendPlugin`](src/engines/native/backends/include/leapp/native/backend_plugin.h) and the
+[backend contribution guide](src/engines/native/backends/README.md#adding-a-backend).
+
 Install only the model runtimes and plugins required by your bundle and selected
 engine; see [model support](#model-support). They load when a session opens;
 bundle inspection does not load them. Cargo does not download or install these
-runtimes. Adding a backend does not require rebuilding the core binary or
-selecting Cargo features. Running exported bundles does not require Python
+runtimes. Installing a supported backend does not require rebuilding the core
+binary or selecting Cargo features. Running exported bundles does not require Python
 model-export packages.
 
 For native execution, follow the

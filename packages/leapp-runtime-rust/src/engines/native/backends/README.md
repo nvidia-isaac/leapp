@@ -90,6 +90,72 @@ for execution requirements.
 
 ## Adding a backend
 
-Implement `BackendPlugin` and register it in [`backends.rs`](../backends.rs).
-The trait documents execution, ownership, and safety requirements. C++ plugins
-can use the [shared bridge](bridge.rs).
+Register the backend in [`backends.rs`](../backends.rs). Rust implementations
+implement its `BackendPlugin` trait; C++ implementations derive from
+[`lrt::native::BackendPlugin`](include/leapp/native/backend_plugin.h).
+The header documents each method's defaults, lifecycle, ownership, and threading
+requirements. Only `new_session` and `run_dynamic` are required.
+
+Public C++ headers are in [`include/leapp/native/`](include/leapp/native/).
+Implement a `LoadBackend` factory and export it with `LEAPP_NATIVE_BACKEND(my_backend, Load)` from
+`<leapp/native/export.h>`. Register the same name with the Rust bridge loader;
+adding a backend name requires rebuilding the runtime registration table.
+
+The built-in C++ implementation is in [`torch/plugin.cc`](torch/plugin.cc),
+shared by TorchScript and NativeRT. Its adjacent `executor.h` / `executor.cc`
+files own SDK execution resources.
+
+### Build a C++ plugin
+
+The standalone SDK requires CMake 3.24+ and C++20. Run from
+`packages/leapp-runtime-rust`:
+
+```sh
+cmake -S src/engines/native/backends/cxx -B target/native-backend-sdk \
+  -DCMAKE_INSTALL_PREFIX=/your/backend-sdk -DLEAPP_NATIVE_BACKEND_TESTS=OFF
+cmake --install target/native-backend-sdk
+```
+
+Set `CMAKE_PREFIX_PATH` to that prefix and consume the SDK:
+
+```cmake
+find_package(leapp_native_backend CONFIG REQUIRED)
+add_library(my_backend SHARED plugin.cc)
+target_link_libraries(my_backend PRIVATE lrt::native_backend)
+```
+
+Source builds can use `add_subdirectory` on `src/engines/native/backends/cxx`
+and link the same target. Add the implementation's model SDK dependencies.
+The adapter compiles with the plugin's C++ ABI settings, including LibTorch's
+`_GLIBCXX_USE_CXX11_ABI`. Build plugins from the matching runtime revision;
+the loader rejects incompatible or incomplete libraries with rebuild instructions.
+
+### Validate a C++ backend
+
+The single CPU fixture under `cxx/tests/` exercises the Rust/C++ boundary.
+Run from `packages/leapp-runtime-rust`:
+
+```sh
+cmake -S src/engines/native/backends/cxx -B target/native-backend-tests \
+  -DCMAKE_INSTALL_PREFIX=/your/backend-sdk
+cmake --build target/native-backend-tests -j4
+ctest --test-dir target/native-backend-tests --output-on-failure
+LEAPP_NATIVE_TEST_PLUGINS="$PWD/target/native-backend-tests/plugins" \
+  cargo test --locked --lib engines::native::backends::bridge -- --test-threads=1
+```
+
+Reuse the same fixture against the installed SDK:
+
+```sh
+cmake --install target/native-backend-tests
+cmake -S src/engines/native/backends/cxx/tests -B target/installed-backend-tests \
+  -DCMAKE_PREFIX_PATH=/your/backend-sdk
+cmake --build target/installed-backend-tests -j4
+ctest --test-dir target/installed-backend-tests --output-on-failure
+LEAPP_NATIVE_TEST_PLUGINS="$PWD/target/installed-backend-tests/plugins" \
+  cargo test --locked --lib engines::native::backends::bridge -- --test-threads=1
+```
+
+Use the [runtime contributor guide](../../../../AGENTS.md) for the existing
+model SDK and CPU/CUDA suites. Format C++ with the repository's Google C++20
+`.clang-format` configuration.
