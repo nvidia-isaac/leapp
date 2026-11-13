@@ -50,13 +50,16 @@ pub(super) fn open(
     for location in options.output_placement.overrides.values() {
         location.validate()?;
     }
-    let pipeline = convert::convert(bundle, options.device, graph)
+    let installation = Options::default();
+    let mut pipeline = convert::convert(bundle, options.device, graph)
         .map_err(|e| crate::RuntimeError::new("convert", e))?;
+    convert::configure_plugins(&mut pipeline, &installation.backend_directory)
+        .map_err(|e| crate::RuntimeError::new("load", e))?;
     let repository = convert::repository::ModelRepository::create(&pipeline)?;
     Ok(std::sync::Arc::new(TritonEngine::load(
         &pipeline,
         repository,
-        &Options::default(),
+        &installation,
     )?))
 }
 

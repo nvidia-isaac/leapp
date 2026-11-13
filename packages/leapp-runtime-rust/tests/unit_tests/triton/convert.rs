@@ -648,3 +648,74 @@ fn torchscript_ports_use_ordinals_without_changing_public_or_feedback_names() {
         }
     }
 }
+
+#[test]
+fn configures_installed_warp_adapters_only_for_used_backends() {
+    let mut f = Fixture::new();
+    f.value["models"]["a_policy"]["parameters"]["backend"] = yaml("pt2");
+    let backends = tempfile::tempdir().unwrap();
+    let mut pipeline = f.convert();
+    configure_plugins(&mut pipeline, backends.path()).unwrap();
+    assert!(pipeline.models[0].config.model_operations.is_none());
+    assert!(!pipeline.models[1]
+        .config
+        .parameters
+        .contains_key("custom_op_library"));
+    for (backend, name) in [
+        ("onnxruntime", "libleapp_wrp_onnx_custom_op.so"),
+        ("leapp_pt2", "libleapp_wrp_torch_custom_op.so"),
+    ] {
+        fs::create_dir(backends.path().join(backend)).unwrap();
+        fs::write(backends.path().join(backend).join(name), b"library").unwrap();
+    }
+    configure_plugins(&mut pipeline, backends.path()).unwrap();
+    assert_eq!(
+        pipeline.models[0]
+            .config
+            .model_operations
+            .as_ref()
+            .unwrap()
+            .op_library_filename,
+        [backends
+            .path()
+            .join("onnxruntime/libleapp_wrp_onnx_custom_op.so")
+            .canonicalize()
+            .unwrap()
+            .to_str()
+            .unwrap()]
+    );
+    assert_eq!(
+        pipeline.models[1].config.parameters["custom_op_library"].string_value,
+        backends
+            .path()
+            .join("leapp_pt2/libleapp_wrp_torch_custom_op.so")
+            .canonicalize()
+            .unwrap()
+            .to_str()
+            .unwrap()
+    );
+}
+
+#[test]
+fn rejects_broken_warp_installations_but_ignores_unused_backends() {
+    let f = Fixture::new();
+    let backends = tempfile::tempdir().unwrap();
+    let pt2 = backends
+        .path()
+        .join("leapp_pt2/libleapp_wrp_torch_custom_op.so");
+    fs::create_dir_all(&pt2).unwrap();
+    configure_plugins(&mut f.convert(), backends.path()).unwrap();
+    let onnx = backends
+        .path()
+        .join("onnxruntime/libleapp_wrp_onnx_custom_op.so");
+    fs::create_dir_all(&onnx).unwrap();
+    let error = configure_plugins(&mut f.convert(), backends.path()).unwrap_err();
+    assert!(error.to_string().contains("not a file"), "{error}");
+    fs::remove_dir(&onnx).unwrap();
+    std::os::unix::fs::symlink("missing.so", &onnx).unwrap();
+    let error = configure_plugins(&mut f.convert(), backends.path()).unwrap_err();
+    assert!(
+        error.to_string().contains("resolve Warp adapter"),
+        "{error}"
+    );
+}
