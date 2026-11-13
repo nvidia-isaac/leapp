@@ -15,6 +15,7 @@
 # limitations under the License.
 #
 import functools
+import tempfile
 import unittest
 import torch
 import leapp
@@ -1024,6 +1025,57 @@ class TestDiagnostics(unittest.TestCase):
     def test_initial_validation_failure_has_no_reentry_hint(self):
         node = self._validation_node(_DiagnosticCounter(True), initial_output=10.0)
         self.assertEqual(node.validate_compiled_model(), (False, None))
+
+    def test_validation_rejects_output_shape_mismatches(self):
+        """Reject broadcast-equal shapes and incompatible shapes before comparing values."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _get_logger().configure(tmpdir, verbose=False)
+            for source_shape, exported_shape in (
+                ((1, 2), (2,)),
+                ((1, 2), (3, 2)),
+                ((), (1,)),
+                ((1, 2), (3,)),
+            ):
+                with self.subTest(source=source_shape, exported=exported_shape):
+                    node = LeappNode("shape_validation")
+                    node.add_output("y", "y", torch.ones(source_shape))
+                    exported = torch.ones(exported_shape)
+                    node.export_backend.compiled_model = lambda: exported
+                    with self.assertLogs("leapp", level="ERROR") as logs:
+                        self.assertEqual(
+                            node._sample_mismatches(
+                                "sample 0", [], (node.outputs[0].value,), 1e-3, 1e-5
+                            ),
+                            {"shape"},
+                        )
+                    message = "\n".join(logs.output)
+                    self.assertIn(
+                        "shape_validation/y sample 0: Shape mismatch", message
+                    )
+                    self.assertIn(f"got {exported_shape}", message)
+                    self.assertIn(f"expected {source_shape}", message)
+
+    def test_larger_tolerance_cannot_hide_output_shape_mismatch(self):
+        """A numerical miss on another output must not hide a broadcast-equal shape error."""
+        node = LeappNode("shape_validation")
+        node.add_output("shape", "shape", torch.ones(1, 2, dtype=torch.float16))
+        node.add_output("value", "value", torch.ones(1, dtype=torch.float16))
+        node.export_backend.compiled_model = lambda: (
+            torch.ones(2, dtype=torch.float16),
+            torch.tensor([1.015625], dtype=torch.float16),
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _get_logger().configure(tmpdir, verbose=False)
+            for rtol in (1e-3, 0.02):
+                with self.subTest(rtol=rtol):
+                    with self.assertLogs("leapp", level="ERROR") as logs:
+                        self.assertEqual(
+                            node.validate_compiled_model(rtol=rtol), (False, None)
+                        )
+                    self.assertIn(
+                        "shape_validation/shape sample 0: Shape mismatch",
+                        "\n".join(logs.output),
+                    )
 
     def test_export_error_hint_terminates_cyclic_exception_chains(self):
         for chain in ("__cause__", "__context__"):

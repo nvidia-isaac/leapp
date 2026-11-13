@@ -464,10 +464,13 @@ class LeappNode:
             examples.append((cache_idx + 1, cached_inputs, cached_outputs))
         return examples
 
-    def _sample_matches(
+    def _sample_mismatches(
         self, label: str, input_values, source_outputs, rtol: float, atol: float
-    ) -> bool:
-        """Run the compiled model on one sample and log how its outputs differ."""
+    ) -> set[str]:
+        """Run one sample, log differences, and return the mismatch types.
+
+        Shapes must match exactly; numerical tolerances never permit broadcasting.
+        """
         with torch.no_grad():
             exported_outputs = self.compiled_model(*input_values)
 
@@ -479,13 +482,21 @@ class LeappNode:
                 f"{self.name} {label}: Output count mismatch - "
                 f"got {len(exported_outputs)}, expected {len(source_outputs)}"
             )
-            return False
+            return {"output count"}
 
-        matched = True
+        mismatches = set()
         for idx, (exported, source) in enumerate(zip(exported_outputs, source_outputs)):
             output_name = (
                 self.outputs[idx].name if idx < len(self.outputs) else f"output_{idx}"
             )
+
+            if exported.shape != source.shape:
+                mismatches.add("shape")
+                _get_logger().error(
+                    f"{self.name}/{output_name} {label}: Shape mismatch - "
+                    f"got {tuple(exported.shape)}, expected {tuple(source.shape)}"
+                )
+                continue
 
             if exported.device != source.device:
                 exported = exported.to(source.device)
@@ -496,7 +507,7 @@ class LeappNode:
             source_inf = torch.isinf(source).sum().item()
 
             if exported_nan > 0 or exported_inf > 0 or source_nan > 0 or source_inf > 0:
-                matched = False
+                mismatches.add("NaN/Inf")
                 num_elements = exported.numel()
                 _get_logger().error(
                     f"{self.name}/{output_name} {label}: NaN/Inf detected!"
@@ -520,7 +531,7 @@ class LeappNode:
                 continue
 
             if not torch.allclose(exported, source, rtol=rtol, atol=atol):
-                matched = False
+                mismatches.add("tolerance")
                 diff = (exported - source).abs()
                 diff_flat = diff.flatten().float()
 
@@ -562,7 +573,7 @@ class LeappNode:
                     f"  Diff percentiles: p50={p50:.6e}, p75={p75:.6e}, p90={p90:.6e}, p99={p99:.6e}, p995={p995:.6e}"
                 )
 
-        return matched
+        return mismatches
 
     def validate_compiled_model(
         self, rtol: float = 1e-3, atol: float = 1e-5
@@ -580,12 +591,13 @@ class LeappNode:
             else {}
         )
         initial_buffers = {name: buffer.clone() for name, buffer in buffers.items()}
-        sample_passed = {
-            sample_idx: self._sample_matches(
+        sample_mismatches = {
+            sample_idx: self._sample_mismatches(
                 f"sample {sample_idx}", input_values, source_outputs, rtol, atol
             )
             for sample_idx, input_values, source_outputs in examples
         }
+        sample_passed = {idx: not found for idx, found in sample_mismatches.items()}
         all_match = all(sample_passed.values())
         replay_failed = False
 
@@ -596,7 +608,7 @@ class LeappNode:
                 for name, buffer in buffers.items():
                     buffer.copy_(initial_buffers[name])
             _, input_values, source_outputs = examples[0]
-            if not self._sample_matches(
+            if self._sample_mismatches(
                 "sample 0 (replayed)", input_values, source_outputs, rtol, atol
             ):
                 all_match = False
