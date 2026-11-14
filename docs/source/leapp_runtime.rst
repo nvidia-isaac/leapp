@@ -35,9 +35,10 @@ Use ``InferenceManager`` to:
 
 .. note::
 
-   An ExecuTorch program built for the CUDA delegate holds compiled native code
-   that runs when ``InferenceManager`` loads it, so load such a bundle only from
-   a source you trust.
+   An ExecuTorch program can hold compiled native code that runs when
+   ``InferenceManager`` loads it, as a program built for the CUDA delegate does.
+   The ``.pte`` file decides what runs, not the YAML, so load ExecuTorch bundles
+   only from a source you trust.
 
 Running With Your Own Values
 ============================

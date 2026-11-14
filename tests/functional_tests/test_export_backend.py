@@ -1535,7 +1535,9 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         """ExecuTorch leaves a buffer the program writes uninitialized unless told to
         keep its value, so these nodes would return zeros where the buffers held
         20 and 30. One declares its buffer, the other's module owns two. On a GPU
-        machine, CPU inputs still give CPU outputs."""
+        machine, CPU inputs still give CPU outputs. A declared counter carries its
+        value between calls, so validation replays sample 0 only after loading the
+        program again."""
 
         class Counter(torch.nn.Module):
             def __init__(self):
@@ -1564,22 +1566,37 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
                 self.counter.total[0] = inputM[0]
                 return (self.counter.count + self.counter.total) / 2
 
+            @annotate._method(export_with="executorch", register_buffers=["self.steps"])
+            def legacy_counter(self, inputK):
+                self.steps += 1
+                return inputK + self.steps
+
         overwriter = Overwriter()
+        overwriter.steps = torch.zeros(3)
         leapp.start(name=self.TEST_GRAPH_NAME)
         for value in (1.0, 2.0):
             overwriter.legacy_declared(torch.full((3,), value))
             overwriter.legacy_module(torch.full((3,), value))
+            overwriter.legacy_counter(torch.full((3,), value))
         leapp.stop()
         self.assertEqual(
             leapp.compile_graph(visualize=False, validate=True),
-            {"legacy_declared": True, "legacy_module": True},
+            {"legacy_declared": True, "legacy_module": True, "legacy_counter": True},
         )
         yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
         seven = torch.full((3,), 7.0)
-        outputs = leapp.InferenceManager(yaml_path).run_policy(
-            {"legacy_declared/inputL": seven, "legacy_module/inputM": seven}
+        manager = leapp.InferenceManager(yaml_path)
+        outputs = manager.run_policy(
+            {
+                "legacy_declared/inputL": seven,
+                "legacy_module/inputM": seven,
+                "legacy_counter/inputK": seven,
+            }
         )
-        self.assertEqual(len(outputs), 2)
+        self.assertEqual(len(outputs), 3)
+        torch.testing.assert_close(
+            outputs.pop("legacy_counter/output1"), torch.full((3,), 8.0)
+        )
         for actual in outputs.values():
             torch.testing.assert_close(actual, torch.tensor([7.0, 20.0, 30.0]))
 
@@ -1587,7 +1604,9 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
     @unittest.skipUnless(torch.cuda.is_available(), "Needs a CUDA GPU")
     def test_executorch_backend_cuda_written_buffer(self):
         """A CUDA node that returns the buffer it writes leaves the buffer outside
-        the delegate, where it must still start from 20 and 30, not zeros."""
+        the delegate, where it must still start from 20 and 30, not zeros. A CUDA
+        counter must start from its first value again when validation replays
+        sample 0."""
 
         class Overwriter:
             def __init__(self):
@@ -1604,21 +1623,37 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
                 self.values[0] = inputC[0]
                 return self.values
 
+            @annotate._method(
+                export_with="executorch",
+                register_buffers=["self.steps"],
+                backend_params={"delegate": "cuda"},
+            )
+            def legacy_cuda_counter(self, inputK):
+                self.steps += 1
+                return inputK + self.steps
+
         overwriter = Overwriter()
+        overwriter.steps = torch.zeros(3)
         leapp.start(name=self.TEST_GRAPH_NAME)
         for value in (1.0, 2.0):
             overwriter.legacy_cuda(torch.full((3,), value))
+            overwriter.legacy_cuda_counter(torch.full((3,), value))
         leapp.stop()
         self.assertEqual(
-            leapp.compile_graph(visualize=False, validate=True), {"legacy_cuda": True}
+            leapp.compile_graph(visualize=False, validate=True),
+            {"legacy_cuda": True, "legacy_cuda_counter": True},
         )
         yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
-        (actual,) = (
-            leapp.InferenceManager(yaml_path)
-            .run_policy({"legacy_cuda/inputC": torch.full((3,), 7.0)})
-            .values()
+        seven = torch.full((3,), 7.0)
+        outputs = leapp.InferenceManager(yaml_path).run_policy(
+            {"legacy_cuda/inputC": seven, "legacy_cuda_counter/inputK": seven}
         )
-        torch.testing.assert_close(actual.cpu(), torch.tensor([7.0, 20.0, 30.0]))
+        torch.testing.assert_close(
+            outputs["legacy_cuda/output1"].cpu(), torch.tensor([7.0, 20.0, 30.0])
+        )
+        torch.testing.assert_close(
+            outputs["legacy_cuda_counter/output1"].cpu(), torch.full((3,), 8.0)
+        )
 
     @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
     def test_executorch_backend_no_inputs(self):
@@ -1659,7 +1694,8 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         """Covers nodes on different devices: a GPU node that returns an input
         unchanged, a GPU node traced on the GPU, two GPU nodes with their own
         weights files in one graph, an XNNPACK node on the CPU feeding a
-        TorchScript node, and a GPU default device during lowering."""
+        TorchScript node, and lowering while the caller's default device is the
+        GPU."""
         yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
         leapp.start(name=self.TEST_GRAPH_NAME)
         a, b = annotate.input_tensors("funcE", {"a": torch.ones(3), "b": torch.ones(3)})
@@ -1828,7 +1864,7 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         with self.assertRaisesRegex(ValueError, "Expected 1 inputs, got 2"):
             backend.compiled_model(torch.ones(3), torch.ones(3))
 
-        # A failed lowering leaves no temporary folder behind.
+        # A program that fails to load leaves no temporary folder behind.
         made = []
         mkdtemp = tempfile.mkdtemp
 
@@ -1842,9 +1878,9 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         with (
             mock.patch("tempfile.mkdtemp", recorded_mkdtemp),
             mock.patch.object(
-                ExecuTorchExportBackend, "_lower", side_effect=RuntimeError("lowering")
+                ExecuTorchProgram, "reload", side_effect=RuntimeError("loading")
             ),
-            self.assertRaisesRegex(Exception, "lowering"),
+            self.assertRaisesRegex(Exception, "loading"),
         ):
             leapp.compile_graph(visualize=False)
         self.assertTrue(made)
@@ -1990,11 +2026,20 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
     @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
     @unittest.skipUnless(torch.cuda.is_available(), "Needs a CUDA GPU")
     def test_executorch_backend_failed_save(self):
-        """A copy that fails while a CUDA program and its ``.ptd`` are saved
-        leaves the node's previous files whole and no staged copies behind."""
+        """A copy or a rename that fails while a CUDA program and its ``.ptd`` are
+        saved leaves the node's previous files whole and no staged copies behind."""
         yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
         copy2 = shutil.copy2
         copies = []
+        replace = os.replace
+
+        def replace_into_export_fails(src, dst, *args, **kwargs):
+            # The compilers rename their own cache files, which must still work.
+            if os.path.dirname(os.path.abspath(dst)) == os.path.abspath(
+                self.TEST_GRAPH_NAME
+            ):
+                raise OSError(errno.EIO, "Input/output error", dst)
+            return replace(src, dst, *args, **kwargs)
 
         def copy_then_fail(src, dst, *args, **kwargs):
             copies.append(dst)
@@ -2020,14 +2065,17 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
             if value == 1.0:
                 leapp.compile_graph(visualize=False)
                 continue
-            with (
+            failures = (
                 mock.patch.object(shutil, "copy2", copy_then_fail),
-                self.assertRaises(OSError),
-            ):
-                leapp.compile_graph(visualize=False)
-            self.assertEqual(
-                [f for f in os.listdir(self.TEST_GRAPH_NAME) if f.endswith(".tmp")], []
+                mock.patch.object(os, "replace", replace_into_export_fails),
             )
+            for failure in failures:
+                with failure, self.assertRaises(OSError):
+                    leapp.compile_graph(visualize=False)
+                self.assertEqual(
+                    [f for f in os.listdir(self.TEST_GRAPH_NAME) if f.endswith(".tmp")],
+                    [],
+                )
         (actual,) = (
             leapp.InferenceManager(yaml_path)
             .run_policy({f"{funcN.__name__}/inputN": torch.ones(2, 3, device="cuda")})

@@ -45,6 +45,15 @@ class ExecuTorchProgram:
     def __init__(self, program_path, data_path=None, cuda=False, temp_dir=None):
         self._temp_dir = temp_dir
         self._cuda = cuda
+        self._program_path = program_path
+        self._data_path = data_path
+        self.reload()
+
+    def reload(self):
+        """Load the program again, so its buffers start from their initial values.
+
+        Loading only the method again keeps the values earlier calls wrote.
+        """
         Runtime = _import_executorch()
 
         # Without the cache XNNPACK packs a weight once per use, so a layer
@@ -53,8 +62,11 @@ class ExecuTorchProgram:
         if Runtime.get().backend_registry.is_available("XnnpackBackend"):
             backend_options["XnnpackBackend"] = {"weight_cache_enabled": True}
 
+        self._method = None
         program = Runtime.get().load_program(
-            program_path, data_path=data_path, backend_options=backend_options
+            self._program_path,
+            data_path=self._data_path,
+            backend_options=backend_options,
         )
         meta = program.metadata("forward")
         self._input_devices = [
@@ -286,7 +298,6 @@ class ExecuTorchExportBackend(ExportBackend):
             if device.type == "cuda"
             else contextlib.nullcontext()
         )
-        # Remove temp_dir if lowering or loading fails.
         try:
             with torch.device("cpu"), gpu:
                 self._lower(exported_program, program_path)
@@ -319,7 +330,7 @@ class ExecuTorchExportBackend(ExportBackend):
         # backend's weights file beside the .pte. Each is renamed into place,
         # since a program still loaded from save_path keeps reading its file.
         # Renaming starts only once all are copied, so a failed copy leaves this
-        # node's previous files whole.
+        # node's previous files whole. Staged copies left by a failure are removed.
         staged = {
             filename: os.path.join(save_path, f".{filename}.tmp")
             for filename in os.listdir(self._program_dir)
@@ -327,13 +338,13 @@ class ExecuTorchExportBackend(ExportBackend):
         try:
             for filename, path in staged.items():
                 shutil.copy2(os.path.join(self._program_dir, filename), path)
+            for filename, path in staged.items():
+                os.replace(path, os.path.join(save_path, filename))
         except BaseException:
             for path in staged.values():
                 if os.path.exists(path):
                     os.remove(path)
             raise
-        for filename, path in staged.items():
-            os.replace(path, os.path.join(save_path, filename))
         path = os.path.join(save_path, f"{self.node_context.name}.pte")
         self.data_path = (
             os.path.join(save_path, os.path.basename(self._program_data))
