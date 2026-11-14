@@ -536,7 +536,7 @@ class LeappNode:
                 diff_flat = diff.flatten().float()
 
                 max_diff = diff.max().item()
-                mean_diff = diff.mean().item()
+                mean_diff = diff.mean(dtype=torch.float64).item()
 
                 percentiles = torch.tensor(
                     [0.50, 0.75, 0.90, 0.99, 0.995], device=diff_flat.device
