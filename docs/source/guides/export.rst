@@ -192,6 +192,12 @@ called many times, such as in a loop, keeps one packed copy of its
 weights. A C++ app gets the same if it sets the XNNPACK backend option
 ``weight_cache_enabled`` to true when it loads the program.
 
+With either delegate, LEAPP returns a node's outputs on the device of its
+inputs. A node with no inputs, such as one whose inputs were all pruned,
+returns its outputs on the GPU when there is one, as TorchScript and
+``torch.export`` nodes do. Later ExecuTorch and ONNX nodes follow their
+inputs, so their outputs then move to the GPU too.
+
 The ``"cuda"`` delegate needs a CUDA toolkit (``nvcc`` and the CUDA headers)
 at export. A CUDA program is built for the first visible GPU, and LEAPP makes
 that GPU current when it loads and runs the program; another runner, such as a
@@ -232,7 +238,9 @@ Boolean masks such as ``x[x > 0]`` do not export with either delegate, and
 the CUDA backend does not export ``nonzero``; both fail at export with an
 error. Export such a node with another backend. The CUDA backend also refuses
 a node that reads or returns a tensor with no elements, since it cannot run
-one. Export such a node with ``"xnnpack"`` or another backend.
+one. Export such a node with ``"xnnpack"`` or another backend. With
+``device_io``, it also refuses a node that returns a buffer it writes; export
+such a node with ``device_io=False``.
 
 
 ONNX export

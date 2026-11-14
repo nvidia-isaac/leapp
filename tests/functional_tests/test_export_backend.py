@@ -14,8 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
+import errno
 import importlib.util
 import os
+import shutil
 import unittest
 import tempfile
 from unittest import mock
@@ -1529,6 +1531,129 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         self.assertEqual([op.name for op in plan.operators], [])
 
     @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    def test_executorch_backend_written_buffers(self):
+        """ExecuTorch leaves a buffer the program writes uninitialized unless told to
+        keep its value, so these nodes would return zeros where the buffers held
+        20 and 30. One declares its buffer, the other's module owns two. On a GPU
+        machine, CPU inputs still give CPU outputs."""
+
+        class Counter(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.register_buffer("count", torch.tensor([10.0, 20.0, 30.0]))
+                # torch.export keeps a persistent=False buffer's value in constants.
+                self.register_buffer(
+                    "total", torch.tensor([10.0, 20.0, 30.0]), persistent=False
+                )
+
+        class Overwriter:
+            def __init__(self):
+                self.values = torch.tensor([10.0, 20.0, 30.0])
+                self.counter = Counter()
+
+            @annotate._method(
+                export_with="executorch", register_buffers=["self.values"]
+            )
+            def legacy_declared(self, inputL):
+                self.values[0] = inputL[0]
+                return self.values * 1.0
+
+            @annotate._method(export_with="executorch")
+            def legacy_module(self, inputM):
+                self.counter.count[0] = inputM[0]
+                self.counter.total[0] = inputM[0]
+                return (self.counter.count + self.counter.total) / 2
+
+        overwriter = Overwriter()
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        for value in (1.0, 2.0):
+            overwriter.legacy_declared(torch.full((3,), value))
+            overwriter.legacy_module(torch.full((3,), value))
+        leapp.stop()
+        self.assertEqual(
+            leapp.compile_graph(visualize=False, validate=True),
+            {"legacy_declared": True, "legacy_module": True},
+        )
+        yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+        seven = torch.full((3,), 7.0)
+        outputs = leapp.InferenceManager(yaml_path).run_policy(
+            {"legacy_declared/inputL": seven, "legacy_module/inputM": seven}
+        )
+        self.assertEqual(len(outputs), 2)
+        for actual in outputs.values():
+            torch.testing.assert_close(actual, torch.tensor([7.0, 20.0, 30.0]))
+
+    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    @unittest.skipUnless(torch.cuda.is_available(), "Needs a CUDA GPU")
+    def test_executorch_backend_cuda_written_buffer(self):
+        """A CUDA node that returns the buffer it writes leaves the buffer outside
+        the delegate, where it must still start from 20 and 30, not zeros."""
+
+        class Overwriter:
+            def __init__(self):
+                self.values = torch.tensor([10.0, 20.0, 30.0])
+
+            @annotate._method(
+                export_with="executorch",
+                register_buffers=["self.values"],
+                # With device_io, ExecuTorch cannot place a written buffer the
+                # program returns on the GPU.
+                backend_params={"delegate": "cuda", "device_io": False},
+            )
+            def legacy_cuda(self, inputC):
+                self.values[0] = inputC[0]
+                return self.values
+
+        overwriter = Overwriter()
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        for value in (1.0, 2.0):
+            overwriter.legacy_cuda(torch.full((3,), value))
+        leapp.stop()
+        self.assertEqual(
+            leapp.compile_graph(visualize=False, validate=True), {"legacy_cuda": True}
+        )
+        yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+        (actual,) = (
+            leapp.InferenceManager(yaml_path)
+            .run_policy({"legacy_cuda/inputC": torch.full((3,), 7.0)})
+            .values()
+        )
+        torch.testing.assert_close(actual.cpu(), torch.tensor([7.0, 20.0, 30.0]))
+
+    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    def test_executorch_backend_no_inputs(self):
+        """A node whose output reads only a buffer loses its input when the graph
+        is pruned. Its output must still reach a TorchScript node on the node's
+        device: the GPU when there is one, else the CPU. The CUDA case also shows
+        that a CUDA program with no inputs runs."""
+        yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        weight = torch.tensor([1.0, 2.0, 3.0], device=device)
+        delegates = ("xnnpack", "cuda") if device == "cuda" else ("xnnpack",)
+        for delegate in delegates:
+            with self.subTest(delegate=delegate):
+                leapp.start(name=self.TEST_GRAPH_NAME)
+                annotate.input_tensors("funcK", {"x": torch.ones(3, device=device)})
+                buffer = annotate.register_buffer(
+                    "funcK", {"buffer": torch.tensor([4.0, 5.0, 6.0], device=device)}
+                )
+                y = annotate.output_tensors(
+                    "funcK",
+                    {"y": buffer * 2},
+                    export_with="executorch",
+                    backend_params={"delegate": delegate},
+                )
+                c = annotate.input_tensors("funcL", {"c": y})
+                annotate.output_tensors("funcL", {"out": c * weight}, export_with="jit")
+                leapp.stop()
+                leapp.compile_graph(visualize=False)
+                outputs = leapp.InferenceManager(yaml_path).run_policy({})
+                torch.testing.assert_close(
+                    outputs["funcL/out"],
+                    torch.tensor([8.0, 20.0, 36.0], device=device),
+                )
+
+    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
     @unittest.skipUnless(torch.cuda.is_available(), "Needs a CUDA GPU")
     def test_executorch_backend_devices(self):
         """Covers nodes on different devices: a GPU node that returns an input
@@ -1863,6 +1988,54 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
             leapp.InferenceManager(yaml_path)
 
     @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    @unittest.skipUnless(torch.cuda.is_available(), "Needs a CUDA GPU")
+    def test_executorch_backend_failed_save(self):
+        """A copy that fails while a CUDA program and its ``.ptd`` are saved
+        leaves the node's previous files whole and no staged copies behind."""
+        yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+        copy2 = shutil.copy2
+        copies = []
+
+        def copy_then_fail(src, dst, *args, **kwargs):
+            copies.append(dst)
+            if len(copies) == 2:
+                # A disk that fills up leaves part of the copy behind.
+                with open(dst, "wb") as f:
+                    f.write(b"partial")
+                raise OSError(errno.ENOSPC, "No space left on device", dst)
+            return copy2(src, dst, *args, **kwargs)
+
+        for value in (1.0, 7.0):
+            weight = torch.full((3, 3), value, device="cuda")
+
+            @annotate.method(
+                export_with="executorch", backend_params={"delegate": "cuda"}
+            )
+            def funcN(inputN: torch.Tensor):
+                return inputN @ weight
+
+            leapp.start(name=self.TEST_GRAPH_NAME)
+            funcN(torch.ones(2, 3, device="cuda"))
+            leapp.stop()
+            if value == 1.0:
+                leapp.compile_graph(visualize=False)
+                continue
+            with (
+                mock.patch.object(shutil, "copy2", copy_then_fail),
+                self.assertRaises(OSError),
+            ):
+                leapp.compile_graph(visualize=False)
+            self.assertEqual(
+                [f for f in os.listdir(self.TEST_GRAPH_NAME) if f.endswith(".tmp")], []
+            )
+        (actual,) = (
+            leapp.InferenceManager(yaml_path)
+            .run_policy({f"{funcN.__name__}/inputN": torch.ones(2, 3, device="cuda")})
+            .values()
+        )
+        torch.testing.assert_close(actual, torch.full((2, 3), 3.0, device="cuda"))
+
+    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
     @unittest.skipUnless(torch.cuda.device_count() > 1, "Needs 2 CUDA GPUs")
     def test_executorch_backend_second_gpu(self):
         """Covers a CUDA program exported with the second GPU current and as the
@@ -1907,6 +2080,7 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
                             {funcJ.__name__: True},
                         )
                     self.assertEqual(lowered_on, [(0, torch.device("cpu"))])
+                    self.assertEqual(torch.cuda.current_device(), 1)
                     if device_io:
                         meta = (
                             Runtime.get()
@@ -1930,6 +2104,7 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
                             .values()
                         )
                         self.assertEqual(actual.device, torch.device("cuda", current))
+                        self.assertEqual(torch.cuda.current_device(), current)
                         torch.testing.assert_close(actual, value * 2 + 1)
                 finally:
                     torch.cuda.set_device(previous)
