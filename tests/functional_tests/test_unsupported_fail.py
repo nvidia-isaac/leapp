@@ -22,7 +22,7 @@ import leapp
 from leapp.leapp import _MANAGER as annotate
 from leapp.leapp_graph.datatypes import promote_in_place
 from leapp.leapp_graph.leapp_node import LeappNode
-from leapp.utils.diagnostics import export_error_hint
+from leapp.utils.diagnostics import _HIDDEN_STATE_HINT, _TF32_HINT, export_error_hint
 from leapp.utils.logging import _get_logger
 from .base import LEAPPFunctionalTestBase
 
@@ -1021,10 +1021,37 @@ class TestDiagnostics(unittest.TestCase):
                         self.assertNotIn("keeps state between calls", hint)
                     else:
                         self.assertIsNone(hint)
+                    if hint is not None:
+                        self.assertEqual(
+                            hint.endswith(_TF32_HINT), cached_output != 4.0
+                        )
 
     def test_initial_validation_failure_has_no_reentry_hint(self):
         node = self._validation_node(_DiagnosticCounter(True), initial_output=10.0)
-        self.assertEqual(node.validate_compiled_model(), (False, None))
+        self.assertEqual(node.validate_compiled_model(), (False, _TF32_HINT))
+        self.assertIn("NVIDIA_TF32_OVERRIDE=0 before starting Python", _TF32_HINT)
+
+    def test_validation_has_no_tf32_hint_for_nan_inf_or_bad_outputs(self):
+        """NaN, Inf, a wrong shape or a wrong output count keeps the TF32 hint out
+        next to a tolerance miss, in the replay of sample 0 as in any sample."""
+        for wrong in (
+            torch.tensor([float("nan")]),
+            torch.tensor([float("inf")]),
+            torch.tensor([2.0, 2.0]),
+            (torch.tensor([2.0]), torch.tensor([2.0])),
+        ):
+            with self.subTest(wrong=wrong, sample="replay"):
+                outputs = iter((torch.tensor([2.0]), torch.tensor([3.0]), wrong))
+                node = self._validation_node(
+                    lambda x: next(outputs), cached_output=10.0
+                )
+                self.assertEqual(
+                    node.validate_compiled_model(), (False, _HIDDEN_STATE_HINT)
+                )
+            with self.subTest(wrong=wrong, sample=1):
+                outputs = iter((torch.tensor([3.0]), wrong))
+                node = self._validation_node(lambda x: next(outputs))
+                self.assertEqual(node.validate_compiled_model(), (False, None))
 
     def test_validation_rejects_output_shape_mismatches(self):
         """Reject broadcast-equal shapes and incompatible shapes before comparing values."""

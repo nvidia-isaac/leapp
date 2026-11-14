@@ -599,7 +599,7 @@ class LeappNode:
         }
         sample_passed = {idx: not found for idx, found in sample_mismatches.items()}
         all_match = all(sample_passed.values())
-        replay_failed = False
+        replay_mismatches = set()
 
         # Replay the first sample with declared buffers restored. A different
         # result means the export kept undeclared state from the earlier calls.
@@ -608,13 +608,17 @@ class LeappNode:
                 for name, buffer in buffers.items():
                     buffer.copy_(initial_buffers[name])
             _, input_values, source_outputs = examples[0]
-            if self._sample_mismatches(
+            replay_mismatches = self._sample_mismatches(
                 "sample 0 (replayed)", input_values, source_outputs, rtol, atol
-            ):
+            )
+            if replay_mismatches:
                 all_match = False
-                replay_failed = True
 
-        error_hint = validation_hint(sample_passed, replay_failed=replay_failed)
+        error_hint = validation_hint(
+            sample_passed,
+            replay_mismatches=replay_mismatches,
+            mismatches=set().union(*sample_mismatches.values()),
+        )
         if error_hint is not None:
             _get_logger().warning(f"  {self.name}: {error_hint}")
 

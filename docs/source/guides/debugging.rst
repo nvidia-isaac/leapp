@@ -65,6 +65,11 @@ one pair of tensors cannot characterize error, and it cannot show
 whether a value was captured because it is computed or because it
 happened to be constant on the first step.
 
+On an NVIDIA GPU, float32 outputs can also differ because TF32
+(TensorFloat-32) settings differ between capture and validation. To rule
+this out, set ``NVIDIA_TF32_OVERRIDE=0`` before starting Python, then
+capture, export, and validate again.
+
 Run more than one step
 ----------------------
 

@@ -11,6 +11,8 @@ TorchDynamo
 ONNX
 GRU
 LSTM
+TF32
+TensorFloat
 GFM
 CI
 PR
