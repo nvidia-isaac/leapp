@@ -21,6 +21,7 @@ from leapp.utils.logging import _get_logger
 from leapp.backends.torch_export_backend import TorchExportBackend
 from leapp.backends.onnx_export_backend import ONNXExportBackend
 from leapp.backends.exported_program_backend import ExportedProgramExportBackend
+from leapp.backends.executorch_backend import ExecuTorchExportBackend
 
 
 class NodeManager:
@@ -30,7 +31,7 @@ class NodeManager:
         self.input_descriptions = inputs
         self.output_descriptions = outputs
 
-        backend = self._create_backend(parameters["backend"])
+        backend = self._create_backend(parameters["backend"], parameters)
         backend.load(model_path, parameters["sha256sum"])
         self.model = backend.compiled_model
 
@@ -96,7 +97,7 @@ class NodeManager:
 
         return output_values_to_populate
 
-    def _create_backend(self, backend):
+    def _create_backend(self, backend, parameters):
         """utilizes the backends just to load the model. the backend is not used for compilation or saving."""
         if backend == "jit":
             return TorchExportBackend(None)
@@ -104,6 +105,8 @@ class NodeManager:
             return ONNXExportBackend(None)
         elif backend == "pt2":
             return ExportedProgramExportBackend(None)
+        elif backend == "pte":
+            return ExecuTorchExportBackend(None, parameters)
         else:
             _get_logger().fatal(
                 f"Unsupported backend: {backend}", error_type=ValueError

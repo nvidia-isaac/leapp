@@ -40,7 +40,7 @@ leapp/                      # installable package
   leapp.py                  # start / stop / compile_graph / annotate facade
   export_manager.py         # annotate.* implementations
   inference_manager.py      # runtime loader for exported YAML
-  backends/                 # jit, onnx-dynamo, onnx-torchscript, pt2, none
+  backends/                 # jit, onnx-dynamo, onnx-torchscript, pt2, executorch, none
   leapp_graph/
     traced_node.py          # per-node FX capture and compile
     leapp_graph.py          # pipeline wiring, feedback, visualize hook
@@ -173,6 +173,7 @@ Add unknown words to `docs/source/spelling_wordlist.txt`. New screenshots:
 ```bash
 python -m pip install -e ".[dev,test,warp-cu12]"  # CUDA 12
 python -m pip install -e ".[dev,test,warp-cu13]"  # CUDA 13
+python -m pip install -e ".[dev,test,warp-cu13,executorch]"  # with ExecuTorch (Python 3.11+, not with warp-cu12)
 ```
 
 ### Python formatting

@@ -14,7 +14,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
+import errno
+import functools
+import importlib.abc
+import importlib.metadata
+import importlib.util
 import os
+import shutil
+import subprocess
+import sys
+import types
 import unittest
 import tempfile
 from unittest import mock
@@ -24,9 +33,37 @@ import onnx
 import leapp
 from leapp.leapp import _MANAGER as annotate
 from leapp import TensorSemantics, InputKindEnum, OutputKindEnum
+from leapp.backends.executorch_backend import ExecuTorchExportBackend, ExecuTorchProgram
 from leapp.backends.export_backend import SimplifiedONNXProgram
 from .base import LEAPPFunctionalTestBase
 import pytest
+
+HAS_EXECUTORCH = importlib.util.find_spec("executorch") is not None
+NO_TENSORRT = "Torch-TensorRT 2.15.0 or its runtime is not installed"
+
+
+@functools.cache
+def _has_tensorrt():
+    """Whether Torch-TensorRT, which builds the engines, and its runtime are
+    installed. The runtime wheel does not require Torch-TensorRT."""
+    if (
+        importlib.util.find_spec("torch_tensorrt_executorch_runtime") is None
+        or importlib.util.find_spec("torch_tensorrt") is None
+    ):
+        return False
+    import torch_tensorrt
+
+    # The backend refuses the early 2.15.0 release candidates, which lack it.
+    return hasattr(torch_tensorrt, "compile_and_save")
+
+
+def _execution_plan(program_path):
+    """Return the execution plan of an ExecuTorch ``.pte`` file."""
+    from executorch.exir._serialize._program import deserialize_pte_binary
+
+    with open(program_path, "rb") as f:
+        (plan,) = deserialize_pte_binary(f.read()).program.execution_plan
+    return plan
 
 
 class TestOnnxProviderSelection(unittest.TestCase):
@@ -195,6 +232,8 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
             ("jit-script", {}),
             ("jit-trace", {}),
         ]
+        if HAS_EXECUTORCH:
+            cases.append(("executorch", {}))
         for backend, params in cases:
             for global_patching in (False, True):
                 with (
@@ -1395,6 +1434,1269 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         self.assertEqual(
             yaml_data["models"][funcA.__name__]["parameters"]["backend"], "pt2"
         )
+
+    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    def test_executorch_backend(self):
+        """Covers the ExecuTorch delegates, which lower and run the graph outside
+        PyTorch, so validation and the InferenceManager run the ``.pte`` file."""
+        from executorch.runtime import Runtime
+
+        # Wide enough that TF32 rounding would fail validation.
+        generator = torch.Generator().manual_seed(0)
+        weight = (torch.rand(512, 512, generator=generator) - 0.5) / 16
+        # A loaded node reports the GPU when there is one, as a TorchScript node does.
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        cases = []
+        if torch.cuda.is_available():
+            cases += [("cuda", True), ("cuda", False)]
+            if _has_tensorrt():
+                cases += [("tensorrt", True), ("tensorrt", False)]
+        # Last, so the folder still holds the .ptd a CUDA case wrote.
+        cases.append(("xnnpack", True))
+        for delegate, device_io in cases:
+            with self.subTest(delegate=delegate, device_io=device_io):
+                backend_params = {"delegate": delegate}
+                if not device_io:
+                    backend_params["device_io"] = False
+
+                @annotate.method(
+                    export_with="executorch", backend_params=backend_params
+                )
+                def funcA(inputA: torch.Tensor):
+                    return inputA @ weight
+
+                leapp.start(name=self.TEST_GRAPH_NAME)
+                # Transposed, so the program must not depend on the traced strides.
+                funcA(torch.linspace(-1, 1, 64 * 512).reshape(512, 64).t())
+                leapp.stop()
+                self.assertEqual(
+                    leapp.compile_graph(visualize=False, validate=True),
+                    {funcA.__name__: True},
+                )
+
+                with open(
+                    os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+                ) as f:
+                    parameters = yaml.safe_load(f)["models"][funcA.__name__][
+                        "parameters"
+                    ]
+                self.assertEqual(parameters["backend"], "pte")
+                self.assertEqual(parameters["delegate"], delegate)
+                self.assertEqual(
+                    "torch_tensorrt_version" in parameters, delegate == "tensorrt"
+                )
+                # TensorRT takes this whole graph, so only the CUDA backend
+                # writes a .ptd, and an earlier case's file must not be recorded.
+                self.assertEqual("data_path" in parameters, delegate == "cuda")
+                program_path = os.path.join(
+                    self.TEST_GRAPH_NAME, f"{funcA.__name__}.pte"
+                )
+                plan = _execution_plan(program_path)
+                backend_id = {
+                    "xnnpack": "XnnpackBackend",
+                    "cuda": "CudaBackend",
+                    "tensorrt": "TensorRTBackend",
+                }
+                self.assertEqual([d.id for d in plan.delegates], [backend_id[delegate]])
+                # The delegate runs the whole graph; only the copies between host
+                # and GPU memory run outside it.
+                copies = {"et_copy::_h2d_copy", "et_copy::_d2h_copy"}
+                self.assertEqual(
+                    {op.name for op in plan.operators},
+                    copies if delegate != "xnnpack" and not device_io else set(),
+                )
+                # The program's own output, before the copy to the inputs' device.
+                data_path = parameters.get("data_path")
+                if data_path is not None:
+                    data_path = os.path.join(self.TEST_GRAPH_NAME, data_path)
+                method = (
+                    Runtime.get()
+                    .load_program(program_path, data_path=data_path)
+                    .load_method("forward")
+                )
+                self.assertEqual(
+                    torch.device(method.metadata.output_tensor_meta(0).device()).type,
+                    "cpu" if delegate == "xnnpack" or not device_io else "cuda",
+                )
+
+                manager = leapp.InferenceManager(
+                    os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+                )
+                self.assertEqual(
+                    torch.device(manager.nodes[funcA.__name__].device).type, device
+                )
+                (output_key,) = manager.outputs
+                # Two calls, so a program that returns its first result fails.
+                for _ in range(2):
+                    # Sliced after the move, which would make it contiguous.
+                    fresh = torch.rand(64, 1024, generator=generator).to(device)[:, ::2]
+                    actual = manager.run_policy({f"{funcA.__name__}/inputA": fresh})[
+                        output_key
+                    ]
+                    self.assertEqual(actual.device.type, device)
+                    torch.testing.assert_close(
+                        actual.cpu(), fresh.cpu() @ weight, rtol=1e-4, atol=1e-5
+                    )
+
+    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    def test_executorch_backend_constants(self):
+        """A legacy node is exported from its Python function, so a value it
+        builds from constants alone reaches export. XNNPACK cannot run arange,
+        so the program runs whole in the delegate only because export folds
+        it."""
+
+        @annotate._method(export_with="executorch")
+        def legacy_constants(inputL):
+            return inputL + torch.arange(3, dtype=torch.float32)
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        legacy_constants(torch.ones(3))
+        leapp.stop()
+        self.assertEqual(
+            leapp.compile_graph(visualize=False, validate=True),
+            {legacy_constants.__name__: True},
+        )
+        plan = _execution_plan(
+            os.path.join(self.TEST_GRAPH_NAME, f"{legacy_constants.__name__}.pte")
+        )
+        self.assertEqual([op.name for op in plan.operators], [])
+
+    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    def test_executorch_backend_written_buffers(self):
+        """ExecuTorch leaves a buffer the program writes uninitialized unless told to
+        keep its value, so these nodes would return zeros where the buffers held
+        20 and 30. One declares its buffer, the other's module owns two. On a GPU
+        machine, CPU inputs still give CPU outputs."""
+
+        class Counter(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.register_buffer("count", torch.tensor([10.0, 20.0, 30.0]))
+                # torch.export keeps a persistent=False buffer's value in constants.
+                self.register_buffer(
+                    "total", torch.tensor([10.0, 20.0, 30.0]), persistent=False
+                )
+
+        class Overwriter:
+            def __init__(self):
+                self.values = torch.tensor([10.0, 20.0, 30.0])
+                self.counter = Counter()
+
+            @annotate._method(
+                export_with="executorch", register_buffers=["self.values"]
+            )
+            def legacy_declared(self, inputL):
+                self.values[0] = inputL[0]
+                return self.values * 1.0
+
+            @annotate._method(export_with="executorch")
+            def legacy_module(self, inputM):
+                self.counter.count[0] = inputM[0]
+                self.counter.total[0] = inputM[0]
+                return (self.counter.count + self.counter.total) / 2
+
+        overwriter = Overwriter()
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        for value in (1.0, 2.0):
+            overwriter.legacy_declared(torch.full((3,), value))
+            overwriter.legacy_module(torch.full((3,), value))
+        leapp.stop()
+        self.assertEqual(
+            leapp.compile_graph(visualize=False, validate=True),
+            {"legacy_declared": True, "legacy_module": True},
+        )
+        yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+        seven = torch.full((3,), 7.0)
+        outputs = leapp.InferenceManager(yaml_path).run_policy(
+            {"legacy_declared/inputL": seven, "legacy_module/inputM": seven}
+        )
+        self.assertEqual(len(outputs), 2)
+        for actual in outputs.values():
+            torch.testing.assert_close(actual, torch.tensor([7.0, 20.0, 30.0]))
+
+    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    @unittest.skipUnless(torch.cuda.is_available(), "Needs a CUDA GPU")
+    def test_executorch_backend_cuda_written_buffer(self):
+        """A CUDA node that returns the buffer it writes leaves the buffer outside
+        the delegate, where it must still start from 20 and 30, not zeros."""
+
+        class Overwriter:
+            def __init__(self):
+                self.values = torch.tensor([10.0, 20.0, 30.0])
+
+            @annotate._method(
+                export_with="executorch",
+                register_buffers=["self.values"],
+                # With device_io, ExecuTorch cannot place a written buffer the
+                # program returns on the GPU.
+                backend_params={"delegate": "cuda", "device_io": False},
+            )
+            def legacy_cuda(self, inputC):
+                self.values[0] = inputC[0]
+                return self.values
+
+        overwriter = Overwriter()
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        for value in (1.0, 2.0):
+            overwriter.legacy_cuda(torch.full((3,), value))
+        leapp.stop()
+        self.assertEqual(
+            leapp.compile_graph(visualize=False, validate=True), {"legacy_cuda": True}
+        )
+        yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+        (actual,) = (
+            leapp.InferenceManager(yaml_path)
+            .run_policy({"legacy_cuda/inputC": torch.full((3,), 7.0)})
+            .values()
+        )
+        torch.testing.assert_close(actual.cpu(), torch.tensor([7.0, 20.0, 30.0]))
+
+    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    def test_executorch_backend_no_inputs(self):
+        """A node whose output reads only a buffer loses its input when the graph
+        is pruned. Its output must still reach a TorchScript node on the node's
+        device: the GPU when there is one, else the CPU. The CUDA case also shows
+        that a CUDA program with no inputs runs."""
+        yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        weight = torch.tensor([1.0, 2.0, 3.0], device=device)
+        delegates = ("xnnpack", "cuda") if device == "cuda" else ("xnnpack",)
+        for delegate in delegates:
+            with self.subTest(delegate=delegate):
+                leapp.start(name=self.TEST_GRAPH_NAME)
+                annotate.input_tensors("funcK", {"x": torch.ones(3, device=device)})
+                buffer = annotate.register_buffer(
+                    "funcK", {"buffer": torch.tensor([4.0, 5.0, 6.0], device=device)}
+                )
+                y = annotate.output_tensors(
+                    "funcK",
+                    {"y": buffer * 2},
+                    export_with="executorch",
+                    backend_params={"delegate": delegate},
+                )
+                c = annotate.input_tensors("funcL", {"c": y})
+                annotate.output_tensors("funcL", {"out": c * weight}, export_with="jit")
+                leapp.stop()
+                leapp.compile_graph(visualize=False)
+                outputs = leapp.InferenceManager(yaml_path).run_policy({})
+                torch.testing.assert_close(
+                    outputs["funcL/out"],
+                    torch.tensor([8.0, 20.0, 36.0], device=device),
+                )
+
+    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    @unittest.skipUnless(torch.cuda.is_available(), "Needs a CUDA GPU")
+    def test_executorch_backend_devices(self):
+        """Covers nodes on different devices: a GPU node that returns an input
+        unchanged, a GPU node traced on the GPU, two GPU nodes with their own
+        weights files in one graph, an XNNPACK node on the CPU feeding a
+        TorchScript node, and a GPU default device during lowering."""
+        yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+        delegates = ["cuda", "tensorrt"] if _has_tensorrt() else ["cuda"]
+        for delegate in delegates:
+            with self.subTest(delegate=delegate):
+                leapp.start(name=self.TEST_GRAPH_NAME)
+                a, b = annotate.input_tensors(
+                    "funcE", {"a": torch.ones(3), "b": torch.ones(3)}
+                )
+                annotate.output_tensors(
+                    "funcE",
+                    {"same": a, "doubled": b * 2},
+                    export_with="executorch",
+                    backend_params={"delegate": delegate},
+                )
+                leapp.stop()
+                leapp.compile_graph(visualize=False)
+                a = torch.tensor([1.0, 2.0, 3.0], device="cuda")
+                b = torch.tensor([4.0, 5.0, 6.0], device="cuda")
+                outputs = leapp.InferenceManager(yaml_path).run_policy(
+                    {"funcE/a": a, "funcE/b": b}
+                )
+                torch.testing.assert_close(outputs["funcE/same"], a)
+                torch.testing.assert_close(outputs["funcE/doubled"], b * 2)
+
+        # Traced on the GPU, with a cast that torch.export records with its device.
+        @annotate.method(export_with="executorch", backend_params={"delegate": "cuda"})
+        def funcH(inputH: torch.Tensor):
+            return inputH.float() / 255
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        funcH(torch.arange(3, dtype=torch.uint8, device="cuda"))
+        leapp.stop()
+        self.assertEqual(
+            leapp.compile_graph(visualize=False, validate=True),
+            {funcH.__name__: True},
+        )
+
+        # Different weights, so a node reading the other's .ptd gives wrong values.
+        weight_k = torch.rand(3, 3, device="cuda")
+        weight_l = torch.rand(3, 3, device="cuda")
+
+        @annotate.method(export_with="executorch", backend_params={"delegate": "cuda"})
+        def funcK(inputK: torch.Tensor):
+            return inputK @ weight_k
+
+        @annotate.method(export_with="executorch", backend_params={"delegate": "cuda"})
+        def funcL(inputL: torch.Tensor):
+            return inputL @ weight_l
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        funcL(funcK(torch.ones(2, 3, device="cuda")))
+        leapp.stop()
+        self.assertEqual(
+            leapp.compile_graph(visualize=False, validate=True),
+            {funcK.__name__: True, funcL.__name__: True},
+        )
+        with open(yaml_path) as f:
+            models = yaml.safe_load(f)["models"]
+        self.assertEqual(
+            {models[name]["parameters"]["data_path"] for name in ("funcK", "funcL")},
+            {"funcK.ptd", "funcL.ptd"},
+        )
+        value = torch.rand(2, 3, device="cuda")
+        (actual,) = (
+            leapp.InferenceManager(yaml_path)
+            .run_policy({f"{funcK.__name__}/inputK": value})
+            .values()
+        )
+        torch.testing.assert_close(
+            actual, value @ weight_k @ weight_l, rtol=1e-4, atol=1e-5
+        )
+
+        weight = torch.tensor([1.0, 2.0, 3.0])
+
+        @annotate.method(export_with="executorch")
+        def funcF(inputF: torch.Tensor):
+            return inputF + 1
+
+        @annotate.method(export_with="jit")
+        def funcG(inputG: torch.Tensor):
+            return inputG * weight
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        funcG(funcF(torch.ones(3)))
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+        manager = leapp.InferenceManager(yaml_path)
+        (actual,) = manager.run_policy(
+            {f"{funcF.__name__}/inputF": torch.ones(3, device="cuda")}
+        ).values()
+        torch.testing.assert_close(actual.cpu(), 2 * weight)
+        # Mock inputs live on the first node's device, which the next node shares.
+        mock_input = manager.get_mock_input()
+        (actual,) = manager.run_policy(mock_input).values()
+        (value,) = mock_input.values()
+        torch.testing.assert_close(actual.cpu(), (value.cpu() + 1) * weight)
+
+        # The caller's default device must not reach either lowering.
+        @annotate.method(export_with="executorch", backend_params={"delegate": "cuda"})
+        def funcM(inputM: torch.Tensor):
+            return inputM * 2 + 1
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        funcM(funcF(torch.ones(3)))
+        leapp.stop()
+        run_lower = ExecuTorchExportBackend._lower
+        lowered_on = []
+
+        def lower(backend, *args):
+            lowered_on.append(torch.get_default_device())
+            return run_lower(backend, *args)
+
+        torch.set_default_device("cuda")
+        try:
+            with mock.patch.object(ExecuTorchExportBackend, "_lower", lower):
+                self.assertEqual(
+                    leapp.compile_graph(visualize=False, validate=True),
+                    {funcF.__name__: True, funcM.__name__: True},
+                )
+        finally:
+            torch.set_default_device(None)
+        self.assertEqual(lowered_on, [torch.device("cpu")] * 2)
+
+    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    def test_executorch_backend_errors(self):
+        """Covers the error paths, the checksum of the ``.pte`` file, and that
+        validation runs the program."""
+        from executorch.runtime import Runtime
+
+        with self.assertRaises(ValueError):
+            ExecuTorchExportBackend(None, {"delegate": "unknown"})
+        with self.assertRaises(TypeError):
+            ExecuTorchExportBackend(None, {"delegate": "cuda", "device_io": "False"})
+        with self.assertRaisesRegex(TypeError, "tensorrt_options must be a dict"):
+            ExecuTorchExportBackend(
+                None, {"delegate": "tensorrt", "tensorrt_options": ["fp16"]}
+            )
+        for key in (
+            "exported_program",
+            "inputs",
+            "arg_inputs",
+            "kwarg_inputs",
+            "device",
+            "dryrun",
+        ):
+            with self.assertRaisesRegex(ValueError, f"\\['{key}'\\] cannot be set"):
+                ExecuTorchExportBackend(
+                    None, {"delegate": "tensorrt", "tensorrt_options": {key: None}}
+                )
+        with self.assertRaisesRegex(ValueError, "release_weights_after_build"):
+            ExecuTorchExportBackend(
+                None,
+                {
+                    "delegate": "tensorrt",
+                    "tensorrt_options": {"release_weights_after_build": True},
+                },
+            )
+        ExecuTorchExportBackend(
+            None, {"delegate": "tensorrt", "tensorrt_options": {"min_block_size": 3}}
+        )
+        for delegate in ("xnnpack", "cuda"):
+            with self.assertRaisesRegex(ValueError, 'only to delegate "tensorrt"'):
+                ExecuTorchExportBackend(
+                    None,
+                    {"delegate": delegate, "tensorrt_options": {"min_blok_size": 3}},
+                )
+        node = mock.Mock()
+        node.name = "never_compiled"
+        with self.assertRaises(RuntimeError):
+            ExecuTorchExportBackend(node).save(self.TEST_GRAPH_NAME)
+
+        @annotate.method(export_with="executorch")
+        def funcB(inputB: torch.Tensor):
+            return inputB * 2
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        funcB(torch.ones(3))
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+        with open(
+            os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+        ) as f:
+            sha256sum = yaml.safe_load(f)["models"][funcB.__name__]["parameters"][
+                "sha256sum"
+            ]
+        model = os.path.join(self.TEST_GRAPH_NAME, f"{funcB.__name__}.pte")
+        with self.assertRaises(ValueError):
+            ExecuTorchExportBackend(None).load(model, "0" * 64)
+        with (
+            mock.patch.dict("sys.modules", {"executorch.runtime": None}),
+            self.assertRaisesRegex(ImportError, "pip install"),
+        ):
+            ExecuTorchExportBackend(None).load(model, sha256sum)
+        # Only a TensorRT program needs Torch-TensorRT's runtime.
+        with mock.patch.dict(
+            "sys.modules", {"torch_tensorrt_executorch_runtime": None}
+        ):
+            ExecuTorchExportBackend(None).load(model, sha256sum)
+        backend = ExecuTorchExportBackend(None)
+        with mock.patch.object(
+            Runtime, "load_program", autospec=True, side_effect=Runtime.load_program
+        ) as load_program:
+            backend.load(model, sha256sum)
+        # So XNNPACK packs a weight once, not once per use.
+        self.assertEqual(
+            load_program.call_args.kwargs["backend_options"],
+            {"XnnpackBackend": {"weight_cache_enabled": True}},
+        )
+        with self.assertRaisesRegex(ValueError, "Expected 1 inputs, got 2"):
+            backend.compiled_model(torch.ones(3), torch.ones(3))
+
+        # A failed lowering leaves no temporary folder behind.
+        made = []
+        mkdtemp = tempfile.mkdtemp
+
+        def recorded_mkdtemp(*args, **kwargs):
+            made.append(mkdtemp(*args, **kwargs))
+            return made[-1]
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        funcB(torch.ones(3))
+        leapp.stop()
+        with (
+            mock.patch("tempfile.mkdtemp", recorded_mkdtemp),
+            mock.patch.object(
+                ExecuTorchExportBackend, "_lower", side_effect=RuntimeError("lowering")
+            ),
+            self.assertRaisesRegex(Exception, "lowering"),
+        ):
+            leapp.compile_graph(visualize=False)
+        self.assertTrue(made)
+        self.assertEqual([path for path in made if os.path.exists(path)], [])
+
+        # Validation runs the program, so a program that returns other values fails it.
+        run = ExecuTorchProgram.__call__
+
+        def off_by_one(program, *args):
+            return tuple(output + 1 for output in run(program, *args))
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        funcB(torch.ones(3))
+        leapp.stop()
+        with (
+            mock.patch.object(ExecuTorchProgram, "__call__", off_by_one),
+            self.assertRaisesRegex(Exception, "validation failed"),
+        ):
+            leapp.compile_graph(visualize=False, validate=True)
+
+        for delegate in ("cuda", "tensorrt"):
+
+            @annotate.method(
+                export_with="executorch", backend_params={"delegate": delegate}
+            )
+            def funcI(inputI: torch.Tensor):
+                return inputI * 2
+
+            with self.subTest(delegate=delegate):
+                leapp.start(name=self.TEST_GRAPH_NAME)
+                funcI(torch.ones(3))
+                leapp.stop()
+                with (
+                    mock.patch("torch.cuda.is_available", return_value=False),
+                    self.assertRaisesRegex(
+                        RuntimeError, f'"{delegate}" needs a CUDA GPU'
+                    ),
+                ):
+                    leapp.compile_graph(visualize=False)
+
+        # With 0 rows the input has no elements, with 1 row only the output.
+        for delegate in ("cuda", "tensorrt"):
+            for device_io in (True, False):
+
+                @annotate.method(
+                    export_with="executorch",
+                    backend_params={"delegate": delegate, "device_io": device_io},
+                )
+                def funcK(inputK: torch.Tensor):
+                    return inputK[1:] * 2
+
+                for rows in (0, 1):
+                    with self.subTest(
+                        delegate=delegate, rows=rows, device_io=device_io
+                    ):
+                        leapp.start(name=self.TEST_GRAPH_NAME)
+                        funcK(torch.ones(rows, 3))
+                        leapp.stop()
+                        with (
+                            mock.patch("torch.cuda.is_available", return_value=True),
+                            self.assertRaisesRegex(
+                                RuntimeError,
+                                f'elements, which ExecuTorch delegate "{delegate}"',
+                            ),
+                        ):
+                            leapp.compile_graph(visualize=False)
+
+        # An installed runtime or Torch-TensorRT that lacks a dependency keeps its
+        # own error.
+        class Broken(importlib.abc.MetaPathFinder):
+            def find_spec(self, name, path, target=None):
+                if name == broken:
+                    raise ModuleNotFoundError(
+                        "No module named 'tensorrt_libs'", name="tensorrt_libs"
+                    )
+
+        @annotate.method(
+            export_with="executorch", backend_params={"delegate": "tensorrt"}
+        )
+        def funcR(inputR: torch.Tensor):
+            return inputR * 2
+
+        runtime = types.ModuleType("runtime")
+        for broken, modules in (
+            ("torch_tensorrt_executorch_runtime", {}),
+            ("torch_tensorrt", {"torch_tensorrt_executorch_runtime": runtime}),
+        ):
+            with self.subTest(broken=broken):
+                leapp.start(name=self.TEST_GRAPH_NAME)
+                funcR(torch.ones(3))
+                leapp.stop()
+                with (
+                    mock.patch("torch.cuda.is_available", return_value=True),
+                    mock.patch.dict("sys.modules", modules),
+                    mock.patch.object(sys, "meta_path", [Broken(), *sys.meta_path]),
+                    self.assertRaisesRegex(ImportError, "tensorrt_libs"),
+                ):
+                    sys.modules.pop(broken, None)
+                    leapp.compile_graph(visualize=False)
+
+        # Without the runtime, or without a Torch-TensorRT that can build the
+        # program, the export stops with an install hint before anything is built.
+        no_runtime = {"torch_tensorrt_executorch_runtime": None}
+        no_compiler = {
+            "torch_tensorrt_executorch_runtime": runtime,
+            "torch_tensorrt": None,
+        }
+        # An early release candidate has torch_tensorrt.dynamo but no
+        # compile_and_save.
+        early = types.ModuleType("torch_tensorrt")
+        early.dynamo = types.ModuleType("torch_tensorrt.dynamo")
+        old_compiler = {
+            "torch_tensorrt_executorch_runtime": runtime,
+            "torch_tensorrt": early,
+        }
+        install = r'pip install "torch_tensorrt\[executorch\]>=2\.15\.0"'
+        for modules, message in (
+            (no_runtime, f"its ExecuTorch runtime: {install}"),
+            (no_compiler, f"Torch-TensorRT 2.15.0 or newer: {install}"),
+            (old_compiler, f"release candidate: pip uninstall .*, then {install}"),
+        ):
+            with self.subTest(message=message, compiler=modules.get("torch_tensorrt")):
+                leapp.start(name=self.TEST_GRAPH_NAME)
+                funcR(torch.ones(3))
+                leapp.stop()
+                with (
+                    mock.patch("torch.cuda.is_available", return_value=True),
+                    mock.patch.dict("sys.modules", modules),
+                    mock.patch("torch.export.export") as export,
+                    self.assertRaisesRegex(ImportError, message),
+                ):
+                    leapp.compile_graph(visualize=False)
+                export.assert_not_called()
+
+    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    @unittest.skipUnless(torch.cuda.is_available(), "Needs a CUDA GPU")
+    def test_executorch_backend_tensorrt_errors(self):
+        """Covers the TensorRT error paths and the timing cache, which need a GPU
+        and Torch-TensorRT."""
+        if not _has_tensorrt():
+            self.skipTest(NO_TENSORRT)
+
+        @annotate.method(
+            export_with="executorch", backend_params={"delegate": "tensorrt"}
+        )
+        def funcT(inputT: torch.Tensor):
+            return inputT * 2 + 1
+
+        # TensorRT has no float64.
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        funcT(torch.ones(3, dtype=torch.float64, device="cuda"))
+        leapp.stop()
+        with self.assertRaisesRegex(ValueError, "float64"):
+            leapp.compile_graph(visualize=False)
+
+        # A saved TensorRT program cannot load without the runtime either.
+        no_runtime = {"torch_tensorrt_executorch_runtime": None}
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        funcT(torch.ones(3, device="cuda"))
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+        yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+        with (
+            mock.patch.dict("sys.modules", no_runtime),
+            self.assertRaisesRegex(ImportError, "pip install"),
+        ):
+            leapp.InferenceManager(yaml_path)
+
+        # A buffer or parameter the node writes, and a held value it returns
+        # unchanged, are refused before the engines are built.
+        class Steps(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.steps = torch.nn.Parameter(
+                    torch.tensor([10.0, 20.0, 30.0], device="cuda"),
+                    requires_grad=False,
+                )
+
+        class Overwriter:
+            def __init__(self):
+                self.values = torch.tensor([10.0, 20.0, 30.0], device="cuda")
+                self.module = Steps()
+
+            @annotate._method(
+                export_with="executorch",
+                register_buffers=["self.values"],
+                backend_params={"delegate": "tensorrt", "device_io": False},
+            )
+            def legacy_buffer(self, inputW):
+                self.values[0] = inputW[0]
+                return self.values * 2.0
+
+            @annotate._method(
+                export_with="executorch", backend_params={"delegate": "tensorrt"}
+            )
+            def legacy_parameter(self, inputW):
+                self.module.steps.add_(1)
+                return inputW * self.module.steps
+
+            @annotate._method(
+                export_with="executorch",
+                register_buffers=["self.values"],
+                backend_params={"delegate": "tensorrt"},
+            )
+            def legacy_returned(self, inputW):
+                return inputW * 2, self.values
+
+            # Torch-TensorRT removes the detach, so this returns the buffer too.
+            @annotate._method(
+                export_with="executorch",
+                register_buffers=["self.values"],
+                backend_params={"delegate": "tensorrt"},
+            )
+            def legacy_detached(self, inputW):
+                return inputW * 2, self.values.detach()
+
+            @annotate._method(
+                export_with="executorch", backend_params={"delegate": "tensorrt"}
+            )
+            def legacy_returned_parameter(self, inputW):
+                return inputW * 2, self.module.steps
+
+            @annotate._method(
+                export_with="executorch", backend_params={"delegate": "tensorrt"}
+            )
+            def legacy_constant(self, inputW):
+                return inputW * 2, table.detach()
+
+        table = torch.tensor([1.0, 2.0, 3.0], device="cuda")
+        import torch_tensorrt
+
+        for name, message in (
+            ("legacy_buffer", 'writes .* delegate "cuda"'),
+            ("legacy_parameter", "writes .* with another backend\\."),
+            ("legacy_returned", "returns \\['values'\\] unchanged"),
+            ("legacy_detached", "returns \\['values'\\] unchanged"),
+            ("legacy_returned_parameter", "returns \\['module.steps'\\] unchanged"),
+            ("legacy_constant", "returns \\['lifted_tensor_0'\\] unchanged"),
+        ):
+            with self.subTest(node=name):
+                leapp.start(name=self.TEST_GRAPH_NAME)
+                getattr(Overwriter(), name)(torch.ones(3, device="cuda"))
+                leapp.stop()
+                with (
+                    mock.patch.object(
+                        torch_tensorrt, "compile_and_save"
+                    ) as compile_trt,
+                    self.assertRaisesRegex(RuntimeError, message),
+                ):
+                    leapp.compile_graph(visualize=False)
+                compile_trt.assert_not_called()
+
+        with self.subTest(node="static output"):
+            leapp.start(name=self.TEST_GRAPH_NAME)
+            inputs = annotate.input_tensors(
+                "static", {"x": torch.ones(3, device="cuda")}
+            )
+            annotate.output_tensors(
+                "static",
+                {"y": inputs * 2},
+                static_outputs={"bias": torch.tensor([4.0, 5.0, 6.0], device="cuda")},
+                export_with="executorch",
+                backend_params={"delegate": "tensorrt"},
+            )
+            leapp.stop()
+            with (
+                mock.patch.object(torch_tensorrt, "compile_and_save") as compile_trt,
+                self.assertRaisesRegex(RuntimeError, "returns .* unchanged"),
+            ):
+                leapp.compile_graph(visualize=False)
+            compile_trt.assert_not_called()
+
+        # A name the CUDA backend refuses for its data file fails before the
+        # engines are built.
+        @annotate.method(
+            export_with="executorch", backend_params={"delegate": "tensorrt"}
+        )
+        def aux(inputA: torch.Tensor):
+            return inputA * 2 + 1
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        aux(torch.ones(3, device="cuda"))
+        leapp.stop()
+        with (
+            mock.patch.object(torch_tensorrt, "compile_and_save") as compile_trt,
+            self.assertRaisesRegex(ValueError, "Invalid data name"),
+        ):
+            leapp.compile_graph(visualize=False)
+        compile_trt.assert_not_called()
+
+        # A misspelled setting is refused before the engines are built.
+        @annotate.method(
+            export_with="executorch",
+            backend_params={
+                "delegate": "tensorrt",
+                "tensorrt_options": {"min_blok_size": 3, "kwargs": {}},
+            },
+        )
+        def funcU(inputU: torch.Tensor):
+            return inputU * 2 + 1
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        funcU(torch.ones(3, device="cuda"))
+        leapp.stop()
+        with (
+            mock.patch.object(torch_tensorrt, "compile_and_save") as compile_trt,
+            self.assertRaisesRegex(ValueError, "\\['kwargs', 'min_blok_size'\\]"),
+        ):
+            leapp.compile_graph(visualize=False)
+        compile_trt.assert_not_called()
+
+        # The timing cache is private to the build and removed after it, whether
+        # the build fails or not. A given path is left alone. A build that returns
+        # without a program fails later, at the load.
+        builds = []
+
+        def build(exported_program, program_path, **kwargs):
+            folder = os.path.dirname(kwargs["timing_cache_path"])
+            # save() copies the program's folder, so the cache must be elsewhere.
+            if folder == os.path.dirname(program_path):
+                raise AssertionError("timing cache in the program folder")
+            builds.append((folder, os.stat(folder).st_mode & 0o777))
+            if fails:
+                raise RuntimeError("stopped before the build")
+
+        given = tempfile.TemporaryDirectory()
+        self.addCleanup(given.cleanup)
+        given_cache = os.path.join(given.name, "timing_cache.bin")
+        with open(given_cache, "wb") as f:
+            f.write(b"timings")
+        for options, fails in (
+            ({}, True),
+            ({}, False),
+            ({"timing_cache_path": given_cache}, True),
+            ({"timing_cache_path": given_cache}, False),
+        ):
+            with self.subTest(options=options, fails=fails):
+
+                @annotate.method(
+                    export_with="executorch",
+                    backend_params={
+                        "delegate": "tensorrt",
+                        "tensorrt_options": options,
+                    },
+                )
+                def funcV(inputV: torch.Tensor):
+                    return inputV * 2 + 1
+
+                leapp.start(name=self.TEST_GRAPH_NAME)
+                funcV(torch.ones(3, device="cuda"))
+                leapp.stop()
+                with (
+                    mock.patch.object(torch_tensorrt, "compile_and_save", build),
+                    self.assertRaisesRegex(
+                        Exception, "stopped before the build" if fails else "funcV.pte"
+                    ),
+                ):
+                    leapp.compile_graph(visualize=False)
+        *made, (given_folder, _), (given_folder_success, _) = builds
+        for folder, mode in made:
+            self.assertEqual(mode, 0o700)
+            self.assertFalse(os.path.exists(folder))
+        self.assertNotEqual(made[0][0], made[1][0])
+        self.assertEqual(given_folder, given.name)
+        self.assertEqual(given_folder_success, given.name)
+        with open(given_cache, "rb") as f:
+            self.assertEqual(f.read(), b"timings")
+
+    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    @unittest.skipUnless(torch.cuda.is_available(), "Needs a CUDA GPU")
+    def test_executorch_backend_tensorrt_options(self):
+        """Covers what TensorRT does not take: the CUDA backend runs it, an
+        operator TensorRT runs through a PyTorch plugin still exports, a program
+        built with ``require_full_compilation`` still saves, and
+        ``tensorrt_options`` override LEAPP's own settings."""
+        if not _has_tensorrt():
+            self.skipTest(NO_TENSORRT)
+        import torch_tensorrt
+
+        compile_trt = torch_tensorrt.compile_and_save
+        settings = []
+
+        def spy(*args, **kwargs):
+            settings.append(kwargs)
+            return compile_trt(*args, **kwargs)
+
+        yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+        weight = torch.rand(8, 8, generator=torch.Generator().manual_seed(0))
+        options = {
+            "torch_executed_ops": {"torch.ops.aten.mul.Tensor"},
+            "fallback_pytorch_plugin_ops": False,
+        }
+        for device_io in (True, False):
+            with self.subTest(device_io=device_io):
+
+                @annotate.method(
+                    export_with="executorch",
+                    backend_params={
+                        "delegate": "tensorrt",
+                        "device_io": device_io,
+                        "tensorrt_options": options,
+                    },
+                )
+                def funcS(inputS: torch.Tensor):
+                    return (inputS @ weight.to(inputS.device)) * 2
+
+                settings.clear()
+                leapp.start(name=self.TEST_GRAPH_NAME)
+                funcS(torch.rand(4, 8, device="cuda"))
+                leapp.stop()
+                with mock.patch.object(torch_tensorrt, "compile_and_save", spy):
+                    self.assertEqual(
+                        leapp.compile_graph(visualize=False, validate=True),
+                        {funcS.__name__: True},
+                    )
+                (split,) = settings
+                self.assertEqual(
+                    split["torch_executed_ops"], options["torch_executed_ops"]
+                )
+                self.assertFalse(split["fallback_pytorch_plugin_ops"])
+
+                plan = _execution_plan(
+                    os.path.join(self.TEST_GRAPH_NAME, f"{funcS.__name__}.pte")
+                )
+                self.assertIn("CudaBackend", [d.id for d in plan.delegates])
+                engines = [d for d in plan.delegates if d.id == "TensorRTBackend"]
+                self.assertTrue(engines)
+                for engine in engines:
+                    specs = {spec.key: spec.value for spec in engine.compile_specs}
+                    self.assertEqual(specs["use_cuda_graphs"], b"1")
+                with open(yaml_path) as f:
+                    parameters = yaml.safe_load(f)["models"][funcS.__name__][
+                        "parameters"
+                    ]
+                self.assertEqual(parameters["data_path"], f"{funcS.__name__}.ptd")
+                self.assertEqual(
+                    parameters["torch_tensorrt_version"],
+                    importlib.metadata.version("torch_tensorrt"),
+                )
+                # save() copies the whole program folder, which must not hold the
+                # private timing cache.
+                self.assertEqual(
+                    [f for f in os.listdir(self.TEST_GRAPH_NAME) if "timing" in f], []
+                )
+
+                fresh = torch.rand(4, 8, device="cuda")
+                outputs = leapp.InferenceManager(yaml_path).run_policy(
+                    {f"{funcS.__name__}/inputS": fresh}
+                )
+                torch.testing.assert_close(
+                    next(iter(outputs.values())).cpu(),
+                    (fresh.cpu() @ weight) * 2,
+                    rtol=1e-4,
+                    atol=1e-5,
+                )
+
+        index = torch.tensor([0, 2, 2, 4, 0])
+
+        # Accumulating index_put runs through such a plugin by default.
+        @annotate.method(
+            export_with="executorch", backend_params={"delegate": "tensorrt"}
+        )
+        def funcP(inputP: torch.Tensor):
+            return torch.zeros(6, device=inputP.device).index_put(
+                (index.to(inputP.device),), inputP, accumulate=True
+            )
+
+        # Runs in float32 instead, as the guide advises.
+        @annotate.method(
+            export_with="executorch",
+            backend_params={
+                "delegate": "tensorrt",
+                "tensorrt_options": {"truncate_double": True},
+            },
+        )
+        def funcD(inputD: torch.Tensor):
+            return inputD * 2 + 1
+
+        # TensorRT takes this whole, so it builds one engine.
+        @annotate.method(
+            export_with="executorch",
+            backend_params={
+                "delegate": "tensorrt",
+                "tensorrt_options": {"require_full_compilation": True},
+            },
+        )
+        def funcF(inputF: torch.Tensor):
+            return inputF * 2 + 1
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        funcP(torch.arange(5, dtype=torch.float32, device="cuda"))
+        funcD(torch.ones(3, dtype=torch.float64, device="cuda"))
+        funcF(torch.ones(3, device="cuda"))
+        leapp.stop()
+        self.assertEqual(
+            leapp.compile_graph(visualize=False, validate=True),
+            {funcP.__name__: True, funcD.__name__: True, funcF.__name__: True},
+        )
+        outputs = leapp.InferenceManager(yaml_path).run_policy(
+            {
+                f"{funcP.__name__}/inputP": torch.tensor(
+                    [1.0, 10, 100, 1000, 10000], device="cuda"
+                ),
+                f"{funcD.__name__}/inputD": torch.full(
+                    (3,), 2.0, dtype=torch.float64, device="cuda"
+                ),
+                f"{funcF.__name__}/inputF": torch.full((3,), 2.0, device="cuda"),
+            }
+        )
+        by_node = {key.split("/")[0]: value for key, value in outputs.items()}
+        self.assertEqual(by_node[funcP.__name__].tolist(), [10001, 0, 110, 0, 1000, 0])
+        self.assertEqual(by_node[funcD.__name__].dtype, torch.float64)
+        self.assertEqual(by_node[funcD.__name__].tolist(), [5.0, 5.0, 5.0])
+        self.assertEqual(by_node[funcF.__name__].tolist(), [5.0, 5.0, 5.0])
+
+        # A new process, as in a deployment, has not yet imported the runtime
+        # that registers the TensorRT backend.
+        with open(yaml_path) as f:
+            sha256sum = yaml.safe_load(f)["models"][funcF.__name__]["parameters"][
+                "sha256sum"
+            ]
+        loaded = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import sys, torch\n"
+                    "from leapp.backends.executorch_backend import "
+                    "ExecuTorchExportBackend\n"
+                    "backend = ExecuTorchExportBackend(None, "
+                    "{'delegate': 'tensorrt'})\n"
+                    "backend.load(sys.argv[1], sys.argv[2])\n"
+                    "x = torch.full((3,), 2.0, device='cuda')\n"
+                    "print(backend.compiled_model(x)[0].tolist())"
+                ),
+                os.path.join(self.TEST_GRAPH_NAME, f"{funcF.__name__}.pte"),
+                sha256sum,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(loaded.returncode, 0, loaded.stderr)
+        self.assertEqual(loaded.stdout.split()[-3:], ["[5.0,", "5.0,", "5.0]"])
+
+    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    def test_executorch_backend_export_again(self):
+        """A program still loaded from the output folder keeps its values when the
+        graph is exported again into that folder."""
+        yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+        index = torch.tensor([0, 1])
+        managers = []
+        for value in (1.0, 7.0):
+            # XNNPACK does not take an embedding, so the program reads the
+            # table from its file.
+            table = torch.full((4, 3), value)
+
+            @annotate.method(export_with="executorch")
+            def funcM(inputM: torch.Tensor):
+                return torch.nn.functional.embedding(inputM, table)
+
+            leapp.start(name=self.TEST_GRAPH_NAME)
+            funcM(index)
+            leapp.stop()
+            leapp.compile_graph(visualize=False)
+            managers.append(leapp.InferenceManager(yaml_path))
+        for manager, value in zip(managers, (1.0, 7.0)):
+            device = manager.nodes[funcM.__name__].device
+            (actual,) = manager.run_policy(
+                {f"{funcM.__name__}/inputM": index.to(device)}
+            ).values()
+            torch.testing.assert_close(actual.cpu(), torch.full((2, 3), value))
+
+    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    @unittest.skipUnless(torch.cuda.is_available(), "Needs a CUDA GPU")
+    def test_executorch_backend_gpu_weights(self):
+        """Covers weights captured on another device than the delegate's, and the
+        CUDA backend's ``.ptd`` file: its checksum and the name the YAML gives."""
+
+        # XNNPACK runs on the CPU, so a weight captured on the GPU must move.
+        weight = torch.tensor([1.0, 2.0, 3.0], device="cuda")
+
+        @annotate.method(export_with="executorch")
+        def funcD(inputD: torch.Tensor):
+            return inputD * weight + 1
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        funcD(torch.ones(3, device="cuda"))
+        leapp.stop()
+        self.assertEqual(
+            leapp.compile_graph(visualize=False, validate=True),
+            {funcD.__name__: True},
+        )
+
+        # A traced module's weights come in as buffers that require grad.
+        linear = torch.jit.trace(torch.nn.Linear(3, 3), torch.ones(2, 3))
+
+        @annotate.method(
+            export_with="executorch",
+            backend_params={"delegate": "cuda"},
+            environment_constants=["linear"],
+        )
+        def funcC(inputC: torch.Tensor):
+            return linear(inputC)
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        funcC(torch.ones(2, 3))
+        leapp.stop()
+        self.assertEqual(
+            leapp.compile_graph(visualize=False, validate=True),
+            {funcC.__name__: True},
+        )
+        yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+        with open(yaml_path) as f:
+            parameters = yaml.safe_load(f)["models"][funcC.__name__]["parameters"]
+        self.assertIn("data_sha256sum", parameters)
+        leapp.InferenceManager(yaml_path)
+        # Loading reads the file the YAML names.
+        data_path = os.path.join(self.TEST_GRAPH_NAME, "renamed.ptd")
+        os.rename(
+            os.path.join(self.TEST_GRAPH_NAME, parameters["data_path"]), data_path
+        )
+        with open(yaml_path) as f:
+            config = yaml.safe_load(f)
+        config["models"][funcC.__name__]["parameters"]["data_path"] = "renamed.ptd"
+        with open(yaml_path, "w") as f:
+            yaml.safe_dump(config, f, sort_keys=False)
+        leapp.InferenceManager(yaml_path)
+        with open(data_path, "ab") as f:
+            f.write(b"\x00")
+        with self.assertRaises(ValueError):
+            leapp.InferenceManager(yaml_path)
+
+    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    @unittest.skipUnless(torch.cuda.is_available(), "Needs a CUDA GPU")
+    def test_executorch_backend_failed_save(self):
+        """A copy that fails while a CUDA program and its ``.ptd`` are saved
+        leaves the node's previous files whole and no staged copies behind."""
+        yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+        copy2 = shutil.copy2
+        copies = []
+
+        def copy_then_fail(src, dst, *args, **kwargs):
+            copies.append(dst)
+            if len(copies) == 2:
+                # A disk that fills up leaves part of the copy behind.
+                with open(dst, "wb") as f:
+                    f.write(b"partial")
+                raise OSError(errno.ENOSPC, "No space left on device", dst)
+            return copy2(src, dst, *args, **kwargs)
+
+        for value in (1.0, 7.0):
+            weight = torch.full((3, 3), value, device="cuda")
+
+            @annotate.method(
+                export_with="executorch", backend_params={"delegate": "cuda"}
+            )
+            def funcN(inputN: torch.Tensor):
+                return inputN @ weight
+
+            leapp.start(name=self.TEST_GRAPH_NAME)
+            funcN(torch.ones(2, 3, device="cuda"))
+            leapp.stop()
+            if value == 1.0:
+                leapp.compile_graph(visualize=False)
+                continue
+            with (
+                mock.patch.object(shutil, "copy2", copy_then_fail),
+                self.assertRaises(OSError),
+            ):
+                leapp.compile_graph(visualize=False)
+            self.assertEqual(
+                [f for f in os.listdir(self.TEST_GRAPH_NAME) if f.endswith(".tmp")], []
+            )
+        (actual,) = (
+            leapp.InferenceManager(yaml_path)
+            .run_policy({f"{funcN.__name__}/inputN": torch.ones(2, 3, device="cuda")})
+            .values()
+        )
+        torch.testing.assert_close(actual, torch.full((2, 3), 3.0, device="cuda"))
+
+    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    @unittest.skipUnless(torch.cuda.device_count() > 1, "Needs 2 CUDA GPUs")
+    def test_executorch_backend_second_gpu(self):
+        """Covers a GPU program exported with the second GPU current and as the
+        default device: it is built for the first GPU and runs there whichever
+        GPU is current at run time."""
+        from executorch.runtime import Runtime
+
+        yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+        previous = torch.cuda.current_device()
+        cases = [("cuda", True), ("cuda", False)]
+        if _has_tensorrt():
+            cases += [("tensorrt", True), ("tensorrt", False)]
+        for delegate, device_io in cases:
+            with self.subTest(delegate=delegate, device_io=device_io):
+                backend_params = {"delegate": delegate, "device_io": device_io}
+                if delegate == "tensorrt":
+                    # The CUDA backend runs the mul, so the program has a part
+                    # that runs on the current GPU.
+                    backend_params["tensorrt_options"] = {
+                        "torch_executed_ops": {"torch.ops.aten.mul.Tensor"}
+                    }
+
+                @annotate.method(
+                    export_with="executorch", backend_params=backend_params
+                )
+                def funcJ(inputJ: torch.Tensor):
+                    return inputJ * 2 + 1
+
+                try:
+                    torch.cuda.set_device(1)
+                    leapp.start(name=self.TEST_GRAPH_NAME)
+                    funcJ(torch.ones(3))
+                    leapp.stop()
+                    # ExecuTorch lowers onto the current GPU, which must be GPU
+                    # 0, with the CPU as the default device.
+                    lowered_on = []
+                    name = (
+                        "_lower_with_tensorrt" if delegate == "tensorrt" else "_lower"
+                    )
+
+                    def lower(
+                        backend, *args, run=getattr(ExecuTorchExportBackend, name)
+                    ):
+                        lowered_on.append(
+                            (torch.cuda.current_device(), torch.get_default_device())
+                        )
+                        return run(backend, *args)
+
+                    with (
+                        torch.device("cuda", 1),
+                        mock.patch.object(ExecuTorchExportBackend, name, lower),
+                    ):
+                        self.assertEqual(
+                            leapp.compile_graph(visualize=False, validate=True),
+                            {funcJ.__name__: True},
+                        )
+                    self.assertEqual(lowered_on, [(0, torch.device("cpu"))])
+                    self.assertEqual(torch.cuda.current_device(), 1)
+                    if delegate == "tensorrt":
+                        plan = _execution_plan(
+                            os.path.join(self.TEST_GRAPH_NAME, f"{funcJ.__name__}.pte")
+                        )
+                        delegate_ids = [d.id for d in plan.delegates]
+                        self.assertIn("CudaBackend", delegate_ids)
+                        self.assertIn("TensorRTBackend", delegate_ids)
+                    if device_io:
+                        meta = (
+                            Runtime.get()
+                            .load_program(
+                                os.path.join(
+                                    self.TEST_GRAPH_NAME, f"{funcJ.__name__}.pte"
+                                )
+                            )
+                            .metadata("forward")
+                        )
+                        self.assertEqual(
+                            torch.device(meta.input_tensor_meta(0).device()),
+                            torch.device("cuda", 0),
+                        )
+                    for current in (0, 1):
+                        torch.cuda.set_device(current)
+                        manager = leapp.InferenceManager(yaml_path)
+                        # A program loaded without GPU 0 current can still get
+                        # one call right.
+                        for _ in range(3):
+                            value = torch.ones(3, device="cuda")
+                            (actual,) = manager.run_policy(
+                                {f"{funcJ.__name__}/inputJ": value}
+                            ).values()
+                            self.assertEqual(
+                                actual.device, torch.device("cuda", current)
+                            )
+                            self.assertEqual(torch.cuda.current_device(), current)
+                            torch.testing.assert_close(actual, value * 2 + 1)
+                finally:
+                    torch.cuda.set_device(previous)
 
     # -----------------------------------------------------------------
     # Complex math operations

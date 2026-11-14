@@ -112,6 +112,7 @@ Select per node through `export_with` on `output_tensors()` or `method()`. LEAPP
 | `"jit"`, `"jit-script"` | TorchScript scripting → `.pt` | A TorchScript target or an alternative when ONNX lowering is unsupported. Both names select the same backend. |
 | `"jit-trace"` | TorchScript tracing → `.pt` | Scripting cannot handle the captured graph; requires representative input and execution-path coverage. |
 | `"pt2"`, `"exported-program"` | `torch.export` → `.pt2` | A requested ExportedProgram target or a compatible modern PyTorch runtime; supports Warp with its runtime adapter. Both names select the same backend. |
+| `"executorch"` | `torch.export` and ExecuTorch → `.pte` (the CUDA backend adds a `.ptd`) | Deployment without Python or libtorch, on the CPU (XNNPACK) or an NVIDIA GPU (CUDA backend or TensorRT). Needs the `executorch` extra; TensorRT also needs `"torch_tensorrt[executorch]>=2.15.0"`. |
 | `None` | No compilation; optionally reference an existing model | Deliberate external/prebuilt model integration or an explicitly incomplete placeholder. Not an export-success fallback. |
 
 When the first export fails:
@@ -126,6 +127,7 @@ Useful `backend_params` (check the installed implementation):
 
 - Both ONNX paths: `opset_version`, `report`; Dynamo also `verify`, `optimize`; legacy ONNX also `prescript`.
 - PT2: `strict` controls `torch.export`, distinct from `compile_graph(strict=True)` validation.
+- ExecuTorch: `delegate` (`"xnnpack"`, `"cuda"` or `"tensorrt"`), `device_io` (GPU delegates only, default `True`: inputs and outputs stay in GPU memory, except an input returned unchanged that no GPU operator reads; an output of the CUDA backend that is a strided slice such as `x[:, ::2]` is copied through host memory on every call), `tensorrt_options` (passed to `torch_tensorrt.dynamo.compile`; `{"truncate_double": True}` for float64), and `strict` as for PT2.
 - `None`: `{"model_path": "/path/model.onnx", "copy_original_model": True}` references/copies an existing `.onnx`, `.pt`, or `.pt2`. Verify its I/O contract and runtime execution.
 
 Choose opset and optimizations for the actual runtime. Disabling validation, `skip_validation=True`, dry-run, or `non_traced` is diagnostic only, not evidence of a working export.
