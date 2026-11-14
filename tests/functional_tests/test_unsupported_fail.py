@@ -22,7 +22,15 @@ import leapp
 from leapp.leapp import _MANAGER as annotate
 from leapp.leapp_graph.datatypes import promote_in_place
 from leapp.leapp_graph.leapp_node import LeappNode
-from leapp.utils.diagnostics import _HIDDEN_STATE_HINT, _TF32_HINT, export_error_hint
+from leapp.utils.diagnostics import (
+    _HIDDEN_STATE_HINT,
+    _REDUCED_PRECISION_HINT,
+    _REENTRY_VALIDATION_HINT,
+    _REPLAY_PRECISION_HINT,
+    _TF32_HINT,
+    export_error_hint,
+    validation_hint,
+)
 from leapp.utils.logging import _get_logger
 from .base import LEAPPFunctionalTestBase
 
@@ -1004,36 +1012,52 @@ class TestDiagnostics(unittest.TestCase):
         fails. A registered counter is restored for replay and must not produce
         the hidden-state hint.
         """
-        for registered in (True, False):
-            for cached_output in (4.0, 10.0):
-                with self.subTest(registered=registered, cached_output=cached_output):
-                    node = self._validation_node(
-                        _DiagnosticCounter(registered), cached_output=cached_output
-                    )
-                    passed, hint = node.validate_compiled_model()
-                    self.assertIs(passed, registered and cached_output == 4.0)
-                    if not registered:
-                        self.assertIn("keeps state between calls", hint)
-                        self.assertIn("execution is nondeterministic", hint)
-                        self.assertNotIn("inlined as a constant", hint)
-                    elif cached_output != 4.0:
-                        self.assertIn("inlined as a constant", hint)
-                        self.assertNotIn("keeps state between calls", hint)
-                    else:
-                        self.assertIsNone(hint)
-                    if hint is not None:
-                        self.assertEqual(
-                            hint.endswith(_TF32_HINT), cached_output != 4.0
-                        )
+        # A miss in the replay alone gets no TF32 hint.
+        for (registered, cached_output), hints in {
+            (True, 4.0): None,
+            (True, 10.0): (
+                _REENTRY_VALIDATION_HINT,
+                _TF32_HINT,
+                _REDUCED_PRECISION_HINT,
+            ),
+            (False, 4.0): (_HIDDEN_STATE_HINT, _REPLAY_PRECISION_HINT),
+            (False, 10.0): (_HIDDEN_STATE_HINT, _TF32_HINT, _REDUCED_PRECISION_HINT),
+        }.items():
+            with self.subTest(registered=registered, cached_output=cached_output):
+                node = self._validation_node(
+                    _DiagnosticCounter(registered), cached_output=cached_output
+                )
+                self.assertEqual(
+                    node.validate_compiled_model(),
+                    (hints is None, hints and " ".join(hints)),
+                )
+        for hint, phrase in (
+            (_HIDDEN_STATE_HINT, "keeps state between calls"),
+            (_HIDDEN_STATE_HINT, "execution is nondeterministic"),
+            (_REENTRY_VALIDATION_HINT, "inlined as a constant"),
+            (_REPLAY_PRECISION_HINT, "from one call of the export to the next"),
+            (_REPLAY_PRECISION_HINT, "run the node in float32."),
+        ):
+            self.assertIn(phrase, hint)
 
     def test_initial_validation_failure_has_no_reentry_hint(self):
         node = self._validation_node(_DiagnosticCounter(True), initial_output=10.0)
-        self.assertEqual(node.validate_compiled_model(), (False, _TF32_HINT))
-        self.assertIn("NVIDIA_TF32_OVERRIDE=0 before starting Python", _TF32_HINT)
+        passed, hint = node.validate_compiled_model()
+        self.assertEqual(
+            (passed, hint), (False, f"{_TF32_HINT} {_REDUCED_PRECISION_HINT}")
+        )
+        for phrase in (
+            "NVIDIA_TF32_OVERRIDE=0 before starting Python",
+            "bfloat16 or float16",
+            "torch.autocast may be missing from the export",
+            "run the node in float32 without torch.autocast",
+        ):
+            self.assertIn(phrase, hint)
 
-    def test_validation_has_no_tf32_hint_for_nan_inf_or_bad_outputs(self):
-        """NaN, Inf, a wrong shape or a wrong output count keeps the TF32 hint out
-        next to a tolerance miss, in the replay of sample 0 as in any sample."""
+    def test_validation_has_no_tolerance_hints_for_nan_inf_or_bad_outputs(self):
+        """NaN, Inf, a wrong shape or a wrong output count keeps the TF32 and
+        reduced-precision hints out next to a tolerance miss, in the replay of
+        sample 0 as in any sample."""
         for wrong in (
             torch.tensor([float("nan")]),
             torch.tensor([float("inf")]),
@@ -1052,6 +1076,18 @@ class TestDiagnostics(unittest.TestCase):
                 outputs = iter((torch.tensor([3.0]), wrong))
                 node = self._validation_node(lambda x: next(outputs))
                 self.assertEqual(node.validate_compiled_model(), (False, None))
+            with self.subTest(wrong=wrong, sample="1, then a replay miss"):
+                outputs = iter((torch.tensor([2.0]), wrong, torch.tensor([3.0])))
+                node = self._validation_node(lambda x: next(outputs))
+                self.assertEqual(
+                    node.validate_compiled_model(), (False, _HIDDEN_STATE_HINT)
+                )
+        for wrong in ("NaN/Inf", "shape"):
+            with self.subTest(wrong=wrong, sample="replay, two outputs"):
+                hint = validation_hint(
+                    {0: True}, replay_mismatches={"tolerance", wrong}, mismatches=set()
+                )
+                self.assertEqual(hint, _HIDDEN_STATE_HINT)
 
     def test_validation_rejects_output_shape_mismatches(self):
         """Reject broadcast-equal shapes and incompatible shapes before comparing values."""

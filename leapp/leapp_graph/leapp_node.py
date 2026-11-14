@@ -602,7 +602,7 @@ class LeappNode:
         replay_mismatches = set()
 
         # Replay the first sample with declared buffers restored. A different
-        # result means the export kept undeclared state from the earlier calls.
+        # result usually means the export kept undeclared state from the earlier calls.
         if sample_passed[0]:
             with torch.no_grad():
                 for name, buffer in buffers.items():
