@@ -4,6 +4,7 @@
 #
 
 import contextlib
+import inspect
 import os
 import shutil
 import tempfile
@@ -15,7 +16,16 @@ import torch
 from leapp.backends.export_backend import ExportBackend, prepare_tensors_for_export
 from leapp.utils.logging import _get_logger
 
-DELEGATES = ("xnnpack", "cuda")
+DELEGATES = ("xnnpack", "cuda", "tensorrt")
+GPU_DELEGATES = ("cuda", "tensorrt")
+_TENSORRT_RESERVED_OPTIONS = {
+    "exported_program",
+    "inputs",
+    "arg_inputs",
+    "kwarg_inputs",
+    "device",
+    "dryrun",
+}
 
 
 def _import_executorch():
@@ -31,21 +41,66 @@ def _import_executorch():
     return Runtime
 
 
+def _import_tensorrt_runtime():
+    # The runtime registers the TensorRT delegate with ExecuTorch on import, and
+    # a program holding TensorRT engines cannot load without it.
+    try:
+        import torch_tensorrt_executorch_runtime  # noqa: F401
+    except ModuleNotFoundError as exc:
+        # Only a missing runtime gets the install hint. One that is installed but
+        # lacks a dependency, or fails to load, keeps its own error.
+        if exc.name != "torch_tensorrt_executorch_runtime":
+            raise
+        _get_logger().fatal(
+            'ExecuTorch delegate "tensorrt" needs Torch-TensorRT with its '
+            'ExecuTorch runtime: pip install "torch_tensorrt[executorch]>=2.15.0"',
+            error_type=ImportError,
+            cause=exc,
+        )
+
+
+def _import_torch_tensorrt():
+    needs = 'ExecuTorch delegate "tensorrt" needs Torch-TensorRT 2.15.0 or newer'
+    install = 'pip install "torch_tensorrt[executorch]>=2.15.0"'
+    try:
+        import torch_tensorrt
+    except ModuleNotFoundError as exc:
+        if exc.name != "torch_tensorrt":
+            raise
+        _get_logger().fatal(f"{needs}: {install}", error_type=ImportError, cause=exc)
+    # Check for compile_and_save, which builds the program, not for the version:
+    # the early 2.15.0 release candidates lack it but report 2.15.0 too, so pip
+    # also keeps them on an upgrade.
+    if not hasattr(torch_tensorrt, "compile_and_save"):
+        _get_logger().fatal(
+            f"{needs}, not an early release candidate: pip uninstall "
+            f"torch_tensorrt, then {install}",
+            error_type=ImportError,
+        )
+    return torch_tensorrt
+
+
 class ExecuTorchProgram:
     """Callable that runs the ``forward`` method of an ExecuTorch ``.pte`` file.
 
     Each input is moved to the device the program reads it from. Outputs come
     back on the device of the inputs, like :class:`SimplifiedONNXProgram`, so
     nodes on different devices can feed each other. A program with no inputs
-    returns its outputs on the GPU when there is one. A ``cuda`` program is
-    built for GPU 0 of the visible GPUs and is loaded and run there. Owns
-    ``temp_dir`` when given and removes it on delete.
+    returns its outputs on the GPU when there is one. A program of a GPU
+    delegate, loaded with ``cuda=True``, is built for GPU 0 of the visible GPUs
+    and is loaded and run there. Owns ``temp_dir`` when given and removes it on delete.
     """
 
-    def __init__(self, program_path, data_path=None, cuda=False, temp_dir=None):
+    def __init__(
+        self, program_path, data_path=None, cuda=False, tensorrt=False, temp_dir=None
+    ):
         self._temp_dir = temp_dir
         self._cuda = cuda
         Runtime = _import_executorch()
+        # Only a TensorRT program needs the runtime, which maps TensorRT into the
+        # process and fails to import against some ExecuTorch builds.
+        if tensorrt:
+            _import_tensorrt_runtime()
 
         # Without the cache XNNPACK packs a weight once per use, so a layer
         # called in a loop, such as a denoising step, holds a copy per call.
@@ -102,10 +157,12 @@ class ExecuTorchExportBackend(ExportBackend):
     """Export node graphs via ``torch.export`` and ExecuTorch to ``.pte`` artifacts.
 
     ``backend_params["delegate"]`` picks what runs the graph: ``"xnnpack"``
-    (CPU, the default) or ``"cuda"`` (ExecuTorch's CUDA backend). The CUDA
-    backend keeps inputs and outputs in GPU memory unless
-    ``backend_params["device_io"]`` is ``False``. An input the program returns
-    unchanged, and that no CUDA operator reads, stays in host memory either way.
+    (CPU, the default), ``"cuda"`` (ExecuTorch's CUDA backend) or
+    ``"tensorrt"`` (Torch-TensorRT engines, with what TensorRT does not take
+    sent to the CUDA backend). The two GPU delegates keep inputs and outputs in
+    GPU memory unless ``backend_params["device_io"]`` is ``False``. An input the
+    program returns unchanged, and that no GPU operator reads, stays in host
+    memory either way.
     """
 
     def __init__(self, node_context, backend_params=None):
@@ -123,7 +180,33 @@ class ExecuTorchExportBackend(ExportBackend):
                 f"device_io must be True or False, got {device_io!r}",
                 error_type=TypeError,
             )
-        self.device_io = self.delegate == "cuda" and device_io
+        self.device_io = self.delegate in GPU_DELEGATES and device_io
+        self.tensorrt_options = self.backend_params.get("tensorrt_options", {})
+        if not isinstance(self.tensorrt_options, dict):
+            _get_logger().fatal(
+                f"tensorrt_options must be a dict, got {self.tensorrt_options!r}",
+                error_type=TypeError,
+            )
+        if self.tensorrt_options and self.delegate != "tensorrt":
+            _get_logger().fatal(
+                'tensorrt_options apply only to delegate "tensorrt", '
+                f'not "{self.delegate}"',
+                error_type=ValueError,
+            )
+        reserved = sorted(self.tensorrt_options.keys() & _TENSORRT_RESERVED_OPTIONS)
+        if reserved:
+            _get_logger().fatal(
+                f"tensorrt_options {reserved} cannot be set: LEAPP chooses the "
+                "program, its inputs and the GPU, and always builds the engines",
+                error_type=ValueError,
+            )
+        if self.tensorrt_options.get("release_weights_after_build"):
+            _get_logger().fatal(
+                "tensorrt_options release_weights_after_build cannot be set: it "
+                "frees the model's own weights when they are on the GPU, and the "
+                "model and later nodes still use them",
+                error_type=ValueError,
+            )
         self.data_path = None
         self._program_dir = None
         self._program_data = None
@@ -134,6 +217,10 @@ class ExecuTorchExportBackend(ExportBackend):
             "executorch_version": version("executorch"),
             "delegate": self.delegate,
         }
+        if self.delegate == "tensorrt":
+            # An engine loads only with the TensorRT it was built with, and each
+            # Torch-TensorRT version pins one TensorRT.
+            metadata["torch_tensorrt_version"] = version("torch_tensorrt")
         if self.data_path is not None:
             metadata["data_path"] = os.path.basename(self.data_path)
             _, metadata["data_sha256sum"] = self._verify_model_location_and_get_hash(
@@ -163,6 +250,19 @@ class ExecuTorchExportBackend(ExportBackend):
             ),
         )
 
+    def _cuda_partitioner(self):
+        from executorch.backends.cuda.cuda_backend import CudaBackend
+        from executorch.backends.cuda.cuda_partitioner import CudaPartitioner
+
+        # Name the weights file after the node, so the nodes of one graph do
+        # not overwrite each other's file in the shared output directory.
+        return CudaPartitioner(
+            [
+                CudaBackend.generate_method_name_compile_spec("forward"),
+                CudaBackend.generate_data_name_compile_spec(self.node_context.name),
+            ]
+        )
+
     def _lower(self, exported_program, program_path):
         from executorch.exir import EdgeCompileConfig, to_edge_transform_and_lower
         from executorch.exir.passes.constant_prop_pass import constant_prop_pass
@@ -178,17 +278,7 @@ class ExecuTorchExportBackend(ExportBackend):
             partitioner = XnnpackPartitioner()
             compile_config = None
         else:
-            from executorch.backends.cuda.cuda_backend import CudaBackend
-            from executorch.backends.cuda.cuda_partitioner import CudaPartitioner
-
-            # Name the weights file after the node, so the nodes of one graph do
-            # not overwrite each other's file in the shared output directory.
-            partitioner = CudaPartitioner(
-                [
-                    CudaBackend.generate_method_name_compile_spec("forward"),
-                    CudaBackend.generate_data_name_compile_spec(self.node_context.name),
-                ]
-            )
+            partitioner = self._cuda_partitioner()
             # The CUDA backend keeps operators whole for its compiler, which the
             # edge dialect check refuses.
             compile_config = EdgeCompileConfig(_check_ir_validity=False)
@@ -227,6 +317,113 @@ class ExecuTorchExportBackend(ExportBackend):
             program.write_to_file(f)
         program.write_tensor_data_to_file(os.path.dirname(program_path))
 
+    def _lower_with_tensorrt(self, exported_program, input_values, program_path):
+        torch_tensorrt = _import_torch_tensorrt()
+
+        # torch_tensorrt.dynamo.compile ignores keys it does not know, so a typo or
+        # a setting it dropped would change nothing without a word.
+        known = inspect.signature(torch_tensorrt.dynamo.compile).parameters
+        unknown = sorted(
+            key
+            for key in self.tensorrt_options
+            if key not in known or known[key].kind is inspect.Parameter.VAR_KEYWORD
+        )
+        if unknown:
+            _get_logger().fatal(
+                f"tensorrt_options {unknown} are not named settings of "
+                "torch_tensorrt.dynamo.compile",
+                error_type=ValueError,
+            )
+        # The core ATen decompositions, which Torch-TensorRT runs too, turn a
+        # no-op such as detach or a 1-D transpose into alias.
+        decomposed = exported_program.run_decompositions()
+        signature = decomposed.graph_signature
+        # Torch-TensorRT writes a buffer back outside its engines, where
+        # ExecuTorch keeps only its shape, so it starts from zeros, and with
+        # device_io the export fails. A write to a parameter is lost.
+        written = sorted(
+            {
+                **signature.buffers_to_mutate,
+                **signature.parameters_to_mutate,
+            }.values()
+        )
+        if written:
+            # The other ExecuTorch delegates cannot export a parameter write either.
+            others = (
+                "another backend"
+                if signature.parameters_to_mutate
+                else 'delegate "cuda" or "xnnpack" or another backend'
+            )
+            _get_logger().fatal(
+                f"Node '{self.node_context.name}' writes {written}, which "
+                'ExecuTorch delegate "tensorrt" cannot keep. Export this node with '
+                f"{others}.",
+                error_type=RuntimeError,
+            )
+        # Torch-TensorRT removes an alias, and leaves a held value it returns
+        # outside the engines on the GPU. ExecuTorch then reads it as host memory
+        # and crashes the process.
+        held = {
+            **signature.inputs_to_buffers,
+            **signature.inputs_to_parameters,
+            **signature.inputs_to_lifted_tensor_constants,
+        }
+        returned = []
+        for node in decomposed.graph.output_node().args[0]:
+            while (
+                isinstance(node, torch.fx.Node)
+                and node.target == torch.ops.aten.alias.default
+            ):
+                node = node.args[0]
+            if isinstance(node, torch.fx.Node) and node.name in held:
+                returned.append(held[node.name])
+        returned.sort()
+        if returned:
+            _get_logger().fatal(
+                f"Node '{self.node_context.name}' returns {returned} unchanged, "
+                'which ExecuTorch delegate "tensorrt" cannot save. Export this node '
+                'with delegate "cuda" or "xnnpack" or another backend.',
+                error_type=RuntimeError,
+            )
+        options = {
+            "min_block_size": 1,
+            # A TensorRT plugin that needs libtorch could not run in ExecuTorch.
+            "fallback_pytorch_plugin_ops": True,
+            # Compute float32 in full precision, not in TensorRT's default TF32.
+            "disable_tf32": True,
+            **self.tensorrt_options,
+        }
+        # Torch-TensorRT's default timing cache is one file in the system temp
+        # directory that every account shares, so keep it private to this build.
+        cache_dir = None
+        if "timing_cache_path" not in options:
+            cache_dir = tempfile.mkdtemp()
+            options["timing_cache_path"] = os.path.join(cache_dir, "timing_cache.bin")
+        try:
+            # Unlike compile and then save, this keeps each built engine in a file
+            # until the save, and it can save a program built with
+            # require_full_compilation.
+            torch_tensorrt.compile_and_save(
+                exported_program,
+                program_path,
+                output_format="executorch",
+                arg_inputs=list(input_values),
+                save_options={
+                    # Replay each engine as a CUDA graph, to cut the launch cost
+                    # per call.
+                    "use_cuda_graphs": True,
+                    # What TensorRT leaves runs on the GPU too, never on a CPU
+                    # kernel. Built before the engines, so a bad node name fails
+                    # first.
+                    "partitioners": [self._cuda_partitioner()],
+                    "backend_config": self._backend_config(),
+                },
+                **options,
+            )
+        finally:
+            if cache_dir is not None:
+                shutil.rmtree(cache_dir, ignore_errors=True)
+
     def compile(self, m: torch.nn.Module = None):
         from torch.export.passes import move_to_device_pass
 
@@ -243,26 +440,32 @@ class ExecuTorchExportBackend(ExportBackend):
             for value in prepare_tensors_for_export(input_values)
         )
         device = torch.device("cpu")
-        if self.delegate == "cuda":
+        if self.delegate in GPU_DELEGATES:
             if not torch.cuda.is_available():
                 _get_logger().fatal(
-                    'ExecuTorch delegate "cuda" needs a CUDA GPU, '
+                    f'ExecuTorch delegate "{self.delegate}" needs a CUDA GPU, '
                     "but torch.cuda.is_available() is False",
                     error_type=RuntimeError,
                 )
-            # GPU 0, which the CUDA backend builds the program for;
+            # GPU 0, which the GPU delegates build the program for;
             # CUDA_VISIBLE_DEVICES picks the physical GPU.
             device = torch.device("cuda", 0)
-            # Shapes are fixed here. Running such a program aborts the process with
-            # device_io and fails on every call without it.
+            # Shapes are fixed here. The CUDA backend cannot run such a program:
+            # it aborts the process with device_io and fails on every call
+            # without it. With "tensorrt", which parts the CUDA backend gets is
+            # not known before the build.
             for desc in (*self.node_context.inputs, *self.node_context.outputs):
                 if 0 in desc.shape:
                     _get_logger().fatal(
                         f"Tensor '{desc.name}' of node '{self.node_context.name}' has no "
-                        'elements, which ExecuTorch delegate "cuda" cannot run. '
-                        'Export this node with delegate "xnnpack" or another backend.',
+                        f'elements, which ExecuTorch delegate "{self.delegate}" cannot '
+                        'run. Export this node with delegate "xnnpack" or another '
+                        "backend.",
                         error_type=RuntimeError,
                     )
+            if self.delegate == "tensorrt":
+                _import_tensorrt_runtime()
+                _import_torch_tensorrt()
 
         export_kwargs = {}
         if "strict" in self.backend_params:
@@ -280,7 +483,7 @@ class ExecuTorchExportBackend(ExportBackend):
         program_path = os.path.join(temp_dir, f"{self.node_context.name}.pte")
         # Lowering creates tensors on the default device, so keep it on the CPU,
         # as in ExecuTorch's own exports, whatever device the caller set. The
-        # CUDA backend also uses the current GPU.
+        # GPU delegates also build on the current GPU.
         gpu = (
             torch.cuda.device(device)
             if device.type == "cuda"
@@ -289,13 +492,19 @@ class ExecuTorchExportBackend(ExportBackend):
         # Remove temp_dir if lowering or loading fails.
         try:
             with torch.device("cpu"), gpu:
-                self._lower(exported_program, program_path)
+                if self.delegate == "tensorrt":
+                    self._lower_with_tensorrt(
+                        exported_program, input_values, program_path
+                    )
+                else:
+                    self._lower(exported_program, program_path)
             data_path = os.path.splitext(program_path)[0] + ".ptd"
             program_data = data_path if os.path.exists(data_path) else None
             compiled_model = ExecuTorchProgram(
                 program_path,
                 program_data,
-                cuda=self.delegate == "cuda",
+                cuda=self.delegate in GPU_DELEGATES,
+                tensorrt=self.delegate == "tensorrt",
                 temp_dir=temp_dir,
             )
         except BaseException:
@@ -362,7 +571,10 @@ class ExecuTorchExportBackend(ExportBackend):
                 )
 
         self.compiled_model = ExecuTorchProgram(
-            model_path, data_path, cuda=self.delegate == "cuda"
+            model_path,
+            data_path,
+            cuda=self.delegate in GPU_DELEGATES,
+            tensorrt=self.delegate == "tensorrt",
         )
         # Like the TorchScript and torch.export backends, so the nodes of a
         # pipeline share one device; the program moves inputs and outputs as it

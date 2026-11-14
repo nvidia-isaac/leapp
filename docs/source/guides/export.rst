@@ -148,13 +148,21 @@ also run from C++ without Python or libtorch.
 Install the ``executorch`` extra first (Python 3.11 or newer, since ExecuTorch
 1.6 has no Python 3.10 wheels). It needs PyTorch 2.15, whose PyPI wheels use
 CUDA 13, so with Warp add the ``warp-cu13`` extra in the same command, not
-``warp-cu12``:
+``warp-cu12``. The ``tensorrt`` delegate also needs Torch-TensorRT 2.15.0 or
+newer with its ExecuTorch runtime. On a Jetson, its wheels need JetPack 7,
+since they need glibc 2.39:
 
 .. code-block:: bash
 
    pip install "leapp[executorch]"
    # with Warp:
    pip install "leapp[executorch,warp-cu13]"
+   # for delegate="tensorrt":
+   pip install "torch_tensorrt[executorch]>=2.15.0"
+
+A TensorRT engine loads only with the TensorRT it was built with, so where
+the program runs, install the Torch-TensorRT version that the YAML records as
+``torch_tensorrt_version``.
 
 .. code-block:: python
 
@@ -179,10 +187,16 @@ ExecuTorch backend parameters
      - ``"xnnpack"``
      - ``"xnnpack"`` runs on the CPU (x86 and Arm). ``"cuda"`` runs on an
        NVIDIA GPU with ExecuTorch's CUDA backend, on Linux only.
+       ``"tensorrt"`` builds TensorRT engines with Torch-TensorRT, also on
+       Linux only, and sends what TensorRT does not take to the CUDA backend.
    * - ``device_io``
      - ``True``
-     - ``"cuda"`` only. The program reads and writes GPU memory. ``False``
+     - GPU delegates only. The program reads and writes GPU memory. ``False``
        makes it read and write CPU memory.
+   * - ``tensorrt_options``
+     - ``{}``
+     - ``"tensorrt"`` only. Settings for
+       :func:`torch_tensorrt.dynamo.compile`. They override LEAPP's own.
    * - ``strict``
      - PyTorch default
      - Passed through to :func:`torch.export.export`
@@ -192,26 +206,64 @@ called many times, such as in a loop, keeps one packed copy of its
 weights. A C++ app gets the same if it sets the XNNPACK backend option
 ``weight_cache_enabled`` to true when it loads the program.
 
-With either delegate, LEAPP returns a node's outputs on the device of its
+With every delegate, LEAPP returns a node's outputs on the device of its
 inputs. A node with no inputs, such as one whose inputs were all pruned,
 returns its outputs on the GPU when there is one, as TorchScript and
 ``torch.export`` nodes do. Later ExecuTorch and ONNX nodes follow their
 inputs, so their outputs then move to the GPU too.
 
 The ``"cuda"`` delegate needs a CUDA toolkit (``nvcc`` and the CUDA headers)
-at export. A CUDA program is built for the first visible GPU, and LEAPP makes
-that GPU current when it loads and runs the program; another runner, such as a
-C++ app, must make it current itself. Choose the physical GPU with
+at export, and so does ``"tensorrt"``, for what it sends to the CUDA backend.
+A GPU program is built for the first visible GPU, and LEAPP makes that GPU
+current when it loads and runs the program; another runner, such as a C++ app,
+must make it current itself. Choose the physical GPU with
 ``CUDA_VISIBLE_DEVICES``. The program holds native code for the export
 machine's CPU architecture and GPU generation, so export on the target device
-or on one like it. Its ``.ptd`` file is named after the node, so the node name
-must be one ExecuTorch accepts as a data name: up to 200 ASCII letters,
-digits, ``_``, ``-`` and ``.``, not starting with ``.`` or ``-``, not ending in
-``.ptd``, and not a Windows device name such as ``aux``.
+or on one like it. The CUDA backend
+names its ``.ptd`` file after the node, so a GPU node needs a name ExecuTorch
+accepts as a data name: up to 200 ASCII letters, digits, ``_``, ``-`` and
+``.``, not starting with ``.`` or ``-``, not ending in ``.ptd``, and not a
+Windows device name such as ``aux``.
+
+Until the program is saved, Torch-TensorRT keeps the engines it built in files
+in the temporary directory, so it needs room there. It puts them in a folder
+named after your account, which another account could create first and write
+into, so on a machine you share, set ``TMPDIR`` to a folder only you can
+write. Torch-TensorRT's engine cache, which ``cache_built_engines`` and
+``reuse_cached_engines`` turn on, is one folder in the temporary directory
+that every account shares, so the same advice holds. It caches an engine only
+when ``immutable_weights`` is ``False``.
+
+``tensorrt_options`` go to :func:`torch_tensorrt.dynamo.compile`, for example
+``{"timing_cache_path": "trt/timing_cache.bin"}``. They override LEAPP's own:
+``min_block_size`` 1, ``disable_tf32``, ``fallback_pytorch_plugin_ops`` (no
+plugin that needs libtorch), and a timing cache
+that is private to each build and deleted after it, since Torch-TensorRT's
+default cache is one file that every account on the machine shares. To reuse
+timings between builds, set ``timing_cache_path`` to a file in a folder you
+own; a bare file name fails after the first engine is built. LEAPP accepts
+only the named settings of that function. So it also refuses an old name that
+the function still reads, such as ``truncate_long_and_double`` (use
+``truncate_double``). LEAPP refuses ``tensorrt_options`` with another delegate.
+It also refuses these settings, because LEAPP sets the program, its inputs and
+the GPU, and always builds the engines: ``exported_program``, ``inputs``,
+``arg_inputs``, ``kwarg_inputs``, ``device`` and ``dryrun``. It refuses
+``release_weights_after_build`` too, which frees the model's own weights when
+they are on the GPU. LEAPP asks the runtime to replay each engine as a CUDA
+graph.
+
+Torch-TensorRT cannot keep a buffer or parameter the node writes. It also
+cannot save one the node returns unchanged, such as a static output, even
+through a step that changes nothing, such as ``detach()``. So LEAPP refuses
+such a node with ``"tensorrt"``. Export it with ``"cuda"`` or ``"xnnpack"``,
+or, if it writes a parameter, with another backend, since those two cannot
+export that either. TensorRT has no float64, so a node that reads or computes
+float64 needs ``{"truncate_double": True}``, which computes in float32 while
+the inputs and outputs stay float64.
 
 With ``device_io`` on (the default), a pipeline fed CUDA tensors passes them between nodes
 without host copies, with two exceptions. An input the node returns
-unchanged, and that no CUDA operator reads, stays in host memory. An output
+unchanged, and that no GPU operator reads, stays in host memory. An output
 that is a slice of another tensor, such as ``x[:, ::2]`` or ``x[:, 0]``, comes
 back in GPU memory, but the CUDA backend copies it through host memory on
 every call, even with a batch of 1. A block of whole rows taken without a
@@ -222,25 +274,28 @@ outputs to the device of the inputs.
 
 The CUDA backend writes the node's weights to ``<node>.ptd`` beside the
 ``.pte``; keep the two files together. The YAML records its checksum as
-``data_sha256sum``, and loading checks it the same way as the ``.pte``. A CUDA
-program holds compiled native code that runs when it is loaded, so load
-ExecuTorch exports only from a source you trust.
+``data_sha256sum``, and loading checks it the same way as the ``.pte``. A GPU
+program holds compiled native code that runs when it is loaded or run, so
+load ExecuTorch exports only from a source you trust.
 
-The CUDA backend compiles with the matrix multiply precision PyTorch has at
+LEAPP turns TensorRT's TF32 off, so TensorRT computes float32 in full
+precision unless ``tensorrt_options`` sets ``disable_tf32`` to ``False``. The
+CUDA backend compiles with the matrix multiply precision PyTorch has at
 export, so keep ``torch.backends.cuda.matmul.allow_tf32`` at its default,
-``False``, when exporting with it. On a GPU, PyTorch runs float32
-convolutions in TF32 by default, so the outputs LEAPP captures there can
-differ from the program by about 1e-3. Set
-``torch.backends.cudnn.allow_tf32 = False`` before ``leapp.start()``, or pass
-a larger ``atol`` to ``compile_graph()``.
+``False``, when exporting with it. On a GPU, PyTorch runs float32 convolutions
+in TF32 by default, so the outputs LEAPP captures there can differ from the
+program by about 1e-3. Set ``torch.backends.cudnn.allow_tf32 = False`` before
+``leapp.start()``, or pass a larger ``atol`` to ``compile_graph()``. If
+TensorRT cannot build a node, use ``delegate="cuda"`` for it.
 
-Boolean masks such as ``x[x > 0]`` do not export with either delegate, and
-the CUDA backend does not export ``nonzero``; both fail at export with an
-error. Export such a node with another backend. The CUDA backend also refuses
-a node that reads or returns a tensor with no elements, since it cannot run
-one. Export such a node with ``"xnnpack"`` or another backend. With
-``device_io``, it also refuses a node that returns a buffer it writes; export
-such a node with ``device_io=False``.
+Boolean masks such as ``x[x > 0]`` do not export with any delegate, and
+the GPU delegates do not export ``nonzero``; both fail at export with an
+error. Export such a node with another backend. The GPU delegates also refuse
+a node that reads or returns a tensor with no elements: the CUDA backend cannot
+run one, and with ``"tensorrt"`` LEAPP cannot tell in advance which parts
+TensorRT takes. Export such a node with ``"xnnpack"`` or another backend. With
+``device_io``, the CUDA backend also refuses a node that returns a buffer it
+writes; export such a node with ``device_io=False``.
 
 
 ONNX export

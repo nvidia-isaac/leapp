@@ -256,8 +256,11 @@ The ``models`` mapping is deterministically ordered. LEAPP guarantees:
       ExecuTorch with the program.
 
    ``delegate``
-      For a ``pte`` node, what runs the program: ``xnnpack`` (CPU) or
-      ``cuda``. A ``cuda`` program runs on the first visible GPU.
+      For a ``pte`` node, what runs the program: ``xnnpack`` (CPU),
+      ``cuda``, or ``tensorrt`` (TensorRT engines, plus the CUDA backend for
+      what TensorRT does not take; it needs Torch-TensorRT's ExecuTorch
+      runtime). A ``cuda`` or ``tensorrt`` program runs on the first visible
+      GPU.
 
 ``pipeline``
 ------------

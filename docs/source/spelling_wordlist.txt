@@ -72,6 +72,9 @@ fx
 CMake
 nvcc
 ExecuTorch
+TensorRT
+Jetson
+glibc
 libtorch
 
 # Code identifiers used in prose
