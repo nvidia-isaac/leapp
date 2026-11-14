@@ -15,11 +15,14 @@
 # limitations under the License.
 #
 import functools
+import tempfile
 import unittest
 import torch
 import leapp
 from leapp.leapp import _MANAGER as annotate
 from leapp.leapp_graph.datatypes import promote_in_place
+from leapp.leapp_graph.leapp_node import LeappNode
+from leapp.utils.diagnostics import _HIDDEN_STATE_HINT, _TF32_HINT, export_error_hint
 from leapp.utils.logging import _get_logger
 from .base import LEAPPFunctionalTestBase
 
@@ -966,6 +969,151 @@ class TestUnsupportedFail(LEAPPFunctionalTestBase):
             self.assertIn(
                 "Cannot reuse a node name from a different call site.", str(e)
             )
+
+
+class _DiagnosticCounter(torch.nn.Module):
+    def __init__(self, registered):
+        super().__init__()
+        if registered:
+            self.register_buffer("counter", torch.zeros(1))
+        else:
+            self.counter = torch.zeros(1)
+
+    def forward(self, x):
+        self.counter.add_(1)
+        return x + self.counter
+
+
+class TestDiagnostics(unittest.TestCase):
+    """Check diagnostic selection on CPU without exporting a backend."""
+
+    @staticmethod
+    def _validation_node(model, *, initial_output=2.0, cached_output=4.0):
+        node = LeappNode("diagnostics")
+        node._max_cached_io = 1
+        inputs = node.add_input("x", "x", torch.tensor([1.0]))
+        outputs = node.add_output("y", "y", torch.tensor([initial_output]))
+        inputs[0].cached_values[0] = torch.tensor([2.0])
+        outputs[0].cached_values[0] = torch.tensor([cached_output])
+        node._cache_write_idx = 1
+        node.export_backend.compiled_model = model
+        return node
+
+    def test_validation_hint_preserves_buffer_restoration_and_replay_precedence(self):
+        """A hidden counter overrides the re-entry hint even when a cached sample
+        fails. A registered counter is restored for replay and must not produce
+        the hidden-state hint.
+        """
+        for registered in (True, False):
+            for cached_output in (4.0, 10.0):
+                with self.subTest(registered=registered, cached_output=cached_output):
+                    node = self._validation_node(
+                        _DiagnosticCounter(registered), cached_output=cached_output
+                    )
+                    passed, hint = node.validate_compiled_model()
+                    self.assertIs(passed, registered and cached_output == 4.0)
+                    if not registered:
+                        self.assertIn("keeps state between calls", hint)
+                        self.assertIn("execution is nondeterministic", hint)
+                        self.assertNotIn("inlined as a constant", hint)
+                    elif cached_output != 4.0:
+                        self.assertIn("inlined as a constant", hint)
+                        self.assertNotIn("keeps state between calls", hint)
+                    else:
+                        self.assertIsNone(hint)
+                    if hint is not None:
+                        self.assertEqual(
+                            hint.endswith(_TF32_HINT), cached_output != 4.0
+                        )
+
+    def test_initial_validation_failure_has_no_reentry_hint(self):
+        node = self._validation_node(_DiagnosticCounter(True), initial_output=10.0)
+        self.assertEqual(node.validate_compiled_model(), (False, _TF32_HINT))
+        self.assertIn("NVIDIA_TF32_OVERRIDE=0 before starting Python", _TF32_HINT)
+
+    def test_validation_has_no_tf32_hint_for_nan_inf_or_bad_outputs(self):
+        """NaN, Inf, a wrong shape or a wrong output count keeps the TF32 hint out
+        next to a tolerance miss, in the replay of sample 0 as in any sample."""
+        for wrong in (
+            torch.tensor([float("nan")]),
+            torch.tensor([float("inf")]),
+            torch.tensor([2.0, 2.0]),
+            (torch.tensor([2.0]), torch.tensor([2.0])),
+        ):
+            with self.subTest(wrong=wrong, sample="replay"):
+                outputs = iter((torch.tensor([2.0]), torch.tensor([3.0]), wrong))
+                node = self._validation_node(
+                    lambda x: next(outputs), cached_output=10.0
+                )
+                self.assertEqual(
+                    node.validate_compiled_model(), (False, _HIDDEN_STATE_HINT)
+                )
+            with self.subTest(wrong=wrong, sample=1):
+                outputs = iter((torch.tensor([3.0]), wrong))
+                node = self._validation_node(lambda x: next(outputs))
+                self.assertEqual(node.validate_compiled_model(), (False, None))
+
+    def test_validation_rejects_output_shape_mismatches(self):
+        """Reject broadcast-equal shapes and incompatible shapes before comparing values."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _get_logger().configure(tmpdir, verbose=False)
+            for source_shape, exported_shape in (
+                ((1, 2), (2,)),
+                ((1, 2), (3, 2)),
+                ((), (1,)),
+                ((1, 2), (3,)),
+            ):
+                with self.subTest(source=source_shape, exported=exported_shape):
+                    node = LeappNode("shape_validation")
+                    node.add_output("y", "y", torch.ones(source_shape))
+                    exported = torch.ones(exported_shape)
+                    node.export_backend.compiled_model = lambda: exported
+                    with self.assertLogs("leapp", level="ERROR") as logs:
+                        self.assertEqual(
+                            node._sample_mismatches(
+                                "sample 0", [], (node.outputs[0].value,), 1e-3, 1e-5
+                            ),
+                            {"shape"},
+                        )
+                    message = "\n".join(logs.output)
+                    self.assertIn(
+                        "shape_validation/y sample 0: Shape mismatch", message
+                    )
+                    self.assertIn(f"got {exported_shape}", message)
+                    self.assertIn(f"expected {source_shape}", message)
+
+    def test_larger_tolerance_cannot_hide_output_shape_mismatch(self):
+        """A numerical miss on another output must not hide a broadcast-equal shape error."""
+        node = LeappNode("shape_validation")
+        node.add_output("shape", "shape", torch.ones(1, 2, dtype=torch.float16))
+        node.add_output("value", "value", torch.ones(1, dtype=torch.float16))
+        node.export_backend.compiled_model = lambda: (
+            torch.ones(2, dtype=torch.float16),
+            torch.tensor([1.015625], dtype=torch.float16),
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _get_logger().configure(tmpdir, verbose=False)
+            for rtol in (1e-3, 0.02):
+                with self.subTest(rtol=rtol):
+                    with self.assertLogs("leapp", level="ERROR") as logs:
+                        self.assertEqual(
+                            node.validate_compiled_model(rtol=rtol), (False, None)
+                        )
+                    self.assertIn(
+                        "shape_validation/shape sample 0: Shape mismatch",
+                        "\n".join(logs.output),
+                    )
+
+    def test_export_error_hint_terminates_cyclic_exception_chains(self):
+        for chain in ("__cause__", "__context__"):
+            with self.subTest(chain=chain):
+                outer = RuntimeError("export wrapper failed")
+                inner = RuntimeError("unrelated failure")
+                setattr(outer, chain, inner)
+                setattr(inner, chain, outer)
+                self.assertIsNone(
+                    export_error_hint(outer, node_name="policy", backend="pt2")
+                )
 
 
 if __name__ == "__main__":

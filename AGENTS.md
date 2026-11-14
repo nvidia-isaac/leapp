@@ -27,6 +27,7 @@ skill installations.
 | Public annotate/lifecycle API or docs examples | `docs/source/api/index.rst` plus the matching guide under `docs/source/` |
 | Graph PNG layout | `packages/leapp-visualization/` |
 | Export backends | `leapp/backends/` |
+| Export/validation diagnostic messages and hint selection | `leapp/utils/diagnostics.py`; model execution, logging, and raising remain with the caller |
 | YAML / `InferenceManager` | `leapp/leapp.py` (`compile_graph`), `leapp/inference_manager.py`, `docs/source/generated_configs.rst` |
 
 Do not mix the current `(context_obj, output_port)` identity with

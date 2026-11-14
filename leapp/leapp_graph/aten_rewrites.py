@@ -206,7 +206,17 @@ def rewrite_aten_ops(graph: fx.Graph):
             _rewrite_to_copy(node)
             continue
 
-        if op_name in ("view", "reshape", "contiguous", "to"):
+        # The legacy tracer freezes integer arguments to raw ATen calls. Keep
+        # both the size query and its expansion consumer as Tensor methods so
+        # functionalized scalar assignments retain their runtime selection size.
+        if op_name == "sym_size":
+            _rewrite_as_method(node, "size")
+            rewritten.append(op_name)
+            continue
+
+        if op_name in ("view", "reshape", "contiguous", "to") or (
+            op_name == "expand" and not node.kwargs
+        ):
             _rewrite_as_method(node, op_name)
             rewritten.append(op_name)
             continue

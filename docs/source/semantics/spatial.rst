@@ -65,7 +65,7 @@ expressed along the tool's own axes:
              expressed_in=ExpressionFrame.SELF,
              axes=[
                  Axis(AxisKind.ELEMENT, names=["tool"]),
-                 Axis(AxisKind.COMPONENT, names=["vx", "vy", "vz", "wx", "wy", "wz"]),
+                 Axis(AxisKind.COMPONENT, names=["x", "y", "z", "angular_x", "angular_y", "angular_z"]),
              ],
          )
 
@@ -81,7 +81,7 @@ expressed along the tool's own axes:
            expressed_in: {selector: self}
          axes:
          - {kind: element, names: [tool]}
-         - {kind: component, names: [vx, vy, vz, wx, wy, wz]}
+         - {kind: component, names: [x, y, z, angular_x, angular_y, angular_z]}
 
 .. _spatial-yaml-fields:
 
@@ -98,7 +98,7 @@ following fields even when their values use the global default:
    * - Helper family
      - Fields emitted under ``spatial``
      - Default values
-   * - Pose, position, orientation
+   * - Pose, position, orientation, point cloud
      - ``reference``
      - ``null``
    * - Twist, linear/angular velocity, acceleration

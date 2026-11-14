@@ -16,6 +16,7 @@
 #
 import functools
 import torch
+from leapp.utils.diagnostics import export_error_hint, validation_hint
 from leapp.utils.semantics import TensorSemantics
 from leapp.utils.tensor_description import (
     describe_io,
@@ -28,17 +29,6 @@ from leapp.leapp_graph.custom_operator_registry.warp_operator.bundle import (
     iter_warp_segments_from_graph,
 )
 from leapp.utils.logging import _get_logger
-
-_HIDDEN_STATE_HINT = (
-    "Sample 0 passed validation, but replaying it after the other samples gave a "
-    "different result, so the exported model keeps state between calls that was "
-    "not declared. This usually means a buffer allocated outside the node is "
-    "reset and then accumulated into inside it, for example a Warp array cleared "
-    "with zero_() and written with wp.atomic_add. Declare such buffers with "
-    "annotate.register_buffer() for this node, or allocate them inside the node. "
-    "Declare state that should carry over between calls with "
-    "annotate.state_tensors() and annotate.update_state()."
-)
 
 
 class LeappNode:
@@ -258,30 +248,9 @@ class LeappNode:
                 prepare_and_validate(self.m, self.backend)
             self.export_backend.compile(self.m)
         except Exception as e:
-            # Exporters may wrap the PyTorch error; inspect the exception chain
-            # only on failure, without scanning or copying model state.
-            error = e
-            seen = set()
-            while error is not None and id(error) not in seen:
-                seen.add(id(error))
-                if any(
-                    message in str(error)
-                    for message in (
-                        "Inference tensors cannot be saved for backward",
-                        "Setting requires_grad=True on inference tensor outside InferenceMode",
-                    )
-                ):
-                    _get_logger().fatal(
-                        f"LEAPP could not export node '{self.name}' with backend "
-                        f"'{self.backend}' because PyTorch rejected an inference tensor. "
-                        "This may be caused by torch.inference_mode() during model "
-                        "initialization or capture, including decorated functions. "
-                        "Use torch.no_grad() instead in those paths. Recreate affected "
-                        "tensors outside inference mode; leaving inference mode does "
-                        "not convert existing tensors.",
-                        cause=e,
-                    )
-                error = error.__cause__ or error.__context__
+            hint = export_error_hint(e, node_name=self.name, backend=self.backend)
+            if hint is not None:
+                _get_logger().fatal(hint, cause=e)
             _get_logger().fatal(
                 f"Error compiling model {self.name}: {e}", error_type=type(e), cause=e
             )
@@ -495,26 +464,13 @@ class LeappNode:
             examples.append((cache_idx + 1, cached_inputs, cached_outputs))
         return examples
 
-    def _reentry_validation_hint(self, sample_passed: dict) -> str | None:
-        """Return a hint when only the initial trace passes and re-entry samples fail."""
-        later_indices = [idx for idx in sample_passed if idx > 0]
-        if not later_indices:
-            return None
-        if not sample_passed.get(0):
-            return None
-        if not any(not sample_passed[idx] for idx in later_indices):
-            return None
-        return (
-            "Sample 0 (initial trace) passed validation, but one or more re-entry "
-            "samples failed. This pattern often means a value that changes across "
-            "iterations was inlined as a constant during export. Consider declaring "
-            "it with annotate.input_tensors() for this node."
-        )
-
-    def _sample_matches(
+    def _sample_mismatches(
         self, label: str, input_values, source_outputs, rtol: float, atol: float
-    ) -> bool:
-        """Run the compiled model on one sample and log how its outputs differ."""
+    ) -> set[str]:
+        """Run one sample, log differences, and return the mismatch types.
+
+        Shapes must match exactly; numerical tolerances never permit broadcasting.
+        """
         with torch.no_grad():
             exported_outputs = self.compiled_model(*input_values)
 
@@ -526,13 +482,21 @@ class LeappNode:
                 f"{self.name} {label}: Output count mismatch - "
                 f"got {len(exported_outputs)}, expected {len(source_outputs)}"
             )
-            return False
+            return {"output count"}
 
-        matched = True
+        mismatches = set()
         for idx, (exported, source) in enumerate(zip(exported_outputs, source_outputs)):
             output_name = (
                 self.outputs[idx].name if idx < len(self.outputs) else f"output_{idx}"
             )
+
+            if exported.shape != source.shape:
+                mismatches.add("shape")
+                _get_logger().error(
+                    f"{self.name}/{output_name} {label}: Shape mismatch - "
+                    f"got {tuple(exported.shape)}, expected {tuple(source.shape)}"
+                )
+                continue
 
             if exported.device != source.device:
                 exported = exported.to(source.device)
@@ -543,7 +507,7 @@ class LeappNode:
             source_inf = torch.isinf(source).sum().item()
 
             if exported_nan > 0 or exported_inf > 0 or source_nan > 0 or source_inf > 0:
-                matched = False
+                mismatches.add("NaN/Inf")
                 num_elements = exported.numel()
                 _get_logger().error(
                     f"{self.name}/{output_name} {label}: NaN/Inf detected!"
@@ -567,12 +531,12 @@ class LeappNode:
                 continue
 
             if not torch.allclose(exported, source, rtol=rtol, atol=atol):
-                matched = False
+                mismatches.add("tolerance")
                 diff = (exported - source).abs()
                 diff_flat = diff.flatten().float()
 
                 max_diff = diff.max().item()
-                mean_diff = diff.mean().item()
+                mean_diff = diff.mean(dtype=torch.float64).item()
 
                 percentiles = torch.tensor(
                     [0.50, 0.75, 0.90, 0.99, 0.995], device=diff_flat.device
@@ -609,7 +573,7 @@ class LeappNode:
                     f"  Diff percentiles: p50={p50:.6e}, p75={p75:.6e}, p90={p90:.6e}, p99={p99:.6e}, p995={p995:.6e}"
                 )
 
-        return matched
+        return mismatches
 
     def validate_compiled_model(
         self, rtol: float = 1e-3, atol: float = 1e-5
@@ -627,14 +591,15 @@ class LeappNode:
             else {}
         )
         initial_buffers = {name: buffer.clone() for name, buffer in buffers.items()}
-        sample_passed = {
-            sample_idx: self._sample_matches(
+        sample_mismatches = {
+            sample_idx: self._sample_mismatches(
                 f"sample {sample_idx}", input_values, source_outputs, rtol, atol
             )
             for sample_idx, input_values, source_outputs in examples
         }
+        sample_passed = {idx: not found for idx, found in sample_mismatches.items()}
         all_match = all(sample_passed.values())
-        error_hint = self._reentry_validation_hint(sample_passed)
+        replay_mismatches = set()
 
         # Replay the first sample with declared buffers restored. A different
         # result means the export kept undeclared state from the earlier calls.
@@ -643,12 +608,17 @@ class LeappNode:
                 for name, buffer in buffers.items():
                     buffer.copy_(initial_buffers[name])
             _, input_values, source_outputs = examples[0]
-            if not self._sample_matches(
+            replay_mismatches = self._sample_mismatches(
                 "sample 0 (replayed)", input_values, source_outputs, rtol, atol
-            ):
+            )
+            if replay_mismatches:
                 all_match = False
-                error_hint = _HIDDEN_STATE_HINT
 
+        error_hint = validation_hint(
+            sample_passed,
+            replay_mismatches=replay_mismatches,
+            mismatches=set().union(*sample_mismatches.values()),
+        )
         if error_hint is not None:
             _get_logger().warning(f"  {self.name}: {error_hint}")
 

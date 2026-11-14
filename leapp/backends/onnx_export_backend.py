@@ -353,6 +353,103 @@ class ONNXTorchScriptExportBackend(ONNXExportBackend):
 
 class ONNXDynamoExportBackend(ONNXExportBackend):
     @staticmethod
+    def _fix_integer_sort_ties(model: onnx.ModelProto) -> None:
+        """Restore ONNX's lower-index-first tie rule for full int64 sorts.
+
+        ORT CUDA TopK can permute equal keys. For ascending full sorts on a
+        statically sized last axis, sort unique (equal-key group, input index)
+        pairs instead. Group IDs avoid overflow from packing the original keys,
+        which may span the entire int64 range. This adds one extra TopK.
+        """
+        graph = model.graph
+        types = {
+            value.name: value.type.tensor_type
+            for value in (*graph.input, *graph.value_info)
+        }
+        initializers = {value.name: value for value in graph.initializer}
+        used_names = set(initializers) | set(types)
+        for node in graph.node:
+            used_names.update(node.input)
+            used_names.update(node.output)
+
+        nodes = []
+        for node_index, node in enumerate(graph.node):
+            nodes.append(node)
+            if node.op_type != "TopK" or node.domain not in ("", "ai.onnx"):
+                continue
+            attrs = {
+                attr.name: helper.get_attribute_value(attr) for attr in node.attribute
+            }
+            tensor_type = types.get(node.input[0])
+            k = initializers.get(node.input[1])
+            if (
+                tensor_type is None
+                or tensor_type.elem_type != TensorProto.INT64
+                or not tensor_type.shape.dim
+                or attrs.get("axis", -1) not in (-1, len(tensor_type.shape.dim) - 1)
+                or attrs.get("largest", 1) != 0
+                or attrs.get("sorted", 1) != 1
+                or k is None
+                or list(k.dims) != [1]
+            ):
+                continue
+            size = tensor_type.shape.dim[-1].dim_value
+            if size < 2 or size * size - 1 > 2**63 - 1:
+                continue
+            if numpy_helper.to_array(k).item() != size:
+                continue
+
+            prefix = f"leapp_sort_{node_index}_"
+            while any(name.startswith(prefix) for name in used_names):
+                prefix += "_"
+
+            def constant(suffix, dims, values):
+                name = prefix + suffix
+                graph.initializer.append(
+                    helper.make_tensor(name, TensorProto.INT64, dims, values)
+                )
+                return name
+
+            def emit(op, inputs, suffix, **attributes):
+                output = prefix + suffix
+                nodes.append(helper.make_node(op, inputs, [output], **attributes))
+                return output
+
+            values, indices = node.output
+            raw_indices = prefix + "raw_indices"
+            node.output[1] = raw_indices
+            previous = emit(
+                "Gather",
+                [values, constant("previous_positions", [size], [0, *range(size - 1)])],
+                "previous_values",
+                axis=-1,
+            )
+            equal = emit("Equal", [values, previous], "equal")
+            boundaries = emit("Not", [equal], "boundaries")
+            flags = emit("Cast", [boundaries], "flags", to=TensorProto.INT64)
+            groups = emit("CumSum", [flags, constant("axis", [], [-1])], "groups")
+            offsets = emit("Mul", [groups, constant("size", [], [size])], "offsets")
+            packed = emit("Add", [offsets, raw_indices], "packed")
+            permutation = prefix + "permutation"
+            nodes.append(
+                helper.make_node(
+                    "TopK",
+                    [packed, node.input[1]],
+                    [prefix + "sorted_packed", permutation],
+                    axis=-1,
+                    largest=0,
+                    sorted=1,
+                )
+            )
+            nodes.append(
+                helper.make_node(
+                    "GatherElements", [raw_indices, permutation], [indices], axis=-1
+                )
+            )
+        del graph.node[:]
+        graph.node.extend(nodes)
+
+    @staticmethod
     def _fix_gathernd_int32_indices(model: onnx.ModelProto) -> int:
         """Replace constant INT32 GatherND indices with per-node INT64 copies.
 
@@ -463,6 +560,7 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
         # (ONNX exporter bug: shared scalar initializers between Gather and Slice nodes).
         self._fix_scalar_slice_inputs(model_proto)
         self._fix_gathernd_int32_indices(model_proto)
+        self._fix_integer_sort_ties(model_proto)
         self._embed_warp_bundles(model_proto)
 
         # Wrap in SimplifiedONNXProgram so validation uses controlled

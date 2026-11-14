@@ -26,8 +26,9 @@ annotation it creates.
 
    * - Helpers
      - Use for
-   * - ``joint_position``, ``joint_velocity``, ``joint_effort``
-     - Joint quantities, including torque represented as joint effort.
+   * - ``joint_position``, ``joint_velocity``, ``joint_acceleration``, ``joint_effort``
+     - Joint quantities, including acceleration in radians/s² or meters/s²
+       according to joint type, and torque represented as joint effort.
    * - ``frame_pose``, ``frame_position``, ``frame_orientation``
      - A frame's pose, position, or orientation relative to a reference frame.
    * - ``frame_twist``, ``frame_linear_velocity``, ``frame_angular_velocity``
@@ -42,6 +43,8 @@ annotation it creates.
      - Proportional and derivative gains.
    * - ``image``
      - Image data with layout and encoding agreed with the consumer.
+   * - ``point_cloud``
+     - Cartesian XYZ point coordinates in meters relative to a reference frame.
 
 For example, construct annotations for measured joint positions and a desired
 position input using the same helper:
@@ -103,7 +106,7 @@ values they accept:
    * - Helpers
      - ``reference``
      - ``expressed_in``
-   * - Pose, position, orientation
+   * - Pose, position, orientation, point cloud
      - Frame name or ``None``
      - Not accepted, always expressed in the same frame as ``reference``
    * - Twist, linear/angular velocity, and acceleration
@@ -121,12 +124,15 @@ Validation and the generic constructor
 ======================================
 
 Helpers enforce standard component names for the common quantities listed
-below. If you provide names on a ``COMPONENT`` axis, they must contain exactly
-the names listed for that helper, with no missing, repeated, or additional
-names. Other names raise ``ValueError``. This gives consumers a consistent
+below. If you provide names on a ``COMPONENT`` axis, they may contain any subset
+of the names listed for that helper, with no repeated or additional names.
+Other names raise ``ValueError``. This gives consumers a consistent
 vocabulary for these quantities.
 
-Any ordering of the required names is accepted. You should make sure that order
+Omitted components remain unspecified; they do not imply zero values.
+The label count must still match the tensor dimension size.
+
+Any ordering of the supplied names is accepted. You should make sure that order
 matches what you actually have in your tensor: LEAPP cannot check the physical
 meaning of the values, so incorrect ordering can still pass validation and
 export successfully.
@@ -142,15 +148,17 @@ export successfully.
      - ``qx, qy, qz, qw``
    * - ``frame_position``, ``force_application_position``
      - ``x, y, z``
+   * - ``point_cloud``
+     - ``x, y, z``
    * - ``frame_twist``
-     - ``vx, vy, vz, wx, wy, wz``
+     - ``x, y, z, angular_x, angular_y, angular_z``
    * - ``frame_linear_velocity``
-     - ``vx, vy, vz``
+     - ``x, y, z``
    * - ``frame_angular_velocity``
-     - ``wx, wy, wz``
+     - ``angular_x, angular_y, angular_z``
 
-For a position, the required names are ``x``, ``y``, and ``z``. These examples
-show accepted permutations and rejected name selections:
+For a position, the allowed names are ``x``, ``y``, and ``z``. These examples
+show accepted subsets and orders, and rejected name selections:
 
 .. tabs::
 
@@ -175,13 +183,19 @@ show accepted permutations and rejected name selections:
              axes=[Axis(AxisKind.COMPONENT, names=["z", "x", "y"])],
          )
 
-         # Rejected (ValueError): velocity labels cannot describe a position.
-         frame_position(
-             "position", xyz,
-             axes=[Axis(AxisKind.COMPONENT, names=["vx", "vy", "vz"])],
+         # Accepted: a planar position with only x and y components.
+         planar_position = frame_position(
+             "position", torch.tensor([1.0, 2.0]),
+             axes=[Axis(AxisKind.COMPONENT, names=["x", "y"])],
          )
 
-         # Rejected (ValueError): z is missing and y appears twice.
+         # Rejected (ValueError): angular labels cannot describe a position.
+         frame_position(
+             "position", xyz,
+             axes=[Axis(AxisKind.COMPONENT, names=["angular_x", "angular_y", "angular_z"])],
+         )
+
+         # Rejected (ValueError): y appears twice.
          frame_position(
              "position", xyz,
              axes=[Axis(AxisKind.COMPONENT, names=["x", "y", "y"])],
@@ -210,8 +224,20 @@ show accepted permutations and rejected name selections:
          - {kind: component, names: [z, x, y]}
          spatial: {reference: null}
 
+         ---
+         # Accepted: planar values ordered x, y
+         name: position
+         kind: frame/position
+         axes:
+         - {kind: component, names: [x, y]}
+         spatial: {reference: null}
+
 These checks apply when names are supplied on a ``COMPONENT`` axis. Helpers do
 not infer missing labels or change the underlying representation.
+
+A planar twist can use ``frame_twist`` with component names
+``["x", "y", "angular_z"]`` and a component dimension of size three.
+Its kind remains ``frame/twist``.
 
 Use ``TensorSemantics`` directly for custom conventions or additional ``extra``
 metadata. For joint positions, the helper is equivalent to:
@@ -224,3 +250,35 @@ metadata. For joint positions, the helper is equivalent to:
 
 The generic constructor validates metadata structure without the helper-specific
 component-name checks. 
+
+Point clouds
+============
+
+``point_cloud`` describes XYZ coordinates relative to ``reference``.
+The coordinates use that frame's origin and axes. An omitted ``reference``
+means global, matching ``frame_position``.
+
+For an unordered cloud shaped ``[point, component]``:
+
+.. code-block:: python
+
+   import torch
+   from leapp import Axis, AxisKind, point_cloud
+
+   points = torch.zeros(1024, 3)
+   annotation = point_cloud(
+       "points", points,
+       reference="camera",
+       axes=[
+           Axis("point"),
+           Axis(AxisKind.COMPONENT, names=["x", "y", "z"]),
+       ],
+   )
+
+This emits ``kind: point_cloud`` and ``spatial: {reference: camera}``.
+``"point"`` is a custom axis kind. Batched ``[batch, point, component]`` and
+organized ``[height, width, component]`` layouts can use additional axes.
+Supplied component names may be any unique subset of ``x, y, z``.
+Keep colors and other attributes in separate tensors with an agreed point order.
+The helper preserves the tensor's values, shape, and dtype. Point-count
+variability depends on the exported model's shape support.

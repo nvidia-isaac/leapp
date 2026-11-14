@@ -1,0 +1,127 @@
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+
+"""Assigning one value to several positions exports correctly.
+
+``axis = torch.zeros_like(q[..., 0:3]); axis[..., 2] = 1`` is lowered to a flat
+``index_put``. PyTorch broadcasts a one-element source over the selected
+positions, but ``torch.onnx.export``'s constant folding does not: when every
+input of the assignment is constant it fails with "shape '[n]' is invalid for
+input of size 1". With traced indices, the number of selected positions
+depends on the input values and differs between samples.
+"""
+
+import torch
+
+import leapp
+from leapp import InferenceManager, TensorSemantics
+from leapp.leapp import _MANAGER as annotate
+
+from tests.functional_tests.base import LEAPPFunctionalTestBase
+
+
+# Seeded so the number of positive entries differs between every input.
+_GENERATOR = torch.Generator().manual_seed(0)
+SAMPLES = [torch.randn(1, 5, 4, generator=_GENERATOR) for _ in range(2)]
+UNSEEN = torch.randn(1, 5, 4, generator=_GENERATOR)
+
+
+def _constant_axis(q):
+    # The heading-axis pattern from ProtoMotions' rotation helpers.
+    axis = torch.zeros_like(q[..., 0:3])
+    axis[..., 2] = 1
+    return q[..., 0:3] + axis
+
+
+def _traced_scalar_value(q):
+    out = torch.zeros_like(q)
+    out[..., 1] = q[0, 0, 0]
+    return out + q
+
+
+def _constant_at_mask(q):
+    out = q.clone()
+    out[q > 0] = 1.0
+    return out
+
+
+def _traced_scalar_at_mask(q):
+    out = torch.zeros_like(q)
+    out[q > 0] = q[0, 0, 0]
+    return out + q
+
+
+def _scalar_in_nested_view(q):
+    out = q.clone()
+    sibling = out[..., 1:]
+    nested = out[:, 1:, :].transpose(1, 2)[..., 1:3]
+    nested[..., 1] = q[0, 0, 0]
+    return torch.cat((out.reshape(-1), sibling.reshape(-1)))
+
+
+def _scalar_at_transposed_mask(q):
+    out = q.clone()
+    sibling = out[..., 1:]
+    view = out.transpose(1, 2)
+    view[q.transpose(1, 2) > 0] = q[0, 0, 0]
+    return torch.cat((out.reshape(-1), sibling.reshape(-1)))
+
+
+class TestSetitemScalarBroadcast(LEAPPFunctionalTestBase):
+    def _export_and_check(self, fn, export_with="onnx-torchscript"):
+        leapp.start(self.TEST_GRAPH_NAME, max_cached_io=len(SAMPLES))
+        for sample in SAMPLES:
+            q = annotate.input_tensors("node", [TensorSemantics("q", sample)])
+            annotate.output_tensors(
+                "node",
+                [TensorSemantics("y", fn(q))],
+                export_with=export_with,
+                backend_params=(
+                    {"opset_version": 17} if export_with == "onnx-torchscript" else None
+                ),
+            )
+        leapp.stop()
+        leapp.compile_graph(visualize=False, validate=True, strict=True)
+
+        manager = InferenceManager(
+            f"{self.TEST_GRAPH_NAME}/{self.TEST_GRAPH_NAME}.yaml"
+        )
+        one_positive = torch.full_like(UNSEEN, -3.0)
+        one_positive[0, 1, 0] = 2.0
+        for value in (
+            *SAMPLES,
+            UNSEEN,
+            torch.full_like(UNSEEN, -2.0),
+            one_positive,
+            torch.ones_like(UNSEEN),
+        ):
+            original = value.clone()
+            actual = torch.as_tensor(manager.run_policy({"node/q": value})["node/y"])
+            torch.testing.assert_close(actual.float(), fn(value).float())
+            torch.testing.assert_close(value, original)
+
+    def test_constant_assigned_to_column(self):
+        self._export_and_check(_constant_axis)
+
+    def test_traced_scalar_assigned_to_column(self):
+        self._export_and_check(_traced_scalar_value)
+
+    def test_constant_assigned_through_traced_mask(self):
+        self._export_and_check(_constant_at_mask)
+
+    def test_traced_scalar_assigned_through_traced_mask(self):
+        self._export_and_check(_traced_scalar_at_mask)
+
+    def test_scalar_assignment_updates_nested_view_base_and_sibling(self):
+        # Flattening these non-contiguous outputs introduces _unsafe_view,
+        # which the legacy ONNX exporter cannot lower.
+        for backend in ("onnx", "pt2"):
+            with self.subTest(backend=backend):
+                self._export_and_check(_scalar_in_nested_view, backend)
+
+    def test_scalar_assignment_through_transposed_mask_updates_base_and_sibling(self):
+        for backend in ("onnx", "pt2"):
+            with self.subTest(backend=backend):
+                self._export_and_check(_scalar_at_transposed_mask, backend)

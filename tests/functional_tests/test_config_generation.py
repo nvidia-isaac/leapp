@@ -672,6 +672,7 @@ if __name__ == "__main__":
 
 class TestStructuredSemantics(LEAPPFunctionalTestBase):
     def test_helpers_export_and_runtime(self):
+        """Preserve partial twist labels through graph export and runtime replay."""
         from leapp import (
             Axis,
             AxisKind,
@@ -684,7 +685,7 @@ class TestStructuredSemantics(LEAPPFunctionalTestBase):
 
         q = torch.tensor([[1.0, 2.0]])
         target = torch.tensor([[3.0, 5.0]])
-        velocity = torch.zeros(1, 1, 6)
+        velocity = torch.tensor([[[0.5, 1.0, -0.25]]])
         pixels = torch.zeros(1, 3, 2, 2, dtype=torch.uint8)
         joints = [
             Axis(AxisKind.SYSTEM, names=["robot0"]),
@@ -705,7 +706,7 @@ class TestStructuredSemantics(LEAPPFunctionalTestBase):
                         Axis(AxisKind.ELEMENT, names=["tool"]),
                         Axis(
                             AxisKind.COMPONENT,
-                            names=["vx", "vy", "vz", "wx", "wy", "wz"],
+                            names=["x", "y", "angular_z"],
                         ),
                     ],
                 ),
@@ -730,6 +731,11 @@ class TestStructuredSemantics(LEAPPFunctionalTestBase):
         )
         self.assertEqual(inputs[2]["axes"][1], {"kind": "element", "names": ["tool"]})
         self.assertEqual(
+            inputs[2]["axes"][2],
+            {"kind": "component", "names": ["x", "y", "angular_z"]},
+        )
+        self.assertEqual(inputs[2]["shape"], [1, 1, 3])
+        self.assertEqual(
             config["models"]["policy"]["outputs"][0]["kind"], Kind.JOINT_EFFORT.value
         )
         runtime = leapp.InferenceManager(path)
@@ -741,7 +747,7 @@ class TestStructuredSemantics(LEAPPFunctionalTestBase):
                 "policy/camera": pixels,
             }
         )
-        torch.testing.assert_close(result["policy/effort"], target - q)
+        torch.testing.assert_close(result["policy/effort"], target - q + velocity.sum())
 
     def test_optional_setpoint_values_survive_export(self):
         leapp.start(name=self.TEST_GRAPH_NAME)
