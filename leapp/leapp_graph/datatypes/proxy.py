@@ -21,6 +21,8 @@ allocate in the graph even when their sample values and dtypes are identical.
 
 from typing import Any, NamedTuple, Optional
 
+import math
+
 import numpy as np
 import torch
 from torch.fx.proxy import Proxy
@@ -30,6 +32,7 @@ from leapp.utils.dtype import value_to_name_and_shape
 
 
 STORAGE_LAYOUT_META_KEY = "leapp_storage_layout"
+WRITTEN_LAYOUT_META_KEY = "leapp_written_layout"
 
 
 class TorchStorageLayout(NamedTuple):
@@ -95,6 +98,8 @@ def update_proxy(carrier: Any, name: str, context, proxy: Optional[Proxy]) -> No
         if old.node is not proxy.node:
             mutation = old.tracer.create_proxy("call_method", "copy_", (old, proxy), {})
             mutation.node.meta["leapp_mutation"] = True
+            # The bytes the write lands on, which a view covers only in part.
+            mutation.node.meta[WRITTEN_LAYOUT_META_KEY] = layout_key(carrier)
             old.node.graph.requires_functionalization = True
     else:
         carrier._proxy = proxy
@@ -183,7 +188,7 @@ def layout_key(value):
 
     try:
         dtype_name, storage_shape = value_to_name_and_shape(native)
-    except ValueError:
+    except (KeyError, ValueError):
         return None
     storage_shape = tuple(int(dim) for dim in storage_shape)
     if 0 in storage_shape:
@@ -198,6 +203,68 @@ def layout_key(value):
         byte_strides = _contiguous_byte_strides(storage_shape, dtype_name)
 
     return (device, dtype_name, storage_shape, byte_strides, pointer)
+
+
+def layouts_overlap(a: object, b: object) -> bool:
+    """Whether two values cover some of the same bytes, also when strided
+    views of one memory interleave. Each is a tensor, a TracedTensor, or the
+    layout_key() of one."""
+    keys = [
+        value if isinstance(value, tuple) else layout_key(value) for value in (a, b)
+    ]
+    # An empty value covers no bytes, and two devices share none.
+    if None in keys or keys[0][0] != keys[1][0]:
+        return False
+    if keys[0] == keys[1]:
+        return True
+    sizes, spans, dense = [], [], []
+    for _, dtype_name, shape, strides, address in keys:
+        size = getattr(torch, dtype_name).itemsize
+        steps = [(n - 1) * stride for n, stride in zip(shape, strides)]
+        low = address + sum(step for step in steps if step < 0)
+        high = address + sum(step for step in steps if step > 0) + size
+        expected, packed = size, True
+        for n, stride in reversed(tuple(zip(shape, strides))):
+            packed = packed and (n == 1 or stride == expected)
+            expected *= n
+        sizes.append(size)
+        spans.append((low, high))
+        dense.append(packed)
+    if spans[0][1] <= spans[1][0] or spans[1][1] <= spans[0][0]:
+        return False
+    if all(dense):
+        return True
+    # The indices of the units a view covers, in the largest unit that divides
+    # every element size, stride and start address, so a view that starts
+    # between elements, as torch.frombuffer() allows, or a NumPy record field
+    # whose stride is not a multiple of its size, keeps the bytes it covers.
+    origin = min(low for low, _ in spans)
+    unit = math.gcd(
+        *sizes,
+        *(stride for key in keys for stride in key[3]),
+        *(key[4] - origin for key in keys),
+    )
+
+    def units(index: int) -> torch.Tensor:
+        _, _, shape, strides, address = keys[index]
+        # On the CPU, whatever the default device, as torch.device("meta").
+        covered = torch.tensor([(address - origin) // unit], device="cpu")
+        for n, stride in zip(shape, strides):
+            covered = (
+                covered[:, None] + torch.arange(n, device="cpu") * (stride // unit)
+            ).reshape(-1)
+        return (
+            covered[:, None] + torch.arange(sizes[index] // unit, device="cpu")
+        ).reshape(-1)
+
+    # A dense view covers every byte of its span, so only the other view's
+    # units are listed, and the cost follows the strided view.
+    for index in (0, 1):
+        if dense[index]:
+            low, high = ((bound - origin) // unit for bound in spans[index])
+            other = units(1 - index)
+            return bool(((other >= low) & (other < high)).any())
+    return bool(torch.isin(units(0), units(1)).any())
 
 
 def is_same_value(source, result) -> bool:

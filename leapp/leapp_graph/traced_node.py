@@ -27,7 +27,11 @@ from leapp.leapp_graph.datatypes import (
     to_export_torch_tensor,
 )
 from leapp.leapp_graph.datatypes.patching import get_warp_backend
-from leapp.leapp_graph.datatypes.proxy import STORAGE_LAYOUT_META_KEY
+from leapp.leapp_graph.datatypes.proxy import (
+    STORAGE_LAYOUT_META_KEY,
+    WRITTEN_LAYOUT_META_KEY,
+    layouts_overlap,
+)
 from leapp.leapp_graph.aten_rewrites import functionalize_graph, rewrite_aten_ops
 from leapp.utils.tensor_description import (
     resolve_tensor_descriptions_to_names,
@@ -44,6 +48,22 @@ if TYPE_CHECKING:
     from leapp.leapp_graph.datatypes.warp import WarpSegment
 
 
+def lazy_flags(value) -> tuple:
+    """The lazy negation and conjugation flags of a tensor, both off for an
+    array of another framework, which has none."""
+    native = value.data if isinstance(value, TracedData) else value
+    if not isinstance(native, torch.Tensor):
+        return (False, False)
+    return (native.is_neg(), native.is_conj())
+
+
+def _alias_key(value) -> tuple | None:
+    """The bytes a value covers and how it reads them, since a lazy negation
+    or conjugation reads the same bytes as another value."""
+    key = layout_key(value)
+    return None if key is None else (key, lazy_flags(value))
+
+
 # fx graph overloads to create custom behavior when interacting with the graph.
 # keep local so that only the tracedTensorNode can create it.
 class _LeappFXGraph(fx.Graph):
@@ -53,6 +73,7 @@ class _LeappFXGraph(fx.Graph):
         super().__init__()
         self.recording = True
         self.requires_functionalization = False
+        self.rewritten = False
 
     def create_node(self, *args, **kwargs):
         warp_backend = get_warp_backend()
@@ -93,6 +114,9 @@ class TracedTensorNode(LeappNode):
         # Buffer tracker for auto-detecting stateful buffers (set by annotate.module())
         self._buffer_tracker = None
         self._next_buffer_idx = 0
+        # The outputs the first output_tensors() call of this pass passed,
+        # which a call repeated after a failure has to pass again.
+        self._called_outputs: dict | None = None
 
     def _get_required_io_description(self, name: str, io_list: list, io_kind: str):
         desc = self.get_io_description_by_name(name, io_list)
@@ -160,6 +184,7 @@ class TracedTensorNode(LeappNode):
         self._next_buffer_idx = 0
         self.m = None
         self._model_captured = False
+        self._called_outputs = None
         self._layout_index.clear()
         self._input_rebindings.clear()
         # State placeholders belong to the graph being replaced, so a second
@@ -209,7 +234,7 @@ class TracedTensorNode(LeappNode):
         match and the sharing policy, so a stale index entry cannot promote an
         unrelated value into a shared root.
         """
-        key = layout_key(value)
+        key = _alias_key(value)
         if key is None:
             return None
         candidate = self._layout_index.get(key)
@@ -232,9 +257,9 @@ class TracedTensorNode(LeappNode):
         for name, value in outputs.items():
             if not isinstance(value, TracedData):
                 continue
-            declared = self._layout_index.get(layout_key(value))
+            declared = self._layout_index.get(_alias_key(value))
             if (
-                declared is None
+                not isinstance(declared, TracedData)
                 or declared.proxy.node is value.proxy.node
                 or (declared.proxy.node, value.proxy.node) in self._captured_aliases
             ):
@@ -264,64 +289,100 @@ class TracedTensorNode(LeappNode):
         # Auto-collect buffer mutations before merging state outputs.
         # collect() may remove non-mutated buffers from _state_tensors and
         # bake them as constants, so it must run before get_state_outputs().
-        if self._buffer_tracker is not None and not self._buffer_tracker._collected:
-            self._buffer_tracker.collect()
-            self._buffer_tracker.restore()
-
-        # Merge state outputs into the tensor dict before processing
-        state_outputs = self.get_state_outputs()
-        if state_outputs:
-            _get_logger().info(
-                f"Adding {len(state_outputs)} state outputs: {list(state_outputs.keys())}"
-            )
-            tensors = {**tensors, **state_outputs}
-
-        # Held for the post-pruning alias check below. Static outputs join
-        # `tensors` further down but are frozen into buffers at trace time, so
-        # the graph never reads the bytes a declared input could alias.
-        traced_outputs = dict(tensors)
-
-        unwrapped_tensors = []
-        for name, tensor in tensors.items():
-            unwrapped = self.create_output(
-                tensor, name, semantics=(semantics_map or {}).get(name)
-            )
-            unwrapped_tensors.append(unwrapped)
-            if name in self._state_tensors:
-                self._state_tensors[name]["output_desc"] = (
-                    self._get_required_io_description(name, self.outputs, "output")
-                )
-
-        # Static tensors go through the same create_output path with static=True
-        if static_tensors:
-            for name, tensor in static_tensors.items():
-                wrapped = self.create_output(
-                    tensor,
-                    name,
-                    static=True,
-                    semantics=(static_semantics_map or {}).get(name),
-                )
-                tensors[name] = wrapped
-
-        self.build_graph_module(list(tensors.values()))
-        self._validate_declared_input_aliases(traced_outputs)
-
-        self.m = fx.GraphModule(self.tracer.root, self.graph)
-
-        # Sanitize the FX graph for compatibility with export backends.
-        rewrite_aten_ops(self.m.graph)
-        self._rewrite_method_descriptors(self.m.graph)
-        self._make_tensor_attrs_contiguous(self.m)
-        self.m.recompile()
-
-        _get_logger().debug(f"Compiled graph module for {self.name}:\n{self.m.graph}")
-        _get_logger().debug(
-            f"Graph module inputs: {[resolve_tensor_descriptions_to_names(input) for input in self.input_formats]}"
+        called = self._called_outputs
+        tracker = self._buffer_tracker
+        # A call that built the graph left its outputs there, and the buffer
+        # checks judged the buffers by them, also when the call failed before
+        # building the graph or in collect(), which leaves the buffers holding
+        # the failed forward's values. Otherwise a failed call can be repeated
+        # with another output.
+        judged = tracker is not None or any(
+            node.op == "output" for node in self.graph.nodes
         )
-        _get_logger().debug(
-            f"Graph module outputs: {[resolve_tensor_descriptions_to_names(output) for output in self.output_formats]}"
-        )
-        self.setup_backend(backend, backend_params)
+        if (
+            called is not None
+            and judged
+            and (
+                list(tensors) != list(called)
+                or any(tensors[name] is not called[name] for name in tensors)
+            )
+        ):
+            _get_logger().fatal(
+                f"output_tensors() for node '{self.name}' can be repeated after "
+                "a failure only with the same outputs. Call leapp.start() and "
+                "capture the graph again.",
+                error_type=RuntimeError,
+            )
+        self._called_outputs = dict(tensors)
+        if tracker is not None and not tracker._collected:
+            tracker.collect(tensors)
+
+        outputs = list(tensors.values())
+        compiled = False
+        try:
+            # Merge state outputs into the tensor dict before processing
+            state_outputs = self.get_state_outputs()
+            if state_outputs:
+                _get_logger().info(
+                    f"Adding {len(state_outputs)} state outputs: {list(state_outputs.keys())}"
+                )
+                tensors = {**tensors, **state_outputs}
+
+            # Held for the post-pruning alias check below. Static outputs join
+            # `tensors` further down but are frozen into buffers at trace time, so
+            # the graph never reads the bytes a declared input could alias.
+            traced_outputs = dict(tensors)
+
+            unwrapped_tensors = []
+            for name, tensor in tensors.items():
+                unwrapped = self.create_output(
+                    tensor, name, semantics=(semantics_map or {}).get(name)
+                )
+                unwrapped_tensors.append(unwrapped)
+                if name in self._state_tensors:
+                    self._state_tensors[name]["output_desc"] = (
+                        self._get_required_io_description(name, self.outputs, "output")
+                    )
+
+            # Static tensors go through the same create_output path with static=True
+            if static_tensors:
+                for name, tensor in static_tensors.items():
+                    wrapped = self.create_output(
+                        tensor,
+                        name,
+                        static=True,
+                        semantics=(static_semantics_map or {}).get(name),
+                    )
+                    tensors[name] = wrapped
+
+            self.build_graph_module(list(tensors.values()))
+            self._validate_declared_input_aliases(traced_outputs)
+
+            self.m = fx.GraphModule(self.tracer.root, self.graph)
+
+            # Sanitize the FX graph for compatibility with export backends.
+            rewrite_aten_ops(self.m.graph)
+            self._rewrite_method_descriptors(self.m.graph)
+            self._make_tensor_attrs_contiguous(self.m)
+            self.m.recompile()
+
+            _get_logger().debug(
+                f"Compiled graph module for {self.name}:\n{self.m.graph}"
+            )
+            _get_logger().debug(
+                f"Graph module inputs: {[resolve_tensor_descriptions_to_names(input) for input in self.input_formats]}"
+            )
+            _get_logger().debug(
+                f"Graph module outputs: {[resolve_tensor_descriptions_to_names(output) for output in self.output_formats]}"
+            )
+            self.setup_backend(backend, backend_params)
+            compiled = True
+        finally:
+            # At the end, so it knows whether the node compiled: after a failure
+            # it keeps the state inputs traced for a repeated call. Also when it
+            # fails, so the model is not left half captured.
+            if self._buffer_tracker is not None:
+                self._buffer_tracker.restore(outputs, compiled)
 
         return (
             unwrapped_tensors[0]
@@ -517,7 +578,7 @@ class TracedTensorNode(LeappNode):
                     # Declaring a buffer is what lets a persistent alias of it
                     # find this carrier later, so registration is the API and no
                     # separate one is needed.
-                    key = layout_key(traced)
+                    key = _alias_key(traced)
                     if key is not None:
                         self._layout_index.setdefault(key, traced)
                 return traced
@@ -541,11 +602,32 @@ class TracedTensorNode(LeappNode):
 
                 # Create unique attribute name and store on root module
                 attr_name = f"_static_{name}".replace(".", "_")
-                self.tracer.root.register_buffer(
-                    attr_name, to_export_torch_tensor(data).clone()
+                value = to_export_torch_tensor(data)
+                # Create get_attr node that retrieves the stored constant, or
+                # take the one a failed call made, so a repeated call has the
+                # same outputs, which needs the same value.
+                node = next(
+                    (
+                        node
+                        for node in self.graph.nodes
+                        if node.op == "get_attr" and node.target == attr_name
+                    ),
+                    None,
                 )
-                # Create get_attr node that retrieves the stored constant
-                node = self.graph.create_node("get_attr", attr_name, (), {})
+                kept = getattr(self.tracer.root, attr_name, None)
+                if node is not None and (
+                    (kept.dtype, kept.device, kept.shape)
+                    != (value.dtype, value.device, value.shape)
+                    or not torch.equal(kept, value)
+                ):
+                    _get_logger().fatal(
+                        f"output_tensors() for node '{self.name}' can be repeated "
+                        "after a failure only with the same outputs. Call "
+                        "leapp.start() and capture the graph again.",
+                        error_type=RuntimeError,
+                    )
+                self.tracer.root.register_buffer(attr_name, value.clone())
+                node = node or self.graph.create_node("get_attr", attr_name, (), {})
                 proxy = Proxy(node, self.tracer)
                 return as_traced(data, name, self, proxy)
         else:
@@ -673,12 +755,31 @@ class TracedTensorNode(LeappNode):
         Returns:
             fx.GraphModule: A graph module that takes all inputs and returns all outputs
         """
+        if self.graph.rewritten:
+            _get_logger().fatal(
+                f"output_tensors() for node '{self.name}' cannot be repeated, "
+                "since the call that failed already rewrote the in-place "
+                "operations of its graph. Call leapp.start() and capture the "
+                "graph again.",
+                error_type=RuntimeError,
+            )
         # Find all nodes that are actually used by traversing backwards from outputs
         output_nodes = [output.proxy.node for output in outputs]
+        # A call that failed after building the graph left its outputs there.
+        built = next((node for node in self.graph.nodes if node.op == "output"), None)
+        expected = output_nodes[0] if len(output_nodes) == 1 else tuple(output_nodes)
+        if built is not None and built.args[0] != expected:
+            _get_logger().fatal(
+                f"output_tensors() for node '{self.name}' can be repeated after "
+                "a failure only with the same outputs. Call leapp.start() and "
+                "capture the graph again.",
+                error_type=RuntimeError,
+            )
         self._captured_aliases = set()
         for output in outputs:
-            declared = self._layout_index.get(layout_key(output))
-            if declared is None:
+            declared = self._layout_index.get(_alias_key(output))
+            # A buffer a failed call made plain again is still in the index.
+            if not isinstance(declared, TracedData):
                 continue
             pending, seen = [output.proxy.node], set()
             while pending:
@@ -699,6 +800,9 @@ class TracedTensorNode(LeappNode):
             # while pruning unused work and reporting required capture errors
             # through the same LEAPP checks as the final graph.
             self._prune_graph(output_nodes, preserve_mutations=True)
+            # Pruning checks the capture before it changes the graph, so a call
+            # that failed those checks can still be repeated.
+            self.graph.rewritten = True
             self.graph.output(
                 output_nodes[0] if len(output_nodes) == 1 else tuple(output_nodes)
             )
@@ -756,6 +860,36 @@ class TracedTensorNode(LeappNode):
                     "as logically dense, so view-mutation behavior can differ "
                     f"from this capture. Pass {description.name}.contiguous() "
                     "as this input to annotate.input_tensors().",
+                    error_type=ValueError,
+                )
+        # Inputs that read the same bytes with different lazy negation or
+        # conjugation are separate graph inputs, so a write the graph records
+        # on those bytes would reach only one of them.
+        readers = [
+            (layout, flags, declared.name)
+            for (layout, flags), declared in self._layout_index.items()
+            if isinstance(declared, TracedData)
+        ]
+        written = [
+            node.meta[WRITTEN_LAYOUT_META_KEY]
+            for node in self.graph.nodes
+            if node.meta.get(WRITTEN_LAYOUT_META_KEY) is not None
+        ]
+        for write in written:
+            # Also in another shape, as a negated view reshaped.
+            touched = [
+                (flags, name)
+                for layout, flags, name in readers
+                if layouts_overlap(layout, write)
+            ]
+            names = [name for _, name in touched]
+            if len({flags for flags, _ in touched}) > 1:
+                _get_logger().fatal(
+                    f"Cannot capture node '{self.name}': inputs {sorted(names)} "
+                    "read the same memory with different lazy negation or "
+                    "conjugation, and the graph writes it, so the export would "
+                    "not carry the write from one to the other. Declare one of "
+                    "them and compute the other from it in the forward.",
                     error_type=ValueError,
                 )
 
@@ -864,6 +998,16 @@ class TracedTensorNode(LeappNode):
         """Create state tensors that are both inputs and outputs."""
         result = {}
         for name, tensor in tensors.items():
+            if name in self._state_tensors and not is_traced_type(
+                self._state_tensors[name]["input"]
+            ):
+                # annotate.module() failed part way and made its buffers plain.
+                _get_logger().fatal(
+                    f"State tensor '{name}' of node '{self.name}' is left from an "
+                    "annotate.module() call that failed. Call leapp.start() and "
+                    "capture the graph again.",
+                    error_type=RuntimeError,
+                )
             if name in self._state_tensors:
                 _get_logger().warning(
                     f"State tensor '{name}' already registered for node '{self.name}'. "

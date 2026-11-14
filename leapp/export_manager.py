@@ -87,6 +87,9 @@ class ExportManager:
             # tracetime variables
             self.nodes = {}
             self._next_completed_node_index = 0
+            self.node_outputs = []
+            # The session's trackers whose models the session end makes plain.
+            self.buffer_trackers = []
 
             ExportManager._initialized = True
 
@@ -130,6 +133,9 @@ class ExportManager:
     def reset_nodes(self):
         self.nodes = {}
         self._next_completed_node_index = 0
+        # Values the session's nodes set into buffers, each with its node.
+        # Holding a value keeps another tensor from taking its address.
+        self.node_outputs = []
 
     def get_nodes(self):
         return self.nodes
@@ -146,9 +152,17 @@ class ExportManager:
         TracingLock().reset()
 
     def restore_pending_buffer_trackers(self):
-        for node in self.nodes.values():
-            if hasattr(node, "_buffer_tracker") and node._buffer_tracker is not None:
-                node._buffer_tracker.restore()
+        # One set of plain tensors, so slots the session end makes plain that
+        # held one tensor still do.
+        copies = {}
+        # Taken off first, so a failure here does not reach the next session.
+        trackers, self.buffer_trackers = self.buffer_trackers, []
+        # Every tracker makes its own tensors plain first, so no alias replaces
+        # a tensor another tracker would make plain in place.
+        for tracker in trackers:
+            tracker.restore(ended=True, copies=copies)
+        for tracker in trackers:
+            tracker.make_traced_buffers_plain(copies)
 
     def set_detected_graph(self, models: dict, pipeline: dict):
         self.detected_nodes = models["models"]
@@ -651,8 +665,9 @@ class ExportManager:
         Replaces registered buffers with TracedTensor inputs so the forward
         pass is traced through them.  When ``output_tensors()`` triggers
         ``compile_trace()``, mutations are auto-detected: reassigned buffers
-        become state outputs with feedback connections, non-mutated buffers are
-        baked as constants.  Model buffers are restored afterwards.
+        become state outputs with feedback connections, non-mutated buffers the
+        graph reads are baked as constants.  Model buffers are restored
+        afterwards.
 
         Must be called after ``input_tensors()`` creates the node and before
         the model's forward pass.
@@ -679,8 +694,10 @@ class ExportManager:
 
         Note:
             Detects *reassignment* (``self.h = h_out``), not in-place mutation
-            (``self.h.copy_(h_out)``). Use ``state_tensors()``/``update_state()``
-            for in-place patterns.
+            (``self.h.copy_(h_out)``), which raises an error when LEAPP
+            detects it (the graph guide gives the exact rule). For in-place
+            patterns, leave the buffer out of ``buffer_names`` and use
+            ``state_tensors()``/``update_state()``.
         """
         if not ExportManager._interpret_graph:
             return
@@ -691,8 +708,39 @@ class ExportManager:
 
         from leapp.buffer_tracker import BufferTracker
 
+        # A node keeps one tracker, so a second call would drop the first one's
+        # buffers, or, once a failed output_tensors() baked them all, export
+        # the first forward. A tracker of an earlier pass has another graph,
+        # and a re-entry pass tracks nothing.
+        node = self.nodes[node_name]
+        previous = getattr(node, "_buffer_tracker", None)
+        if previous is not None and (
+            previous._injected or (previous._graph is node.graph and node.is_tracing)
+        ):
+            # After a failed output_tensors() its buffers stay traced so that
+            # call can be repeated.
+            msg = (
+                f"Error: module() was already called for node '{node_name}'. "
+                "Call it once per node in each pass, on a module that holds all "
+                "the buffers to track. If output_tensors() failed after its "
+                "buffer checks, repeat the same call without module(); "
+                "otherwise call leapp.start() and capture the graph again."
+            )
+            _get_logger().fatal(msg, error_type=ValueError)
+
         tracker = BufferTracker(model, node_name, self, buffer_names=buffer_names)
-        tracker.inject()
+        # The session end makes the buffers of each model plain, so a call that
+        # tracks nothing, as on every re-entry pass, is kept only for a model
+        # no kept tracker holds.
+        try:
+            tracker.inject()
+        except Exception:
+            self.buffer_trackers.append(tracker)
+            raise
+        if tracker._injected or all(
+            kept._model is not model for kept in self.buffer_trackers
+        ):
+            self.buffer_trackers.append(tracker)
 
         self.nodes[node_name]._buffer_tracker = tracker
 
