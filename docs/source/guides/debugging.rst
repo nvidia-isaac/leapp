@@ -33,7 +33,7 @@ returns a dict mapping node names to results.
 After the last sample, LEAPP runs sample 0 again, with buffers declared
 through ``annotate.register_buffer()`` restored to their exported values.
 The export must give the same result for the same inputs. If the replay
-differs, the exported model carries state between calls that the
+differs, the exported model usually carries state between calls that the
 annotations do not declare. A common cause is a buffer allocated outside
 the node that the node resets and then accumulates into, such as a Warp
 array cleared with ``zero_()`` and written with ``wp.atomic_add``. LEAPP
@@ -64,6 +64,19 @@ percentiles. Several samples are what make those numbers meaningful:
 one pair of tensors cannot characterize error, and it cannot show
 whether a value was captured because it is computed or because it
 happened to be constant on the first step.
+
+On an NVIDIA GPU, float32 outputs can also differ because TF32
+(TensorFloat-32) settings differ between capture and validation. To rule
+this out, set ``NVIDIA_TF32_OVERRIDE=0`` before starting Python, then
+capture, export, and validate again.
+
+A node that computes in ``bfloat16`` or ``float16`` can also round
+differently in the export than in the capture, and ``torch.autocast`` may
+be missing from the export. To rule this out, run the node in ``float32``
+without ``torch.autocast``. Reduced precision can also round differently
+from one call of the export to the next, for example once a TorchScript
+module on a GPU fuses its operations, so with a single sample only the
+replay of sample 0 may miss.
 
 Run more than one step
 ----------------------
