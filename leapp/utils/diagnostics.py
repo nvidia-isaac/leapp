@@ -60,21 +60,22 @@ def export_error_hint(error: Exception, *, node_name: str, backend: str) -> str 
 def validation_hint(
     sample_passed: dict[int, bool],
     *,
-    replay_failed: bool,
+    replay_mismatches: set[str],
     mismatches: set[str],
 ) -> str | None:
     """Explain a replay failure first, otherwise a failure confined to re-entry.
 
     Add the TF32 hint when the samples' only ``mismatches`` are values beyond the
-    tolerance.
+    tolerance and ``replay_mismatches`` add no other type. The replay's own
+    tolerance miss does not count, since the hidden-state hint explains it.
     """
     hints = []
-    if replay_failed:
+    if replay_mismatches:
         hints.append(_HIDDEN_STATE_HINT)
     elif sample_passed.get(0) and any(
         not passed for index, passed in sample_passed.items() if index > 0
     ):
         hints.append(_REENTRY_VALIDATION_HINT)
-    if mismatches == {"tolerance"}:
+    if mismatches | (replay_mismatches - {"tolerance"}) == {"tolerance"}:
         hints.append(_TF32_HINT)
     return " ".join(hints) or None
