@@ -266,7 +266,8 @@ Parameters
 Generated artifacts
 ~~~~~~~~~~~~~~~~~~~
 
-* Compiled models --- one file per node (``.pt``, ``.pt2``, ``.onnx``).
+* Compiled models --- one file per node (``.pt``, ``.pt2``, ``.onnx``,
+  ``.pte``), plus a ``.ptd`` weights file for an ExecuTorch CUDA node.
 * ``{name}.yaml`` --- model descriptions, pipeline connections
   (``data_flow`` and ``feedback_flow``), and system information.
 * ``{name}.png`` --- graph visualization (when ``visualize=True`` on
@@ -473,8 +474,8 @@ Parameters
   * ``export_with`` (str | None): Export backend. Common values
     ``"jit"``, ``"onnx"``, and ``"exported-program"`` (alias ``"pt2"``).
     Other variants are ``"jit-script"``, ``"jit-trace"``,
-    ``"onnx-dynamo"``, and ``"onnx-torchscript"``. See
-    :doc:`/guides/export`.
+    ``"onnx-dynamo"``, and ``"onnx-torchscript"``. ``"executorch"``
+    writes an ExecuTorch ``.pte`` program. See :doc:`/guides/export`.
   * ``backend_params`` (dict): Backend-specific parameters.
 
 Behavior
@@ -823,7 +824,7 @@ Notes
 * Input dictionaries passed to ``run_policy()`` must use
   ``node_name/input_name`` keys.
 * ``InferenceManager`` currently runs exported or referenced ``jit``,
-  ``pt2``, and ``onnx`` models.
+  ``pt2``, and ``onnx`` models, and exported ``pte`` models.
 * For ``pt2`` nodes, runtime inputs should be on the same device as the
   loaded exported program. ``get_mock_input()`` already allocates on the
   node device.
