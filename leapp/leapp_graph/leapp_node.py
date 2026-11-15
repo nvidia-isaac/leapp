@@ -622,6 +622,7 @@ class LeappNode:
             sample_passed,
             replay_mismatches=replay_mismatches,
             mismatches=set().union(*sample_mismatches.values()),
+            backend=self.backend,
         )
         if error_hint is not None:
             _get_logger().warning(f"  {self.name}: {error_hint}")

@@ -83,6 +83,26 @@ cause a large miss, for example for points far from the origin moved into
 a robot frame. LEAPP gives no hint for a large miss, since a bug looks the
 same.
 
+When every miss is small, the export can also round differently than the
+capture, for example in ONNX Runtime, which adds in another order than
+PyTorch. Math in ``bfloat16`` or ``float16`` rounds the most, also under
+``torch.autocast``, which LEAPP does not record. For such math, try
+``float32`` without ``torch.autocast``. A difference this small can also
+be a real bug. LEAPP judges a miss by the dtype of the output, so a
+``bfloat16`` node that returns ``float32`` can miss by more than a
+hundredth, for example when large values go into ``softmax``, and then
+gets no hint.
+
+A node exported with ``export_with="jit"`` (``jit-script``) can also round
+differently after its first call, because it then fuses or rewrites
+operations. This moves ``bfloat16`` and ``float16`` results the most, so
+sample 0 can pass while its replay or a later sample fails. By default,
+``jit-trace`` already runs the model once during export (unless
+``check_trace=False`` is passed), and ``exported-program`` and ONNX
+usually give the same result on every call, so for them a different
+replay usually points to undeclared state. LEAPP adds this cause to the
+hint only for ``jit-script``.
+
 Run more than one step
 ----------------------
 

@@ -27,9 +27,12 @@ from leapp.leapp_graph.leapp_node import LeappNode
 from leapp.utils.diagnostics import (
     _HIDDEN_STATE_HINT,
     _REENTRY_VALIDATION_HINT,
+    _REPLAY_ROUNDING_HINT,
+    _ROUNDING_HINT,
     _TF32_HINT,
     export_error_hint,
     mismatch_type,
+    validation_hint,
 )
 from leapp.utils.logging import _get_logger
 from .base import LEAPPFunctionalTestBase
@@ -1041,25 +1044,28 @@ class TestDiagnostics(unittest.TestCase):
         self.assertEqual(node.validate_compiled_model(), (False, None))
 
     @mock.patch.dict(os.environ)
-    def test_validation_has_tf32_hint_when_every_sample_misses_the_tolerance(self):
-        """Small misses get the TF32 hint on a GPU, alone or after the re-entry
-        hint, unless NVIDIA_TF32_OVERRIDE is 0. The model gives 2 and 4."""
+    def test_validation_has_rounding_hints_when_every_sample_misses_a_little(self):
+        """Small misses get the TF32 hint on a GPU unless NVIDIA_TF32_OVERRIDE is
+        0, then the rounding hint, alone or after the re-entry hint. The model
+        gives 2 and 4."""
         os.environ.pop("NVIDIA_TF32_OVERRIDE", None)
-        tf32 = (_TF32_HINT,)
+        tf32 = (_TF32_HINT, _ROUNDING_HINT)
+        rounding = (_ROUNDING_HINT,)
         reentry = _REENTRY_VALIDATION_HINT
         for initial_output, cached_output, dtype, override, gpu, hints in (
             (2.01, 4.01, torch.float32, None, True, tf32),
             (2.01, 4.01, torch.float32, "1", True, tf32),
             (2.0, 4.01, torch.float32, None, True, (reentry, *tf32)),
-            (2.01, 4.01, torch.float32, None, False, None),
+            (2.01, 4.01, torch.float32, None, False, rounding),
             (2.01, 4.0, torch.float32, None, True, tf32),
-            (2.01, 4.01, torch.float32, "0", True, None),
+            (2.01, 4.01, torch.float32, "0", True, rounding),
             (2.03, 4.06, torch.float32, None, True, None),
             (10.0, 10.0, torch.float32, None, True, None),
             (2.01, 10.5, torch.float32, None, True, None),
             (2.0, 10.0, torch.float32, None, True, (reentry,)),
             (2, 5, torch.int64, None, True, (reentry,)),
             (2.01, 4.01, torch.float16, None, True, tf32),
+            (2.01, 4.01, torch.float16, None, False, rounding),
             (2.03, 4.06, torch.float16, None, True, None),
             (2.015625, 4.03125, torch.bfloat16, None, True, tf32),
             (2.0, 4.09375, torch.bfloat16, None, True, (reentry, *tf32)),
@@ -1093,51 +1099,57 @@ class TestDiagnostics(unittest.TestCase):
                         (False, hints and " ".join(hints)),
                     )
         self.assertIn("NVIDIA_TF32_OVERRIDE=0 before starting Python", _TF32_HINT)
+        self.assertIn("ONNX Runtime", _ROUNDING_HINT)
+        self.assertIn(
+            "For such math, try float32 without torch.autocast", _ROUNDING_HINT
+        )
+        self.assertIn("real bug", _ROUNDING_HINT)
 
     @mock.patch.dict(os.environ)
     @mock.patch("torch.cuda.is_available", return_value=True)
-    def test_tf32_hint_bounds_use_the_largest_values_of_the_output(self, _):
+    def test_rounding_hint_bounds_use_the_largest_values_of_the_output(self, _):
         """A miss is small up to a hundredth (bfloat16: 3 hundredths) of the
         output's largest absolute value, and up to a tenth of the largest
         absolute value that misses or 10 times atol."""
         os.environ.pop("NVIDIA_TF32_OVERRIDE", None)
+        both = _TF32_HINT + " " + _ROUNDING_HINT
         for exported, captured, dtype, hint in (
-            ([100.0, 50.0, 10.0], [100.6, 50.6, 10.6], torch.float32, _TF32_HINT),
+            ([100.0, 50.0, 10.0], [100.6, 50.6, 10.6], torch.float32, both),
             ([100.0, 50.0, 10.0], [101.5, 51.5, 11.5], torch.float32, None),
             ([100.0, 50.0, 10.0], [101.5, 51.5, 11.5], torch.float16, None),
-            ([100.0, 50.0, 10.0], [101.5, 51.5, 11.5], torch.bfloat16, _TF32_HINT),
+            ([100.0, 50.0, 10.0], [101.5, 51.5, 11.5], torch.bfloat16, both),
             ([100.0, 50.0, 10.0], [104.0, 54.0, 14.0], torch.bfloat16, None),
-            ([100.0, 0.0, 1.0], [100.0, 0.0, 1.09], torch.float32, _TF32_HINT),
+            ([100.0, 0.0, 1.0], [100.0, 0.0, 1.09], torch.float32, both),
             ([100.0, 0.0, 1.0], [100.0, 0.0, 1.2], torch.float32, None),
-            ([100.0, 0.0, 1.0], [100.0, 0.0, 1.0625], torch.float16, _TF32_HINT),
+            ([100.0, 0.0, 1.0], [100.0, 0.0, 1.0625], torch.float16, both),
             ([100.0, 0.0, 1.0], [100.0, 0.0, 1.25], torch.float16, None),
             ([100.0, 0.0, 1.0], [100.0, 0.0, 1.25], torch.bfloat16, None),
-            ([100.0, 0.0], [100.6, 0.05], torch.float32, _TF32_HINT),
+            ([100.0, 0.0], [100.6, 0.05], torch.float32, both),
             ([1000.5, 1.0], [1000.0, 1.5], torch.float32, None),
             ([1000.0, 1.0], [1000.0, 1.5], torch.bfloat16, None),
-            ([10.009, 0.0501], [10.0, 0.05], torch.float32, _TF32_HINT),
-            ([1000.5, 1.00390625], [1000.0, 1.0], torch.float16, _TF32_HINT),
-            ([100.0, 7.6e-5], [100.0, 5.6e-5], torch.float32, _TF32_HINT),
+            ([10.009, 0.0501], [10.0, 0.05], torch.float32, both),
+            ([1000.5, 1.00390625], [1000.0, 1.0], torch.float16, both),
+            ([100.0, 7.6e-5], [100.0, 5.6e-5], torch.float32, both),
             ([100.0, 5e-4], [100.0, 0.0], torch.float32, None),
             ([1.015, 1.002], [1.0, 1.0], torch.float32, None),
             ([101.5, 1.002], [100.0, 1.0], torch.float32, None),
             ([100.0, 50.0, 10.0], [100.6, 50.6, 11.2], torch.float32, None),
-            ([1000.0, 1.09, 0.0011], [1000.0, 1.0, 0.001], torch.float32, _TF32_HINT),
+            ([1000.0, 1.09, 0.0011], [1000.0, 1.0, 0.001], torch.float32, both),
             (
                 [1000.0, 1.05, 0.0, 0.0, 0.0],
                 [1000.0, 1.0, 0.01, 0.01, 0.01],
                 torch.float32,
-                _TF32_HINT,
+                both,
             ),
-            ([-100.0, -50.0, -10.0], [-100.6, -50.6, -10.6], torch.float32, _TF32_HINT),
-            ([100.10005], [100.0], torch.float32, _TF32_HINT),
-            ([100.0, 50.0, 10.0], [100.6, 50.6, 10.6], torch.float16, _TF32_HINT),
-            ([100.625], [100.0], torch.float16, _TF32_HINT),
-            ([2052.0], [2048.0], torch.float16, _TF32_HINT),
-            ([100.0, 50.0, 10.0], [100.6, 50.6, 10.6], torch.float64, _TF32_HINT),
+            ([-100.0, -50.0, -10.0], [-100.6, -50.6, -10.6], torch.float32, both),
+            ([100.10005], [100.0], torch.float32, both),
+            ([100.0, 50.0, 10.0], [100.6, 50.6, 10.6], torch.float16, both),
+            ([100.625], [100.0], torch.float16, both),
+            ([2052.0], [2048.0], torch.float16, both),
+            ([100.0, 50.0, 10.0], [100.6, 50.6, 10.6], torch.float64, both),
             ([100.0, 50.0, 10.0], [101.5, 51.5, 11.5], torch.float64, None),
-            ([100.12, 1.3], [100.0, 1.0], torch.float32, _TF32_HINT),
-            ([100.0, 5e-5], [100.0, 0.0], torch.float32, _TF32_HINT),
+            ([100.12, 1.3], [100.0, 1.0], torch.float32, both),
+            ([100.0, 5e-5], [100.0, 0.0], torch.float32, both),
             ([100.0, 3e-4], [100.0, 0.0], torch.float32, None),
             ([201], [200], torch.int64, None),
         ):
@@ -1152,13 +1164,14 @@ class TestDiagnostics(unittest.TestCase):
 
     @mock.patch.dict(os.environ)
     @mock.patch("torch.cuda.is_available", return_value=True)
-    def test_tf32_hint_follows_the_given_tolerance_and_every_output(self, _):
+    def test_rounding_hints_follow_the_given_tolerance_and_every_output(self, _):
         """The bounds use the given rtol and atol. NaN or a large miss in one
-        output keeps the hint out; an integer miss, or a miss between whole
+        output keeps the hints out; an integer miss, or a miss between whole
         numbers in a float output, does not."""
         os.environ.pop("NVIDIA_TF32_OVERRIDE", None)
+        both = _TF32_HINT + " " + _ROUNDING_HINT
         for exported, captured, rtol, atol, hint in (
-            ([100.0, 0.005], [100.0, 0.0], 1e-3, 1e-3, _TF32_HINT),
+            ([100.0, 0.005], [100.0, 0.0], 1e-3, 1e-3, both),
             ([100.5, 1.0], [100.0, 1.15], 1e-2, 1e-5, None),
         ):
             with self.subTest(rtol=rtol, atol=atol):
@@ -1173,10 +1186,10 @@ class TestDiagnostics(unittest.TestCase):
         for a, b, b_dtype, hint in (
             (float("nan"), 2.01, torch.float32, None),
             (1.2, 2.01, torch.float32, None),
-            (1.005, 3, torch.int64, _TF32_HINT),
+            (1.005, 3, torch.int64, both),
             (1.0, 3, torch.int64, None),
             (1.2, 3, torch.int64, None),
-            (1.005, 3.0, torch.float32, _TF32_HINT),
+            (1.005, 3.0, torch.float32, both),
             (1.0, 3.0, torch.float32, None),
             (1.005, 3.5, torch.float32, None),
             (1.005, 300.0, torch.bfloat16, None),
@@ -1200,41 +1213,148 @@ class TestDiagnostics(unittest.TestCase):
 
     @mock.patch.dict(os.environ)
     @mock.patch("torch.cuda.is_available", return_value=True)
-    def test_validation_has_no_tf32_hint_for_nan_inf_or_bad_outputs(self, _):
-        """NaN, Inf, a wrong shape or a wrong output count in one sample, or in the
-        replay, keeps the TF32 hint out when another sample misses only the
-        tolerance."""
+    def test_validation_has_no_rounding_hints_for_nan_inf_or_bad_outputs(self, _):
+        """NaN, Inf, a wrong shape or a wrong output count in one sample keeps the
+        rounding hints out, and in the replay leaves the hidden-state hint alone."""
         os.environ.pop("NVIDIA_TF32_OVERRIDE", None)
-        for wrong in (
-            torch.tensor([float("nan")]),
-            torch.tensor([float("inf")]),
-            torch.tensor([2.0, 2.0]),
-            (torch.tensor([2.0]), torch.tensor([2.0])),
+        hidden = _HIDDEN_STATE_HINT
+        for dtype in (torch.float32, torch.float16):
+            for wrong in (
+                torch.tensor([float("nan")]),
+                torch.tensor([float("inf")]),
+                torch.tensor([2.0, 2.0]),
+                (torch.tensor([2.0]), torch.tensor([2.0])),
+            ):
+                with self.subTest(dtype=dtype, wrong=wrong, sample=1):
+                    outputs = iter((torch.tensor([2.01], dtype=dtype), wrong))
+                    node = self._validation_node(lambda x: next(outputs), dtype=dtype)
+                    self.assertEqual(node.validate_compiled_model(), (False, None))
+                with self.subTest(dtype=dtype, wrong=wrong, sample="replay"):
+                    outputs = iter(
+                        (
+                            torch.tensor([2.0], dtype=dtype),
+                            torch.tensor([4.01], dtype=dtype),
+                            wrong,
+                        )
+                    )
+                    node = self._validation_node(lambda x: next(outputs), dtype=dtype)
+                    node.backend = "jit-script"
+                    self.assertEqual(node.validate_compiled_model(), (False, hidden))
+        for replay, mismatches in (
+            ({"tolerance"}, {"NaN/Inf"}),
+            ({"tolerance"}, {"shape"}),
+            ({"tolerance"}, {"output count"}),
+            ({"tolerance"}, {"value"}),
+            ({"tolerance", "NaN/Inf"}, set()),
+            ({"tolerance", "shape"}, set()),
+            ({"tolerance", "value"}, set()),
         ):
-            with self.subTest(wrong=wrong, sample=1):
-                outputs = iter((torch.tensor([2.01]), wrong))
-                node = self._validation_node(lambda x: next(outputs))
-                self.assertEqual(node.validate_compiled_model(), (False, None))
-            with self.subTest(wrong=wrong, sample="replay"):
-                outputs = iter((torch.tensor([2.0]), torch.tensor([4.01]), wrong))
-                node = self._validation_node(lambda x: next(outputs))
+            with self.subTest(replay=replay, mismatches=mismatches, sample="replay"):
                 self.assertEqual(
-                    node.validate_compiled_model(), (False, _HIDDEN_STATE_HINT)
+                    validation_hint(
+                        {0: True},
+                        replay_mismatches=replay,
+                        mismatches=mismatches,
+                        backend="jit-script",
+                    ),
+                    hidden,
+                )
+        for mismatches in ({"tolerance", "NaN/Inf"}, {"tolerance", "value"}):
+            with self.subTest(mismatches=mismatches, sample="two samples"):
+                self.assertIsNone(
+                    validation_hint(
+                        {0: False, 1: False},
+                        replay_mismatches=set(),
+                        mismatches=mismatches,
+                    )
                 )
 
     @mock.patch.dict(os.environ)
-    @mock.patch("torch.cuda.is_available", return_value=True)
-    def test_replay_failure_has_only_the_hidden_state_hint(self, _):
-        """A replay miss, small or large, gets the hidden-state hint alone,
-        whatever the other samples miss. Samples give 2 and 4."""
+    @mock.patch("torch.cuda.is_available")
+    def test_replay_rounding_hint_only_for_a_small_jit_script_replay_miss(self, gpu):
+        """Only a jit-script node whose replay, or a later sample after sample 0
+        passed, misses a little, with no larger miss, gets the call-to-call
+        sentence. Samples give 2 and 4."""
         os.environ.pop("NVIDIA_TF32_OVERRIDE", None)
-        for sample_1, replay in ((4.0, 2.01), (4.01, 2.01), (10.0, 2.01), (4.0, 3.0)):
-            with self.subTest(sample_1=sample_1, replay=replay):
+        hidden = (_HIDDEN_STATE_HINT,)
+        replay_hints = (_HIDDEN_STATE_HINT, _REPLAY_ROUNDING_HINT)
+        reentry = (_REENTRY_VALIDATION_HINT, _TF32_HINT, _ROUNDING_HINT)
+        reentry_jit = (*reentry, _REPLAY_ROUNDING_HINT)
+        for backend, sample_1, replay, dtype, has_gpu, hints in (
+            ("jit-script", 4.01, 2.0, torch.float32, True, reentry_jit),
+            ("jit-trace", 4.01, 2.0, torch.float32, True, reentry),
+            ("jit-script", 4.0, 2.01, torch.float32, True, replay_hints),
+            ("jit-script", 4.01, 2.01, torch.float32, True, replay_hints),
+            ("jit-script", 4.0, 2.01, torch.float16, False, replay_hints),
+            ("jit-script", 4.0, 2.01, torch.bfloat16, True, replay_hints),
+            ("jit-script", 10.5, 2.01, torch.float16, True, hidden),
+            ("jit-script", 4.0, 3.5, torch.float32, True, hidden),
+            ("jit-trace", 4.0, 2.01, torch.float16, True, hidden),
+            ("jit-trace", 4.01, 2.01, torch.float32, True, hidden),
+            ("exported-program", 4.0, 2.01, torch.float16, True, hidden),
+            ("onnx-dynamo", 4.0, 2.01, torch.float32, True, hidden),
+            ("onnx-torchscript", 4.0, 2.01, torch.float32, True, hidden),
+            (None, 4.0, 2.01, torch.float32, True, hidden),
+        ):
+            with self.subTest(
+                backend=backend, sample_1=sample_1, replay=replay, dtype=dtype
+            ):
+                gpu.return_value = has_gpu
                 outputs = iter((2.0, sample_1, replay))
-                node = self._validation_node(lambda x: torch.tensor([next(outputs)]))
-                self.assertEqual(
-                    node.validate_compiled_model(), (False, _HIDDEN_STATE_HINT)
+                node = self._validation_node(
+                    lambda x: torch.tensor([next(outputs)], dtype=dtype), dtype=dtype
                 )
+                node.backend = backend
+                self.assertEqual(
+                    node.validate_compiled_model(), (False, " ".join(hints))
+                )
+        for replay, mismatches in (
+            ({"tolerance"}, set()),
+            ({"tolerance"}, {"tolerance", "integer"}),
+            ({"tolerance", "integer"}, set()),
+        ):
+            with self.subTest(replay=replay, mismatches=mismatches):
+                self.assertEqual(
+                    validation_hint(
+                        {0: True},
+                        replay_mismatches=replay,
+                        mismatches=mismatches,
+                        backend="jit-script",
+                    ),
+                    " ".join(replay_hints),
+                )
+        self.assertEqual(
+            validation_hint(
+                {0: True},
+                replay_mismatches={"integer"},
+                mismatches=set(),
+                backend="jit-script",
+            ),
+            _HIDDEN_STATE_HINT,
+        )
+        for mismatches in ({"value"}, {"tolerance", "value"}, {"NaN/Inf"}, {"integer"}):
+            with self.subTest(reentry=mismatches):
+                self.assertEqual(
+                    validation_hint(
+                        {0: True, 1: False},
+                        replay_mismatches=set(),
+                        mismatches=mismatches,
+                        backend="jit-script",
+                    ),
+                    _REENTRY_VALIDATION_HINT,
+                )
+        gpu.return_value = True
+        self.assertEqual(
+            validation_hint(
+                {0: False, 1: False},
+                replay_mismatches=set(),
+                mismatches={"tolerance"},
+                backend="jit-script",
+            ),
+            f"{_TF32_HINT} {_ROUNDING_HINT}",
+        )
+        self.assertIn("jit-script", _REPLAY_ROUNDING_HINT)
+        self.assertIn("after its first call", _REPLAY_ROUNDING_HINT)
 
     def test_validation_rejects_output_shape_mismatches(self):
         """Reject broadcast-equal shapes and incompatible shapes before comparing values."""
