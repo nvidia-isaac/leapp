@@ -15,8 +15,10 @@
 # limitations under the License.
 #
 import functools
+import os
 import tempfile
 import unittest
+from unittest import mock
 import torch
 import leapp
 from leapp.leapp import _MANAGER as annotate
@@ -24,12 +26,10 @@ from leapp.leapp_graph.datatypes import promote_in_place
 from leapp.leapp_graph.leapp_node import LeappNode
 from leapp.utils.diagnostics import (
     _HIDDEN_STATE_HINT,
-    _REDUCED_PRECISION_HINT,
     _REENTRY_VALIDATION_HINT,
-    _REPLAY_PRECISION_HINT,
     _TF32_HINT,
     export_error_hint,
-    validation_hint,
+    mismatch_type,
 )
 from leapp.utils.logging import _get_logger
 from .base import LEAPPFunctionalTestBase
@@ -996,13 +996,19 @@ class TestDiagnostics(unittest.TestCase):
     """Check diagnostic selection on CPU without exporting a backend."""
 
     @staticmethod
-    def _validation_node(model, *, initial_output=2.0, cached_output=4.0):
+    def _validation_node(
+        model, *, initial_output=2.0, cached_output=4.0, dtype=torch.float32
+    ):
         node = LeappNode("diagnostics")
         node._max_cached_io = 1
         inputs = node.add_input("x", "x", torch.tensor([1.0]))
-        outputs = node.add_output("y", "y", torch.tensor([initial_output]))
+        outputs = node.add_output(
+            "y", "y", torch.tensor(initial_output, dtype=dtype).reshape(-1)
+        )
         inputs[0].cached_values[0] = torch.tensor([2.0])
-        outputs[0].cached_values[0] = torch.tensor([cached_output])
+        outputs[0].cached_values[0] = torch.tensor(cached_output, dtype=dtype).reshape(
+            -1
+        )
         node._cache_write_idx = 1
         node.export_backend.compiled_model = model
         return node
@@ -1012,82 +1018,223 @@ class TestDiagnostics(unittest.TestCase):
         fails. A registered counter is restored for replay and must not produce
         the hidden-state hint.
         """
-        # A miss in the replay alone gets no TF32 hint.
-        for (registered, cached_output), hints in {
-            (True, 4.0): None,
-            (True, 10.0): (
-                _REENTRY_VALIDATION_HINT,
-                _TF32_HINT,
-                _REDUCED_PRECISION_HINT,
-            ),
-            (False, 4.0): (_HIDDEN_STATE_HINT, _REPLAY_PRECISION_HINT),
-            (False, 10.0): (_HIDDEN_STATE_HINT, _TF32_HINT, _REDUCED_PRECISION_HINT),
-        }.items():
-            with self.subTest(registered=registered, cached_output=cached_output):
-                node = self._validation_node(
-                    _DiagnosticCounter(registered), cached_output=cached_output
-                )
-                self.assertEqual(
-                    node.validate_compiled_model(),
-                    (hints is None, hints and " ".join(hints)),
-                )
-        for hint, phrase in (
-            (_HIDDEN_STATE_HINT, "keeps state between calls"),
-            (_HIDDEN_STATE_HINT, "execution is nondeterministic"),
-            (_REENTRY_VALIDATION_HINT, "inlined as a constant"),
-            (_REPLAY_PRECISION_HINT, "from one call of the export to the next"),
-            (_REPLAY_PRECISION_HINT, "run the node in float32."),
-        ):
-            self.assertIn(phrase, hint)
+        for registered in (True, False):
+            for cached_output in (4.0, 10.0):
+                with self.subTest(registered=registered, cached_output=cached_output):
+                    node = self._validation_node(
+                        _DiagnosticCounter(registered), cached_output=cached_output
+                    )
+                    passed, hint = node.validate_compiled_model()
+                    self.assertIs(passed, registered and cached_output == 4.0)
+                    if not registered:
+                        self.assertIn("keeps state between calls", hint)
+                        self.assertIn("execution is nondeterministic", hint)
+                        self.assertNotIn("inlined as a constant", hint)
+                    elif cached_output != 4.0:
+                        self.assertIn("inlined as a constant", hint)
+                        self.assertNotIn("keeps state between calls", hint)
+                    else:
+                        self.assertIsNone(hint)
 
     def test_initial_validation_failure_has_no_reentry_hint(self):
         node = self._validation_node(_DiagnosticCounter(True), initial_output=10.0)
-        passed, hint = node.validate_compiled_model()
-        self.assertEqual(
-            (passed, hint), (False, f"{_TF32_HINT} {_REDUCED_PRECISION_HINT}")
-        )
-        for phrase in (
-            "NVIDIA_TF32_OVERRIDE=0 before starting Python",
-            "bfloat16 or float16",
-            "torch.autocast may be missing from the export",
-            "run the node in float32 without torch.autocast",
-        ):
-            self.assertIn(phrase, hint)
+        self.assertEqual(node.validate_compiled_model(), (False, None))
 
-    def test_validation_has_no_tolerance_hints_for_nan_inf_or_bad_outputs(self):
-        """NaN, Inf, a wrong shape or a wrong output count keeps the TF32 and
-        reduced-precision hints out next to a tolerance miss, in the replay of
-        sample 0 as in any sample."""
+    @mock.patch.dict(os.environ)
+    def test_validation_has_tf32_hint_when_every_sample_misses_the_tolerance(self):
+        """Small misses get the TF32 hint on a GPU, alone or after the re-entry
+        hint, unless NVIDIA_TF32_OVERRIDE is 0. The model gives 2 and 4."""
+        os.environ.pop("NVIDIA_TF32_OVERRIDE", None)
+        tf32 = (_TF32_HINT,)
+        reentry = _REENTRY_VALIDATION_HINT
+        for initial_output, cached_output, dtype, override, gpu, hints in (
+            (2.01, 4.01, torch.float32, None, True, tf32),
+            (2.01, 4.01, torch.float32, "1", True, tf32),
+            (2.0, 4.01, torch.float32, None, True, (reentry, *tf32)),
+            (2.01, 4.01, torch.float32, None, False, None),
+            (2.01, 4.0, torch.float32, None, True, tf32),
+            (2.01, 4.01, torch.float32, "0", True, None),
+            (2.03, 4.06, torch.float32, None, True, None),
+            (10.0, 10.0, torch.float32, None, True, None),
+            (2.01, 10.5, torch.float32, None, True, None),
+            (2.0, 10.0, torch.float32, None, True, (reentry,)),
+            (2, 5, torch.int64, None, True, (reentry,)),
+            (2.01, 4.01, torch.float16, None, True, tf32),
+            (2.03, 4.06, torch.float16, None, True, None),
+            (2.015625, 4.03125, torch.bfloat16, None, True, tf32),
+            (2.0, 4.09375, torch.bfloat16, None, True, (reentry, *tf32)),
+            (2.0, 4.125, torch.bfloat16, None, True, (reentry,)),
+            (2.125, 4.25, torch.bfloat16, None, True, None),
+            (2.01, 4.01, torch.float64, None, True, tf32),
+            (3, 5, torch.int64, None, True, None),
+        ):
+            with self.subTest(
+                initial=initial_output,
+                cached=cached_output,
+                dtype=dtype,
+                override=override,
+                gpu=gpu,
+            ):
+                node = self._validation_node(
+                    lambda x: (2 * x).to(dtype),
+                    initial_output=initial_output,
+                    cached_output=cached_output,
+                    dtype=dtype,
+                )
+                with (
+                    mock.patch.dict(
+                        os.environ,
+                        {} if override is None else {"NVIDIA_TF32_OVERRIDE": override},
+                    ),
+                    mock.patch("torch.cuda.is_available", return_value=gpu),
+                ):
+                    self.assertEqual(
+                        node.validate_compiled_model(),
+                        (False, hints and " ".join(hints)),
+                    )
+        self.assertIn("NVIDIA_TF32_OVERRIDE=0 before starting Python", _TF32_HINT)
+
+    @mock.patch.dict(os.environ)
+    @mock.patch("torch.cuda.is_available", return_value=True)
+    def test_tf32_hint_bounds_use_the_largest_values_of_the_output(self, _):
+        """A miss is small up to a hundredth (bfloat16: 3 hundredths) of the
+        output's largest absolute value, and up to a tenth of the largest
+        absolute value that misses or 10 times atol."""
+        os.environ.pop("NVIDIA_TF32_OVERRIDE", None)
+        for exported, captured, dtype, hint in (
+            ([100.0, 50.0, 10.0], [100.6, 50.6, 10.6], torch.float32, _TF32_HINT),
+            ([100.0, 50.0, 10.0], [101.5, 51.5, 11.5], torch.float32, None),
+            ([100.0, 50.0, 10.0], [101.5, 51.5, 11.5], torch.float16, None),
+            ([100.0, 50.0, 10.0], [101.5, 51.5, 11.5], torch.bfloat16, _TF32_HINT),
+            ([100.0, 50.0, 10.0], [104.0, 54.0, 14.0], torch.bfloat16, None),
+            ([100.0, 0.0, 1.0], [100.0, 0.0, 1.09], torch.float32, _TF32_HINT),
+            ([100.0, 0.0, 1.0], [100.0, 0.0, 1.2], torch.float32, None),
+            ([100.0, 0.0, 1.0], [100.0, 0.0, 1.0625], torch.float16, _TF32_HINT),
+            ([100.0, 0.0, 1.0], [100.0, 0.0, 1.25], torch.float16, None),
+            ([100.0, 0.0, 1.0], [100.0, 0.0, 1.25], torch.bfloat16, None),
+            ([100.0, 0.0], [100.6, 0.05], torch.float32, _TF32_HINT),
+            ([1000.5, 1.0], [1000.0, 1.5], torch.float32, None),
+            ([1000.0, 1.0], [1000.0, 1.5], torch.bfloat16, None),
+            ([10.009, 0.0501], [10.0, 0.05], torch.float32, _TF32_HINT),
+            ([1000.5, 1.00390625], [1000.0, 1.0], torch.float16, _TF32_HINT),
+            ([100.0, 7.6e-5], [100.0, 5.6e-5], torch.float32, _TF32_HINT),
+            ([100.0, 5e-4], [100.0, 0.0], torch.float32, None),
+            ([1.015, 1.002], [1.0, 1.0], torch.float32, None),
+            ([101.5, 1.002], [100.0, 1.0], torch.float32, None),
+            ([100.0, 50.0, 10.0], [100.6, 50.6, 11.2], torch.float32, None),
+            ([1000.0, 1.09, 0.0011], [1000.0, 1.0, 0.001], torch.float32, _TF32_HINT),
+            (
+                [1000.0, 1.05, 0.0, 0.0, 0.0],
+                [1000.0, 1.0, 0.01, 0.01, 0.01],
+                torch.float32,
+                _TF32_HINT,
+            ),
+            ([-100.0, -50.0, -10.0], [-100.6, -50.6, -10.6], torch.float32, _TF32_HINT),
+            ([100.10005], [100.0], torch.float32, _TF32_HINT),
+            ([100.0, 50.0, 10.0], [100.6, 50.6, 10.6], torch.float16, _TF32_HINT),
+            ([100.625], [100.0], torch.float16, _TF32_HINT),
+            ([2052.0], [2048.0], torch.float16, _TF32_HINT),
+            ([100.0, 50.0, 10.0], [100.6, 50.6, 10.6], torch.float64, _TF32_HINT),
+            ([100.0, 50.0, 10.0], [101.5, 51.5, 11.5], torch.float64, None),
+            ([100.12, 1.3], [100.0, 1.0], torch.float32, _TF32_HINT),
+            ([100.0, 5e-5], [100.0, 0.0], torch.float32, _TF32_HINT),
+            ([100.0, 3e-4], [100.0, 0.0], torch.float32, None),
+            ([201], [200], torch.int64, None),
+        ):
+            with self.subTest(exported=exported, captured=captured, dtype=dtype):
+                node = self._validation_node(
+                    lambda x: torch.tensor(exported, dtype=dtype),
+                    initial_output=captured,
+                    cached_output=captured,
+                    dtype=dtype,
+                )
+                self.assertEqual(node.validate_compiled_model(), (False, hint))
+
+    @mock.patch.dict(os.environ)
+    @mock.patch("torch.cuda.is_available", return_value=True)
+    def test_tf32_hint_follows_the_given_tolerance_and_every_output(self, _):
+        """The bounds use the given rtol and atol. NaN or a large miss in one
+        output keeps the hint out; an integer miss, or a miss between whole
+        numbers in a float output, does not."""
+        os.environ.pop("NVIDIA_TF32_OVERRIDE", None)
+        for exported, captured, rtol, atol, hint in (
+            ([100.0, 0.005], [100.0, 0.0], 1e-3, 1e-3, _TF32_HINT),
+            ([100.5, 1.0], [100.0, 1.15], 1e-2, 1e-5, None),
+        ):
+            with self.subTest(rtol=rtol, atol=atol):
+                node = self._validation_node(
+                    lambda x: torch.tensor(exported),
+                    initial_output=captured,
+                    cached_output=captured,
+                )
+                self.assertEqual(
+                    node.validate_compiled_model(rtol=rtol, atol=atol), (False, hint)
+                )
+        for a, b, b_dtype, hint in (
+            (float("nan"), 2.01, torch.float32, None),
+            (1.2, 2.01, torch.float32, None),
+            (1.005, 3, torch.int64, _TF32_HINT),
+            (1.0, 3, torch.int64, None),
+            (1.2, 3, torch.int64, None),
+            (1.005, 3.0, torch.float32, _TF32_HINT),
+            (1.0, 3.0, torch.float32, None),
+            (1.005, 3.5, torch.float32, None),
+            (1.005, 300.0, torch.bfloat16, None),
+        ):
+            with self.subTest(a=a, b=b, b_dtype=b_dtype):
+                node = LeappNode("two_outputs")
+                node.add_input("x", "x", torch.tensor([1.0]))
+                node.add_output("a", "a", torch.tensor([1.0]))
+                node.add_output("b", "b", torch.tensor([2], dtype=b_dtype))
+                node.export_backend.compiled_model = lambda x: (
+                    torch.tensor([a]),
+                    torch.tensor([b], dtype=b_dtype),
+                )
+                self.assertEqual(node.validate_compiled_model(), (False, hint))
+        self.assertEqual(
+            mismatch_type(
+                torch.tensor([0.5, 3.0]), torch.tensor([0.5, 2.0]), rtol=1e-3, atol=1e-5
+            ),
+            "integer",
+        )
+
+    @mock.patch.dict(os.environ)
+    @mock.patch("torch.cuda.is_available", return_value=True)
+    def test_validation_has_no_tf32_hint_for_nan_inf_or_bad_outputs(self, _):
+        """NaN, Inf, a wrong shape or a wrong output count in one sample, or in the
+        replay, keeps the TF32 hint out when another sample misses only the
+        tolerance."""
+        os.environ.pop("NVIDIA_TF32_OVERRIDE", None)
         for wrong in (
             torch.tensor([float("nan")]),
             torch.tensor([float("inf")]),
             torch.tensor([2.0, 2.0]),
             (torch.tensor([2.0]), torch.tensor([2.0])),
         ):
-            with self.subTest(wrong=wrong, sample="replay"):
-                outputs = iter((torch.tensor([2.0]), torch.tensor([3.0]), wrong))
-                node = self._validation_node(
-                    lambda x: next(outputs), cached_output=10.0
-                )
-                self.assertEqual(
-                    node.validate_compiled_model(), (False, _HIDDEN_STATE_HINT)
-                )
             with self.subTest(wrong=wrong, sample=1):
-                outputs = iter((torch.tensor([3.0]), wrong))
+                outputs = iter((torch.tensor([2.01]), wrong))
                 node = self._validation_node(lambda x: next(outputs))
                 self.assertEqual(node.validate_compiled_model(), (False, None))
-            with self.subTest(wrong=wrong, sample="1, then a replay miss"):
-                outputs = iter((torch.tensor([2.0]), wrong, torch.tensor([3.0])))
+            with self.subTest(wrong=wrong, sample="replay"):
+                outputs = iter((torch.tensor([2.0]), torch.tensor([4.01]), wrong))
                 node = self._validation_node(lambda x: next(outputs))
                 self.assertEqual(
                     node.validate_compiled_model(), (False, _HIDDEN_STATE_HINT)
                 )
-        for wrong in ("NaN/Inf", "shape"):
-            with self.subTest(wrong=wrong, sample="replay, two outputs"):
-                hint = validation_hint(
-                    {0: True}, replay_mismatches={"tolerance", wrong}, mismatches=set()
+
+    @mock.patch.dict(os.environ)
+    @mock.patch("torch.cuda.is_available", return_value=True)
+    def test_replay_failure_has_only_the_hidden_state_hint(self, _):
+        """A replay miss, small or large, gets the hidden-state hint alone,
+        whatever the other samples miss. Samples give 2 and 4."""
+        os.environ.pop("NVIDIA_TF32_OVERRIDE", None)
+        for sample_1, replay in ((4.0, 2.01), (4.01, 2.01), (10.0, 2.01), (4.0, 3.0)):
+            with self.subTest(sample_1=sample_1, replay=replay):
+                outputs = iter((2.0, sample_1, replay))
+                node = self._validation_node(lambda x: torch.tensor([next(outputs)]))
+                self.assertEqual(
+                    node.validate_compiled_model(), (False, _HIDDEN_STATE_HINT)
                 )
-                self.assertEqual(hint, _HIDDEN_STATE_HINT)
 
     def test_validation_rejects_output_shape_mismatches(self):
         """Reject broadcast-equal shapes and incompatible shapes before comparing values."""
@@ -1118,14 +1265,17 @@ class TestDiagnostics(unittest.TestCase):
                     self.assertIn(f"got {exported_shape}", message)
                     self.assertIn(f"expected {source_shape}", message)
 
-    def test_larger_tolerance_cannot_hide_output_shape_mismatch(self):
+    @mock.patch.dict(os.environ)
+    @mock.patch("torch.cuda.is_available", return_value=True)
+    def test_larger_tolerance_cannot_hide_output_shape_mismatch(self, _):
         """A numerical miss on another output must not hide a broadcast-equal shape error."""
+        os.environ.pop("NVIDIA_TF32_OVERRIDE", None)
         node = LeappNode("shape_validation")
         node.add_output("shape", "shape", torch.ones(1, 2, dtype=torch.float16))
         node.add_output("value", "value", torch.ones(1, dtype=torch.float16))
         node.export_backend.compiled_model = lambda: (
             torch.ones(2, dtype=torch.float16),
-            torch.tensor([1.015625], dtype=torch.float16),
+            torch.tensor([1.0078125], dtype=torch.float16),
         )
         with tempfile.TemporaryDirectory() as tmpdir:
             _get_logger().configure(tmpdir, verbose=False)

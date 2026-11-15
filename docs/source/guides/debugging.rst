@@ -65,18 +65,23 @@ one pair of tensors cannot characterize error, and it cannot show
 whether a value was captured because it is computed or because it
 happened to be constant on the first step.
 
-On an NVIDIA GPU, float32 outputs can also differ because TF32
-(TensorFloat-32) settings differ between capture and validation. To rule
-this out, set ``NVIDIA_TF32_OVERRIDE=0`` before starting Python, then
-capture, export, and validate again.
-
-A node that computes in ``bfloat16`` or ``float16`` can also round
-differently in the export than in the capture, and ``torch.autocast`` may
-be missing from the export. To rule this out, run the node in ``float32``
-without ``torch.autocast``. Reduced precision can also round differently
-from one call of the export to the next, for example once a TorchScript
-module on a GPU fuses its operations, so with a single sample only the
-replay of sample 0 may miss.
+On an NVIDIA GPU, outputs can also differ because TF32 (TensorFloat-32)
+settings differ between capture and validation. To rule this out, set
+``NVIDIA_TF32_OVERRIDE=0`` before starting Python, then capture, export,
+and validate again. LEAPP gives this hint only when every miss is small.
+A miss is small when the largest difference among the values that miss is
+at most a hundredth of the output's largest absolute value (3 hundredths in
+``bfloat16``), and at most a tenth of the largest absolute value among the
+values that miss or 10 times ``atol``, whichever is larger. A miss in an
+integer output, such as an ``argmax``, or a larger miss between whole
+numbers in a float output, such as a flag from ``(x > 0).float()``,
+neither adds nor removes the hint, since rounding can flip one. So a node
+whose misses are all of this kind gets no hint, even when TF32 flipped
+them. A flip between levels that are not whole numbers, such as a gripper
+width of 0 or 0.08 or a quantized action, is a large miss. TF32 can also
+cause a large miss, for example for points far from the origin moved into
+a robot frame. LEAPP gives no hint for a large miss, since a bug looks the
+same.
 
 Run more than one step
 ----------------------

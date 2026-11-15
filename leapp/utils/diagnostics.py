@@ -9,6 +9,10 @@ Helpers return explanatory text from exceptions or recorded validation results.
 Callers own model execution, logging, and exception raising.
 """
 
+import os
+
+import torch
+
 _INFERENCE_TENSOR_ERRORS = (
     "Inference tensors cannot be saved for backward",
     "Setting requires_grad=True on inference tensor outside InferenceMode",
@@ -44,15 +48,40 @@ _TF32_HINT = (
     "NVIDIA_TF32_OVERRIDE=0 before starting Python, then repeat capture, export, "
     "and validation."
 )
-_REDUCED_PRECISION_HINT = (
-    "Math in bfloat16 or float16 can also round differently in the export than "
-    "in the capture, and torch.autocast may be missing from the export. To rule "
-    "this out, run the node in float32 without torch.autocast."
-)
-_REPLAY_PRECISION_HINT = (
-    "Math in bfloat16 or float16 can also round differently from one call of "
-    "the export to the next. To rule this out, run the node in float32."
-)
+
+
+def mismatch_type(
+    exported: torch.Tensor, source: torch.Tensor, *, rtol: float, atol: float
+) -> str:
+    """Return "tolerance" for a miss that rounding can explain, "integer" for a
+    miss in an integer output or a larger miss between whole numbers in a float
+    output, otherwise "value".
+
+    The caller has already checked that the shapes match, that neither tensor
+    holds NaN or Inf, and that some elements miss the tolerance.
+    """
+    if not source.dtype.is_floating_point:
+        return "integer"
+    # A wider share would also take in undeclared state that moves an output by
+    # a few percent; bfloat16 rounds 8 times more coarsely than float16.
+    share = 0.03 if source.dtype == torch.bfloat16 else 0.01
+    missed = ~torch.isclose(exported, source, rtol=rtol, atol=atol)
+    missed_diff = (exported - source).abs()[missed].max().item()
+    # Only missed elements count: large values move the most and can still pass.
+    # The second bound keeps out an error that is large next to the values that miss.
+    small_share = missed_diff <= share * source.abs().max().item()
+    small_near_zero = missed_diff <= max(
+        0.1 * source[missed].abs().max().item(), 10 * atol
+    )
+    if small_share and small_near_zero:
+        return "tolerance"
+    # Rounding can flip a flag or an index stored as a float, such as
+    # (x > 0).float(), like an integer output. From 1 / eps on, every value of
+    # the dtype is a whole number, so a whole number says nothing there.
+    values = torch.cat((exported[missed], source[missed]))
+    whole = torch.equal(values, values.round())
+    limit = 1 / torch.finfo(source.dtype).eps
+    return "integer" if whole and values.abs().max().item() < limit else "value"
 
 
 def export_error_hint(error: Exception, *, node_name: str, backend: str) -> str | None:
@@ -74,24 +103,22 @@ def validation_hint(
 ) -> str | None:
     """Explain a replay failure first, otherwise a failure confined to re-entry.
 
-    Add the TF32 and reduced-precision hints when the samples miss only the
-    tolerance and the replay adds no other mismatch type. When only the replay
-    misses the tolerance, add a shorter reduced-precision hint instead. Both
-    runs of sample 0 use the same TF32 settings and autocast, but reduced
-    precision can round differently from one call to the next, for example once
-    a TorchScript module fuses its operations on its second call.
+    Then add the TF32 hint, alone or after the re-entry hint, if every float
+    miss is small ("tolerance"), the machine has an NVIDIA GPU, and
+    NVIDIA_TF32_OVERRIDE is not already 0. A miss in an integer output does not
+    count against it, since rounding can flip one, as with argmax.
     """
-    hints = []
     if replay_mismatches:
-        hints.append(_HIDDEN_STATE_HINT)
-    elif sample_passed.get(0) and any(
+        return _HIDDEN_STATE_HINT
+    hints = []
+    if sample_passed.get(0) and any(
         not passed for index, passed in sample_passed.items() if index > 0
     ):
         hints.append(_REENTRY_VALIDATION_HINT)
-    if mismatches | replay_mismatches == {"tolerance"}:
-        if "tolerance" in mismatches:
-            hints.append(_TF32_HINT)
-            hints.append(_REDUCED_PRECISION_HINT)
-        else:
-            hints.append(_REPLAY_PRECISION_HINT)
+    if (
+        mismatches - {"integer"} == {"tolerance"}
+        and torch.cuda.is_available()
+        and os.environ.get("NVIDIA_TF32_OVERRIDE") != "0"
+    ):
+        hints.append(_TF32_HINT)
     return " ".join(hints) or None
