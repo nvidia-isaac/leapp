@@ -625,7 +625,7 @@ class LeappNode:
             backend=self.backend,
         )
         if error_hint is not None:
-            _get_logger().warning(f"  {self.name}: {error_hint}")
+            _get_logger().info(f"  {self.name}: {error_hint}")
 
         if all_match:
             num_examples = len(examples)
