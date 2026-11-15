@@ -45,9 +45,10 @@ class ONNXExportBackend(ExportBackend):
 
     def _get_onnx_model(self, onnx_program):
         """Get the ONNX model proto from an ONNX program."""
-        if hasattr(onnx_program, "model_proto"):
+        model_proto = getattr(onnx_program, "model_proto", None)
+        if model_proto is not None:
             # dynamo export returns ONNXProgram with model_proto
-            return onnx_program.model_proto
+            return model_proto
         else:
             # SimplifiedONNXProgram - load from file
             model_path = os.path.join(
@@ -94,7 +95,7 @@ class ONNXExportBackend(ExportBackend):
             used_names.add(new_input_name)
             used_names.add(new_output_name)
 
-    def _sync_inputs_with_onnx(self, onnx_program):
+    def _sync_inputs_with_onnx(self, onnx_program, *, model_proto=None):
         """Sync inputs with what ONNX actually exported.
 
         ONNX export can remove unused inputs (constant folding, dead code elimination).
@@ -103,7 +104,9 @@ class ONNXExportBackend(ExportBackend):
         However, if ONNX renames inputs (which happens with identity/passthrough functions
         when using onnx-dynamo), we raise an error and suggest using onnx-torchscript instead.
         """
-        onnx_model = self._get_onnx_model(onnx_program)
+        onnx_model = (
+            self._get_onnx_model(onnx_program) if model_proto is None else model_proto
+        )
 
         expected_input_names = set(td.name for td in self.node_context.inputs)
         actual_input_names = self._get_actual_onnx_inputs(onnx_model)
@@ -548,13 +551,10 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
             opset_version=self.opset_version,
         )
 
-        # Sync inputs with what ONNX actually exported
-        # (ONNX can remove unused inputs during optimization)
-        self._sync_inputs_with_onnx(onnx_program)
-
         # Capture proto once — model_proto may be a property that rebuilds on
-        # each access, so we must fix and save from the same object.
+        # each access, so sync, fix and save from the same object.
         model_proto = onnx_program.model_proto
+        self._sync_inputs_with_onnx(onnx_program, model_proto=model_proto)
 
         # Fix scalar Slice initializers on the in-memory proto before saving
         # (ONNX exporter bug: shared scalar initializers between Gather and Slice nodes).
