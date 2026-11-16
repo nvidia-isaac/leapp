@@ -120,87 +120,39 @@ also mean global for applicable spatial quantities. See
 
 Wrenches and the force application position
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-* A wrench contains force and torque. Without a separate application position,
-  the force acts at the element origin and moments are taken about that origin.
-* ``force_application_position`` describes an optional XYZ position. It is
-  paired with a wrench by element name and input/output purpose.
-* The wrench and application position use the same ``expressed_in`` value.
-* With an application position, the wrench's moment is the supplied torque;
-  applying the offset force adds its lever-arm moment.
 
-For the application position, ``expressed_in`` determines how to interpret XYZ:
+Without a separate application position, a wrench's force acts at the element
+origin and its torque is measured about that origin. An optional
+``force_application_position`` pairs with it through the same element names,
+input/output direction, and ``expressed_in`` value. Its offset force adds a
+lever-arm moment to the supplied torque.
 
-* ``ExpressionFrame.SELF`` means an offset from the element origin.
-* ``None`` means an absolute global position.
-* A named frame supplies the position's origin and coordinate axes.
+The application position is an offset from the element origin with
+``ExpressionFrame.SELF``, an absolute global position with ``None``, or a
+position in the named frame's origin and axes.
 
+.. dropdown:: Example: force applied at a local offset
 
-For example, apply a force along a tool's local y-axis at a point 0.1 meters
-along its local x-axis:
+   Both annotations describe the tool in its own axes. Register them together
+   as inputs or together as outputs.
 
-* Both annotations identify the same frame through
-  ``Axis(AxisKind.ELEMENT, names=["tool"])``. This shared element name connects
-  the wrench to its application position.
-* Register both in the same input/output direction. Both use
-  ``ExpressionFrame.SELF``, so the force and offset use the tool's own axes.
+   .. code-block:: python
 
-.. tabs::
+      import torch
+      from leapp import Axis, AxisKind, ExpressionFrame
+      from leapp import frame_wrench, force_application_position
 
-   .. tab:: Python
-
-      .. code-block:: python
-
-         import torch
-         from leapp import Axis, AxisKind, ExpressionFrame
-         from leapp import frame_wrench, force_application_position
-
-         # The shared element name pairs these two annotations.
-         tool_axis = Axis(AxisKind.ELEMENT, names=["tool"])
-
-         wrench = frame_wrench(
-             "tool_wrench", torch.tensor([[0.0, 10.0, 0.0, 0.0, 0.0, 0.0]]),
-             expressed_in=ExpressionFrame.SELF,
-             axes=[
-                 tool_axis,
-                 Axis(AxisKind.COMPONENT, names=["fx", "fy", "fz", "tx", "ty", "tz"]),
-             ],
-         )
-         application = force_application_position(
-             "force_position", torch.tensor([[0.1, 0.0, 0.0]]),
-             expressed_in=ExpressionFrame.SELF,
-             axes=[
-                 tool_axis,  # Same frame name as the wrench: "tool".
-                 Axis(AxisKind.COMPONENT, names=["x", "y", "z"]),
-             ],
-         )
-         # Pass [wrench, application] together to annotate.output_tensors.
-
-   .. tab:: YAML
-
-      The two entries after registration as outputs and export. Their matching
-      ``element`` names connect them. Numeric force and offset values travel
-      in the tensors; the YAML describes how to interpret them.
-
-      .. code-block:: yaml
-
-         outputs:
-         - name: tool_wrench
-           dtype: float32
-           shape: [1, 6]
-           type: tensor
-           kind: frame/wrench
-           axes:
-           - {kind: element, names: [tool]}
-           - {kind: component, names: [fx, fy, fz, tx, ty, tz]}
-           spatial:
-             expressed_in: {selector: self}
-         - name: force_position
-           dtype: float32
-           shape: [1, 3]
-           type: tensor
-           kind: frame/force_application_position
-           axes:
-           - {kind: element, names: [tool]}
-           - {kind: component, names: [x, y, z]}
-           spatial:
-             expressed_in: {selector: self}
+      tool_axis = Axis(AxisKind.ELEMENT, names=["tool"])
+      wrench = frame_wrench(
+          "tool_wrench", torch.tensor([[0.0, 10.0, 0.0, 0.0, 0.0, 0.0]]),
+          expressed_in=ExpressionFrame.SELF,
+          axes=[
+              tool_axis,
+              Axis(AxisKind.COMPONENT, names=["fx", "fy", "fz", "tx", "ty", "tz"]),
+          ],
+      )
+      application = force_application_position(
+          "force_position", torch.tensor([[0.1, 0.0, 0.0]]),
+          expressed_in=ExpressionFrame.SELF,
+          axes=[tool_axis, Axis(AxisKind.COMPONENT, names=["x", "y", "z"])],
+      )
