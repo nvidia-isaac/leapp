@@ -104,10 +104,9 @@ arguments, and nested lists, tuples, and dictionaries are searched. User
 patches require ``global_patching=True``.
 
 The replacement receives traced arguments directly and must build its result
-from operations LEAPP already traces. It must accept a compatible signature,
-return the output structure, shape, and dtype expected by the caller, and be
-pure. Mutation, output arguments such as ``out=`` or ``dst=``, input/output
-aliasing, and calls back into the patched target are not supported.
+from operations LEAPP already traces. It must accept a compatible signature
+and return the output structure, shape, and dtype expected by the caller.
+A replacement must not call the patched function.
 
 Call ``leapp.stop()`` before starting a session with a different patch list.
 Stopping restores the exact function object captured when the patch was
