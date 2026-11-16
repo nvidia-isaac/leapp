@@ -60,6 +60,7 @@ opset_version
 onnxruntime
 onnxruntime-gpu
 onnxscript
+quantized
 cupti
 cupti-python
 libcupti

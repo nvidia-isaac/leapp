@@ -430,7 +430,7 @@ requires-dist = [
     { name = "onnxruntime-gpu", extras = ["cuda", "cudnn"], marker = "python_full_version >= '3.11' and extra == 'warp-cu12'", specifier = ">=1.20.0,<1.27" },
     { name = "onnxruntime-gpu", extras = ["cuda", "cudnn"], marker = "python_full_version >= '3.11' and extra == 'warp-cu13'", specifier = ">=1.27.0" },
     { name = "onnxruntime-gpu", extras = ["cuda", "cudnn"], marker = "python_full_version < '3.11' and extra == 'warp-cu12'", specifier = ">=1.20.0,<1.24" },
-    { name = "onnxscript", specifier = ">=0.1.0" },
+    { name = "onnxscript", specifier = "==0.7.1" },
     { name = "opencv-python-headless", marker = "extra == 'test'", specifier = ">=4.8" },
     { name = "pillow", marker = "python_full_version >= '3.11'", specifier = ">=10.0.0" },
     { name = "pytest", marker = "extra == 'dev'" },
