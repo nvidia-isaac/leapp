@@ -11,6 +11,7 @@ from leapp.backends.export_backend import (
     SimplifiedONNXProgram,
 )
 from leapp.utils.logging import _get_logger
+from leapp.backends._onnxscript_compat import patch_onnxscript_matcher
 import os
 import onnx
 from onnx import AttributeProto, TensorProto, helper
@@ -525,6 +526,7 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
             m = self.module_builder()
         m = m.eval()
         self._clone_aliased_outputs(m)
+        patch_onnxscript_matcher()
         self._handle_duplicate_io_names()
         # Get flat tensor values directly from inputs (not input_formats which preserves nested structure)
         input_values = tuple(

@@ -160,6 +160,27 @@ exporting recurrent models (e.g. ``nn.GRU``, ``nn.LSTM``). See
    leapp.stop()
    leapp.compile_graph(validate=True)
 
+ONNXScript dependency
+---------------------
+
+The Dynamo exporter uses ONNXScript to translate and optimize ONNX graphs.
+LEAPP pins ``onnxscript==0.7.1`` and automatically installs an in-memory
+matcher workaround when a Dynamo export starts. This avoids repeated graph
+scans for incompatible pattern roots while keeping optimization enabled.
+No additional installation step is needed.
+
+The workaround stays active for other ONNXScript users in the same Python
+process. It does not modify installed package files or saved models.
+Loading and running an exported model does not activate it. The legacy
+``onnx-torchscript``, TorchScript, and ExportedProgram backends do not
+activate it either.
+
+The pin and workaround will be removed together after an upstream release
+containing the `matcher fix <https://github.com/microsoft/onnxscript/pull/3215>`_
+or an equivalent fix has been validated. If dependencies are overridden,
+Dynamo export rejects other ONNXScript versions rather than applying this
+private-API workaround to an untested version.
+
 ONNX backend parameters
 -----------------------
 
