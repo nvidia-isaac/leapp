@@ -11,6 +11,8 @@ TorchDynamo
 ONNX
 GRU
 LSTM
+TF32
+TensorFloat
 GFM
 CI
 PR
@@ -58,6 +60,7 @@ opset_version
 onnxruntime
 onnxruntime-gpu
 onnxscript
+quantized
 cupti
 cupti-python
 libcupti

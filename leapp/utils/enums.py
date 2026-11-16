@@ -65,6 +65,7 @@ class Kind(str, Enum):
 
     JOINT_POSITION = "joint/position"
     JOINT_VELOCITY = "joint/velocity"
+    JOINT_ACCELERATION = "joint/acceleration"
     JOINT_EFFORT = "joint/effort"
     FRAME_POSE = "frame/pose"
     FRAME_POSITION = "frame/position"
@@ -81,6 +82,7 @@ class Kind(str, Enum):
     KP = "kp"
     KD = "kd"
     IMAGE = "image"
+    POINT_CLOUD = "point_cloud"
 
 
 class AxisKind(str, Enum):

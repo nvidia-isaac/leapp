@@ -64,7 +64,14 @@ class TestExportInferenceMode(unittest.TestCase):
                             if chain:
                                 error = RuntimeError("export wrapper failed")
                                 setattr(error, chain, original)
-                            with mock.patch(target, side_effect=error) as export:
+                            # An unavailable workaround must not hide export errors.
+                            with (
+                                mock.patch(target, side_effect=error) as export,
+                                mock.patch(
+                                    "leapp.backends.onnx_export_backend.patch_onnxscript_matcher",
+                                    side_effect=ImportError("matcher API unavailable"),
+                                ),
+                            ):
                                 with self.assertLogs("leapp", level="ERROR") as logs:
                                     with self.assertRaises(RuntimeError) as caught:
                                         node.compile_model()

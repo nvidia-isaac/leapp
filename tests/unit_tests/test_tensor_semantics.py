@@ -195,12 +195,52 @@ def test_helper_checks_components_beyond_generic_constructor(axis_kind):
     assert leapp.frame_twist("v", ref, reference="base").axes is None
 
 
-def test_pose_component_order_is_preserved():
-    names = ["qw", "qx", "qy", "qz", "z", "y", "x"]
-    annotation = leapp.frame_pose(
-        "pose", torch.zeros(7), reference="world", axes=[Axis("component", names=names)]
+HELPER_COMPONENTS = [
+    (leapp.point_cloud, ["x", "y", "z"]),
+    (leapp.force_application_position, ["x", "y", "z"]),
+    (leapp.frame_pose, ["x", "y", "z", "qx", "qy", "qz", "qw"]),
+    (leapp.frame_position, ["x", "y", "z"]),
+    (leapp.frame_orientation, ["qx", "qy", "qz", "qw"]),
+    (leapp.frame_twist, ["x", "y", "z", "angular_x", "angular_y", "angular_z"]),
+    (leapp.frame_linear_velocity, ["x", "y", "z"]),
+    (leapp.frame_angular_velocity, ["angular_x", "angular_y", "angular_z"]),
+]
+
+
+@pytest.mark.parametrize("helper, components", HELPER_COMPONENTS)
+@pytest.mark.parametrize("selection", ["reordered", "subset", "single", "empty"])
+def test_helpers_preserve_component_subsets_and_order(helper, components, selection):
+    names = {
+        "reordered": components[::-1],
+        "subset": components[::2],
+        "single": components[-1:],
+        "empty": [],
+    }[selection]
+    annotation = helper(
+        "value", torch.zeros(len(names)), axes=[Axis("component", names=names)]
     )
     assert annotation.to_dict()["axes"][0]["names"] == names
+
+
+@pytest.mark.parametrize("helper, components", HELPER_COMPONENTS)
+@pytest.mark.parametrize("invalid", ["duplicate", "unknown"])
+def test_helpers_reject_duplicate_and_unknown_components(helper, components, invalid):
+    names = [components[0], components[0] if invalid == "duplicate" else "unknown"]
+    with pytest.raises(ValueError, match="components"):
+        helper("value", torch.zeros(len(names)), axes=[Axis("component", names=names)])
+
+
+@pytest.mark.parametrize(
+    "helper, names",
+    [
+        (leapp.frame_twist, ["vx", "vy", "vz", "wx", "wy", "wz"]),
+        (leapp.frame_linear_velocity, ["vx", "vy", "vz"]),
+        (leapp.frame_angular_velocity, ["wx", "wy", "wz"]),
+    ],
+)
+def test_velocity_helpers_reject_old_component_names(helper, names):
+    with pytest.raises(ValueError, match="components"):
+        helper("value", torch.zeros(len(names)), axes=[Axis("component", names=names)])
 
 
 @pytest.mark.parametrize("kind", list(Kind))

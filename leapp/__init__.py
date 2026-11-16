@@ -40,11 +40,13 @@ from .utils.semantics import (
     TensorSemantics,
     joint_position,
     joint_velocity,
+    joint_acceleration,
     joint_effort,
     vector3d,
     kp,
     kd,
     image,
+    point_cloud,
     frame_pose,
     frame_position,
     frame_orientation,
@@ -58,7 +60,7 @@ from .utils.semantics import (
     force_application_position,
 )
 
-__version__ = "0.8.0"
+__version__ = "0.8.1"
 __config_version__ = "1.4"
 __author__ = "Frank Lai"
 __email__ = "frlai@nvidia.com"
@@ -83,11 +85,13 @@ __all__ = [
     "Axis",
     "joint_position",
     "joint_velocity",
+    "joint_acceleration",
     "joint_effort",
     "vector3d",
     "kp",
     "kd",
     "image",
+    "point_cloud",
     "frame_pose",
     "frame_position",
     "frame_orientation",

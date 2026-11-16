@@ -15,16 +15,20 @@
 # limitations under the License.
 #
 import os
+import json
 import unittest
 import tempfile
 from unittest import mock
 import torch
 import yaml
 import onnx
+import onnxruntime as ort
+from onnxscript.rewriter import _matcher
 import leapp
 from leapp.leapp import _MANAGER as annotate
 from leapp import TensorSemantics, InputKindEnum, OutputKindEnum
 from leapp.backends.export_backend import SimplifiedONNXProgram
+from leapp.leapp_graph.leapp_node import LeappNode
 from .base import LEAPPFunctionalTestBase
 import pytest
 
@@ -177,6 +181,74 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
 
     """
 
+    def test_integer_sort_ties_and_mismatch_diagnostics(self):
+        """Cover real CUDA ONNX sorting and integer failure reporting in one test.
+
+        Export once and replay changed duplicate keys, including large int64 keys.
+        A separate deliberate mismatch must report statistics without changing
+        integer outputs to floating point.
+        """
+        if (
+            not torch.cuda.is_available()
+            or "CUDAExecutionProvider" not in ort.get_available_providers()
+        ):
+            self.skipTest("requires CUDA and GPU ONNX Runtime")
+        keys = (
+            torch.arange(2 * 3632, dtype=torch.int64, device="cuda").reshape(2, -1) % 11
+            - 5
+        )
+        keys[:, 0] = torch.iinfo(torch.int64).min
+        # ORT CUDA TopK separately mishandles its exact INT64_MAX sentinel.
+        keys[:, 1] = torch.iinfo(torch.int64).max - 1
+        leapp.start(self.TEST_GRAPH_NAME, global_patching=False)
+        try:
+            x = annotate.input_tensors("sort", {"keys": keys})
+            annotate.output_tensors(
+                "sort", {"indices": torch.argsort(x, dim=-1)}, export_with="onnx"
+            )
+        finally:
+            leapp.stop()
+        leapp.compile_graph(visualize=False, validate=False)
+        options = ort.SessionOptions()
+        options.enable_profiling = True
+        options.profile_file_prefix = os.path.join(self.TEST_GRAPH_NAME, "sort_profile")
+        session = ort.InferenceSession(
+            os.path.join(self.TEST_GRAPH_NAME, "sort.onnx"),
+            options,
+            providers=["CUDAExecutionProvider"],
+        )
+        session.disable_fallback()
+        with self.subTest("CUDA sort parity"):
+            for index, sample in enumerate((keys, keys.roll(317, dims=-1))):
+                actual = session.run(None, {"keys": sample.cpu().numpy()})[0]
+                if index == 0:
+                    with open(session.end_profiling()) as stream:
+                        events = json.load(stream)
+                    providers = {
+                        event.get("args", {}).get("provider")
+                        for event in events
+                        if event.get("args", {}).get("op_name") == "TopK"
+                    }
+                    self.assertIn("CUDAExecutionProvider", providers)
+                torch.testing.assert_close(
+                    torch.from_numpy(actual),
+                    torch.argsort(sample, dim=-1).cpu(),
+                    rtol=0,
+                    atol=0,
+                )
+        with self.subTest("integer mismatch diagnostics"):
+            node = LeappNode("integer_mismatch")
+            node.add_output("indices", "indices", torch.tensor([0, 1]))
+            node.export_backend.compiled_model = lambda: torch.tensor([0, 2])
+            with self.assertLogs("leapp", level="ERROR") as logs:
+                self.assertEqual(
+                    node.validate_compiled_model(rtol=0, atol=0), (False, None)
+                )
+            self.assertIn(
+                "integer_mismatch/indices sample 0: Mismatch detected",
+                "\n".join(logs.output),
+            )
+
     def test_reused_parameter_export(self):
         # Exceed onnxscript's small-initializer deduplication threshold.
         dim = 64
@@ -254,16 +326,35 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
                             )
 
     def test_onnx_backend(self):
+        """Exercise real export and verify the matcher patch is active beforehand."""
+
         @annotate.method(export_with="onnx")
         def funcA(inputA: torch.Tensor):
             return inputA * 2.0
 
         input_tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+        matcher = _matcher.SimplePatternMatcher
+        stock = matcher.match
+        if getattr(stock, "_leapp_root_guard", False):
+            stock = stock.__wrapped__
+        original_export = torch.onnx.export
 
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        funcA(input_tensor)
-        leapp.stop()
-        leapp.compile_graph(visualize=False)
+        def export(*args, **kwargs):
+            self.assertTrue(matcher.match._leapp_root_guard)
+            self.assertIs(matcher.match.__wrapped__, stock)
+            self.assertTrue(kwargs["optimize"])
+            return original_export(*args, **kwargs)
+
+        # Start unpatched even if another test exported first; restore on exit.
+        with (
+            mock.patch.object(matcher, "match", stock),
+            mock.patch("torch.onnx.export", side_effect=export) as export_mock,
+        ):
+            leapp.start(name=self.TEST_GRAPH_NAME)
+            funcA(input_tensor)
+            leapp.stop()
+            leapp.compile_graph(visualize=False)
+            export_mock.assert_called_once()
 
     def test_onnx_backend_reverse_scalar_mul(self):
         @annotate.method(export_with="onnx")

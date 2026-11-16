@@ -2,246 +2,142 @@
 Debugging
 =========
 
-LEAPP provides multiple lines of defense against an incorrectly traced
-graph. The goal is confidence that the traced graph is numerically
-correct.
-
-.. list-table::
-   :header-rows: 1
-   :widths: 55 45
-
-   * - When
-     - Use
-   * - You want numeric confidence in an export
-     - ``compile_graph(validate=True)``
-   * - Validation failed and you need the recorded ops
-     - ``log.txt`` and the FX dump
-   * - You need to tell tracing from export from patching
-     - ``dry_run``, ``non_traced``, ``global_patching=False``
+Validate exports with representative inputs, then use the logs to locate any
+differences between the captured pipeline and the exported model.
 
 Confirm the export
 ==================
 
-``compile_graph(validate=True)`` checks each exported node against all its
-cached Python input/output samples, including exported state inputs and
-updates. Repeated execution can capture consecutive stateful transitions;
-``max_cached_io`` controls how many samples are retained per node. LEAPP runs
-the exported model on each sample, compares outputs with
-``torch.allclose(..., rtol=..., atol=...)``, logs any deviation, and
-returns a dict mapping node names to results.
-
-After the last sample, LEAPP runs sample 0 again, with buffers declared
-through ``annotate.register_buffer()`` restored to their exported values.
-The export must give the same result for the same inputs. If the replay
-differs, the exported model carries state between calls that the
-annotations do not declare. A common cause is a buffer allocated outside
-the node that the node resets and then accumulates into, such as a Warp
-array cleared with ``zero_()`` and written with ``wp.atomic_add``. LEAPP
-only records work on traced data, so the reset is lost and the exported
-model keeps adding to the previous call's result. Declare the buffer with
-``annotate.register_buffer()``, or allocate it inside the node. Declare
-state that should carry over between calls, such as a warm start or a filter
-value, with ``annotate.state_tensors()`` and ``annotate.update_state()``
-so it becomes an explicit model input and output.
+``compile_graph(validate=True)`` compares each exported node with its cached
+Python input/output samples. Shapes must match exactly; values are compared
+with ``rtol`` and ``atol``.
 
 .. code-block:: python
 
-   leapp.compile_graph(
-       validate=True,
-       rtol=1e-3,
-       atol=1e-5,
-       strict=True,
+   results = leapp.compile_graph(
+       validate=True, strict=True, rtol=1e-3, atol=1e-5,
    )
 
-``strict=True`` raises if any node fails. ``strict=False`` still runs
-validation, but leaves the result dict available. Nodes with no compiled
-model, such as ``non_traced`` or dry-run cases, are skipped and treated
-as successful.
-
-A mismatch log includes the node and output names, the sample index,
-tolerances, shapes and dtypes, value ranges, and absolute-difference
-percentiles. Several samples are what make those numbers meaningful:
-one pair of tensors cannot characterize error, and it cannot show
-whether a value was captured because it is computed or because it
-happened to be constant on the first step.
+``strict=True`` raises on failure. Use ``strict=False`` to inspect the result
+dict instead. Nodes without compiled models are skipped.
 
 Run more than one step
 ----------------------
 
-.. warning::
-
-   Loop the annotated policy. A graph that matches the first observation
-   can still have inlined a live input as a constant, and a single
-   sample says nothing about error on any other input.
+Use different observations and commands so validation can catch live values
+that were captured as constants. ``max_cached_io`` limits the samples per node.
 
 .. code-block:: python
 
-   leapp.start(name="policy_graph", max_cached_io=5)
+   leapp.start("policy_graph", max_cached_io=5)
    for _ in range(5):
        obs = annotate.input_tensors("policy", {"obs": next_obs()})
-       action = policy(obs)
        annotate.output_tensors(
-           "policy", {"action": action}, export_with="jit",
+           "policy", {"action": policy(obs)}, export_with="jit",
        )
    leapp.stop()
    leapp.compile_graph(validate=True, strict=True)
 
-Each iteration is stored as a sample, up to ``max_cached_io``.
-``compile_graph(validate=True)`` replays the export against every one.
-Use inputs that look like deployment: different state, commands, and
-timing, not copies of the first frame. If a later step fails while the
-first passes, the log names that ``sample N``.
+Re-entry checks names, shapes, dtypes, and connectivity during tracing.
+Export validation checks the recorded values after compilation.
 
-Re-entry also checks names, shapes, dtypes, and connectivity against
-the first step. Those failures show up during tracing, not at
-``compile_graph()``.
+When validation fails
+---------------------
+
+The mismatch log identifies the node, output, and sample, with shapes,
+tolerances, and error statistics.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 35 65
+
+   * - Symptom
+     - Check
+   * - Sample 0 passes, later samples fail
+     - Declare changing values with ``annotate.input_tensors()`` rather than
+       leaving them as constants.
+   * - Replaying sample 0 gives a different result
+     - Check undeclared persistent buffers and nondeterministic execution.
+       Use ``annotate.register_buffer()`` for traced buffers, or
+       ``state_tensors()`` / ``update_state()`` for state carried between calls.
+   * - Small numerical differences
+     - Compare with ``float32`` and without ``torch.autocast``. On NVIDIA GPUs,
+       try ``NVIDIA_TF32_OVERRIDE=0`` before starting Python, then recapture.
+
+.. dropdown:: Numerical differences and replay
+
+   Validation repeats sample 0 after the other samples, restoring declared
+   buffers first. A missed reset of an undeclared buffer can make the export
+   accumulate values across calls.
+
+   ONNX Runtime and PyTorch can round differently. TorchScript scripting can
+   also change rounding after its first call when it fuses operations. These
+   effects are more visible with ``float16`` or ``bfloat16``.
+
+   Diagnostic hints suggest possible causes; they do not establish that a
+   difference is harmless.
 
 Data-dependent shapes
 ---------------------
 
-``torch.nonzero``, boolean masks such as ``x[x > 0]``, ``masked_select``
-and ``torch.unique`` return tensors whose size depends on the input
-values. LEAPP keeps reads of such sizes symbolic: ``.shape``,
-``.size()``, ``.numel()``, integer arithmetic on them, and
-``torch.tensor(x.shape)`` are recorded in the graph, so the export
-computes them at run time.
-
-``len(x)`` and Python ``float`` arithmetic on sizes always produce plain
-numbers and are inlined as constants. Use ``x.size(0)`` or
-``x.shape[0]`` instead of ``len(x)``. Include samples with different
-counts, so validation would catch an inlined size.
+For results of boolean masks, ``nonzero``, or ``unique``, use ``.shape``,
+``.size()``, or ``.numel()`` to keep size-dependent computation in the graph.
+``len(x)`` and Python ``float`` arithmetic on sizes produce constants. Include
+samples with different result sizes to catch a frozen count.
 
 .. _stateful-validation:
 
 Stateful transitions and sequential replay
 ------------------------------------------
 
-When consecutive calls carry state forward, cached samples preserve the
-original trajectory, including each state's next value:
+Cached validation checks each recorded ``(observation, state) -> (action,
+next_state)`` transition independently, using its recorded input state.
+Declare state in the exported interface as described in :doc:`graph`.
 
-.. code-block:: text
-
-   (observation_0, state_0) -> (action_0, state_1)
-   (observation_1, state_1) -> (action_1, state_2)
-   (observation_2, state_2) -> (action_2, state_3)
-
-LEAPP supplies each recorded observation and state to the exported node and
-compares both its action and its next state with the recorded outputs. This
-validates the state-transition computation across the captured trajectory.
-State must be included in the exported interface as described in
-:doc:`graph`; unannotated Python state is outside this check.
-
-For deterministic computation with all relevant state represented, exact
-agreement on every transition also implies agreement when those transitions
-are chained with the same observations, initial state, and reset boundaries:
-each exported next state equals the next recorded input state.
-
-Validation accepts numerical differences within ``rtol`` and ``atol``.
-Cached validation supplies the recorded reference state again at each step,
-so small accepted errors do not accumulate between samples. **Sequential
-runtime replay feeds the exported state outputs into subsequent calls** and
-can reveal whether those errors grow, as well as problems in feedback wiring,
-initialization, or reset handling. Increasing the cache size expands recorded
-transition coverage; it does not change how validation supplies state.
-
-Use both checks when assessing stateful deployment: capture representative
-consecutive transitions, then compare a sequence through
-:doc:`../leapp_runtime` against the original pipeline from matching initial
-state. Include episode resets and fresh observations beyond the capture set.
+Also compare a sequence through :doc:`../leapp_runtime` with the original
+pipeline, starting from the same state. This feeds exported state into later
+calls and checks whether small accepted errors accumulate. Include episode
+resets and observations beyond the capture set.
 
 Inspect what was captured
 =========================
 
-Every ``leapp.start()`` call writes a LEAPP log file in the graph output
-directory:
-
-.. code-block:: python
-
-   leapp.start("debug_policy", save_path="exports")
-
-creates ``exports/debug_policy/log.txt``. The file includes DEBUG
-output. The console is quieter and shows warnings and errors. Pass
-``verbose=True`` to stream the same detail to the console:
-
-.. code-block:: python
-
-   leapp.start("debug_policy", save_path="exports", verbose=True)
-   # ... run your traced code ...
-   leapp.stop()
-   leapp.compile_graph(validate=True, verbose=True)
-
-``leapp.start(..., verbose=True)`` covers trace-time diagnostics.
-``leapp.compile_graph(..., verbose=True)`` covers compilation, export,
-and validation.
+``leapp.start("policy", save_path="exports")`` writes detailed diagnostics to
+``exports/policy/log.txt``. Use ``verbose=True`` on ``start()`` for trace-time
+console output, and on ``compile_graph()`` for export and validation output.
 
 FX graph
 --------
 
-For each traced node, LEAPP writes the full ``torch.fx.Graph`` to the
-log after building the node's ``fx.GraphModule``. Search for
-``Compiled graph module for <node name>`` in ``log.txt``:
-
-.. code-block:: text
-
-   [DEBUG]: Compiled graph module for policy:
-   graph():
-       %obs : [num_users=1] = placeholder[target=obs]
-       %linear : [num_users=1] = call_module[target=linear](args = (%obs,), kwargs = {})
-       %tanh : [num_users=1] = call_function[target=torch.tanh](args = (%linear,), kwargs = {})
-       return tanh
-   [DEBUG]: Graph module inputs: [...]
-   [DEBUG]: Graph module outputs: [...]
-
-This is the graph LEAPP hands to the export backend. Use it to check
-that annotated inputs became placeholders, that operations recorded as
-the operators you expected, that unused inputs were trimmed, and that
-the graph outputs match what you passed to ``annotate.output_tensors()``.
+Search the log for ``Compiled graph module for <node name>``. The FX dump shows
+the graph passed to the backend: input placeholders, recorded operations, and
+outputs. Check it for missing inputs or unexpected constants.
 
 Graph image
 -----------
 
-On Python 3.11+, ``leapp.compile_graph(visualize=True)`` writes a PNG
-of the node graph, which is the fastest check that nodes connected the
-way you intended and the dtypes are as you expect.
+On Python 3.11+, ``compile_graph(visualize=True)`` also writes a PNG showing
+node connections, boundary tensors, and dtypes.
 
 Isolate the failure
 ===================
 
-These flags turn pieces of a LEAPP session off so you can tell whether
-a bad result comes from tracing, from export, or from LEAPP's own
-patches.
+Use these options to narrow down which stage causes the problem:
 
-Skip export
------------
+.. list-table::
+   :header-rows: 1
+   :widths: 45 55
 
-Tracing is what produces the values that carry graph connectivity, so
-it cannot be skipped while still producing a graph. Export can.
+   * - Option
+     - Effect
+   * - ``start(..., dry_run=True)``
+     - Trace and write graph YAML without compiling models.
+   * - ``start(..., non_traced=["node"])``
+     - Skip export for selected nodes while preserving their connections.
+   * - ``export_with=None`` on ``output_tensors()``
+     - Skip export for that node.
+   * - ``start(..., global_patching=False)``
+     - Disable session-wide conversion and function patches.
 
-* ``leapp.start(..., dry_run=True)`` traces every node and writes YAML,
-  but exports no models. Use it to inspect boundaries, I/O, and
-  connectivity without paying export cost.
-* ``leapp.start(..., non_traced=["some_node"])`` does the same for
-  listed nodes only: they still appear in the graph and still connect
-  to neighbors, but they produce no model artifact.
-* ``export_with=None`` on a single ``output_tensors()`` call skips
-  export for that node only.
-
-Warp graphs still run the annotated path a second time and still report
-a segment that diverges between the two runs. Only APIC capture is
-skipped, because nothing consumes the captured bundle when the node is
-not exported.
-
-.. code-block:: python
-
-   leapp.start("debug_graph", dry_run=True)
-   # ... run your traced code ...
-   leapp.stop()
-   leapp.compile_graph()
-
-Disable session patches
------------------------
-
-``leapp.start(..., global_patching=False)`` turns off the conversions
-LEAPP patches for the tracing session (for example NumPy and torch
-interop). Use this only to test whether those patches are involved in
-a failure.
+These options still execute your Python pipeline. Warp dry runs also retain
+the second pass that checks whether a segment's execution diverges.

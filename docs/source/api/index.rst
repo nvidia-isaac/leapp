@@ -202,8 +202,8 @@ Parameters
   input/output samples, including exported state updates. Each sample uses
   its recorded inputs and state; see :ref:`stateful-validation` for the
   distinction from sequential runtime replay. Validation then runs sample 0
-  again and fails if the result differs, which means the export keeps
-  undeclared state between calls. Defaults to ``True``.
+  again and fails if the result differs, which usually means the export
+  keeps undeclared state between calls. Defaults to ``True``.
 * ``rtol`` (float, optional): Relative tolerance for
   ``torch.allclose()``. Defaults to ``1e-3``.
 * ``atol`` (float, optional): Absolute tolerance for
@@ -307,7 +307,7 @@ Output YAML structure
      python version: "3.12.9"
      torch version: "2.7.0+cu126"
      warp version: null
-     leapp version: "0.8.0"
+     leapp version: "0.8.1"
      leapp config version: "1.4"
      cuda version: "12.6"
      os: Linux
@@ -353,7 +353,8 @@ Semantic metadata
   ``True`` marks an incoming desired value. Outputs accept ``False`` or ``None``
   but reject ``True``. Explicit boolean values are written to YAML; ``None``
   leaves the field unspecified and omitted.
-* ``reference`` names the frame against which pose or motion is measured.
+* ``reference`` names the frame against which pose or motion is measured,
+  or the coordinate frame for a point cloud.
 * ``expressed_in`` accepts a literal frame name, ``ExpressionFrame.SELF``,
   ``ExpressionFrame.REFERENCE``, or ``None`` (global).
 * ``extra`` is a dictionary flattened into the tensor YAML entry. Use it only
@@ -379,6 +380,8 @@ a dict or mixed with raw tensors. See :doc:`/semantics/usage` for examples.
 
    Axis(kind=None, names=None, period_ms=None)
    joint_position(name, ref, *, axes=None, is_setpoint=None)
+   joint_acceleration(name, ref, *, axes=None, is_setpoint=None)
+   point_cloud(name, ref, *, reference=None, axes=None, is_setpoint=None)
    frame_pose(name, ref, *, axes=None, is_setpoint=None, reference=None)
    frame_twist(name, ref, *, axes=None, is_setpoint=None,
                reference=None, expressed_in=None)
