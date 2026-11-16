@@ -66,6 +66,13 @@ def check_versions(root=ROOT, tag=None):
     ]
     if (project["name"], project["version"]) != ("leapp-rt", version):
         raise RuntimeError(f"Python project must be leapp-rt {version}")
+    for requirements in project.get("optional-dependencies", {}).values():
+        for requirement in requirements:
+            if (
+                requirement.startswith("leapp-rt-")
+                and requirement.split("==", 1)[-1] != version
+            ):
+                raise RuntimeError(f"Backend extra must pin =={version}: {requirement}")
     cmake = (root / "bindings/cxx/CMakeLists.txt").read_text()
     match = re.search(r"project\(leapp-rt\s+VERSION\s+([^\s)]+)", cmake)
     if not match or match[1] != version:

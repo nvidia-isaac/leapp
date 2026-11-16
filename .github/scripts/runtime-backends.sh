@@ -59,6 +59,18 @@ pixi run --locked build-runtime --output "$work/packages" --glibc 2.39 \
   --backends "$backend" --engines "${engines[@]}" --cuda --sdk-origin "$sdk_origin"
 pixi run --locked package-runtime --input "$work/packages"
 
+# Reuse the SDK and core artifact to verify native pip extras independently.
+if [[ "$backend" != tensorrt ]]; then
+  export ORT_DYLIB_PATH=/opt/tritonserver/backends/onnxruntime/libonnxruntime.so
+  pip_options=()
+  if [[ "$backend" == onnx ]]; then
+    pip_options+=(--onnx-tensorrt)
+  fi
+  pixi run --locked build-runtime --output "$work/pip-packages" --glibc 2.39 \
+    --backends "$backend" --engines native --cuda --sdk-origin "$sdk_origin" "${pip_options[@]}"
+  pixi run --locked package-wheels --input "$work/pip-packages" --allow-unreleased
+fi
+
 # Each consumer installs one engine and one backend. The core wheel is shared
 # with the SDK-free packaging job and is never rebuilt in this SDK environment.
 for engine in "${engines[@]}"; do

@@ -111,6 +111,8 @@ def main():
         selected.append("leapp-libs-triton")
     if args.cuda:
         selected.append("leapp-libs-cudart")
+        if "onnx" in args.backends:
+            selected.append("leapp-onnx-cuda")
     if args.onnx_tensorrt:
         selected.append("leapp-onnx-tensorrt")
     missing = set(selected) - report["packages"].keys()

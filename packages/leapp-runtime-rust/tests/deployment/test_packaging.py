@@ -5,6 +5,9 @@
 
 import contextlib
 import io
+import importlib.util
+import os
+from types import SimpleNamespace
 import json
 from pathlib import Path
 import shutil
@@ -23,6 +26,161 @@ import sdk
 
 
 class PackagingTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "linux" and shutil.which("cc"), "Linux cc")
+    def test_backend_wheels_keep_cuda_optional_and_resolve_sonames(self):
+        from wheels import build_wheels
+
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            sdk_root = work / "sdk"
+            (sdk_root / "lib").mkdir(parents=True)
+            (sdk_root / "LICENSE").write_text("SDK test license")
+            (work / "stage/leapp-backend-onnx").mkdir(parents=True)
+
+            def library(name, code, *link):
+                subprocess.run(
+                    [
+                        "cc",
+                        "-shared",
+                        "-fPIC",
+                        "-x",
+                        "c",
+                        "-",
+                        "-o",
+                        str(sdk_root / "lib" / name),
+                        f"-Wl,-soname,{name}",
+                        *link,
+                    ],
+                    input=code,
+                    text=True,
+                    check=True,
+                )
+
+            library("libcudart.so.13", "int cuda_value(void) { return 42; }")
+            (sdk_root / "lib/libcudart.so").symlink_to("libcudart.so.13")
+            library("libonnxruntime.so", "int ort_value(void) { return 1; }")
+            library(
+                "libonnxruntime_providers_shared.so",
+                "int shared_value(void) { return 2; }",
+            )
+            library(
+                "libonnxruntime_providers_cuda.so",
+                "int cuda_value(void); int provider(void) { return cuda_value(); }",
+                f"-L{sdk_root / 'lib'}",
+                "-l:libcudart.so.13",
+                f"-Wl,-rpath,{sdk_root / 'lib'}",
+            )
+            target = sdk.native_platform()
+            info = {
+                "version": "0.1.0",
+                "runtime_release": True,
+                "platform": target,
+                "glibc": "2.28",
+                "l4t": None,
+                "engines": ["native"],
+                "backends": ["onnx"],
+                "onnx_cuda": True,
+                "onnx_tensorrt": False,
+                "versions": {"cuda": "13.0", "onnxruntime": "1.24.0"},
+                "tools": {},
+                "source_sha256": "test",
+            }
+            (work / "build.json").write_text(json.dumps(info))
+            (work / "sdk.json").write_text(
+                json.dumps(
+                    {
+                        "onnx": str(sdk_root / "lib/libonnxruntime.so"),
+                        "cuda": str(sdk_root),
+                        "torch": None,
+                        "triton": None,
+                        "tensorrt": None,
+                    }
+                )
+            )
+            with patch("payloads.inspect_sdk", return_value=info["versions"]):
+                report = build_wheels(work, work / "wheels")
+            packages = report["packages"]
+            self.assertEqual(
+                packages["leapp-rt-onnx"]["dependencies"],
+                ["leapp-rt==0.1.0", "leapp-rt-libs-onnx==0.1.0"],
+            )
+            self.assertIn(
+                "leapp-rt-libs-cudart-cuda13==0.1.0",
+                packages["leapp-rt-onnx-cuda13"]["dependencies"],
+            )
+            for package in packages.values():
+                with ZipFile(work / "wheels" / package["archive"]) as archive:
+                    names = archive.namelist()
+                    self.assertFalse(any(name.endswith(".sh") for name in names))
+                    self.assertTrue(
+                        any(".dist-info/licenses/" in name for name in names)
+                    )
+                    if "libs_cudart" in package["archive"]:
+                        self.assertIn("_leapp_rt_backends/lib/libcudart.so.13", names)
+                        self.assertEqual(
+                            archive.read("_leapp_rt_backends/lib/libcudart.so"),
+                            archive.read("_leapp_rt_backends/lib/libcudart.so.13"),
+                        )
+                    for name in names:
+                        if name.endswith(".so.13") or name.endswith(".so"):
+                            elf_path = work / "check.so"
+                            elf_path.write_bytes(archive.read(name))
+                            dynamic = subprocess.check_output(
+                                ["readelf", "-d", elf_path], text=True
+                            )
+                            self.assertNotIn(str(sdk_root), dynamic)
+
+    def test_pip_discovery_preserves_overrides_and_rejects_mixed_builds(self):
+        path = check_release.ROOT / "bindings/python/python/lrt/_backends.py"
+        spec = importlib.util.spec_from_file_location("pip_backends", path)
+        backends = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(backends)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "lib").mkdir()
+            (root / "metadata").mkdir()
+            (root / "lib/libonnxruntime.so.1").touch()
+            item = {
+                "package": "leapp-rt-libs-onnx",
+                "version": "0.1.0",
+                "build": "one",
+                "glibc": "2.28",
+                "l4t": None,
+                "platform": sdk.native_platform(),
+            }
+            (root / "metadata/onnx.json").write_text(json.dumps(item))
+            with (
+                patch.object(
+                    backends,
+                    "find_spec",
+                    return_value=SimpleNamespace(
+                        submodule_search_locations=[str(root)]
+                    ),
+                ),
+                patch.object(backends, "version", return_value="0.1.0"),
+                patch.object(
+                    backends.platform, "libc_ver", return_value=("glibc", "2.39")
+                ),
+                patch.dict(os.environ, {}, clear=True),
+            ):
+                backends.configure()
+                self.assertEqual(
+                    os.environ["ORT_DYLIB_PATH"], str(root / "lib/libonnxruntime.so.1")
+                )
+                backends.configure.cache_clear()
+                os.environ["LEAPP_NATIVE_BACKENDS"] = "/explicit"
+                os.environ.pop("ORT_DYLIB_PATH")
+                backends.configure()
+                self.assertNotIn("ORT_DYLIB_PATH", os.environ)
+                os.environ.pop("LEAPP_NATIVE_BACKENDS")
+                backends.configure.cache_clear()
+                (root / "metadata/cuda.json").write_text(
+                    json.dumps({**item, "build": "two"})
+                )
+                with self.assertRaisesRegex(RuntimeError, "incompatible SDK builds"):
+                    backends.configure()
+                self.assertNotIn("ORT_DYLIB_PATH", os.environ)
+
     def test_release_version_drift(self):
         version = check_release.check_versions()
         with self.assertRaisesRegex(RuntimeError, "Release tag"):
@@ -114,7 +272,7 @@ class PackagingTests(unittest.TestCase):
 
     @unittest.skipUnless(sys.platform == "linux" and shutil.which("cc"), "Linux cc")
     def test_relocation(self):
-        from channel import relocate
+        from payloads import relocate
 
         for tag in ("rpath", "runpath"):
             with self.subTest(tag=tag), tempfile.TemporaryDirectory() as directory:

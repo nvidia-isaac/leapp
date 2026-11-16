@@ -39,8 +39,8 @@ The exporter uses `publish.yml` for its `v*` and `release-v*` tags.
 Neither workflow uploads packages to a registry.
 
 The first public runtime release contains only the core crate, sdist, and wheels.
-Public Pixi backend channels remain separate future release work. The local SDK
-producer's `--auditwheel skip` path is only for local Conda packages.
+Public Pixi backend channels and optional backend wheels remain separate future
+release work. The local SDK producer's `--auditwheel skip` path is only for local Conda packages.
 
 `check_release.py` checks versions and the core crate's contents. The crate keeps
 Rust tests needed by source builds and only three explicitly listed YAML fixtures,
@@ -93,6 +93,7 @@ repository license.
 | `leapp-backend-torchscript` | Native TorchScript plugin |
 | `leapp-backend-nativert` | NativeRT library and native plugin |
 | `leapp-triton-{backend}` | Selected backend's Triton adapter and server dependencies |
+| `leapp-onnx-cuda` | Optional ONNX Runtime CUDA provider and runtime dependencies |
 | `leapp-onnx-tensorrt` | Optional ONNX Runtime TensorRT provider and builder dependencies |
 | `leapp-warp-{engine}-{backend}` | Optional Warp adapter for the selected engine and backend |
 | `leapp-rt-python`, `leapp-rt-cxx` | Optional local bindings, built with `--bindings`, for development before publication |
@@ -177,6 +178,58 @@ Activation selects the installed backend directories. Explicit
 retain their existing behavior. Libraries use relative ELF search paths, so
 installation does not need `LD_LIBRARY_PATH`. Do not inherit an SDK's
 `LD_LIBRARY_PATH` when testing or deploying an isolated environment.
+
+## Build pip backend wheels
+
+The same producer outputs can become optional backend wheels. `payloads.py`
+collects SDK dependencies, licenses, provenance, and relocated libraries for both
+formats; `channel.py` writes Conda packages and `wheels.py` writes Python wheels.
+Wheels currently support the native ONNX, TorchScript, and NativeRT backends,
+including ONNX CUDA and TensorRT acceleration. Triton and Warp remain on the
+Pixi/manual installation path.
+
+For example, on an SDK host configured as described below:
+
+```sh
+pixi run build-runtime --output target/pip-sdk --glibc 2.39 \
+  --backends onnx --cuda --onnx-tensorrt \
+  --sdk-origin 'sdk-artifact@sha256:<verified-digest>'
+pixi run package-wheels --input target/pip-sdk
+python -m pip install --find-links=target/pip-sdk/backend-wheels \
+  'leapp-rt[onnx,tensorrt]'
+```
+
+Use `--backends torchscript nativert` to build both Torch backends, or combine
+these with `onnx` to share SDK libraries across every selected backend. Supply
+`TORCH_ROOT` and matching `PYTORCH_SOURCE` as required by the producer. CPU-only
+ONNX needs no CUDA SDK. ONNX CUDA providers are a separate component, so the
+`onnx` extra stays CPU-only even in a wheelhouse containing GPU backends.
+
+Backend wheels normally require the clean matching `runtime-vVERSION` source.
+Before publication, add `--allow-unreleased` to `package-wheels`, build the core
+wheel from the same checkout, and install that wheel with its extras:
+
+```sh
+python -m pip install --find-links=target/pip-sdk/backend-wheels \
+  './target/wheels/leapp_rt-0.1.0-cp312-cp312-linux_x86_64.whl[onnx,tensorrt]'
+```
+
+Use the actual core wheel filename for the host interpreter. This development
+flag does not publish anything. All SDK components in an environment must come
+from one producer build. SDK changes require a new backend release; do not mix
+wheels from separate builds under the same distribution version.
+
+The extras default to CUDA 13; explicit CUDA 12/13 extras select distinctly named
+GPU components. Dependency metadata pins each component and the core version.
+Shared SDKs install once under the private `_leapp_rt_backends` namespace.
+Wheels contain regular files, retain native notices, and use relative ELF lookup
+paths; they need neither Pixi activation nor `LD_LIBRARY_PATH` at execution.
+Only the NVIDIA driver and platform libraries remain external.
+
+The platform tag records the architecture and glibc baseline. Jetson SDK wheels
+use a Linux architecture tag and enforce their recorded Jetson Linux release
+when opening a session, since pip tags cannot express that release. Core wheels
+retain their existing manylinux baseline and contain no backend libraries.
 
 ## Build a local channel
 

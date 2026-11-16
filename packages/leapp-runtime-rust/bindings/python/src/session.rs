@@ -72,6 +72,18 @@ impl PySession {
                     .insert(name, crate::location(&device)?);
             }
         }
+        if opts.engine == EngineKind::Native {
+            py.import("lrt._backends")?
+                .call_method0("configure")
+                .map_err(|error| {
+                    crate::diagnostic(
+                        py,
+                        crate::runtime_error(error),
+                        lrt::ErrorCode::Unsupported,
+                        "load",
+                    )
+                })?;
+        }
         let inner = py
             .detach(|| SessionHandle::open(&bundle.inner, opts))
             .map_err(|e| binding_error(py, e))?;

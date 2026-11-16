@@ -238,6 +238,7 @@ jobs:
         run: |
           pixi run --locked build-runtime --output target/onnx-ci/packages --glibc 2.39 --backends onnx --sdk-origin "$SDK_ORIGIN"
           pixi run --locked package-runtime --input target/onnx-ci/packages
+          pixi run --locked package-wheels --input target/onnx-ci/packages --allow-unreleased
           pixi run --locked consumer --channel target/onnx-ci/packages/channel --core-source channel --binding none --output target/onnx-ci/consumer --backends onnx
           pixi run --locked python - <<'PY'
           from pathlib import Path
@@ -265,6 +266,23 @@ jobs:
               pixi install --manifest-path /app/pixi.toml
               pixi run --locked --manifest-path /app/pixi.toml python /tests/check_packages.py --backends onnx --report /app/audit.json
               pixi run --locked --manifest-path /app/pixi.toml python /tests/check_installation.py --backend onnx --engine native --installed-only --without-triton --without-cuda
+            '
+
+      - name: Run ONNX inference from pip extras without Pixi
+        run: |
+          docker run --rm \
+            --mount "type=bind,src=$PWD/target/onnx-ci/core,dst=/core,readonly" \
+            --mount "type=bind,src=$PWD/target/onnx-ci/packages/backend-wheels,dst=/backends,readonly" \
+            --mount "type=bind,src=$PWD/target/onnx-ci/fixtures,dst=/fixtures,readonly" \
+            --mount "type=bind,src=$PWD/tests/deployment,dst=/tests,readonly" \
+            --env LEAPP_TRITON_FIXTURES=/fixtures \
+            ubuntu:24.04 bash -euc '
+              apt-get update
+              apt-get install -y --no-install-recommends ca-certificates python3-venv
+              python3 -m venv /app
+              set -- /core/*.whl
+              /app/bin/python -m pip install --only-binary=:all: --find-links=/backends "$1[onnx]"
+              /app/bin/python /tests/check_installation.py --backend onnx --engine native --installed-only --without-triton --without-cuda
             '
 
   runtime-backends:
@@ -338,6 +356,27 @@ jobs:
                 pixi run --locked --manifest-path /app/pixi.toml python /tests/check_packages.py --backends "$BACKEND" --engines "$ENGINE" --cuda --report /app/audit.json
               '
           done
+
+      - name: Check native pip extras without Pixi
+        if: matrix.backend != 'tensorrt'
+        run: |
+          docker run --rm --gpus all \
+            --mount "type=bind,src=$PWD/target/backend-ci/core,dst=/core,readonly" \
+            --mount "type=bind,src=$PWD/target/backend-ci/pip-packages/backend-wheels,dst=/backends,readonly" \
+            --mount "type=bind,src=$PWD/target/backend-ci/fixtures,dst=/fixtures,readonly" \
+            --mount "type=bind,src=$PWD/tests/deployment,dst=/tests,readonly" \
+            --env BACKEND --env LEAPP_TRITON_FIXTURES=/fixtures --env LEAPP_TORCHSCRIPT_FIXTURES=/fixtures \
+            ubuntu:24.04 bash -euc '
+              apt-get update
+              apt-get install -y --no-install-recommends ca-certificates python3-venv
+              python3 -m venv /app
+              extra=$BACKEND
+              if [[ "$BACKEND" == onnx ]]; then extra=onnx-cuda; fi
+              set -- /core/*.whl
+              /app/bin/python -m pip install --only-binary=:all: --find-links=/backends "$1[$extra]" cupy-cuda13x==14.2.0
+              export CUDA_PATH=/app/lib/python3.12/site-packages/_leapp_rt_backends
+              /app/bin/python /tests/check_installation.py --backend "$BACKEND" --engine native --cuda --installed-only --without-triton
+            '
 
       - name: Clean GPU runner build files
         if: always() && env.LEAPP_CI_ROOT != ''

@@ -50,6 +50,13 @@ runtimes. Installing a supported backend does not require rebuilding the core
 binary or selecting Cargo features. Running exported bundles does not require Python
 model-export packages.
 
+Pixi is the default deployment path; see the
+[backend environment guide](packaging/README.md#install-an-application-environment).
+Python applications can also select native SDK wheels with extras such as
+`pip install 'leapp-rt[onnx,tensorrt]'` or
+`pip install 'leapp-rt[torchscript,nativert]'`; see the
+[Python installation guide](bindings/python/README.md).
+
 For native execution, follow the
 [native backend installation guide](src/engines/native/backends/README.md#installation).
 For Triton, use its ONNX Runtime and TensorRT backends and the
