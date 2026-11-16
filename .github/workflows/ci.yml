@@ -99,6 +99,9 @@ jobs:
             LEAPP_NATIVE_TEST_PLUGINS="$plugins" pixi run --locked cargo test --locked --lib engines::native::backends::bridge -- --test-threads=1
           done
 
+      - name: Check dependency inventory and notices
+        run: pixi run --locked python packaging/licenses.py --check
+
       - name: Test packaging helpers
         run: pixi run --locked python -m unittest discover -s tests/deployment -p test_packaging.py -v
 

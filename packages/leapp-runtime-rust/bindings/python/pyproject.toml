@@ -8,7 +8,7 @@ version = "0.1.0"
 requires-python = ">=3.10"
 description = "Synchronous LEAPP inference through native backends or Triton"
 license = "Apache-2.0"
-license-files = ["LICENSE-LEAPP"]
+license-files = ["LICENSE-LEAPP", "THIRD-PARTY-NOTICES.txt"]
 readme = "README.md"
 dependencies = ["numpy>=1.26"]
 classifiers = [

@@ -17,6 +17,7 @@ Adding a backend does not rebuild it. Backend recipes currently produce a
 Run with Python 3.12+, Rust, Maturin, and the workspace dependencies available:
 
 ```sh
+python packaging/licenses.py --check
 cargo package --locked -p leapp-rt
 python packaging/build_sdist.py
 ```
@@ -27,6 +28,21 @@ file without changing any retained dependency version. The resulting archive
 builds with `--locked`. The planned release wheel matrix is manylinux_2_28
 for x86-64 and aarch64 and CPython 3.10–3.14, built from that archive.
 The local SDK producer's `--auditwheel skip` path is only for local Conda packages.
+
+`dependency-licenses.csv` inventories all external crates in `Cargo.lock`,
+including build-only, inactive-feature, and other-target dependencies. Its
+non-Cargo SDK and tool entries are maintained separately. After updating the
+lockfile, run `python packaging/licenses.py` to refresh the Cargo rows and
+`bindings/python/THIRD-PARTY-NOTICES.txt`. The generator verifies published crate
+archive checksums against the lockfile and preserves upstream license expressions
+and notice texts. It reads Cargo's archive cache, downloading missing archives
+from crates.io. CI rejects stale generated files.
+
+The Python sdist and wheels include these dependency notices alongside LEAPP's
+license through the Python project's `license-files` metadata. Identical notice
+texts are included once with their source packages listed. The notices cover
+the workspace's locked crates and vendored schema/header; they do not imply
+that every listed dependency is linked into every wheel.
 
 The runtime version is independent of the exporter version. Keep the runtime's
 Cargo manifests, Python metadata, CMake version, and lockfile aligned when
