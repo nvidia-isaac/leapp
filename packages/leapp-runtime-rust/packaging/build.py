@@ -204,13 +204,12 @@ def main():
         "host": platform.platform(),
         "tools": {},
     }
-    for tool, flag in [
-        ("rustc", "--version"),
-        ("cmake", "--version"),
-        ("c++", "--version"),
-    ]:
+    tools = ["rustc", "cmake"]
+    if "cxx" in args.bindings or set(args.backends) & {"torchscript", "nativert"}:
+        tools.append("c++")
+    for tool in tools:
         provenance["tools"][tool] = subprocess.check_output(
-            [tool, flag], text=True
+            [tool, "--version"], text=True
         ).splitlines()[0]
     if pytorch:
         source_files = []
@@ -259,6 +258,7 @@ def main():
             "--no-deps",
             "--no-compile",
             "--no-index",
+            "--ignore-installed",
             "--prefix",
             stage / "leapp-rt-python",
             wheels[0],
