@@ -6,7 +6,7 @@ and importing it require neither the Triton nor the CUDA SDK.
 NumPy is a package dependency; PyTorch and CuPy are optional DLPack
 producers/consumers.
 
-For a published release, use `python -m pip install leapp-runtime`.
+For a published release, use `python -m pip install leapp-rt`.
 The planned release wheels target Linux x86-64 and aarch64, CPython 3.10–3.14,
 and glibc 2.28 or newer. They are interpreter-specific wheels. Backend SDKs may
 require a newer operating system; Jetson backend environments are validated
@@ -18,7 +18,7 @@ and Python 3.10 or newer:
 ```sh
 python -m pip install 'maturin>=1.9,<2'
 maturin build --locked --release --manifest-path bindings/python/Cargo.toml
-python -m pip install target/wheels/leapp_runtime-*.whl
+python -m pip install target/wheels/leapp_rt-*.whl
 ```
 
 Install the model backends you need as described in the

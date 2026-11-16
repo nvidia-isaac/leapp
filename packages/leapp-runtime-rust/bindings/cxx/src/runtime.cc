@@ -16,7 +16,7 @@
 #include <utility>
 #include <vector>
 
-#include "leapp-runtime-cxx/src/bridge.rs.h"
+#include "leapp-rt-cxx/src/bridge.rs.h"
 
 namespace lrt {
 namespace {

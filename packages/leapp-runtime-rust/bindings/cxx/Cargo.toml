@@ -1,5 +1,5 @@
 [package]
-name = "leapp-runtime-cxx"
+name = "leapp-rt-cxx"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
@@ -10,8 +10,8 @@ rust-version = "1.88"
 crate-type = ["staticlib"]
 
 [dependencies]
-leapp-runtime = { version = "=0.1.0", path = "../.." }
-leapp-runtime-bindings = { version = "=0.1.0", path = "../common" }
+leapp-rt = { version = "=0.1.0", path = "../.." }
+leapp-rt-bindings = { version = "=0.1.0", path = "../common" }
 cxx = "=1.0.205"
 
 [build-dependencies]

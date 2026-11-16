@@ -38,10 +38,11 @@ either. Configure library discovery as described in the
 Consume the installed SDK with:
 
 ```cmake
-find_package(leapp_runtime CONFIG REQUIRED)
+find_package(leapp-rt CONFIG REQUIRED)
 target_link_libraries(my_application PRIVATE lrt::runtime)
 ```
 
+The shared library is `libleapp_rt.so`; CMake exposes it as `lrt::runtime`.
 Set `CMAKE_PREFIX_PATH` to the installation prefix. C++ exceptions are not required.
 Operational failures return `Status` with code, phase, and message. Allocation
 failure and Rust panics are not recoverable status errors.
@@ -51,7 +52,7 @@ failure and Rust panics are not recoverable status errors.
 For a local checkout, add the C++ binding directory and link the same target:
 
 ```cmake
-add_subdirectory(path/to/leapp/packages/leapp-runtime-rust/bindings/cxx leapp-runtime)
+add_subdirectory(path/to/leapp/packages/leapp-runtime-rust/bindings/cxx leapp-rt)
 target_link_libraries(my_application PRIVATE lrt::runtime)
 ```
 

@@ -70,7 +70,7 @@ Core builds and checks require no Triton or CUDA SDK. Run from this package:
 cargo check --locked --workspace --all-targets
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --test bundle --test dlpack
-cargo test --locked -p leapp-runtime-bindings --test binding_lifecycle
+cargo test --locked -p leapp-rt-bindings --test binding_lifecycle
 cargo test --locked --lib engines::memory:: -- --test-threads=1
 RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --no-deps
 ```

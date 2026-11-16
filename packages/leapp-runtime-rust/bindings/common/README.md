@@ -12,7 +12,7 @@ engine references.
 Close reports the lock error after cleanup; subsequent close calls succeed.
 Normal run/reset operations still fail on poisoned locks.
 
-The `leapp-runtime-bindings` crate compiles these wrappers against the core
+The `leapp-rt-bindings` crate compiles these wrappers against the core
 runtime on Linux. Both engines are included; `SessionOptions.engine` selects one
 when opening a session. Triton and CUDA libraries load only when required by
 execution; building these wrappers requires neither SDK.

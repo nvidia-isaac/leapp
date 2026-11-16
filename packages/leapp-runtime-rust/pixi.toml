@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [workspace]
-name = "leapp-runtime-build"
+name = "leapp-rt-build"
 channels = ["conda-forge"]
 platforms = ["linux-64", "linux-aarch64"]
 requires-pixi = ">=0.84.0"

@@ -75,7 +75,7 @@ for engine in sys.argv[1:]:
     manifest = root / engine / "pixi.toml"
     text = manifest.read_text().replace("[dependencies]\n", '[dependencies]\npython = "3.12.*"\n')
     text += 'CUDA_PATH = "$CONDA_PREFIX/lib/leapp/cuda"\n'
-    text += '\n[pypi-dependencies]\nleapp-runtime = { path = "/wheels/' + wheel.name + '" }\n'
+    text += '\n[pypi-dependencies]\nleapp-rt = { path = "/wheels/' + wheel.name + '" }\n'
     text += 'cupy-cuda13x = "==14.2.0"\n'
     manifest.write_text(text)
 PY

@@ -34,10 +34,10 @@ def main():
             ],
             check=True,
         )
-        source = work / f"leapp_runtime-{version}.tar.gz"
+        source = work / f"leapp_rt-{version}.tar.gz"
         with tarfile.open(source) as archive:
             archive.extractall(work / "source", filter="data")
-        root = work / "source" / f"leapp_runtime-{version}"
+        root = work / "source" / f"leapp_rt-{version}"
         lock = root / "Cargo.lock"
         before = tomllib.loads(lock.read_text())["package"]
         # Maturin omits the unrelated C++ workspace member. Cargo must prune its

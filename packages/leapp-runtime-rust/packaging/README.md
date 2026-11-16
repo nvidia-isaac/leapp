@@ -17,7 +17,7 @@ Adding a backend does not rebuild it. Backend recipes currently produce a
 Run with Python 3.12+, Rust, Maturin, and the workspace dependencies available:
 
 ```sh
-cargo package --locked -p leapp-runtime
+cargo package --locked -p leapp-rt
 python packaging/build_sdist.py
 ```
 
@@ -37,14 +37,14 @@ repository license.
 
 | Package | Contents |
 |---|---|
-| `leapp-runtime-environment` | Backend discovery configuration; no SDK libraries |
+| `leapp-rt-environment` | Backend discovery configuration; no SDK libraries |
 | `leapp-backend-onnx` | Native ONNX Runtime installation |
 | `leapp-backend-torchscript` | Native TorchScript plugin |
 | `leapp-backend-nativert` | NativeRT library and native plugin |
 | `leapp-triton-{backend}` | Selected backend's Triton adapter and server dependencies |
 | `leapp-onnx-tensorrt` | Optional ONNX Runtime TensorRT provider and builder dependencies |
 | `leapp-warp-{engine}-{backend}` | Optional Warp adapter for the selected engine and backend |
-| `leapp-runtime-python`, `leapp-runtime-cxx` | Optional local bindings, built with `--bindings`, for development before publication |
+| `leapp-rt-python`, `leapp-rt-cxx` | Optional local bindings, built with `--bindings`, for development before publication |
 
 Shared dependencies are installed once. The `leapp-libs-*` packages are resolved
 automatically. A core-only environment installs no model SDKs. A native CPU ONNX

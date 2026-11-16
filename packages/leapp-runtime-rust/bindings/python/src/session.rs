@@ -5,7 +5,7 @@ use crate::{
     bundle::PyBundle,
     dlpack::{import_items, Output},
 };
-use leapp_runtime_bindings::{Error, SessionHandle};
+use leapp_rt_bindings::{Error, SessionHandle};
 use lrt::dlpack::{BorrowedTensor, OutputBuffer};
 use lrt::{EngineKind, ExecutionDevice, RunResult, SessionOptions};
 use pyo3::{

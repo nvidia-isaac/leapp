@@ -298,7 +298,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
-name = "leapp-runtime"
+name = "leapp-rt"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -317,29 +317,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "leapp-runtime-bindings"
+name = "leapp-rt-bindings"
 version = "0.1.0"
 dependencies = [
- "leapp-runtime",
+ "leapp-rt",
  "tempfile",
 ]
 
 [[package]]
-name = "leapp-runtime-cxx"
+name = "leapp-rt-cxx"
 version = "0.1.0"
 dependencies = [
  "cxx",
  "cxx-build",
- "leapp-runtime",
- "leapp-runtime-bindings",
+ "leapp-rt",
+ "leapp-rt-bindings",
 ]
 
 [[package]]
-name = "leapp-runtime-python"
+name = "leapp-rt-python"
 version = "0.1.0"
 dependencies = [
- "leapp-runtime",
- "leapp-runtime-bindings",
+ "leapp-rt",
+ "leapp-rt-bindings",
  "pyo3",
 ]
 

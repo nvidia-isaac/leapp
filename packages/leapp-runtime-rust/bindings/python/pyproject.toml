@@ -3,7 +3,7 @@ requires = ["maturin>=1.9,<2"]
 build-backend = "maturin"
 
 [project]
-name = "leapp-runtime"
+name = "leapp-rt"
 version = "0.1.0"
 requires-python = ">=3.10"
 description = "Synchronous LEAPP inference through native backends or Triton"

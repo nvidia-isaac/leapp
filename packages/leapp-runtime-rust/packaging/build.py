@@ -260,13 +260,13 @@ def main():
             "--no-compile",
             "--no-index",
             "--prefix",
-            stage / "leapp-runtime-python",
+            stage / "leapp-rt-python",
             wheels[0],
         )
-        for path in (stage / "leapp-runtime-python").rglob("direct_url.json"):
+        for path in (stage / "leapp-rt-python").rglob("direct_url.json"):
             path.unlink()
     if "cxx" in args.bindings:
-        cmake("bindings/cxx", out / "build-cxx", stage / "leapp-runtime-cxx")
+        cmake("bindings/cxx", out / "build-cxx", stage / "leapp-rt-cxx")
     if pytorch:
         nativert = stage / "leapp-libs-nativert"
         cmake(

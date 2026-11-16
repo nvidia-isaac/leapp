@@ -17,7 +17,7 @@ SDKs and sources are build dependencies; deployment needs the installed librarie
 and their runtime dependencies.
 
 Set `LEAPP_NATIVE_BACKENDS` to the plugin installation directory (default:
-`/opt/leapp/backends`):
+`/opt/leapp-rt/backends`):
 
 ```sh
 export LEAPP_NATIVE_BACKENDS="$PWD/target/native-backends"

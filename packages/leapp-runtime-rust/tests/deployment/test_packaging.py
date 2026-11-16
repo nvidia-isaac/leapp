@@ -148,7 +148,7 @@ class PackagingTests(unittest.TestCase):
                 "build": "habc_0",
                 "versions": {"cuda": "13.2"},
                 "engines": ["native"],
-                "packages": {"leapp-runtime-cxx": {}, "leapp-runtime-environment": {}},
+                "packages": {"leapp-rt-cxx": {}, "leapp-rt-environment": {}},
             }
             (root / "packages.json").write_text(json.dumps(report))
             output = root / "consumer"

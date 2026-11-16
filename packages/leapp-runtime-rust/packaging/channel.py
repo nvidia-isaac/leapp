@@ -293,7 +293,7 @@ def main():
             {"leapp-libs-onnx", "leapp-libs-tensorrt-builder"}
         )
     # Plugin lookup remains configurable through the existing environment API.
-    core = stage / "leapp-runtime-environment"
+    core = stage / "leapp-rt-environment"
     activate = core / "etc/conda/activate.d/leapp.sh"
     activate.parent.mkdir(parents=True, exist_ok=True)
     activate.write_text(
@@ -346,11 +346,11 @@ def main():
     for name in components:
         if (
             name.startswith(
-                ("leapp-runtime-", "leapp-backend-", "leapp-triton-", "leapp-warp-")
+                ("leapp-rt-", "leapp-backend-", "leapp-triton-", "leapp-warp-")
             )
-            and name != "leapp-runtime-environment"
+            and name != "leapp-rt-environment"
         ):
-            dependencies[name].add("leapp-runtime-environment")
+            dependencies[name].add("leapp-rt-environment")
         if name.startswith("leapp-triton-"):
             dependencies[name].add("leapp-libs-triton")
         if name.startswith("leapp-warp-"):
@@ -368,7 +368,7 @@ def main():
         license_dir.mkdir(parents=True, exist_ok=True)
         if (
             name.startswith(
-                ("leapp-runtime-", "leapp-backend-", "leapp-triton-", "leapp-warp-")
+                ("leapp-rt-", "leapp-backend-", "leapp-triton-", "leapp-warp-")
             )
             or name == "leapp-libs-nativert"
         ):
@@ -427,7 +427,7 @@ def main():
                     archive.add(path, arcname=path.name)
             runtime = sorted(specs[dep] for dep in dependencies[name])
             runtime += [f"__glibc >={info['glibc']}"]
-            if name == "leapp-runtime-python":
+            if name == "leapp-rt-python":
                 major, minor = map(int, info["versions"]["python"].split("."))
                 runtime += [
                     f"python >={major}.{minor},<{major}.{minor + 1}.0a0",

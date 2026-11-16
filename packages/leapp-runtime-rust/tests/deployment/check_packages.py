@@ -101,7 +101,7 @@ def audit(prefix, backends, report, onnx_tensorrt=False, engines=("native",)):
     core = {}
     for pattern in [
         "lib/python*/site-packages/lrt/_native*.so",
-        "lib/libleapp_runtime.so.*",
+        "lib/libleapp_rt.so.*",
     ]:
         for path in prefix.glob(pattern):
             if not path.is_symlink():

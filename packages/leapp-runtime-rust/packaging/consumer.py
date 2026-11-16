@@ -96,9 +96,9 @@ def main():
         if args.binding == "both"
         else ([] if args.binding == "none" else [args.binding])
     )
-    selected = ["leapp-runtime-environment"] if channel else []
+    selected = ["leapp-rt-environment"] if channel else []
     if args.core_source == "channel":
-        selected += [f"leapp-runtime-{binding}" for binding in bindings]
+        selected += [f"leapp-rt-{binding}" for binding in bindings]
     for engine in sorted(set(args.engines)):
         kind = "backend" if engine == "native" else "triton"
         selected += [
@@ -129,7 +129,7 @@ def main():
         text += f'{name} = {{ version = "=={report["version"]}", build = "{report["build"]}" }}\n'
     if args.core_source == "pypi" and args.binding == "python":
         text += 'python = "3.12.*"\n\n[pypi-dependencies]\n'
-        text += f'leapp-runtime = "=={report["version"]}"\n'
+        text += f'leapp-rt = "=={report["version"]}"\n'
     # Explicit overrides are preserved. Pixi expands these at activation, not
     # when writing the manifest, so another install prefix works unchanged.
     text += (

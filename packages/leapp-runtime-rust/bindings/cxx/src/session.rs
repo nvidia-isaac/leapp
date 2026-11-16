@@ -4,7 +4,7 @@
 use crate::{bundle::BundleHandle, ffi};
 use lrt::{EngineKind, ExecutionDevice, MemoryLocation, RunResult, SessionOptions};
 
-pub struct SessionHandle(Option<leapp_runtime_bindings::SessionHandle>);
+pub struct SessionHandle(Option<leapp_rt_bindings::SessionHandle>);
 
 pub struct ResultHandle(Option<RunResult>);
 
@@ -90,7 +90,7 @@ pub fn session_open(
         options.onnx_tensorrt.insert(node, parameters);
     }
     crate::binding_status(
-        leapp_runtime_bindings::SessionHandle::open(bundle, options).map(|runtime| {
+        leapp_rt_bindings::SessionHandle::open(bundle, options).map(|runtime| {
             output.0 = Some(runtime);
         }),
     )
@@ -176,7 +176,7 @@ pub unsafe fn session_run(
         let value = match unsafe { lrt::dlpack::OutputBuffer::new(&*ptr) } {
             Ok(value) => value,
             Err(error) => {
-                return crate::binding_status(Err(leapp_runtime_bindings::Error::Runtime(error)))
+                return crate::binding_status(Err(leapp_rt_bindings::Error::Runtime(error)))
             }
         };
         if outputs.insert(name, value).is_some() {
