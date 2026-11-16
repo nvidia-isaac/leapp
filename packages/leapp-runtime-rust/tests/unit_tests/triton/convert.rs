@@ -17,7 +17,7 @@ impl Fixture {
         let directory = tempfile::tempdir().unwrap();
         fs::write(directory.path().join("model.bin"), b"abc").unwrap();
         let mut value: Value =
-            serde_yaml_ng::from_str(include_str!("../../fixtures/pipeline.yaml")).unwrap();
+            yaml_serde::from_str(include_str!("../../fixtures/pipeline.yaml")).unwrap();
         for model in value["models"].as_mapping_mut().unwrap().values_mut() {
             model["parameters"]["backend"] = yaml("onnx");
         }
@@ -26,7 +26,7 @@ impl Fixture {
 
     fn open(&self) -> Bundle {
         let path = self.directory.path().join("pipeline.yaml");
-        fs::write(&path, serde_yaml_ng::to_string(&self.value).unwrap()).unwrap();
+        fs::write(&path, yaml_serde::to_string(&self.value).unwrap()).unwrap();
         Bundle::open(path).unwrap()
     }
 
@@ -48,7 +48,7 @@ impl Fixture {
 }
 
 fn yaml(text: &str) -> Value {
-    serde_yaml_ng::from_str(text).unwrap()
+    yaml_serde::from_str(text).unwrap()
 }
 
 #[test]
