@@ -20,7 +20,7 @@ try:
 
     release = _pkg_version("leapp")
 except Exception:
-    release = "0.8.0"
+    release = "0.8.1"
 version = release
 
 # -- General configuration ---------------------------------------------------

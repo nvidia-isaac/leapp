@@ -93,7 +93,7 @@ YAML structure
        frequency: 50
 
    system information:
-     leapp version: 0.8.0
+     leapp version: 0.8.1
      leapp config version: '1.4'
      torch version: 2.9.1+cu128
      python version: 3.12.9
