@@ -61,6 +61,7 @@ onnxruntime
 onnxruntime-gpu
 onnxscript
 matcher
+quantized
 cupti
 cupti-python
 libcupti
