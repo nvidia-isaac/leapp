@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[graph]
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+
+[advisories]
+yanked = "deny"
+ignore = []
+
+[licenses]
+# TODO(OSRB): replace this placeholder with the approved SPDX license allow-list.
+allow = []

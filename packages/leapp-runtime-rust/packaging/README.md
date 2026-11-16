@@ -14,20 +14,45 @@ Adding a backend does not rebuild it. Backend recipes currently produce a
 
 ## Core release artifacts
 
-Run with Python 3.12+, Rust, Maturin, and the workspace dependencies available:
+Run with Python 3.12+, Rust, Maturin, cargo-deny 0.20.2, and the workspace
+dependencies available:
 
 ```sh
 python packaging/licenses.py --check
+python packaging/check_release.py
+cargo deny --locked --workspace check licenses advisories
+cargo package --locked -p leapp-rt --list
 cargo package --locked -p leapp-rt
+python packaging/check_release.py --crate target/package/leapp-rt-*.crate
 python packaging/build_sdist.py
 ```
 
 `build_sdist.py` uses Maturin to include the core and shared binding sources. It
 prunes the unrelated C++ workspace entries from the source archive's Cargo lock
 file without changing any retained dependency version. The resulting archive
-builds with `--locked`. The planned release wheel matrix is manylinux_2_28
-for x86-64 and aarch64 and CPython 3.10–3.14, built from that archive.
-The local SDK producer's `--auditwheel skip` path is only for local Conda packages.
+builds with `--locked`. The `runtime-release.yml` workflow handles published
+`runtime-vVERSION` releases. It checks the tag and versions, runs
+`cargo publish --dry-run`, and builds ten manylinux_2_28 wheels from that archive:
+CPython 3.10–3.14 on native x86-64 and aarch64 runners. Each wheel is installed
+and imported before the complete artifact set is attached to the GitHub release.
+The exporter uses `publish.yml` for its `v*` and `release-v*` tags.
+Neither workflow uploads packages to a registry.
+
+The first public runtime release contains only the core crate, sdist, and wheels.
+Public Pixi backend channels remain separate future release work. The local SDK
+producer's `--auditwheel skip` path is only for local Conda packages.
+
+`check_release.py` checks versions and the core crate's contents. The crate keeps
+Rust tests needed by source builds and only three explicitly listed YAML fixtures,
+each limited to 64 KiB. The archive check rejects exported models and unexpected
+payloads and enforces a 10,000,000-byte compressed size limit.
+
+`deny.toml` contains an empty license allow-list placeholder.
+The license check intentionally fails until the approved SPDX identifiers are
+recorded; the dependency inventory is not an approval policy. Runtime CI and
+release attachment run `cargo deny check licenses advisories`. Run the checks
+separately while completing approval: `cargo deny --locked --workspace check advisories`
+and `cargo deny --locked --workspace check licenses`.
 
 `dependency-licenses.csv` inventories all external crates in `Cargo.lock`,
 including build-only, inactive-feature, and other-target dependencies. Its
@@ -43,6 +68,16 @@ license through the Python project's `license-files` metadata. Identical notice
 texts are included once with their source packages listed. The notices cover
 the workspace's locked crates and vendored schema/header; they do not imply
 that every listed dependency is linked into every wheel.
+
+CI and each release-wheel job run `auditwheel show` and check the wheel archive
+and ELF imports. Only the LEAPP extension and system-library imports are allowed;
+backend SDK binaries fail the check. The complete reports are retained as
+`runtime-wheel-audit*` workflow artifacts. To audit a local wheel:
+
+```sh
+python -m pip install auditwheel==6.8.2
+python packaging/check_release.py --wheel target/wheels/*.whl
+```
 
 The runtime version is independent of the exporter version. Keep the runtime's
 Cargo manifests, Python metadata, CMake version, and lockfile aligned when

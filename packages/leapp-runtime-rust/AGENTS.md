@@ -68,6 +68,8 @@ Core builds and checks require no Triton or CUDA SDK. Run from this package:
 
 ```sh
 cargo check --locked --workspace --all-targets
+cargo deny --locked --workspace check licenses advisories
+python packaging/check_release.py
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --test bundle --test dlpack
 cargo test --locked -p leapp-rt-bindings --test binding_lifecycle

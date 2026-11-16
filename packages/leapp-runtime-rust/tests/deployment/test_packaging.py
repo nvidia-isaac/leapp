@@ -11,15 +11,107 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tarfile
 import unittest
 from unittest.mock import Mock, patch
+from zipfile import ZipFile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "packaging"))
+import check_release
 import consumer
 import sdk
 
 
 class PackagingTests(unittest.TestCase):
+    def test_release_version_drift(self):
+        version = check_release.check_versions()
+        with self.assertRaisesRegex(RuntimeError, "Release tag"):
+            check_release.check_versions(tag="runtime-v9.9.9")
+        files = [
+            *check_release.MANIFESTS,
+            "bindings/python/pyproject.toml",
+            "bindings/cxx/CMakeLists.txt",
+            "Cargo.lock",
+        ]
+        for changed in files:
+            with (
+                self.subTest(changed=changed),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                for name in files:
+                    destination = root / name
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(check_release.ROOT / name, destination)
+                manifest = root / changed
+                manifest.write_text(manifest.read_text().replace(version, "9.9.9"))
+                with self.assertRaises(RuntimeError):
+                    check_release.check_versions(root)
+
+    def test_crate_payload_limits(self):
+        for name, size, valid in (
+            ("src/lib.rs", 1, True),
+            ("tests/fixtures/pipeline.yaml", 1, True),
+            ("src/model.onnx", 1, False),
+            ("tests/fixtures/export.yaml", 1, False),
+            ("tests/fixtures/pipeline.yaml", 65537, False),
+        ):
+            with (
+                self.subTest(name=name, size=size),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                path = Path(directory) / "core.crate"
+                with tarfile.open(path, "w:gz") as archive:
+                    member = tarfile.TarInfo(f"leapp-rt-0.1.0/{name}")
+                    member.size = size
+                    archive.addfile(member, io.BytesIO(b"x" * size))
+                if valid:
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        check_release.check_crate(path, "0.1.0")
+                    with patch.object(check_release, "MAX_CRATE_BYTES", 1):
+                        with self.assertRaisesRegex(RuntimeError, "limit"):
+                            check_release.check_crate(path, "0.1.0")
+                else:
+                    with self.assertRaises(RuntimeError):
+                        check_release.check_crate(path, "0.1.0")
+
+    def test_wheel_rejects_missing_notices_and_sdk_binaries(self):
+        for problem, message in (
+            ("notices", "Missing or stale wheel license"),
+            ("bundled", "Unexpected wheel binaries"),
+            ("linked", "Unexpected wheel shared-library dependencies"),
+        ):
+            with (
+                self.subTest(problem=problem),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                wheel = root / "core.whl"
+                with ZipFile(wheel, "w") as archive:
+                    archive.writestr(
+                        "lrt/_native.cpython-312-x86_64-linux-gnu.so", b"\x7fELF"
+                    )
+                    for name in ("LICENSE-LEAPP", "THIRD-PARTY-NOTICES.txt"):
+                        if problem == "notices" and name == "THIRD-PARTY-NOTICES.txt":
+                            continue
+                        archive.writestr(
+                            f"leapp_rt-0.1.0.dist-info/licenses/{name}",
+                            (
+                                check_release.ROOT / "bindings/python" / name
+                            ).read_bytes(),
+                        )
+                    if problem == "bundled":
+                        archive.writestr("leapp_rt.libs/backend.bin", b"\x7fELF")
+                with (
+                    patch.object(
+                        check_release.subprocess,
+                        "check_output",
+                        return_value="(NEEDED) Shared library: [libonnxruntime.so.1]",
+                    ),
+                    self.assertRaisesRegex(RuntimeError, message),
+                ):
+                    check_release.check_wheel(wheel, root / "reports")
+
     @unittest.skipUnless(sys.platform == "linux" and shutil.which("cc"), "Linux cc")
     def test_relocation(self):
         from channel import relocate

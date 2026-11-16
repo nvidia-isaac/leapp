@@ -40,6 +40,7 @@ jobs:
               - 'packages/leapp-runtime-rust/**'
               - '.github/scripts/runtime-backends.sh'
               - '.github/workflows/ci.yml'
+              - '.github/workflows/runtime-release.yml'
               - 'LICENSE'
 
   runtime-packaging:
@@ -102,11 +103,17 @@ jobs:
       - name: Check dependency inventory and notices
         run: pixi run --locked python packaging/licenses.py --check
 
+      - name: Check runtime release versions
+        run: pixi run --locked python packaging/check_release.py
+
       - name: Test packaging helpers
         run: pixi run --locked python -m unittest discover -s tests/deployment -p test_packaging.py -v
 
       - name: Build and verify Rust source package
-        run: pixi run --locked cargo package --locked -p leapp-rt
+        run: |
+          pixi run --locked cargo package --locked -p leapp-rt --list
+          pixi run --locked cargo package --locked -p leapp-rt
+          pixi run --locked python packaging/check_release.py --crate target/package/leapp-rt-*.crate
 
       - name: Build Python wheel from source distribution
         run: |
@@ -114,6 +121,17 @@ jobs:
           mkdir -p target/sdist
           tar -xzf target/distributions/leapp_rt-*.tar.gz -C target/sdist
           pixi run --locked maturin build --locked --release --manifest-path target/sdist/leapp_rt-*/bindings/python/Cargo.toml --out target/wheels
+
+      - name: Audit core wheel contents and shared libraries
+        run: |
+          pixi run --locked python -m pip install auditwheel==6.8.2
+          pixi run --locked python packaging/check_release.py --wheel target/wheels/*.whl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: runtime-wheel-audit
+          path: packages/leapp-runtime-rust/target/wheel-audits/
+          if-no-files-found: ignore
 
       - name: Check installed Python wheel
         run: |
@@ -148,6 +166,15 @@ jobs:
           path: packages/leapp-runtime-rust/target/wheels/*.whl
           if-no-files-found: error
           retention-days: 1
+
+      # Keep the license policy check after the build and packaging checks.
+      - name: Check runtime dependency licenses and advisories
+        uses: EmbarkStudios/cargo-deny-action@v2.1.1
+        with:
+          manifest-path: packages/leapp-runtime-rust/Cargo.toml
+          rust-version: "1.99.0"
+          arguments: --locked --workspace
+          command-arguments: licenses advisories
 
   runtime-onnx-cpu:
     name: Runtime ONNX (CPU, native)

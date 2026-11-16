@@ -18,7 +18,11 @@ repository = "https://github.com/nvidia-isaac/leapp"
 homepage = "https://nvidia-isaac.github.io/leapp/"
 documentation = "https://docs.rs/leapp-rt"
 readme = "README.md"
-include = ["src/**", "build.rs", "Cargo.lock", "README.md", "LICENSE", "examples/*.rs", "tests/unit_tests/**", "tests/functional_tests/**", "tests/fixtures/**"]
+include = [
+    "/src/**", "/build.rs", "/Cargo.lock", "/README.md", "/LICENSE", "/examples/*.rs",
+    "/tests/unit_tests/**/*.rs", "/tests/functional_tests/**/*.rs",
+    "/tests/fixtures/feedback.yaml", "/tests/fixtures/pipeline.yaml", "/tests/fixtures/policy.yaml",
+]
 
 [lib]
 name = "lrt"

@@ -1,0 +1,138 @@
+# Core runtime distributions only. Backend channels have a separate release policy.
+# Builds and attaches artifacts; does not publish to PyPI or crates.io.
+name: Build Runtime Release Distributions
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  sources:
+    if: startsWith(github.event.release.tag_name, 'runtime-v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: packages/leapp-runtime-rust
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.11.3
+        with:
+          pixi-version: v0.84.0
+          working-directory: packages/leapp-runtime-rust
+          locked: true
+          cache: true
+      - name: Validate runtime versions and tag
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: pixi run --locked python packaging/check_release.py --tag "$RELEASE_TAG"
+      - name: Check dependency inventory and notices
+        run: pixi run --locked python packaging/licenses.py --check
+      - name: Check crate contents and dry-run publication
+        run: |
+          pixi run --locked cargo package --locked -p leapp-rt --list
+          pixi run --locked cargo publish --dry-run --locked -p leapp-rt
+          pixi run --locked python packaging/check_release.py --crate target/package/leapp-rt-*.crate
+      - name: Build Python source distribution
+        run: |
+          pixi run --locked build-sdist
+          cp target/package/leapp-rt-*.crate target/distributions/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: leapp-rt-sources
+          path: packages/leapp-runtime-rust/target/distributions/
+          if-no-files-found: error
+
+  wheels:
+    name: CPython ${{ matrix.python-version }} (${{ matrix.platform.arch }})
+    needs: sources
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        platform:
+          - {runner: ubuntu-24.04, arch: x86_64, target: x86_64-unknown-linux-gnu}
+          - {runner: ubuntu-24.04-arm, arch: aarch64, target: aarch64-unknown-linux-gnu}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: leapp-rt-sources
+          path: distributions
+      - name: Extract shared source distribution
+        run: |
+          mkdir source
+          tar -xzf distributions/leapp_rt-*.tar.gz -C source --strip-components=1
+      - name: Build manylinux wheel from source distribution
+        uses: PyO3/maturin-action@86b9d133d34bc1b40018696f782949dac11bd380 # v1.49.4
+        with:
+          maturin-version: v1.16.0
+          rust-toolchain: "1.99.0"
+          target: ${{ matrix.platform.target }}
+          manylinux: "2_28"
+          args: >-
+            --locked --release --manifest-path source/bindings/python/Cargo.toml
+            --out wheels -i python${{ matrix.python-version }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Audit core wheel contents and shared libraries
+        run: |
+          python -m pip install auditwheel==6.8.2
+          python packages/leapp-runtime-rust/packaging/check_release.py --wheel wheels/*.whl --report-dir wheel-audits
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: runtime-wheel-audit-${{ matrix.platform.arch }}-${{ matrix.python-version }}
+          path: wheel-audits/
+          if-no-files-found: ignore
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Check installed wheel
+        run: |
+          python -m pip install --only-binary=:all: wheels/*.whl
+          python -c "import lrt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: leapp-rt-wheel-${{ matrix.platform.arch }}-${{ matrix.python-version }}
+          path: wheels/*.whl
+          if-no-files-found: error
+
+  release-artifacts:
+    needs: [sources, wheels]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check runtime dependency licenses and advisories
+        uses: EmbarkStudios/cargo-deny-action@v2.1.1
+        with:
+          manifest-path: packages/leapp-runtime-rust/Cargo.toml
+          rust-version: "1.99.0"
+          arguments: --locked --workspace
+          command-arguments: licenses advisories
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: leapp-rt-*
+          path: distributions
+          merge-multiple: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check complete distribution set
+        run: |
+          python -c "from pathlib import Path; assert len(list(Path('distributions').glob('*.whl'))) == 10"
+          python -m pip install twine
+          python -m twine check distributions/*.tar.gz distributions/*.whl
+      - name: Attach core distributions to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$RELEASE_TAG" distributions/*.crate distributions/*.tar.gz distributions/*.whl --clobber

@@ -25,6 +25,11 @@ include both orchestration engines and require no model SDKs at installation.
 Build on Linux with Rust 1.88 or newer. Building the core runtime does not
 require the Triton or CUDA SDKs.
 
+The crate pins the Rust `ort` binding to `=2.0.0-rc.13`, a release candidate.
+Cargo consumers inherit this exact dependency constraint; upgrading the binding
+requires updating the runtime's pin. This is separate from the ONNX Runtime
+shared library version: the binding loads it dynamically and requires C API 24.
+
 ```sh
 cargo build --locked --release
 ```
