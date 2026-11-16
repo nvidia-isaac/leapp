@@ -526,7 +526,10 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
             m = self.module_builder()
         m = m.eval()
         self._clone_aliased_outputs(m)
-        patch_onnxscript_matcher()
+        try:
+            patch_onnxscript_matcher()
+        except Exception as error:
+            _get_logger().info(f"Skipping ONNXScript matcher workaround: {error}")
         self._handle_duplicate_io_names()
         # Get flat tensor values directly from inputs (not input_formats which preserves nested structure)
         input_values = tuple(

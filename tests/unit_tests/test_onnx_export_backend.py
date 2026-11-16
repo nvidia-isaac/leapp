@@ -32,7 +32,10 @@ def stock_matcher(monkeypatch):
     return method
 
 
-def test_compile_materializes_once_and_saves_repaired_model(stock_matcher):
+@pytest.mark.parametrize("workaround", ["supported", "version_mismatch", "missing_api"])
+def test_compile_materializes_once_and_saves_repaired_model(
+    stock_matcher, monkeypatch, workaround
+):
     """Avoid repeated weight serialization while preserving pruning and repairs."""
     model = helper.make_model(
         helper.make_graph(
@@ -73,10 +76,27 @@ def test_compile_materializes_once_and_saves_repaired_model(stock_matcher):
         trimmed_inputs=set(),
     )
     backend = ONNXDynamoExportBackend(context)
+    info = mock.Mock()
+    logger = SimpleNamespace(
+        info=info, warning=mock.Mock(), debug=mock.Mock(), is_verbose=lambda: False
+    )
+    monkeypatch.setattr(
+        "leapp.backends.onnx_export_backend._get_logger", lambda: logger
+    )
+    if workaround == "version_mismatch":
+        monkeypatch.setattr(onnxscript, "__version__", "0.7.2")
+    elif workaround == "missing_api":
+        monkeypatch.setattr(
+            "leapp.backends.onnx_export_backend.patch_onnxscript_matcher",
+            mock.Mock(side_effect=ImportError("matcher API unavailable")),
+        )
 
     def export(*args, **kwargs):
         # The normal backend must activate the guard before PyTorch optimizes.
-        assert _matcher.SimplePatternMatcher.match._leapp_root_guard
+        if workaround == "supported":
+            assert _matcher.SimplePatternMatcher.match._leapp_root_guard
+        else:
+            assert _matcher.SimplePatternMatcher.match is stock_matcher
         assert kwargs["optimize"] is True
         return Program()
 
@@ -89,6 +109,19 @@ def test_compile_materializes_once_and_saves_repaired_model(stock_matcher):
     with mock.patch("torch.onnx.export", side_effect=export):
         backend.compile(torch.nn.Identity())
     assert _matcher.SimplePatternMatcher.match is installed
+    if workaround == "supported":
+        info.assert_not_called()
+    else:
+        # Both export attempts continue after activation fails, with info only.
+        assert info.call_count == 2
+        for call in info.call_args_list:
+            message = call.args[0]
+            assert "Skipping ONNXScript matcher workaround" in message
+            assert (
+                "loaded 0.7.2"
+                if workaround == "version_mismatch"
+                else "API unavailable"
+            ) in message
 
     # Count is the performance regression contract: each read copies all weights.
     assert len(accesses) == 1

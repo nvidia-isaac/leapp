@@ -177,9 +177,10 @@ activate it either.
 
 The pin and workaround will be removed together after an upstream release
 containing the `matcher fix <https://github.com/microsoft/onnxscript/pull/3215>`_
-or an equivalent fix has been validated. If dependencies are overridden,
-Dynamo export rejects other ONNXScript versions rather than applying this
-private-API workaround to an untested version.
+or an equivalent fix has been validated. If the loaded ONNXScript version
+differs or the workaround cannot be installed, LEAPP logs an info message
+and continues export without installing it. Errors from the exporter itself
+still propagate normally.
 
 ONNX backend parameters
 -----------------------
