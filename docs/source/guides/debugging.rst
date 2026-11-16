@@ -33,7 +33,7 @@ returns a dict mapping node names to results.
 After the last sample, LEAPP runs sample 0 again, with buffers declared
 through ``annotate.register_buffer()`` restored to their exported values.
 The export must give the same result for the same inputs. If the replay
-differs, the exported model carries state between calls that the
+differs, the exported model usually carries state between calls that the
 annotations do not declare. A common cause is a buffer allocated outside
 the node that the node resets and then accumulates into, such as a Warp
 array cleared with ``zero_()`` and written with ``wp.atomic_add``. LEAPP
@@ -65,10 +65,43 @@ one pair of tensors cannot characterize error, and it cannot show
 whether a value was captured because it is computed or because it
 happened to be constant on the first step.
 
-On an NVIDIA GPU, float32 outputs can also differ because TF32
-(TensorFloat-32) settings differ between capture and validation. To rule
-this out, set ``NVIDIA_TF32_OVERRIDE=0`` before starting Python, then
-capture, export, and validate again.
+On an NVIDIA GPU, outputs can also differ because TF32 (TensorFloat-32)
+settings differ between capture and validation. To rule this out, set
+``NVIDIA_TF32_OVERRIDE=0`` before starting Python, then capture, export,
+and validate again. LEAPP gives this hint only when every miss is small.
+A miss is small when the largest difference among the values that miss is
+at most a hundredth of the output's largest absolute value (3 hundredths in
+``bfloat16``), and at most a tenth of the largest absolute value among the
+values that miss or 10 times ``atol``, whichever is larger. A miss in an
+integer output, such as an ``argmax``, or a larger miss between whole
+numbers in a float output, such as a flag from ``(x > 0).float()``,
+neither adds nor removes the hint, since rounding can flip one. So a node
+whose misses are all of this kind gets no hint, even when TF32 flipped
+them. A flip between levels that are not whole numbers, such as a gripper
+width of 0 or 0.08 or a quantized action, is a large miss. TF32 can also
+cause a large miss, for example for points far from the origin moved into
+a robot frame. LEAPP gives no hint for a large miss, since a bug looks the
+same.
+
+When every miss is small, the export can also round differently than the
+capture, for example in ONNX Runtime, which adds in another order than
+PyTorch. Math in ``bfloat16`` or ``float16`` rounds the most, also under
+``torch.autocast``, which LEAPP does not record. For such math, try
+``float32`` without ``torch.autocast``. A difference this small can also
+be a real bug. LEAPP judges a miss by the dtype of the output, so a
+``bfloat16`` node that returns ``float32`` can miss by more than a
+hundredth, for example when large values go into ``softmax``, and then
+gets no hint.
+
+A node exported with ``export_with="jit"`` (``jit-script``) can also round
+differently after its first call, because it then fuses or rewrites
+operations. This moves ``bfloat16`` and ``float16`` results the most, so
+sample 0 can pass while its replay or a later sample fails. By default,
+``jit-trace`` already runs the model once during export (unless
+``check_trace=False`` is passed), and ``exported-program`` and ONNX
+usually give the same result on every call, so for them a different
+replay usually points to undeclared state. LEAPP adds this cause to the
+hint only for ``jit-script``.
 
 Run more than one step
 ----------------------

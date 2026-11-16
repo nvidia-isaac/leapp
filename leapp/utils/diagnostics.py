@@ -9,6 +9,10 @@ Helpers return explanatory text from exceptions or recorded validation results.
 Callers own model execution, logging, and exception raising.
 """
 
+import os
+
+import torch
+
 _INFERENCE_TENSOR_ERRORS = (
     "Inference tensors cannot be saved for backward",
     "Setting requires_grad=True on inference tensor outside InferenceMode",
@@ -44,6 +48,50 @@ _TF32_HINT = (
     "NVIDIA_TF32_OVERRIDE=0 before starting Python, then repeat capture, export, "
     "and validation."
 )
+_ROUNDING_HINT = (
+    "The export can round differently than the capture, for example in ONNX "
+    "Runtime. bfloat16 and float16 math round the most, also under "
+    "torch.autocast, which LEAPP does not record. For such math, try float32 "
+    "without torch.autocast. A difference this small can also be a real bug."
+)
+_REPLAY_ROUNDING_HINT = (
+    "A jit-script export can also round differently after its first call, "
+    "because it then fuses or rewrites operations."
+)
+
+
+def mismatch_type(
+    exported: torch.Tensor, source: torch.Tensor, *, rtol: float, atol: float
+) -> str:
+    """Return "tolerance" for a miss that rounding can explain, "integer" for a
+    miss in an integer output or a larger miss between whole numbers in a float
+    output, otherwise "value".
+
+    The caller has already checked that the shapes match, that neither tensor
+    holds NaN or Inf, and that some elements miss the tolerance.
+    """
+    if not source.dtype.is_floating_point:
+        return "integer"
+    # A wider share would also take in undeclared state that moves an output by
+    # a few percent; bfloat16 rounds 8 times more coarsely than float16.
+    share = 0.03 if source.dtype == torch.bfloat16 else 0.01
+    missed = ~torch.isclose(exported, source, rtol=rtol, atol=atol)
+    missed_diff = (exported - source).abs()[missed].max().item()
+    # Only missed elements count: large values move the most and can still pass.
+    # The second bound keeps out an error that is large next to the values that miss.
+    small_share = missed_diff <= share * source.abs().max().item()
+    small_near_zero = missed_diff <= max(
+        0.1 * source[missed].abs().max().item(), 10 * atol
+    )
+    if small_share and small_near_zero:
+        return "tolerance"
+    # Rounding can flip a flag or an index stored as a float, such as
+    # (x > 0).float(), like an integer output. From 1 / eps on, every value of
+    # the dtype is a whole number, so a whole number says nothing there.
+    values = torch.cat((exported[missed], source[missed]))
+    whole = torch.equal(values, values.round())
+    limit = 1 / torch.finfo(source.dtype).eps
+    return "integer" if whole and values.abs().max().item() < limit else "value"
 
 
 def export_error_hint(error: Exception, *, node_name: str, backend: str) -> str | None:
@@ -62,20 +110,33 @@ def validation_hint(
     *,
     replay_mismatches: set[str],
     mismatches: set[str],
+    backend: str | None = None,
 ) -> str | None:
     """Explain a replay failure first, otherwise a failure confined to re-entry.
 
-    Add the TF32 hint when the samples' only ``mismatches`` are values beyond the
-    tolerance and ``replay_mismatches`` add no other type. The replay's own
-    tolerance miss does not count, since the hidden-state hint explains it.
+    An "integer" miss neither adds nor removes a hint, since rounding can flip
+    one. A replay miss gets the hidden-state hint alone, plus, for a jit-script
+    node, the sentence about rounding from call to call when every miss is small.
+    Otherwise, when every float miss is small ("tolerance"), add the TF32 hint
+    on a machine with an NVIDIA GPU while NVIDIA_TF32_OVERRIDE is not 0, then
+    the rounding hint, then the jit-script sentence after a re-entry failure.
     """
-    hints = []
+    small = mismatches - {"integer"} <= {"tolerance"}
     if replay_mismatches:
-        hints.append(_HIDDEN_STATE_HINT)
-    elif sample_passed.get(0) and any(
+        replay_small = replay_mismatches - {"integer"} == {"tolerance"}
+        if replay_small and small and backend == "jit-script":
+            return f"{_HIDDEN_STATE_HINT} {_REPLAY_ROUNDING_HINT}"
+        return _HIDDEN_STATE_HINT
+    hints = []
+    reentry = sample_passed.get(0) and any(
         not passed for index, passed in sample_passed.items() if index > 0
-    ):
+    )
+    if reentry:
         hints.append(_REENTRY_VALIDATION_HINT)
-    if mismatches | (replay_mismatches - {"tolerance"}) == {"tolerance"}:
-        hints.append(_TF32_HINT)
+    if small and "tolerance" in mismatches:
+        if torch.cuda.is_available() and os.environ.get("NVIDIA_TF32_OVERRIDE") != "0":
+            hints.append(_TF32_HINT)
+        hints.append(_ROUNDING_HINT)
+        if reentry and backend == "jit-script":
+            hints.append(_REPLAY_ROUNDING_HINT)
     return " ".join(hints) or None

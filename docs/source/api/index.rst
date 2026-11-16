@@ -203,8 +203,8 @@ Parameters
   input/output samples, including exported state updates. Each sample uses
   its recorded inputs and state; see :ref:`stateful-validation` for the
   distinction from sequential runtime replay. Validation then runs sample 0
-  again and fails if the result differs, which means the export keeps
-  undeclared state between calls. Defaults to ``True``.
+  again and fails if the result differs, which usually means the export
+  keeps undeclared state between calls. Defaults to ``True``.
 * ``rtol`` (float, optional): Relative tolerance for
   ``torch.allclose()``. Defaults to ``1e-3``.
 * ``atol`` (float, optional): Absolute tolerance for
