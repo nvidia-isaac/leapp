@@ -15,6 +15,10 @@ def check(fixtures, cache, engine):
     left = np.arange(4, dtype=np.float32)
     right = left * 2
     inputs = {"arithmetic/left": left, "arithmetic/right": right}
+    if engine == "native":
+        import cupy as cp
+
+        inputs = {port: cp.asarray(value) for port, value in inputs.items()}
     expected = {"arithmetic/sum": left + right, "arithmetic/difference": left - right}
     cases = (
         [(None, True)]

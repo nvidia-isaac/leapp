@@ -373,23 +373,34 @@ jobs:
       - name: Check native pip extras without Pixi
         if: matrix.backend != 'tensorrt'
         run: |
-          docker run --rm --gpus all \
-            --mount "type=bind,src=$PWD/target/backend-ci/core,dst=/core,readonly" \
-            --mount "type=bind,src=$PWD/target/backend-ci/pip-packages/backend-wheels,dst=/backends,readonly" \
-            --mount "type=bind,src=$PWD/target/backend-ci/fixtures,dst=/fixtures,readonly" \
-            --mount "type=bind,src=$PWD/tests/deployment,dst=/tests,readonly" \
-            --env BACKEND --env LEAPP_TRITON_FIXTURES=/fixtures --env LEAPP_TORCHSCRIPT_FIXTURES=/fixtures \
-            ubuntu:24.04 bash -euc '
-              apt-get update
-              apt-get install -y --no-install-recommends ca-certificates python3-venv
-              python3 -m venv /app
-              extra=$BACKEND
-              if [[ "$BACKEND" == onnx ]]; then extra=onnx-cuda; fi
-              set -- /core/*.whl
-              /app/bin/python -m pip install --only-binary=:all: --find-links=/backends "$1[$extra]" cupy-cuda13x==14.2.0
-              export CUDA_PATH=/app/lib/python3.12/site-packages/_leapp_rt_backends
-              /app/bin/python /tests/check_installation.py --backend "$BACKEND" --engine native --cuda --installed-only --without-triton
-            '
+          if [[ "$BACKEND" == onnx ]]; then
+            extras=(onnx-cuda tensorrt)
+          else
+            extras=(torchscript nativert)
+          fi
+          for extra in "${extras[@]}"; do
+            docker run --rm --gpus all \
+              --mount "type=bind,src=$PWD/target/backend-ci/core,dst=/core,readonly" \
+              --mount "type=bind,src=$PWD/target/backend-ci/pip-packages/backend-wheels,dst=/backends,readonly" \
+              --mount "type=bind,src=$PWD/target/backend-ci/fixtures,dst=/fixtures,readonly" \
+              --mount "type=bind,src=$PWD/tests/deployment,dst=/tests,readonly" \
+              --env BACKEND --env EXTRA="$extra" --env LEAPP_TRITON_FIXTURES=/fixtures \
+              --env LEAPP_TORCHSCRIPT_FIXTURES=/fixtures --env LEAPP_PT2_FIXTURES=/fixtures \
+              ubuntu:24.04 bash -euc '
+                apt-get update
+                apt-get install -y --no-install-recommends ca-certificates python3-venv
+                python3 -m venv /app
+                set -- /core/*.whl
+                /app/bin/python -m pip install --only-binary=:all: --find-links=/backends "$1[$EXTRA]" cupy-cuda13x==14.2.0
+                export CUDA_PATH=/app/lib/python3.12/site-packages/_leapp_rt_backends
+                backend=$BACKEND
+                if [[ "$EXTRA" == nativert ]]; then backend=nativert; fi
+                /app/bin/python /tests/check_installation.py --backend "$backend" --engine native --cuda --installed-only --without-triton
+                if [[ "$EXTRA" == tensorrt ]]; then
+                  /app/bin/python /tests/check_onnx_tensorrt.py --fixtures /fixtures --cache /app/trt-cache --engine native
+                fi
+              '
+          done
 
       - name: Clean GPU runner build files
         if: always() && env.LEAPP_CI_ROOT != ''

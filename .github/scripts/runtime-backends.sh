@@ -32,8 +32,20 @@ case "$backend" in
       --index-url https://download.pytorch.org/whl/cu132 'torch==2.12.1+cu132'
     export TORCH_ROOT
     TORCH_ROOT=$("$python" -c 'import torch; print(torch.__path__[0])')
-    export LD_LIBRARY_PATH="$TORCH_ROOT/lib:$LD_LIBRARY_PATH"
+    # Discover the compiler in the toolkit; link and stage PyTorch's runtime.
+    export CUDAToolkit_ROOT="$CUDA_ROOT"
+    export CUDA_ROOT="$TORCH_ROOT/../nvidia/cu13"
+    ln -sf libcudart.so.13 "$CUDA_ROOT/lib/libcudart.so"
+    export LD_LIBRARY_PATH="$TORCH_ROOT/lib:$CUDA_ROOT/lib:$LD_LIBRARY_PATH"
+    "$python" tests/generators/generate_models.py --output "$work/fixtures"
     "$python" tests/generators/generate_torchscript_models.py --output "$work/fixtures"
+    export PYTORCH_SOURCE="$PWD/$work/pytorch"
+    git clone --depth 1 --filter=blob:none --sparse --branch v2.12.1 \
+      https://github.com/pytorch/pytorch.git "$PYTORCH_SOURCE"
+    git -C "$PYTORCH_SOURCE" sparse-checkout set --skip-checks torch/nativert \
+      torch/csrc/inductor/aoti_torch third_party/nlohmann third_party/concurrentqueue
+    git -C "$PYTORCH_SOURCE" submodule update --init --depth 1 -- third_party/nlohmann
+    "$python" tests/generators/generate_pt2_models.py --output "$work/fixtures"
     ;;
   tensorrt)
     "$python" tests/generators/generate_tensorrt_models.py --output "$work/fixtures" \
@@ -48,6 +60,13 @@ import json, os
 from pathlib import Path
 
 origins = [os.environ["SDK_IMAGE"]]
+if source := os.environ.get("PYTORCH_SOURCE"):
+    import subprocess
+
+    revision = subprocess.check_output(
+        ["git", "-C", source, "rev-parse", "HEAD"], text=True
+    ).strip()
+    origins.append(f"https://github.com/pytorch/pytorch/tree/{revision}")
 for report in Path("target/backend-ci").glob("*-sdk.json"):
     for item in json.loads(report.read_text())["install"]:
         artifact = item["download_info"]
@@ -63,11 +82,14 @@ pixi run --locked package-runtime --input "$work/packages"
 if [[ "$backend" != tensorrt ]]; then
   export ORT_DYLIB_PATH=/opt/tritonserver/backends/onnxruntime/libonnxruntime.so
   pip_options=()
+  pip_backends=("$backend")
   if [[ "$backend" == onnx ]]; then
     pip_options+=(--onnx-tensorrt)
+  elif [[ "$backend" == torchscript ]]; then
+    pip_backends+=(nativert)
   fi
   pixi run --locked build-runtime --output "$work/pip-packages" --glibc 2.39 \
-    --backends "$backend" --engines native --cuda --sdk-origin "$sdk_origin" "${pip_options[@]}"
+    --backends "${pip_backends[@]}" --engines native --cuda --sdk-origin "$sdk_origin" "${pip_options[@]}"
   pixi run --locked package-wheels --input "$work/pip-packages" --allow-unreleased
 fi
 

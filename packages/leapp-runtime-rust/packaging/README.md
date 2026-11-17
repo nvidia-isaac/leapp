@@ -125,6 +125,11 @@ by default, so moving a manifest and running `pixi install` alone does not valid
 Jetson compatibility. ARM server and Jetson packages are not interchangeable merely
 because both use aarch64.
 
+PR CI installs the core wheel and optional pip extras in fresh containers
+without Pixi. It checks ONNX on CPU and CUDA, TorchScript and NativeRT on CPU
+and CUDA, and ONNX TensorRT engine creation and cache reuse. The core wheel is
+shared across these trials; each extra gets a separate consumer environment.
+
 ## Install an application environment
 
 For a published Python core, a core-only environment needs no backend channel:

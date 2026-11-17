@@ -15,7 +15,7 @@ import subprocess
 import sys
 import tomllib
 
-from sdk import ROOT, inspect_sdk, jetson_release, native_platform
+from sdk import ROOT, cuda_library, inspect_sdk, jetson_release, native_platform
 
 BACKENDS = ("onnx", "torchscript", "nativert", "tensorrt")
 
@@ -291,7 +291,11 @@ def main():
             adapter = triton / "backends/onnxruntime/libtriton_onnxruntime.so"
             shutil.copy2(adapter, destination)
             continue
-        options = [f"-DCUDA_ROOT={cuda}", f"-DCUDAToolkit_ROOT={cuda}"]
+        options = [
+            f"-DCUDA_ROOT={cuda}",
+            f"-DCUDAToolkit_ROOT={os.environ.get('CUDAToolkit_ROOT', cuda)}",
+            f"-DCUDA_cudart_LIBRARY={cuda_library(sdk)}",
+        ]
         if torch and backend != "tensorrt":
             options += [f"-DTORCH_ROOT={torch}"]
         if backend == "nativert":
