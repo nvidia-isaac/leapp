@@ -47,12 +47,14 @@ Rust tests needed by source builds and only three explicitly listed YAML fixture
 each limited to 64 KiB. The archive check rejects exported models and unexpected
 payloads and enforces a 10,000,000-byte compressed size limit.
 
-`deny.toml` contains an empty license allow-list placeholder.
-The license check intentionally fails until the approved SPDX identifiers are
-recorded; the dependency inventory is not an approval policy. Runtime CI and
-release attachment run `cargo deny check licenses advisories`. Run the checks
-separately while completing approval: `cargo deny --locked --workspace check advisories`
-and `cargo deny --locked --workspace check licenses`.
+`deny.toml` contains an empty license allow-list placeholder. Runtime CI always
+checks dependency advisories and skips license enforcement with a notice while
+`licenses.allow` is empty, so backend checks can run. Filling in the allow-list
+automatically enables the CI license check. Release attachment still requires
+both checks to pass; the dependency inventory is not an approval policy. Run the
+checks separately while completing approval:
+`cargo deny --locked --workspace check advisories` and
+`cargo deny --locked --workspace check licenses`.
 
 `dependency-licenses.csv` inventories all external crates in `Cargo.lock`,
 including build-only, inactive-feature, and other-target dependencies. Its

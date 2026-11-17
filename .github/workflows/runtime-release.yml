@@ -19,12 +19,14 @@ jobs:
         working-directory: packages/leapp-runtime-rust
     steps:
       - uses: actions/checkout@v4
-      - uses: prefix-dev/setup-pixi@v0.11.3
+      - name: Install Pixi
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/install-runtime-tool.sh" pixi
+      - uses: actions/cache@v4
         with:
-          pixi-version: v0.84.0
-          working-directory: packages/leapp-runtime-rust
-          locked: true
-          cache: true
+          path: ~/.cache/rattler
+          key: pixi-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packages/leapp-runtime-rust/pixi.lock') }}
+      - name: Install build environment
+        run: pixi install --locked
       - name: Validate runtime versions and tag
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
@@ -111,13 +113,14 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+      - name: Install cargo-deny and Rust
+        run: |
+          bash .github/scripts/install-runtime-tool.sh cargo-deny
+          rustup toolchain install 1.99.0 --profile minimal --no-self-update
       - name: Check runtime dependency licenses and advisories
-        uses: EmbarkStudios/cargo-deny-action@v2.1.1
-        with:
-          manifest-path: packages/leapp-runtime-rust/Cargo.toml
-          rust-version: "1.99.0"
-          arguments: --locked --workspace
-          command-arguments: licenses advisories
+        run: >-
+          cargo +1.99.0 deny --manifest-path packages/leapp-runtime-rust/Cargo.toml
+          --locked --workspace check licenses advisories
       - uses: actions/download-artifact@v4
         with:
           pattern: leapp-rt-*

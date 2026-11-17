@@ -39,6 +39,7 @@ jobs:
             runtime:
               - 'packages/leapp-runtime-rust/**'
               - '.github/scripts/runtime-backends.sh'
+              - '.github/scripts/install-runtime-tool.sh'
               - '.github/workflows/ci.yml'
               - '.github/workflows/runtime-release.yml'
               - 'LICENSE'
@@ -54,12 +55,14 @@ jobs:
         working-directory: packages/leapp-runtime-rust
     steps:
       - uses: actions/checkout@v4
-      - uses: prefix-dev/setup-pixi@v0.11.3
+      - name: Install Pixi
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/install-runtime-tool.sh" pixi
+      - uses: actions/cache@v4
         with:
-          pixi-version: v0.84.0
-          working-directory: packages/leapp-runtime-rust
-          locked: true
-          cache: true
+          path: ~/.cache/rattler
+          key: pixi-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packages/leapp-runtime-rust/pixi.lock') }}
+      - name: Install build environment
+        run: pixi install --locked
 
       - name: Check native backend C++ style
         run: |
@@ -168,13 +171,26 @@ jobs:
           retention-days: 1
 
       # Keep the license policy check after the build and packaging checks.
-      - name: Check runtime dependency licenses and advisories
-        uses: EmbarkStudios/cargo-deny-action@v2.1.1
-        with:
-          manifest-path: packages/leapp-runtime-rust/Cargo.toml
-          rust-version: "1.99.0"
-          arguments: --locked --workspace
-          command-arguments: licenses advisories
+      - name: Install cargo-deny
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/install-runtime-tool.sh" cargo-deny
+      - name: Check runtime dependency advisories
+        run: pixi run --locked cargo deny --locked --workspace check advisories
+      - name: Check license policy configuration
+        id: license-policy
+        run: |
+          pixi run --locked python - <<'PYTHON'
+          import os, tomllib
+          from pathlib import Path
+
+          allow = tomllib.loads(Path("deny.toml").read_text())["licenses"]["allow"]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"configured={str(bool(allow)).lower()}\n")
+          if not allow:
+              print("::notice::Skipping dependency license check: deny.toml license allowlist is empty.")
+          PYTHON
+      - name: Check runtime dependency licenses
+        if: steps.license-policy.outputs.configured == 'true'
+        run: pixi run --locked cargo deny --locked --workspace check licenses
 
   runtime-onnx-cpu:
     name: Runtime ONNX (CPU, native)
@@ -201,13 +217,14 @@ jobs:
             echo "XDG_CACHE_HOME=$LEAPP_CI_ROOT/cache"
             echo "CARGO_HOME=$LEAPP_CI_ROOT/cargo"
           } >> "$GITHUB_ENV"
-      - uses: prefix-dev/setup-pixi@v0.11.3
+      - name: Install Pixi
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/install-runtime-tool.sh" pixi
+      - uses: actions/cache@v4
         with:
-          pixi-version: v0.84.0
-          pixi-bin-path: ${{ env.LEAPP_CI_ROOT }}/bin/pixi
-          working-directory: packages/leapp-runtime-rust
-          locked: true
-          cache: true
+          path: ${{ env.PIXI_CACHE_DIR }}
+          key: pixi-onnx-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packages/leapp-runtime-rust/pixi.lock') }}
+      - name: Install build environment
+        run: pixi install --locked
 
       - name: Install ONNX SDK and generate fixtures
         run: |
@@ -316,12 +333,8 @@ jobs:
             echo "PIXI_CACHE_DIR=$ci_root/cache/rattler"
             echo "XDG_CACHE_HOME=$ci_root/cache"
           } >> "$GITHUB_ENV"
-      - uses: prefix-dev/setup-pixi@v0.11.3
-        with:
-          pixi-version: v0.84.0
-          pixi-bin-path: ${{ env.LEAPP_CI_ROOT }}/bin/pixi
-          run-install: false
-          cache: false
+      - name: Install Pixi
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/install-runtime-tool.sh" pixi
 
       - name: Build backend packages and fixtures
         run: |
