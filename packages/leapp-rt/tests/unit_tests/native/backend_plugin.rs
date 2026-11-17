@@ -10,7 +10,7 @@ use std::sync::{
 
 // A minimal dynamic-only backend: the defaults provide guarded execution and
 // unsupported prepared calls. No SDK is needed to exercise trait dispatch.
-struct CopyPlugin(Arc<usize>);
+struct CopyPlugin(Arc<AtomicUsize>);
 
 impl BackendPlugin for CopyPlugin {
     fn new_session(&self) -> anyhow::Result<Box<dyn BackendPlugin>> {
@@ -23,8 +23,11 @@ impl BackendPlugin for CopyPlugin {
         outputs: &[(usize, DLTensor)],
         transfers: &mut Transfers,
     ) -> anyhow::Result<Vec<Option<SharedTensor>>> {
-        // The backend must receive the original input allocation.
-        assert_eq!(inputs[0].descriptor().data as usize, *self.0);
+        // The backend must receive the allocation selected by input routing.
+        assert_eq!(
+            inputs[0].descriptor().data as usize,
+            self.0.load(Ordering::SeqCst)
+        );
         if let Some(output) = outputs.first() {
             let input = inputs[0].as_cpu_slice::<f32>().unwrap();
             unsafe {
@@ -62,6 +65,7 @@ fn plan(nodes: usize) -> Arc<Plan> {
             .collect(),
         inputs: IndexMap::from([("input".into(), 0)]),
         public_inputs: 1,
+        feedback_inputs: Default::default(),
         outputs: IndexMap::from([("output".into(), nodes)]),
         slots: (0..=nodes).map(|_| Arc::new(spec())).collect(),
         terminal_outputs: [nodes].into_iter().collect(),
@@ -71,7 +75,7 @@ fn plan(nodes: usize) -> Arc<Plan> {
 #[test]
 fn dynamic_only_trait_defaults_and_peers_preserve_output_ownership() {
     let mut values = [2f32];
-    let address = Arc::new(values.as_ptr() as usize);
+    let address = Arc::new(AtomicUsize::new(values.as_ptr() as usize));
     let mut model: Box<dyn BackendPlugin> = Box::new(CopyPlugin(address));
     assert!(model.needs_guard());
     assert!(!model.can_prepare());
@@ -256,6 +260,47 @@ fn prepared_execution_uses_one_entry_point_and_never_retries_errors() {
         }
         assert_eq!(runs.load(Ordering::SeqCst), 1);
     }
+}
+
+#[test]
+fn feedback_reuses_existing_slot_for_dynamic_backends() {
+    let mut plan = plan(1);
+    let specification = Arc::get_mut(&mut plan).unwrap();
+    specification.public_inputs = 0;
+    specification.feedback_inputs.insert(0);
+    let address = Arc::new(AtomicUsize::new(0));
+    let engine = NativeEngine::with_models(
+        plan,
+        vec![Box::new(CopyPlugin(address.clone()))],
+        None,
+        &SessionOptions::default(),
+    )
+    .unwrap();
+    let workspace = engine.workspace.lock().unwrap();
+    address.store(
+        workspace.slots[0].view().unwrap().descriptor().data as usize,
+        Ordering::SeqCst,
+    );
+    drop(workspace);
+    // CopyPlugin checks that each changed value arrives at the same address.
+    for value in [[2_f32], [7.], [0.]] {
+        let result = engine
+            .run(
+                &[("input", BorrowedTensor::cpu(&value, &[1]).unwrap())],
+                &OutputPlacement::default(),
+                &mut HashMap::new(),
+            )
+            .unwrap();
+        assert_eq!(result["output"].to_cpu_vec::<f32>().unwrap(), value);
+    }
+    let invalid = BorrowedTensor::cpu(&[1_f32, 2.], &[2]).unwrap();
+    assert!(engine
+        .run(
+            &[("input", invalid)],
+            &OutputPlacement::default(),
+            &mut HashMap::new()
+        )
+        .is_err());
 }
 
 // Simulate an SDK retaining partial binding resources before prepare fails.

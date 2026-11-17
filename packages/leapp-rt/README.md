@@ -183,7 +183,10 @@ supplied inputs or graph routing. A successful call publishes all next-state
 tensors together; validation and inference failures leave the session's feedback
 unchanged. `reset()` restores the values captured when the session was opened, without
 rereading files or changing retained results. It does not reset model-internal
-state.
+state. In native execution, fixed-shape feedback inputs stay bound to the same
+workspace slots across calls and reset. Each invocation refreshes those slots
+from the session's last committed values; peers have separate slots. Dynamic
+feedback retains its existing allocation behavior.
 
 `Session::open(&bundle, options)` loads models and captures initial state.
 `session.new_session()` shares the loaded engine and construction options while

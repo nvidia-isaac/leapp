@@ -111,8 +111,15 @@ impl NativeEngine {
             .map(|&id| slots[id].fixed.as_ref().map_or(0, |fixed| fixed.buffer.len))
             .collect();
         let mut input_positions = vec![None; plan.slots.len()];
+        let mut staged_inputs = Vec::new();
         for (position, &slot) in plan.inputs.values().enumerate() {
-            input_positions[slot] = Some(position);
+            if plan.feedback_inputs.contains(&slot) && slots[slot].fixed.is_some() {
+                // Keep feedback bound to its existing workspace allocation. Session
+                // retains committed values; only the slot contents change per call.
+                staged_inputs.push((slot, position));
+            } else {
+                input_positions[slot] = Some(position);
+            }
         }
         let dynamic_slots = slots
             .iter()
@@ -136,7 +143,7 @@ impl NativeEngine {
             plan,
             input_positions,
             input_bytes,
-            staged_inputs: Vec::new(),
+            staged_inputs,
             calls,
             dynamic_slots,
             output_bindings: Vec::with_capacity(binding_capacity),
@@ -357,10 +364,10 @@ struct Workspace {
     models: Vec<Box<dyn BackendPlugin>>,
     slots: Vec<plan::Slot>,
     plan: Arc<Plan>,
-    // Session input position for each boundary slot; None for node outputs.
+    // Direct Session input positions; fixed feedback and node outputs use slots.
     input_positions: Vec<Option<usize>>,
     input_bytes: Vec<usize>,
-    // Prepared calls whose backend disables input borrowing.
+    // Fixed feedback, plus prepared calls whose backend disables input borrowing.
     staged_inputs: Vec<(usize, usize)>,
     calls: Vec<CallState>,
     dynamic_slots: Vec<usize>,
@@ -491,12 +498,19 @@ impl Workspace {
         placement: &OutputPlacement,
         buffers: &mut HashMap<&str, OutputBuffer<'_>>,
     ) -> anyhow::Result<IndexMap<String, SharedTensor>> {
-        // Copy session inputs for prepared backends that disable borrowing.
-        // Dynamic calls read Session inputs directly. Initialization records
-        // each (workspace slot, session input index) pair in staged_inputs.
+        // Refresh existing slots for fixed feedback and backends that disable
+        // borrowing. Session keeps committed values, so a failed invocation is
+        // restored from those values before the next attempt, including reset.
         for &(slot, order) in &self.staged_inputs {
-            // SAFETY: NativeEngine::validate checked public inputs; Session owns
-            // validated private defaults/feedback. input_bytes has current lengths.
+            if order >= self.plan.public_inputs {
+                self.input_bytes[order] = plan::matches(
+                    &self.slots[slot].spec,
+                    inputs[order].1,
+                    self.slots[slot].view()?.descriptor().device,
+                )?;
+            }
+            // SAFETY: NativeEngine::validate checked public inputs; private
+            // copies were checked above. input_bytes has current lengths.
             unsafe {
                 self.slots[slot].assign_validated(
                     inputs[order].1,

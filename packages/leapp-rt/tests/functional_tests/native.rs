@@ -147,6 +147,7 @@ fn onnx_peers_share_models_and_run_with_independent_workspaces() {
             calls: vec![],
             inputs: IndexMap::new(),
             public_inputs: 0,
+            feedback_inputs: Default::default(),
             outputs: IndexMap::new(),
             terminal_outputs: Default::default(),
             slots: vec![Arc::new(plan::TensorSpec {
@@ -327,7 +328,7 @@ fn onnx_port_names_and_metadata_are_validated_at_load() {
 }
 
 #[test]
-fn forward_edges_share_fixed_storage_and_follow_dependency_order() {
+fn forward_edges_and_feedback_use_existing_fixed_storage() {
     let bundle = Bundle::open(fixtures().join("policy.yaml")).unwrap();
     for device in devices() {
         let engine = NativeEngine::load(
@@ -351,6 +352,45 @@ fn forward_edges_share_fixed_storage_and_follow_dependency_order() {
         );
         assert_eq!(calls[0].outputs[0], calls[1].inputs[0]);
         assert!(workspace.models.iter().all(|model| model.is_prepared()));
+        drop(workspace);
+
+        let bundle = Bundle::open(fixtures().join("feedback.yaml")).unwrap();
+        let engine = NativeEngine::load(
+            &bundle,
+            &Graph::new(&bundle).unwrap(),
+            &SessionOptions {
+                device,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let before = {
+            let workspace = engine.workspace.lock().unwrap();
+            let slot = workspace.plan.inputs["accumulator/state"];
+            assert!(workspace.input_positions[slot].is_none());
+            identities(&workspace)
+        };
+        let location = execution_location(&engine);
+        let observation = placed(&[1_f32; 4], &[4], location).unwrap();
+        let initial = placed(&[0_f32; 4], &[4], location).unwrap();
+        let updated = placed(&[7_f32; 4], &[4], location).unwrap();
+        for (state, expected) in [(&initial, 1.), (&updated, 8.), (&initial, 1.)] {
+            let result = engine
+                .run(
+                    &[
+                        ("accumulator/observation", observation.view()),
+                        ("accumulator/state", state.view()),
+                    ],
+                    &OutputPlacement::default(),
+                    &mut HashMap::new(),
+                )
+                .unwrap();
+            assert_eq!(
+                result["accumulator/next"].to_cpu_vec::<f32>().unwrap(),
+                [expected; 4]
+            );
+            assert_eq!(identities(&engine.workspace.lock().unwrap()), before);
+        }
     }
 }
 
