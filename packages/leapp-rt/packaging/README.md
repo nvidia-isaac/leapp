@@ -242,7 +242,7 @@ retain their existing manylinux baseline and contain no backend libraries.
 
 Run on the target architecture in a trusted, compatible SDK environment. Install
 [Pixi 0.84 or newer](https://pixi.prefix.dev/latest/installation/), then run from
-`packages/leapp-runtime-rust`. The producer environment in `pixi.toml` is separate
+`packages/leapp-rt`. The producer environment in `pixi.toml` is separate
 from every generated consumer environment.
 
 ```sh

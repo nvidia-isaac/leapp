@@ -17,7 +17,7 @@ It does not require the C++ consumer facade.
 
 Building on Linux requires Rust 1.88 or newer, CMake 3.22 or newer, and a C++20
 compiler. The Triton and CUDA SDKs are not required. Run from
-`packages/leapp-runtime-rust`:
+`packages/leapp-rt`:
 
 ```sh
 cmake -S bindings/cxx -B target/cxx-build \
@@ -52,7 +52,7 @@ failure and Rust panics are not recoverable status errors.
 For a local checkout, add the C++ binding directory and link the same target:
 
 ```cmake
-add_subdirectory(path/to/leapp/packages/leapp-runtime-rust/bindings/cxx leapp-rt)
+add_subdirectory(path/to/leapp/packages/leapp-rt/bindings/cxx leapp-rt)
 target_link_libraries(my_application PRIVATE lrt::runtime)
 ```
 
@@ -64,7 +64,7 @@ include(FetchContent)
 FetchContent_Declare(leapp
   GIT_REPOSITORY https://github.com/nvidia-isaac/leapp.git
   GIT_TAG <runtime-release-commit>
-  SOURCE_SUBDIR packages/leapp-runtime-rust/bindings/cxx)
+  SOURCE_SUBDIR packages/leapp-rt/bindings/cxx)
 FetchContent_MakeAvailable(leapp)
 target_link_libraries(my_application PRIVATE lrt::runtime)
 ```

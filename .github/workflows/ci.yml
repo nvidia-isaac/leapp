@@ -37,7 +37,7 @@ jobs:
         with:
           filters: |
             runtime:
-              - 'packages/leapp-runtime-rust/**'
+              - 'packages/leapp-rt/**'
               - '.github/scripts/runtime-backends.sh'
               - '.github/scripts/install-runtime-tool.sh'
               - '.github/workflows/ci.yml'
@@ -52,7 +52,7 @@ jobs:
     timeout-minutes: 30
     defaults:
       run:
-        working-directory: packages/leapp-runtime-rust
+        working-directory: packages/leapp-rt
     steps:
       - uses: actions/checkout@v4
       - name: Install Pixi
@@ -60,7 +60,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/.cache/rattler
-          key: pixi-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packages/leapp-runtime-rust/pixi.lock') }}
+          key: pixi-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packages/leapp-rt/pixi.lock') }}
       - name: Install build environment
         run: pixi install --locked
 
@@ -133,7 +133,7 @@ jobs:
         if: always()
         with:
           name: runtime-wheel-audit
-          path: packages/leapp-runtime-rust/target/wheel-audits/
+          path: packages/leapp-rt/target/wheel-audits/
           if-no-files-found: ignore
 
       - name: Check installed Python wheel
@@ -166,7 +166,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: leapp-rt-core
-          path: packages/leapp-runtime-rust/target/wheels/*.whl
+          path: packages/leapp-rt/target/wheels/*.whl
           if-no-files-found: error
           retention-days: 1
 
@@ -199,13 +199,13 @@ jobs:
     timeout-minutes: 30
     defaults:
       run:
-        working-directory: packages/leapp-runtime-rust
+        working-directory: packages/leapp-rt
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: leapp-rt-core
-          path: packages/leapp-runtime-rust/target/onnx-ci/core
+          path: packages/leapp-rt/target/onnx-ci/core
       - name: Isolate build caches
         env:
           LEAPP_CI_ROOT: ${{ runner.temp }}/leapp-onnx-${{ github.run_id }}-${{ github.run_attempt }}-cpu
@@ -222,7 +222,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ${{ env.PIXI_CACHE_DIR }}
-          key: pixi-onnx-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packages/leapp-runtime-rust/pixi.lock') }}
+          key: pixi-onnx-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('packages/leapp-rt/pixi.lock') }}
       - name: Install build environment
         run: pixi install --locked
 
@@ -313,7 +313,7 @@ jobs:
         backend: [onnx, torchscript, tensorrt]
     defaults:
       run:
-        working-directory: packages/leapp-runtime-rust
+        working-directory: packages/leapp-rt
     env:
       BACKEND: ${{ matrix.backend }}
       # Triton 26.05 supplies the supported server 2.69.0 and matching adapters.
@@ -323,7 +323,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: leapp-rt-core
-          path: packages/leapp-runtime-rust/target/backend-ci/core
+          path: packages/leapp-rt/target/backend-ci/core
       - name: Isolate build caches
         run: |
           ci_root=$(mktemp -d "$RUNNER_TEMP/leapp-backends-XXXXXX")

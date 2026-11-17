@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Run inside the pinned Triton SDK image, from packages/leapp-runtime-rust.
+# Run inside the pinned Triton SDK image, from packages/leapp-rt.
 set -euo pipefail
 backend=$1
 engines=(native triton)

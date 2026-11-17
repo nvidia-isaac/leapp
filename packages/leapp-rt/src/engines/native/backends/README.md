@@ -10,7 +10,7 @@ See the [runtime guide](../../../../README.md) for model support and public APIs
 ## Installation
 
 Build the core runtime and plugins from the same source revision. The commands
-below run from `packages/leapp-runtime-rust` and require CMake 3.24+ and a C++20
+below run from `packages/leapp-rt` and require CMake 3.24+ and a C++20
 compiler. For the core build and library-loader setup, see
 [core installation](../../../../README.md#installation).
 SDKs and sources are build dependencies; deployment needs the installed libraries
@@ -113,7 +113,7 @@ files own SDK execution resources.
 ### Build a C++ plugin
 
 The standalone SDK requires CMake 3.24+ and C++20. Run from
-`packages/leapp-runtime-rust`:
+`packages/leapp-rt`:
 
 ```sh
 cmake -S src/engines/native/backends/cxx -B target/native-backend-sdk \
@@ -138,7 +138,7 @@ the loader rejects incompatible or incomplete libraries with rebuild instruction
 ### Validate a C++ backend
 
 The single CPU fixture under `cxx/tests/` exercises the Rust/C++ boundary.
-Run from `packages/leapp-runtime-rust`:
+Run from `packages/leapp-rt`:
 
 ```sh
 cmake -S src/engines/native/backends/cxx -B target/native-backend-tests \

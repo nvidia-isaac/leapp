@@ -8,7 +8,7 @@ the `LEAPP_TRITON_BACKENDS` environment variable. Applications use the same
 Outputs use caller-provided buffers or fresh allocations. Retained allocated
 outputs remain valid across later calls and session closure.
 
-Torch build commands below run from `packages/leapp-runtime-rust`. Supply Linux,
+Torch build commands below run from `packages/leapp-rt`. Supply Linux,
 CMake 3.24+, a C++20 compiler, nlohmann_json 3.11+, Triton 2.69.0, CUDA, and
 CUDA-enabled LibTorch with the C++11 libstdc++ ABI. CUDA-enabled LibTorch is
 required even for CPU execution. Builds use installed dependencies without
