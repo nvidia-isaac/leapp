@@ -6,6 +6,7 @@
 """Base class for traced data types (tensors, arrays, etc.)."""
 
 from abc import ABC, abstractmethod
+import math
 import operator
 from numbers import Integral
 from typing import Any, Set, Optional
@@ -729,7 +730,7 @@ class TracedData(ABC):
                 source_tensor, "_setitem_value"
             )
         else:
-            one_element = getattr(real_value, "numel", lambda: 1)() == 1
+            one_element = math.prod(getattr(real_value, "shape", ())) == 1
             if (
                 not one_element
                 and tuple(getattr(real_value, "shape", ())) != target_shape

@@ -1345,6 +1345,24 @@ class TestCompiledGraphExecution(unittest.TestCase):
         )
 
 
+@pytest.mark.parametrize("width", [1, 4])
+def test_setitem_broadcast_traced_source(width):
+    """Broadcast traced NumPy values before flattening the assignment."""
+
+    def assign(x, q):
+        out = x.copy()
+        out[0, 1:3] = q[0, 0]
+        return out
+
+    x = np.zeros((1, 3, 4), dtype=np.float32)
+    q = np.arange(width, dtype=np.float32).reshape(1, 1, width)
+    model = _capture_numpy(assign, x, q)
+    for a, b in ((x, q), (x + 10, q + 5)):
+        _assert_numpy_output(
+            model(torch.from_numpy(a), torch.from_numpy(b)), assign(a, b)
+        )
+
+
 @pytest.mark.parametrize("equal_nan", [False, True])
 def test_isclose_special_values_and_broadcasting(equal_nan):
     fn = lambda x, y: np.isclose(x, y, rtol=1e-4, atol=1e-6, equal_nan=equal_nan)
