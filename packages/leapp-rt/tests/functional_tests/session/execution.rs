@@ -226,7 +226,10 @@ fn onnx_ports_bind_by_name_for_all_declaration_orders() {
 fn public_names_results_and_lifetimes() {
     for device in devices() {
         let runtime = open("policy", device);
-        assert_eq!(runtime.info().pipeline_outputs()[0].name(), "policy/action");
+        assert_eq!(
+            runtime.bundle().pipeline_outputs()[0].name(),
+            "policy/action"
+        );
         let mut session = runtime.new_session().unwrap();
         drop(runtime);
         let bias = input(&[10f32, 20., 30., 40.], &[4], device);
@@ -264,7 +267,7 @@ fn validation_failures_leave_session_usable() {
         .output_placement
         .overrides
         .insert("bad".into(), MemoryLocation::Cpu);
-    assert!(Session::open(session.info(), options).is_err());
+    assert!(Session::open(session.bundle(), options).is_err());
     assert!(session
         .run(&std::collections::HashMap::from([(
             "dynamic/input",

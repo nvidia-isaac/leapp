@@ -168,7 +168,7 @@ Select Triton with `SessionOptions { engine: EngineKind::Triton, ..Default::defa
 Python `SessionOptions(engine="triton")`, or C++ `EngineKind::kTriton`.
 Both engines are available in the same build, and peers inherit the selection.
 
-`session.info()` borrows the retained bundle snapshot. Every public input must be supplied
+`session.bundle()` borrows the retained bundle snapshot. Every public input must be supplied
 in a `HashMap<&str, BorrowedTensor<'_>>`, using its LEAPP name. Names and
 tensors are borrowed for the call; input map iteration order has no effect on routing. Generated Triton names and internal ports
 are hidden. Results contain only declared public outputs, in declaration order;

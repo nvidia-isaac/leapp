@@ -33,7 +33,7 @@ mod lifecycle {
         assert!(matches!(session.reset(), Err(Error::Lock)));
         assert!(matches!(session.close(), Err(Error::Lock)));
         assert!(!session.is_open().unwrap());
-        assert!(session.info().model_names().is_empty());
+        assert!(session.bundle().model_names().is_empty());
         session.close().unwrap();
         peer.run_into(
             &std::collections::HashMap::new(),

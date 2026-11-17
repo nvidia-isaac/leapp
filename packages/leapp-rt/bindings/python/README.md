@@ -81,6 +81,9 @@ with lr.Session.open(bundle, options) as session:
     session.reset()
 ```
 
+`session.bundle()` returns the retained bundle snapshot, also available after
+`session.close()`.
+
 Bundle getters return detached Python values. Pipeline input/output getters are
 ordered dictionaries of qualified names to port descriptors. Missing model or
 port lookups return `None`. Unhashable or colliding YAML mapping keys are retained in

@@ -173,7 +173,7 @@ impl Session {
     }
 
     /// Immutable bundle snapshot, also available after close.
-    pub fn info(&self) -> &Bundle {
+    pub fn bundle(&self) -> &Bundle {
         &self.bundle
     }
 
