@@ -5,7 +5,7 @@ use crate::{
     bundle::PyBundle,
     dlpack::{import_items, Output},
 };
-use leapp_runtime_bindings::{Error, SessionHandle};
+use leapp_rt_bindings::{Error, SessionHandle};
 use lrt::dlpack::{BorrowedTensor, OutputBuffer};
 use lrt::{EngineKind, ExecutionDevice, RunResult, SessionOptions};
 use pyo3::{
@@ -71,6 +71,18 @@ impl PySession {
                     .overrides
                     .insert(name, crate::location(&device)?);
             }
+        }
+        if opts.engine == EngineKind::Native {
+            py.import("lrt._backends")?
+                .call_method0("configure")
+                .map_err(|error| {
+                    crate::diagnostic(
+                        py,
+                        crate::runtime_error(error),
+                        lrt::ErrorCode::Unsupported,
+                        "load",
+                    )
+                })?;
         }
         let inner = py
             .detach(|| SessionHandle::open(&bundle.inner, opts))

@@ -7,7 +7,7 @@ use serde::{de::DeserializeOwned, Deserialize, Deserializer};
 use std::{fmt, path::PathBuf};
 
 use safetensors::Dtype as InitialValueDtype;
-pub use serde_yaml_ng::Value as MetadataValue;
+pub use yaml_serde::Value as MetadataValue;
 
 pub type Metadata = IndexMap<String, MetadataValue>;
 pub(crate) type Connections = IndexMap<PortRef, Vec<PortRef>>;

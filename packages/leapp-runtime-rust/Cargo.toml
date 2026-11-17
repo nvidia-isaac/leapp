@@ -7,12 +7,22 @@ default-members = ["."]
 resolver = "2"
 
 [package]
-name = "leapp-runtime"
+name = "leapp-rt"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-publish = false
+rust-version = "1.88"
+publish = ["crates-io"]
 description = "LEAPP bundle inspection and synchronous native or Triton execution"
+repository = "https://github.com/nvidia-isaac/leapp"
+homepage = "https://nvidia-isaac.github.io/leapp/"
+documentation = "https://docs.rs/leapp-rt"
+readme = "README.md"
+include = [
+    "/src/**", "/build.rs", "/Cargo.lock", "/README.md", "/LICENSE", "/examples/*.rs",
+    "/tests/unit_tests/**/*.rs", "/tests/functional_tests/**/*.rs",
+    "/tests/fixtures/feedback.yaml", "/tests/fixtures/pipeline.yaml", "/tests/fixtures/policy.yaml",
+]
 
 [lib]
 name = "lrt"
@@ -26,7 +36,7 @@ anyhow = "1"
 indexmap = { version = "2", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_path_to_error = "0.1"
-serde_yaml_ng = "=0.10.0"
+yaml_serde = "=0.10.7"
 serde_json = "1"
 sha2 = "0.10"
 safetensors = "=0.6.2"
@@ -41,7 +51,3 @@ path = "tests/unit_tests/bundle.rs"
 [[test]]
 name = "dlpack"
 path = "tests/unit_tests/dlpack.rs"
-
-[[test]]
-name = "binding_lifecycle"
-path = "bindings/common/tests/lifecycle.rs"

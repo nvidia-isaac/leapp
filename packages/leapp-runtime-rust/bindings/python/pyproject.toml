@@ -3,14 +3,40 @@ requires = ["maturin>=1.9,<2"]
 build-backend = "maturin"
 
 [project]
-name = "leapp-runtime"
+name = "leapp-rt"
 version = "0.1.0"
 requires-python = ">=3.10"
 description = "Synchronous LEAPP inference through native backends or Triton"
 license = "Apache-2.0"
+license-files = ["LICENSE-LEAPP", "THIRD-PARTY-NOTICES.txt"]
+readme = "README.md"
 dependencies = ["numpy>=1.26"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Rust",
+    "Operating System :: POSIX :: Linux",
+]
+
+[project.urls]
+Homepage = "https://nvidia-isaac.github.io/leapp/"
+Repository = "https://github.com/nvidia-isaac/leapp"
+Issues = "https://github.com/nvidia-isaac/leapp/issues"
 
 [project.optional-dependencies]
+onnx = ["leapp-rt-onnx==0.1.0"]
+onnx-cuda = ["leapp-rt-onnx-cuda13==0.1.0"]
+onnx-cuda12 = ["leapp-rt-onnx-cuda12==0.1.0"]
+onnx-cuda13 = ["leapp-rt-onnx-cuda13==0.1.0"]
+tensorrt = ["leapp-rt-tensorrt-cuda13==0.1.0"]
+tensorrt-cuda12 = ["leapp-rt-tensorrt-cuda12==0.1.0"]
+tensorrt-cuda13 = ["leapp-rt-tensorrt-cuda13==0.1.0"]
+torchscript = ["leapp-rt-torchscript-cuda13==0.1.0"]
+torchscript-cuda12 = ["leapp-rt-torchscript-cuda12==0.1.0"]
+torchscript-cuda13 = ["leapp-rt-torchscript-cuda13==0.1.0"]
+nativert = ["leapp-rt-nativert-cuda13==0.1.0"]
+nativert-cuda12 = ["leapp-rt-nativert-cuda12==0.1.0"]
+nativert-cuda13 = ["leapp-rt-nativert-cuda13==0.1.0"]
 test = ["pytest>=8"]
 
 [tool.maturin]

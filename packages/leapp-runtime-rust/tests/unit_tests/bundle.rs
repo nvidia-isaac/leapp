@@ -22,12 +22,12 @@ impl Fixture {
         Self {
             directory,
             path,
-            value: serde_yaml_ng::from_str(YAML).unwrap(),
+            value: yaml_serde::from_str(YAML).unwrap(),
         }
     }
 
     fn write(&self) {
-        fs::write(&self.path, serde_yaml_ng::to_string(&self.value).unwrap()).unwrap();
+        fs::write(&self.path, yaml_serde::to_string(&self.value).unwrap()).unwrap();
     }
 
     fn open(&self) -> Bundle {
@@ -59,7 +59,7 @@ impl Fixture {
 }
 
 fn value(text: &str) -> Value {
-    serde_yaml_ng::from_str(text).unwrap()
+    yaml_serde::from_str(text).unwrap()
 }
 
 #[test]
@@ -314,7 +314,7 @@ fn preserves_shapes_and_all_canonical_dtypes() {
             };
             assert_eq!(
                 b.input_info("a_policy", "features").unwrap().shape,
-                serde_yaml_ng::from_value::<Vec<i64>>(expected).unwrap()
+                yaml_serde::from_value::<Vec<i64>>(expected).unwrap()
             );
         }
     }

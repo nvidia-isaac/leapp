@@ -24,7 +24,7 @@ pub(super) fn load(
 ) -> Result<Box<dyn BackendPlugin>> {
     let directory = std::env::var_os("LEAPP_NATIVE_BACKENDS")
         .map(PathBuf::from)
-        .unwrap_or_else(|| "/opt/leapp/backends".into());
+        .unwrap_or_else(|| "/opt/leapp-rt/backends".into());
     Ok(Box::new(Model::load_library(
         spec,
         location,

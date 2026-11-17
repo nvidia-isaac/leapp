@@ -32,7 +32,7 @@ fn invalid(message: &str) -> ffi::StatusData {
     error(ErrorCode::InvalidArgument, "binding", message)
 }
 
-fn binding_status(result: Result<(), leapp_runtime_bindings::Error>) -> ffi::StatusData {
+fn binding_status(result: Result<(), leapp_rt_bindings::Error>) -> ffi::StatusData {
     match result {
         Ok(()) => success(),
         Err(e) => error(e.code(), e.phase(), &e),

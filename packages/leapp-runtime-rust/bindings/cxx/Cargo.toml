@@ -1,16 +1,17 @@
 [package]
-name = "leapp-runtime-cxx"
+name = "leapp-rt-cxx"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 publish = false
+rust-version = "1.88"
 
 [lib]
 crate-type = ["staticlib"]
 
 [dependencies]
-leapp-runtime = { path = "../.." }
-leapp-runtime-bindings = { path = "../common" }
+leapp-rt = { version = "=0.1.0", path = "../.." }
+leapp-rt-bindings = { version = "=0.1.0", path = "../common" }
 cxx = "=1.0.205"
 
 [build-dependencies]

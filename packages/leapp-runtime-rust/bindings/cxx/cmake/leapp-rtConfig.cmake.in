@@ -1,0 +1,4 @@
+@PACKAGE_INIT@
+
+include("${CMAKE_CURRENT_LIST_DIR}/leapp_rtTargets.cmake")
+check_required_components(leapp-rt)

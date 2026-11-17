@@ -25,11 +25,11 @@ pub(crate) fn read_bundle(path: &Path) -> Result<BundleData, BundleError> {
     let base = yaml_path.parent().expect("absolute path has a parent");
     let mut description = in_phase(path, "parse", || {
         // PyYAML keeps the last duplicate mapping entry and expands YAML merges.
-        let value = serde_yaml_ng::from_str::<YamlValue>(&yaml_text)?.into_value()?;
+        let value = yaml_serde::from_str::<YamlValue>(&yaml_text)?.into_value()?;
         let mut description: BundleDescription = serde_path_to_error::deserialize(value.clone())?;
         for (name, node) in &mut description.models {
             node.original_parameters =
-                serde_yaml_ng::from_value(value["models"][name]["parameters"].clone())?;
+                yaml_serde::from_value(value["models"][name]["parameters"].clone())?;
         }
         Ok(description)
     })?;
@@ -151,7 +151,7 @@ enum YamlValue {
 }
 
 impl YamlValue {
-    fn into_value(self) -> Result<MetadataValue, serde_yaml_ng::Error> {
+    fn into_value(self) -> Result<MetadataValue, yaml_serde::Error> {
         match self {
             Self::Mapping(items) => {
                 // Expand inherited maps first so chained merges retain their fields.

@@ -94,7 +94,7 @@ impl Model {
     ) -> Result<Self> {
         let directory = std::env::var_os("LEAPP_NATIVE_BACKENDS")
             .map(PathBuf::from)
-            .unwrap_or_else(|| "/opt/leapp/backends".into());
+            .unwrap_or_else(|| "/opt/leapp-rt/backends".into());
         initialize(&directory)?;
         location.validate()?;
         let _device = select_device(location)?;

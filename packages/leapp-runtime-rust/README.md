@@ -12,14 +12,29 @@ the same bundle inspection and synchronous Session API.
 
 ## Installation
 
+The core is distributed as the `leapp-rt` Cargo crate and Python package.
+C++ consumers build the source with CMake, use `find_package(leapp-rt)`, and link
+`lrt::runtime`. Pixi provisions the selected backend libraries independently; see the
+[packaging guide](packaging/README.md). Backend recipes currently produce local
+channels. Until the first registry release, use the source-build commands below.
+
+For a published Rust release, add `leapp-rt = "0.1"` to `[dependencies]`.
+Python users install `leapp-rt` from PyPI and import `lrt`. Core packages
+include both orchestration engines and require no model SDKs at installation.
+
 Build on Linux with Rust 1.88 or newer. Building the core runtime does not
 require the Triton or CUDA SDKs.
+
+The crate pins the Rust `ort` binding to `=2.0.0-rc.13`, a release candidate.
+Cargo consumers inherit this exact dependency constraint; upgrading the binding
+requires updating the runtime's pin. This is separate from the ONNX Runtime
+shared library version: the binding loads it dynamically and requires C API 24.
 
 ```sh
 cargo build --locked --release
 ```
 
-The Cargo package is `leapp-runtime`; its Rust import name is `lrt`.
+The Cargo package is `leapp-rt`; its Rust import name is `lrt`.
 See the [Python bindings](bindings/python/README.md) for `import lrt` and the
 [C++ bindings](bindings/cxx/README.md) for the `lrt` namespace and `lrt::runtime`
 CMake target.
@@ -34,6 +49,13 @@ bundle inspection does not load them. Cargo does not download or install these
 runtimes. Installing a supported backend does not require rebuilding the core
 binary or selecting Cargo features. Running exported bundles does not require Python
 model-export packages.
+
+Pixi is the default deployment path; see the
+[backend environment guide](packaging/README.md#install-an-application-environment).
+Python applications can also select native SDK wheels with extras such as
+`pip install 'leapp-rt[onnx,tensorrt]'` or
+`pip install 'leapp-rt[torchscript,nativert]'`; see the
+[Python installation guide](bindings/python/README.md).
 
 For native execution, follow the
 [native backend installation guide](src/engines/native/backends/README.md#installation).
@@ -278,8 +300,9 @@ Model-internal mutations are shared between peers and are not reset by `reset()`
 ### ONNX TensorRT acceleration
 
 Both engines accept per-node TensorRT accelerator parameters through
-`SessionOptions.onnx_tensorrt`. Install an ONNX Runtime TensorRT provider
-with its TensorRT dependencies beside the ONNX Runtime library.
+`SessionOptions.onnx_tensorrt`. Install the optional
+[`leapp-onnx-tensorrt` package](packaging/README.md), or an ONNX Runtime TensorRT
+provider with its TensorRT dependencies beside the ONNX Runtime library.
 
 ```python
 options = lrt.SessionOptions(

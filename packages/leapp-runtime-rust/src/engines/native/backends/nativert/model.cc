@@ -31,7 +31,7 @@ using Json = nlohmann::json;
 
 std::shared_ptr<void> load_warp_library() {
   const auto* root = std::getenv("LEAPP_NATIVE_BACKENDS");
-  const auto path = std::filesystem::path(root ? root : "/opt/leapp/backends") /
+  const auto path = std::filesystem::path(root ? root : "/opt/leapp-rt/backends") /
                     "nativert/libleapp_wrp_torch_custom_op.so";
   std::error_code error;
   const auto status = std::filesystem::symlink_status(path, error);

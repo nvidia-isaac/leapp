@@ -1,16 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 [package]
-name = "leapp-runtime-python"
+name = "leapp-rt-python"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 publish = false
+rust-version = "1.88"
 
 [lib]
 name = "_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-leapp-runtime-bindings = { path = "../common" }
-leapp-runtime = { path = "../.." }
-pyo3 = { version = "=0.27.2", features = ["extension-module"] }
+leapp-rt-bindings = { version = "=0.1.0", path = "../common" }
+leapp-rt = { version = "=0.1.0", path = "../.." }
+pyo3 = { version = "=0.29.3", features = ["extension-module"] }

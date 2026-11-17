@@ -53,7 +53,7 @@ fn location(text: &str) -> PyResult<MemoryLocation> {
     }
 }
 
-#[pymodule]
+#[pymodule(gil_used = true)]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add(
         "_DEFAULT_ENGINE",

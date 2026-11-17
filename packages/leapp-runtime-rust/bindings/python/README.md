@@ -6,13 +6,50 @@ and importing it require neither the Triton nor the CUDA SDK.
 NumPy is a package dependency; PyTorch and CuPy are optional DLPack
 producers/consumers.
 
-Build with the workspace's Rust toolchain and Python 3.10 or newer:
+For a published release, use `python -m pip install leapp-rt`.
+The planned release wheels target Linux x86-64 and aarch64, CPython 3.10–3.14,
+and glibc 2.28 or newer. They are interpreter-specific wheels. Backend SDKs may
+require a newer operating system; Jetson backend environments are validated
+separately. A source installation requires Rust 1.88 or newer.
+
+Until the first registry release, build from the runtime workspace with Rust
+and Python 3.10 or newer:
 
 ```sh
-python -m pip install maturin
-maturin build --release --manifest-path bindings/python/Cargo.toml --auditwheel skip
-python -m pip install target/wheels/leapp_runtime-*.whl
+python -m pip install 'maturin>=1.9,<2'
+maturin build --locked --release --manifest-path bindings/python/Cargo.toml
+python -m pip install target/wheels/leapp_rt-*.whl
 ```
+
+Optional backend wheels can be selected through pip extras:
+
+```sh
+python -m pip install 'leapp-rt[onnx]'                 # CPU ONNX; no CUDA libraries
+python -m pip install 'leapp-rt[onnx-cuda]'            # ONNX with CUDA 13
+python -m pip install 'leapp-rt[onnx,tensorrt]'         # ONNX with TensorRT acceleration
+python -m pip install 'leapp-rt[torchscript,nativert]'  # Native Torch backends
+```
+
+The GPU and Torch extras select CUDA 13. Explicit `onnx-cuda12`,
+`tensorrt-cuda12`, `torchscript-cuda12`, and `nativert-cuda12` extras select a
+CUDA 12 build; the corresponding `cuda13` names are also available. Install one
+CUDA family per environment. Torch backend wheels include their native plugins
+and LibTorch libraries and do not require the Python `torch` distribution.
+TensorRT acceleration still needs `SessionOptions.onnx_tensorrt` for the selected
+ONNX nodes; installing its extra makes the SDK available.
+
+Extras require the matching companion wheels in the configured package index or
+local wheelhouse. Their producer is documented under
+[backend wheels](../../packaging/README.md#build-pip-backend-wheels).
+The first public release remains core-only; optional backend distributions are
+separate release artifacts. Pixi remains the default for locked deployments.
+
+Backend wheels are discovered when a session opens. Import and bundle inspection
+load no SDK libraries and download nothing. Explicit `LEAPP_NATIVE_BACKENDS` or
+`ORT_DYLIB_PATH` selects the existing manual/Pixi installation instead. Other
+explicit settings, including `CUDA_ROOT`, are preserved. All pip SDK components
+must have the same build identity and core version; Jetson builds additionally
+require the recorded Jetson Linux release.
 
 Install the model backends you need as described in the
 [model support guide](../../README.md#model-support). ONNX, TorchScript, and
@@ -23,7 +60,10 @@ Triton and CUDA libraries load only when needed. Set `TRITON_ROOT` and
 `CUDA_ROOT` for explicit installations, and make their dependencies available
 through `LD_LIBRARY_PATH`. Native CPU ONNX with CPU I/O can run without either
 library; the current Torch plugins still require CUDA even for CPU execution.
-The wheel does not redistribute model runtimes or NVIDIA libraries. See the
+The core wheel contains no model runtimes or NVIDIA libraries; optional backend
+wheels carry the selected SDK libraries and their license files. Use the
+[Pixi consumer generator](../../packaging/README.md#install-an-application-environment)
+for a locked backend environment. See the
 [runtime installation guide](../../README.md#installation) for library discovery.
 
 ```python
