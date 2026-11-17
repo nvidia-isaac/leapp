@@ -63,7 +63,7 @@ fn scripted_traced_and_mixed_match_pytorch_with_positional_ports() {
                 } else {
                     "model/z_values"
                 };
-                let mut session = Session::open(runtime.info(), options).unwrap();
+                let mut session = Session::open(runtime.bundle(), options).unwrap();
                 // Request order differs from the exported argument order.
                 let result = session
                     .run(&HashMap::from([

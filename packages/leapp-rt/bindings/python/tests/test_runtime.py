@@ -73,7 +73,7 @@ def test_output_lifetime_feedback_and_close():
             operation()
         assert error.value.code == lr.ErrorCode.INVALID_ARGUMENT
         assert error.value.phase == "execute"
-    assert rt.info().model_names() == ["accumulator"]
+    assert rt.bundle().model_names() == ["accumulator"]
     del tensor, rt, session
     gc.collect()
     np.testing.assert_array_equal(view, [retained_value] * 4)

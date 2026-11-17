@@ -62,7 +62,7 @@ impl SessionHandle {
             session: Mutex::new(session),
         })
     }
-    pub fn info(&self) -> &Bundle {
+    pub fn bundle(&self) -> &Bundle {
         &self.bundle
     }
     pub fn is_open(&self) -> Result<bool, Error> {

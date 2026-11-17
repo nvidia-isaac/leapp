@@ -91,9 +91,9 @@ impl PySession {
     }
 
     /// Return the bundle snapshot retained at open.
-    fn info(&self) -> PyBundle {
+    fn bundle(&self) -> PyBundle {
         PyBundle {
-            inner: self.inner.info().clone(),
+            inner: self.inner.bundle().clone(),
         }
     }
 

@@ -41,7 +41,7 @@ fn ensembles_support_host_and_device_buffers_and_retained_results() {
             let bias = placed(&[10f32, 20., 30., 40.], &[4], location).unwrap();
             let mut options = options();
             options.output_placement.default_location = location;
-            let mut session = Session::open(runtime.info(), options).unwrap();
+            let mut session = Session::open(runtime.bundle(), options).unwrap();
             let result = session
                 .run(&std::collections::HashMap::from([
                     ("preprocess/observation", observation.view()),
