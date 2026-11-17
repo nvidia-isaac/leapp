@@ -393,11 +393,19 @@ Status Session::Open(const Bundle& bundle, const SessionOptions& options,
   for (const auto& [name, location] : options.output_overrides) {
     overrides.push_back({OwnedBytes(name), Location(location)});
   }
+  std::vector<wire::OnnxTensorRT> onnx_tensorrt;
+  for (const auto& [node, parameters] : options.onnx_tensorrt) {
+    wire::OnnxTensorRT entry{OwnedBytes(node), {}};
+    for (const auto& [key, value] : parameters) {
+      entry.parameters.push_back({OwnedBytes(key), OwnedBytes(value)});
+    }
+    onnx_tensorrt.push_back(std::move(entry));
+  }
   auto data = std::make_unique<Data>();
-  auto status = Convert(
-      wire::session_open(*bundle.data_->handle, engine, Location(location),
-                         Location(options.output_location),
-                         {overrides.data(), overrides.size()}, *data->handle));
+  auto status = Convert(wire::session_open(
+      *bundle.data_->handle, engine, Location(location),
+      Location(options.output_location), {overrides.data(), overrides.size()},
+      {onnx_tensorrt.data(), onnx_tensorrt.size()}, *data->handle));
   if (!status.ok()) {
     return status;
   }

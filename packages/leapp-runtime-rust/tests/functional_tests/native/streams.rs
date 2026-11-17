@@ -12,15 +12,26 @@ fn values(result: &RunResult) -> Vec<(String, Vec<f32>)> {
 }
 
 fn exercise(bundle: &Bundle, device: ExecutionDevice, inputs: &HashMap<&str, BorrowedTensor<'_>>) {
+    exercise_with_options(
+        bundle,
+        inputs,
+        SessionOptions {
+            engine: crate::EngineKind::Native,
+            device,
+            ..Default::default()
+        },
+    );
+}
+
+fn exercise_with_options(
+    bundle: &Bundle,
+    inputs: &HashMap<&str, BorrowedTensor<'_>>,
+    options: SessionOptions,
+) {
     // The external owner outlives both the original session and all peers.
     let owner = HandoffStream::new(0).unwrap();
     let stream = unsafe { CudaStream::from_raw(owner.address() as *mut _) };
     eprintln!("external CUDA stream: {:#x}", owner.address());
-    let options = SessionOptions {
-        engine: crate::EngineKind::Native,
-        device,
-        ..Default::default()
-    };
     let expected = {
         let mut session = Session::open(bundle, options.clone()).unwrap();
         values(&session.run(inputs).unwrap())
@@ -61,6 +72,23 @@ fn exercise(bundle: &Bundle, device: ExecutionDevice, inputs: &HashMap<&str, Bor
         // Closing every user must not destroy the caller's stream.
         owner.synchronize().unwrap();
     }
+}
+
+#[test]
+#[ignore = "requires ONNX Runtime TensorRT provider and GPU"]
+fn external_streams_support_onnx_tensorrt() {
+    let bundle = Bundle::open(fixtures().join("feedback.yaml")).unwrap();
+    let input = placed(&[1_f32; 4], &[4], MemoryLocation::Cuda { device_id: 0 }).unwrap();
+    exercise_with_options(
+        &bundle,
+        &HashMap::from([("accumulator/observation", input.view())]),
+        SessionOptions {
+            engine: crate::EngineKind::Native,
+            device: ExecutionDevice::Cuda { device_id: 0 },
+            onnx_tensorrt: [("accumulator".into(), HashMap::new())].into(),
+            ..Default::default()
+        },
+    );
 }
 
 #[test]

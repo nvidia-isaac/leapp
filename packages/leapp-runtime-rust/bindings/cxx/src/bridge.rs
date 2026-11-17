@@ -110,6 +110,16 @@ pub mod ffi {
         location: Location,
     }
 
+    struct Parameter {
+        key: Vec<u8>,
+        value: Vec<u8>,
+    }
+
+    struct OnnxTensorRT {
+        node: Vec<u8>,
+        parameters: Vec<Parameter>,
+    }
+
     extern "Rust" {
         type BundleHandle;
 
@@ -136,12 +146,14 @@ pub mod ffi {
         type SessionHandle;
         fn engine_default() -> EngineKind;
         fn session_new() -> Box<SessionHandle>;
+        #[allow(clippy::too_many_arguments)]
         fn session_open(
             bundle: &BundleHandle,
             engine: EngineKind,
             location: Location,
             output_location: Location,
             overrides: &[Placement],
+            onnx_tensorrt: &[OnnxTensorRT],
             output: &mut SessionHandle,
         ) -> StatusData;
         fn session_close(session: &SessionHandle) -> StatusData;

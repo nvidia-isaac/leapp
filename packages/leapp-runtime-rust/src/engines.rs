@@ -75,6 +75,8 @@ pub(crate) fn open(
     graph: &crate::session::graph::Graph<'_>,
     options: &crate::SessionOptions,
 ) -> Result<Arc<dyn Engine>, RuntimeError> {
+    crate::session::onnx_tensorrt::validate(bundle, options)
+        .map_err(|error| RuntimeError::new("configure", error))?;
     match options.engine {
         EngineKind::Triton => triton::open(bundle, graph, options),
         EngineKind::Native => native::open(bundle, graph, options),

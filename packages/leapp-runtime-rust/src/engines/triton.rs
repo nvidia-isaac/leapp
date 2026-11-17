@@ -49,6 +49,7 @@ pub(super) fn open(
     let installation = Options::default();
     let mut pipeline = convert::convert(bundle, options.device, graph)
         .map_err(|e| crate::RuntimeError::new("convert", e))?;
+    convert::configure_tensorrt(&mut pipeline, bundle, &options.onnx_tensorrt);
     convert::configure_plugins(&mut pipeline, &installation.backend_directory)
         .map_err(|e| crate::RuntimeError::new("load", e))?;
     let repository = convert::repository::ModelRepository::create(&pipeline)?;
