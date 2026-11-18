@@ -147,6 +147,7 @@ fn onnx_peers_share_models_and_run_with_independent_workspaces() {
             calls: vec![],
             inputs: IndexMap::new(),
             public_inputs: 0,
+            public_outputs: 0,
             feedback_inputs: Default::default(),
             outputs: IndexMap::new(),
             terminal_outputs: Default::default(),
@@ -650,3 +651,6 @@ mod torch;
 
 #[path = "native/streams.rs"]
 mod streams;
+
+#[path = "native/replay.rs"]
+mod replay;

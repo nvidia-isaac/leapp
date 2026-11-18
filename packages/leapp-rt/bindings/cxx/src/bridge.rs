@@ -115,6 +115,10 @@ pub mod ffi {
         value: Vec<u8>,
     }
 
+    struct ReplayNode {
+        name: Vec<u8>,
+    }
+
     struct OnnxTensorRT {
         node: Vec<u8>,
         parameters: Vec<Parameter>,
@@ -154,6 +158,7 @@ pub mod ffi {
             output_location: Location,
             overrides: &[Placement],
             onnx_tensorrt: &[OnnxTensorRT],
+            cuda_graph_replay: &[ReplayNode],
             output: &mut SessionHandle,
         ) -> StatusData;
         fn session_close(session: &SessionHandle) -> StatusData;

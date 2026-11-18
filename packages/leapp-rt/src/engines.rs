@@ -50,7 +50,8 @@ pub enum MemoryLocation {
 /// order established by Session: public declarations, then private defaults and
 /// feedback in model declaration order. Session checks names and completeness,
 /// plus supplied output names, declared dtype/shape, and output/output overlap.
-/// Engines validate input/output overlap before execution and never retain buffers.
+/// Engines validate input/output overlap before execution. Caller-owned tensor
+/// handles are released before returning; opt-in replay retains binding addresses.
 pub(crate) trait Engine: Send + Sync {
     fn new_session(self: Arc<Self>) -> Result<Arc<dyn Engine>, RuntimeError>;
 

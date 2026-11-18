@@ -35,6 +35,7 @@ fn warp_plugins_execute_through_sessions() {
                         engine: engine(),
                         cuda_streams: Default::default(),
                         onnx_tensorrt: Default::default(),
+                        cuda_graph_replay: Default::default(),
                         device,
                         output_placement: OutputPlacement {
                             default_location: location,

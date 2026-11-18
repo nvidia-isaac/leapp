@@ -44,6 +44,8 @@ struct SessionOptions {
   // enable SDK defaults. See documentation for supported options.
   std::unordered_map<std::string, std::unordered_map<std::string, std::string>>
       onnx_tensorrt;
+  // Native ONNX nodes opting into CUDA graph replay with fixed CUDA buffers.
+  std::vector<std::string> cuda_graph_replay;
 };
 
 /// @brief Retained outputs; copies share allocations.

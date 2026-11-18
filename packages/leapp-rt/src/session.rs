@@ -16,7 +16,10 @@ use crate::{
 };
 use anyhow::{ensure, Context};
 use indexmap::{IndexMap, IndexSet};
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 /// Exact allocation locations keyed by logical output names.
 #[derive(Debug, Clone, Default)]
@@ -43,8 +46,14 @@ pub struct SessionOptions {
     pub engine: EngineKind,
     /// ONNX node names mapped to Triton's TensorRT accelerator parameters.
     /// An entry enables the provider with CUDA fallback; an empty map uses SDK defaults.
+    /// Native execution supports opt-in per-node replay with `trt_cuda_graph_enable=1`.
+    /// Replay requires fixed CUDA bindings and caller-owned public outputs via `run_into`.
     /// See documentation for supported options.
     pub onnx_tensorrt: HashMap<String, HashMap<String, String>>,
+    /// Native ONNX nodes using per-node CUDA graph replay. TensorRT is used when
+    /// selected in `onnx_tensorrt`; otherwise replay uses the CUDA provider.
+    /// Requires fixed CUDA bindings and caller-owned public outputs via `run_into`.
+    pub cuda_graph_replay: HashSet<String>,
     /// Caller-owned streams by CUDA device ID, used by native GPU execution and
     /// transfers. Missing devices use internal streams. Triton ignores this map.
     /// Peers inherit the same handles; keep them alive through every peer's close.
@@ -189,6 +198,7 @@ impl Session {
 
     /// Create an independently initialized session without reloading models or files.
     /// Configuration and captured initial values are inherited; current feedback is not.
+    /// Native ONNX CUDA replay does not support peers; use `Session::open` instead.
     pub fn new_session(&self) -> Result<Self, RuntimeError> {
         Ok(Self {
             engine: Some(self.engine()?.clone().new_session()?),

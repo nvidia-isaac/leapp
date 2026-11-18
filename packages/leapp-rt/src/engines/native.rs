@@ -72,6 +72,7 @@ impl NativeEngine {
                     location,
                     compute_stream,
                     options.onnx_tensorrt.get(name),
+                    options.cuda_graph_replay.contains(name),
                 )
                 .map_err(|e| backends::error("load", e.context(format!("load node {name}"))))
             })
@@ -145,6 +146,7 @@ impl NativeEngine {
             input_bytes,
             staged_inputs,
             calls,
+            replay_calls: Vec::new(),
             dynamic_slots,
             output_bindings: Vec::with_capacity(binding_capacity),
             transfers: Transfers::new(location, options)
@@ -152,6 +154,14 @@ impl NativeEngine {
         };
         // Workspace's field order also protects buffers on failed preparation.
         for call in &workspace.plan.calls {
+            let replay = options.cuda_graph_replay.contains(&call.name)
+                || options
+                    .onnx_tensorrt
+                    .get(&call.name)
+                    .map(crate::session::onnx_tensorrt::replay_requested)
+                    .transpose()
+                    .map_err(|e| RuntimeError::new("prepare", e))?
+                    .unwrap_or(false);
             let mut external_inputs = Vec::new();
             for (position, &id) in call.inputs.iter().enumerate() {
                 if let Some(order) = workspace.input_positions[id] {
@@ -185,6 +195,15 @@ impl NativeEngine {
                     .map_err(|e| backends::error("prepare", e))?;
             }
             let prepared = workspace.models[call.model].is_prepared();
+            if replay && !prepared {
+                return Err(RuntimeError::new(
+                    "prepare",
+                    anyhow::anyhow!(
+                        "node {}: replay requires fixed prepared bindings",
+                        call.name
+                    ),
+                ));
+            }
             if !prepared {
                 workspace
                     .dynamic_slots
@@ -223,7 +242,12 @@ impl NativeEngine {
                     );
                 }
             }
+            if replay {
+                workspace.replay_calls.push(workspace.calls.len());
+            }
             workspace.calls.push(CallState {
+                replay: replay.then(Vec::new),
+                replay_failed: false,
                 outputs: call
                     .outputs
                     .iter()
@@ -236,8 +260,16 @@ impl NativeEngine {
                             .find(|(_, slot)| **slot == id)
                             .map(|(name, _)| (position, id, name.clone()))
                     })
+                    // Replay keeps private feedback in its prepared output slots.
+                    .filter(|(_, _, name)| {
+                        !replay
+                            || workspace.plan.outputs.get_index_of(name).unwrap()
+                                < workspace.plan.public_outputs
+                    })
                     .collect(),
-                execute: if prepared {
+                execute: if replay {
+                    Workspace::run_replay_first
+                } else if prepared {
                     Workspace::run_prepared
                 } else {
                     Workspace::run_dynamic
@@ -370,6 +402,8 @@ struct Workspace {
     // Fixed feedback, plus prepared calls whose backend disables input borrowing.
     staged_inputs: Vec<(usize, usize)>,
     calls: Vec<CallState>,
+    // Preflight skips ordinary nodes, including all nodes when replay is disabled.
+    replay_calls: Vec<usize>,
     dynamic_slots: Vec<usize>,
     output_bindings: Vec<(usize, DLTensor)>,
     transfers: Transfers,
@@ -380,7 +414,7 @@ struct Workspace {
 // the caller's storage. All other workspace fields are independently Send.
 unsafe impl Send for Workspace {}
 
-// Select each node's execution function once, with no mode flag in the loop.
+// Dispatch uses a preselected function, with no mode flag in the loop.
 type Execute = fn(&mut Workspace, usize, &[(&str, BorrowedTensor<'_>)]) -> anyhow::Result<()>;
 
 struct CallState {
@@ -388,6 +422,26 @@ struct CallState {
     // Input position within this call and its boundary position in Plan.inputs.
     external_inputs: Vec<InputRoute>,
     outputs: Vec<(usize, usize, String)>,
+    // Only direct boundary addresses can change; other bindings use fixed slots.
+    replay: Option<Vec<usize>>,
+    replay_failed: bool,
+}
+
+impl CallState {
+    /// Effective data addresses, independent of temporary DLPack/ORT wrappers.
+    fn addresses<'a>(
+        &'a self,
+        inputs: &'a [(&str, BorrowedTensor<'_>)],
+        outputs: impl Iterator<Item = usize> + 'a,
+    ) -> impl Iterator<Item = usize> + 'a {
+        self.external_inputs
+            .iter()
+            .map(|route| {
+                let tensor = inputs[route.boundary].1.descriptor();
+                tensor.data as usize + tensor.byte_offset as usize
+            })
+            .chain(outputs)
+    }
 }
 
 impl Engine for NativeEngine {
@@ -411,6 +465,11 @@ impl Engine for NativeEngine {
         self.validate(inputs, outputs, &mut workspace.input_bytes)
             .map_err(|error| backends::error("execute", error))?;
 
+        // Check every replay node before staging or advancing any backend.
+        workspace
+            .validate_replay(inputs, outputs)
+            .map_err(|e| backends::error("execute", e))?;
+
         // Stateful/unclassified models keep the existing graph-wide order.
         // Hold the guard through output snapshots, including dynamic result copies.
         let _execution = self
@@ -422,7 +481,7 @@ impl Engine for NativeEngine {
                 RuntimeError::new("execute", anyhow::anyhow!("native model lock poisoned"))
             })?;
         let result = workspace.run(inputs, placement, outputs);
-        // Scratch capacity is reusable; invocation pointers must not survive return.
+        // Release invocation descriptors; replay retains only effective addresses.
         workspace.output_bindings.clear();
 
         // No dynamic value from a failed/previous call can feed a later call.
@@ -450,6 +509,52 @@ impl Engine for NativeEngine {
 }
 
 impl Workspace {
+    /// Reject changed replay bindings before any node can change session state.
+    fn validate_replay(
+        &self,
+        inputs: &[(&str, BorrowedTensor<'_>)],
+        buffers: &HashMap<&str, OutputBuffer<'_>>,
+    ) -> anyhow::Result<()> {
+        for &index in &self.replay_calls {
+            let call = &self.calls[index];
+            let spec = &self.plan.calls[index];
+            let saved = call.replay.as_ref().unwrap();
+            ensure!(
+                !call.replay_failed,
+                "node {}: replay backend failed; close and reopen the session",
+                spec.name
+            );
+            for (_, id, name) in &call.outputs {
+                ensure!(buffers.contains_key(name.as_str()), "replay output {name} requires a stable CUDA buffer supplied through run_into()");
+                debug_assert!(self.slots[*id].fixed.is_some());
+            }
+            if !saved.is_empty() {
+                let outputs = call
+                    .outputs
+                    .iter()
+                    .map(|(_, _, name)| buffers[name.as_str()].address());
+                ensure!(saved.iter().copied().eq(call.addresses(inputs, outputs)),
+                    "node {}: CUDA replay input/output addresses changed; retain buffers or open a new session", spec.name);
+            }
+        }
+        Ok(())
+    }
+
+    /// Record bindings once, then use the ordinary prepared dispatcher on every replay.
+    fn run_replay_first(
+        &mut self,
+        index: usize,
+        inputs: &[(&str, BorrowedTensor<'_>)],
+    ) -> anyhow::Result<()> {
+        let outputs = self
+            .output_bindings
+            .iter()
+            .map(|(_, tensor)| tensor.data as usize + tensor.byte_offset as usize);
+        self.calls[index].replay = Some(self.calls[index].addresses(inputs, outputs).collect());
+        self.calls[index].execute = Self::run_prepared;
+        self.run_prepared(index, inputs)
+    }
+
     fn run_prepared(
         &mut self,
         index: usize,
@@ -550,8 +655,13 @@ impl Workspace {
                     }
                 }
             }
-            (self.calls[index].execute)(self, index, inputs)
-                .with_context(|| format!("execute node {}", self.plan.calls[index].name))?;
+            (self.calls[index].execute)(self, index, inputs).with_context(|| {
+                if self.calls[index].replay.is_some() {
+                    // A failed capture may retain partial provider state. Never retry it.
+                    self.calls[index].replay_failed = true;
+                }
+                format!("execute node {}", self.plan.calls[index].name)
+            })?;
             // Copy overridden outputs back for downstream consumers.
             for binding in &self.output_bindings {
                 let id = self.plan.calls[index].outputs[binding.0];

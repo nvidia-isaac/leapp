@@ -43,6 +43,7 @@ pub(super) struct Plan {
     pub calls: Vec<Call>,
     pub inputs: IndexMap<String, usize>,
     pub public_inputs: usize,
+    pub public_outputs: usize,
     pub feedback_inputs: BTreeSet<usize>,
     pub outputs: IndexMap<String, usize>,
     pub slots: Vec<Arc<TensorSpec>>,
@@ -89,6 +90,12 @@ impl Plan {
             inputs: IndexMap::new(),
             public_inputs: bundle
                 .pipeline_inputs()
+                .iter()
+                .map(|port| port.name())
+                .collect::<BTreeSet<_>>()
+                .len(),
+            public_outputs: bundle
+                .pipeline_outputs()
                 .iter()
                 .map(|port| port.name())
                 .collect::<BTreeSet<_>>()

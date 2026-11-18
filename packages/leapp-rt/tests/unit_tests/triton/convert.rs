@@ -136,14 +136,8 @@ fn onnx_tensorrt_rejects_invalid_selection_before_loading_sdks() {
         (
             "a_policy",
             ExecutionDevice::Cuda { device_id: 0 },
-            [("trt_cuda_graph_enable".into(), "1".into())].into(),
-            "trt_cuda_graph_enable is unsupported by the native engine",
-        ),
-        (
-            "a_policy",
-            ExecutionDevice::Cuda { device_id: 0 },
-            [("trt_cuda_graph_enable".into(), "true".into())].into(),
-            "trt_cuda_graph_enable is unsupported by the native engine",
+            [("trt_cuda_graph_enable".into(), "invalid".into())].into(),
+            "trt_cuda_graph_enable must be",
         ),
     ] {
         let fixture = Fixture::new();
@@ -160,6 +154,41 @@ fn onnx_tensorrt_rejects_invalid_selection_before_loading_sdks() {
         assert_eq!(error.phase(), "configure");
         assert_eq!(error.code(), ErrorCode::InvalidArgument);
         assert!(error.to_string().contains(expected), "{error}");
+    }
+    for (node, engine, device) in [
+        (
+            "missing",
+            crate::EngineKind::Native,
+            ExecutionDevice::Cuda { device_id: 0 },
+        ),
+        ("a_policy", crate::EngineKind::Native, ExecutionDevice::Cpu),
+        (
+            "a_policy",
+            crate::EngineKind::Triton,
+            ExecutionDevice::Cuda { device_id: 0 },
+        ),
+    ] {
+        let fixture = Fixture::new();
+        let error = crate::Session::open(
+            &fixture.open(),
+            crate::SessionOptions {
+                engine,
+                device,
+                cuda_graph_replay: [node.into()].into(),
+                ..Default::default()
+            },
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error.phase(), "configure");
+        assert!(
+            error.to_string().contains(if node == "missing" {
+                "unknown CUDA replay node"
+            } else {
+                "requires native ONNX CUDA execution"
+            }),
+            "{error}"
+        );
     }
     let mut fixture = Fixture::new();
     fixture.value["models"]["a_policy"]["parameters"]["backend"] = yaml("jit");

@@ -102,7 +102,8 @@ pub(super) trait BackendPlugin: Send {
     /// Unrouted arguments retain their prepared workspace bindings. The engine
     /// has already established input compatibility, placement and alignment.
     /// Complete all work and restore bindings before returning, including errors.
-    /// Caller pointers must never be retained. Execution errors propagate without retry.
+    /// Never access caller pointers after completion. Opt-in replay may retain
+    /// addresses, checked by the engine before each run. Errors propagate without retry.
     /// Empty routes reuse all prepared inputs. There is one prepared execution
     /// entry point, with no borrowing/staging selection during dispatch.
     /// # Safety
@@ -150,6 +151,7 @@ type LoadBackend = fn(
     MemoryLocation,
     Option<crate::CudaStream>,
     Option<&std::collections::HashMap<String, String>>,
+    bool,
 ) -> Result<Box<dyn BackendPlugin>>;
 
 struct Backend {
@@ -163,16 +165,16 @@ const BACKENDS: &[Backend] = &[
     Backend {
         name: "onnx",
         validate: |_, _| Ok(()),
-        load: |spec, location, stream, options| {
+        load: |spec, location, stream, options, replay| {
             Ok(Box::new(onnx::Model::load(
-                spec, location, stream, options,
+                spec, location, stream, options, replay,
             )?))
         },
     },
     Backend {
         name: "jit",
         validate: |_, _| Ok(()),
-        load: |spec, location, stream, _| {
+        load: |spec, location, stream, _, _| {
             bridge::load(
                 spec,
                 location,
@@ -185,7 +187,7 @@ const BACKENDS: &[Backend] = &[
     Backend {
         name: "pt2",
         validate: |_, _| Ok(()),
-        load: |spec, location, stream, _| {
+        load: |spec, location, stream, _, _| {
             bridge::load(
                 spec,
                 location,
@@ -224,10 +226,11 @@ pub(super) fn load(
     location: MemoryLocation,
     stream: Option<crate::CudaStream>,
     onnx_tensorrt: Option<&std::collections::HashMap<String, String>>,
+    replay: bool,
 ) -> Result<Box<dyn BackendPlugin>> {
     let backend = backend(spec)?;
     (backend.validate)(spec, location)?;
-    (backend.load)(spec, location, stream, onnx_tensorrt)
+    (backend.load)(spec, location, stream, onnx_tensorrt, replay)
 }
 
 pub(super) fn error(phase: &'static str, source: anyhow::Error) -> RuntimeError {

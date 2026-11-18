@@ -6,6 +6,20 @@ use anyhow::{ensure, Context, Result};
 use std::collections::HashMap;
 
 pub(crate) fn validate(bundle: &Bundle, options: &SessionOptions) -> Result<()> {
+    for node in &options.cuda_graph_replay {
+        let model = bundle
+            .0
+            .description
+            .models
+            .get(node)
+            .with_context(|| format!("unknown CUDA replay node {node}"))?;
+        ensure!(
+            options.engine == EngineKind::Native
+                && matches!(options.device, ExecutionDevice::Cuda { .. })
+                && model.parameters.backend == "onnx",
+            "node {node}: CUDA graph replay requires native ONNX CUDA execution"
+        );
+    }
     for (node, parameters) in &options.onnx_tensorrt {
         let model = bundle
             .0
@@ -21,15 +35,10 @@ pub(crate) fn validate(bundle: &Bundle, options: &SessionOptions) -> Result<()> 
             matches!(options.device, ExecutionDevice::Cuda { .. }),
             "node {node}: TensorRT acceleration requires CUDA execution"
         );
+        if options.engine == EngineKind::Native {
+            replay_requested(parameters).with_context(|| format!("node {node}"))?;
+        }
         for (key, value) in parameters {
-            // ORT graph replay retains addresses across borrowed runs and peers.
-            ensure!(
-                options.engine != EngineKind::Native
-                    || key != "trt_cuda_graph_enable"
-                    || matches!(value.as_str(), "0" | "false"),
-                "node {node}: trt_cuda_graph_enable is unsupported by the native engine; \
-                 CUDA graph capture requires stable input and output storage"
-            );
             ensure!(
                 !key.contains('\0') && !value.contains('\0'),
                 "node {node}: TensorRT parameters must not contain NUL"
@@ -73,4 +82,15 @@ pub(crate) fn provider_options(
         );
     }
     Ok(result)
+}
+
+/// Replay is explicit; do not inherit TensorRT's CUDA graph environment setting.
+pub(crate) fn replay_requested(parameters: &HashMap<String, String>) -> Result<bool> {
+    match parameters.get("trt_cuda_graph_enable").map(String::as_str) {
+        None | Some("0" | "false") => Ok(false),
+        Some("1" | "true") => Ok(true),
+        Some(value) => {
+            anyhow::bail!("trt_cuda_graph_enable must be 0, 1, false or true; got {value}")
+        }
+    }
 }
