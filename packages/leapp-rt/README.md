@@ -183,14 +183,18 @@ supplied inputs or graph routing. A successful call publishes all next-state
 tensors together; validation and inference failures leave the session's feedback
 unchanged. `reset()` restores the values captured when the session was opened, without
 rereading files or changing retained results. It does not reset model-internal
-state.
+state. In native execution, fixed-shape feedback inputs stay bound to the same
+workspace slots across calls and reset. Each invocation refreshes those slots
+from the session's last committed values; peers have separate slots. Dynamic
+feedback retains its existing allocation behavior.
 
 `Session::open(&bundle, options)` loads models and captures initial state.
 `session.new_session()` shares the loaded engine and construction options while
 starting from captured initial state. It does not copy current feedback or reread
-files. Separate sessions may be called concurrently with independent feedback;
-the native engine gives each session private fixed workspace buffers. `run`
-borrows one session mutably. `close()` releases only that session's state and
+files. Native ONNX sessions with replay enabled reject `new_session()`; use
+`Session::open()` to create an independent session. Separate sessions may be called
+concurrently with independent feedback; the native engine gives each session
+private fixed workspace buffers. `run` borrows one session mutably. `close()` releases only that session's state and
 engine reference. Peers and retained results remain usable. The last engine
 owner releases loaded models and workspace storage. Triton additionally stops
 its server and removes the temporary repository. Model-internal state sharing
@@ -267,6 +271,8 @@ compile them.
 | TensorRT engine (Triton only) | `trt`, `tensorrt` | CUDA | TensorRT compatible with the engine and GPU |
 
 ONNX ports are matched by name, independently of bundle declaration order.
+Native ONNX nodes also support [CUDA graph replay](#onnx-cuda-graph-replay)
+through the CUDA and TensorRT providers.
 
 ### Native engine
 
@@ -323,11 +329,35 @@ Native execution forwards additional options directly to ORT. Triton forwards
 options to its unmodified ONNX Runtime backend. Each backend validates keys and
 values and rejects unsupported options. ORT-only options such as
 `trt_op_types_to_exclude` require native execution and a supporting ORT version.
-The native engine rejects CUDA graph capture (`trt_cuda_graph_enable`) because
-borrowed runs and peer sessions can use different input and output addresses.
 ONNX Runtime executes supported subgraphs with TensorRT and uses CUDA/CPU fallback
 for other operations. Compilation and cache management follow ONNX Runtime's
 behavior; dynamic shapes can trigger compilation on the first inference.
+
+### ONNX CUDA graph replay
+
+Native ONNX nodes support per-node replay with ORT's CUDA or TensorRT provider.
+Select nodes with `SessionOptions.cuda_graph_replay` (a Rust/Python set or C++
+vector); nodes selected in `onnx_tensorrt` use TensorRT.
+
+```python
+options = lrt.SessionOptions(device="cuda:0", cuda_graph_replay={"policy"})
+```
+
+Replay requires fixed, nonempty ONNX shapes and 256-byte-aligned CUDA buffers.
+Supply every public output of replay-enabled nodes through `run_into()`. Keep
+bound input/output allocations alive at unchanged addresses until close. Data
+may change in place; host-side shape/control values must stay fixed. LEAPP rejects
+address changes before execution and adds no public I/O staging copies. Feedback
+retains its existing copies.
+
+ORT captures on the first call. Run initial captures serially, without concurrent
+CUDA work on other host threads. All operations must use the selected GPU
+provider; fallback regions and control flow are unsupported. Disable replay for
+constant or input-forwarding outputs, whose destination writes ORT may skip.
+
+Replay sessions reject `new_session()`; use `Session::open()` for independent
+sessions. `reset()` retains capture and binding requirements. Reopen after a
+replay backend error. TensorRT's `trt_cuda_graph_enable=1` also remains supported.
 
 ### TensorRT engines
 

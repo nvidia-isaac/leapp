@@ -43,6 +43,8 @@ pub(super) struct Plan {
     pub calls: Vec<Call>,
     pub inputs: IndexMap<String, usize>,
     pub public_inputs: usize,
+    pub public_outputs: usize,
+    pub feedback_inputs: BTreeSet<usize>,
     pub outputs: IndexMap<String, usize>,
     pub slots: Vec<Arc<TensorSpec>>,
     pub terminal_outputs: BTreeSet<usize>,
@@ -92,6 +94,13 @@ impl Plan {
                 .map(|port| port.name())
                 .collect::<BTreeSet<_>>()
                 .len(),
+            public_outputs: bundle
+                .pipeline_outputs()
+                .iter()
+                .map(|port| port.name())
+                .collect::<BTreeSet<_>>()
+                .len(),
+            feedback_inputs: BTreeSet::new(),
             outputs: IndexMap::new(),
             slots: Vec::new(),
             terminal_outputs: BTreeSet::new(),
@@ -120,6 +129,9 @@ impl Plan {
                         id
                     }
                 };
+                if matches!(graph.sources.get(&port), Some(InputSource::Feedback(_))) {
+                    plan.feedback_inputs.insert(id);
+                }
                 inputs.push(id);
             }
 

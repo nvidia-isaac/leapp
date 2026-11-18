@@ -73,6 +73,7 @@ fn sessions_preserve_peer_and_retained_outputs() {
                 engine: crate::EngineKind::Triton,
                 cuda_streams: Default::default(),
                 onnx_tensorrt: Default::default(),
+                cuda_graph_replay: Default::default(),
                 device,
                 output_placement: OutputPlacement {
                     default_location: match device {

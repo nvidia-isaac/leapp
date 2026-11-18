@@ -10,7 +10,7 @@ use std::sync::{
 
 // A minimal dynamic-only backend: the defaults provide guarded execution and
 // unsupported prepared calls. No SDK is needed to exercise trait dispatch.
-struct CopyPlugin(Arc<usize>);
+struct CopyPlugin(Arc<AtomicUsize>);
 
 impl BackendPlugin for CopyPlugin {
     fn new_session(&self) -> anyhow::Result<Box<dyn BackendPlugin>> {
@@ -23,8 +23,11 @@ impl BackendPlugin for CopyPlugin {
         outputs: &[(usize, DLTensor)],
         transfers: &mut Transfers,
     ) -> anyhow::Result<Vec<Option<SharedTensor>>> {
-        // The backend must receive the original input allocation.
-        assert_eq!(inputs[0].descriptor().data as usize, *self.0);
+        // The backend must receive the allocation selected by input routing.
+        assert_eq!(
+            inputs[0].descriptor().data as usize,
+            self.0.load(Ordering::SeqCst)
+        );
         if let Some(output) = outputs.first() {
             let input = inputs[0].as_cpu_slice::<f32>().unwrap();
             unsafe {
@@ -62,6 +65,8 @@ fn plan(nodes: usize) -> Arc<Plan> {
             .collect(),
         inputs: IndexMap::from([("input".into(), 0)]),
         public_inputs: 1,
+        public_outputs: 1,
+        feedback_inputs: Default::default(),
         outputs: IndexMap::from([("output".into(), nodes)]),
         slots: (0..=nodes).map(|_| Arc::new(spec())).collect(),
         terminal_outputs: [nodes].into_iter().collect(),
@@ -71,7 +76,7 @@ fn plan(nodes: usize) -> Arc<Plan> {
 #[test]
 fn dynamic_only_trait_defaults_and_peers_preserve_output_ownership() {
     let mut values = [2f32];
-    let address = Arc::new(values.as_ptr() as usize);
+    let address = Arc::new(AtomicUsize::new(values.as_ptr() as usize));
     let mut model: Box<dyn BackendPlugin> = Box::new(CopyPlugin(address));
     assert!(model.needs_guard());
     assert!(!model.can_prepare());
@@ -220,10 +225,11 @@ impl BackendPlugin for PreparedProbe {
 
 #[test]
 fn prepared_execution_uses_one_entry_point_and_never_retries_errors() {
-    for (alignment, outcome) in [
-        (1, Ok(())),
-        (0, Ok(())),
-        (1, Err("injected execution failure")),
+    for (alignment, outcome, replay) in [
+        (1, Ok(()), false),
+        (0, Ok(()), false),
+        (1, Err("injected execution failure"), false),
+        (1, Err("injected execution failure"), true),
     ] {
         let runs = Arc::new(AtomicUsize::new(0));
         let model = PreparedProbe {
@@ -237,13 +243,29 @@ fn prepared_execution_uses_one_entry_point_and_never_retries_errors() {
             plan(1),
             vec![Box::new(model)],
             None,
-            &SessionOptions::default(),
+            &SessionOptions {
+                onnx_tensorrt: if replay {
+                    HashMap::from([(
+                        "node0".into(),
+                        HashMap::from([("trt_cuda_graph_enable".into(), "1".into())]),
+                    )])
+                } else {
+                    HashMap::new()
+                },
+                ..Default::default()
+            },
         )
         .unwrap();
+        let mut destination = [0_f32];
+        let mut buffers = if replay {
+            HashMap::from([("output", OutputBuffer::cpu(&mut destination, &[1]).unwrap())])
+        } else {
+            HashMap::new()
+        };
         let result = engine.run(
             &[("input", BorrowedTensor::cpu(&[7f32], &[1]).unwrap())],
             &OutputPlacement::default(),
-            &mut HashMap::new(),
+            &mut buffers,
         );
         if outcome.is_err() {
             assert!(result
@@ -254,8 +276,61 @@ fn prepared_execution_uses_one_entry_point_and_never_retries_errors() {
         } else {
             assert_eq!(result.unwrap()["output"].to_cpu_vec::<f32>().unwrap(), [7.]);
         }
+        if replay {
+            assert!(engine
+                .run(
+                    &[("input", BorrowedTensor::cpu(&[7_f32], &[1]).unwrap())],
+                    &OutputPlacement::default(),
+                    &mut buffers,
+                )
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("replay backend failed"));
+        }
         assert_eq!(runs.load(Ordering::SeqCst), 1);
     }
+}
+
+#[test]
+fn feedback_reuses_existing_slot_for_dynamic_backends() {
+    let mut plan = plan(1);
+    let specification = Arc::get_mut(&mut plan).unwrap();
+    specification.public_inputs = 0;
+    specification.feedback_inputs.insert(0);
+    let address = Arc::new(AtomicUsize::new(0));
+    let engine = NativeEngine::with_models(
+        plan,
+        vec![Box::new(CopyPlugin(address.clone()))],
+        None,
+        &SessionOptions::default(),
+    )
+    .unwrap();
+    let workspace = engine.workspace.lock().unwrap();
+    address.store(
+        workspace.slots[0].view().unwrap().descriptor().data as usize,
+        Ordering::SeqCst,
+    );
+    drop(workspace);
+    // CopyPlugin checks that each changed value arrives at the same address.
+    for value in [[2_f32], [7.], [0.]] {
+        let result = engine
+            .run(
+                &[("input", BorrowedTensor::cpu(&value, &[1]).unwrap())],
+                &OutputPlacement::default(),
+                &mut HashMap::new(),
+            )
+            .unwrap();
+        assert_eq!(result["output"].to_cpu_vec::<f32>().unwrap(), value);
+    }
+    let invalid = BorrowedTensor::cpu(&[1_f32, 2.], &[2]).unwrap();
+    assert!(engine
+        .run(
+            &[("input", invalid)],
+            &OutputPlacement::default(),
+            &mut HashMap::new()
+        )
+        .is_err());
 }
 
 // Simulate an SDK retaining partial binding resources before prepare fails.
@@ -350,4 +425,68 @@ fn failed_preparation_drops_all_trait_objects_before_workspace_slots() {
     assert_eq!(dropped, ["drop0", "drop1"]);
     assert_eq!(Arc::strong_count(&plan.slots[1]), 1);
     assert_eq!(Arc::strong_count(&plan.slots[2]), 1);
+}
+
+#[test]
+fn replay_checks_all_bindings_before_any_backend_runs() {
+    for (replay, tensorrt) in [(false, false), (true, false), (true, true)] {
+        let runs = Arc::new(AtomicUsize::new(0));
+        let models = (0..2)
+            .map(|_| {
+                Box::new(PreparedProbe {
+                    alignment: 1,
+                    outcome: Ok(()),
+                    input: 0,
+                    outputs: Vec::new(),
+                    runs: runs.clone(),
+                }) as Box<dyn BackendPlugin>
+            })
+            .collect();
+        let engine = NativeEngine::with_models(
+            plan(2),
+            models,
+            None,
+            &SessionOptions {
+                cuda_graph_replay: (0..2)
+                    .filter(|_| replay && !tensorrt)
+                    .map(|i| format!("node{i}"))
+                    .collect(),
+                onnx_tensorrt: (0..2)
+                    .filter(|_| tensorrt)
+                    .map(|i| {
+                        (
+                            format!("node{i}"),
+                            HashMap::from([(
+                                "trt_cuda_graph_enable".into(),
+                                if replay { "1" } else { "0" }.into(),
+                            )]),
+                        )
+                    })
+                    .collect(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let run = |input: &[f32], output: &mut [f32]| {
+            engine.run(
+                &[("input", BorrowedTensor::cpu(input, &[1]).unwrap())],
+                &OutputPlacement::default(),
+                &mut HashMap::from([("output", OutputBuffer::cpu(output, &[1]).unwrap())]),
+            )
+        };
+        let input = [2_f32];
+        let changed = [7_f32];
+        let mut output = [0_f32];
+        let mut other = [0_f32];
+        run(&input, &mut output).unwrap();
+        assert_eq!(output, input);
+        for result in [run(&changed, &mut output), run(&input, &mut other)] {
+            assert_eq!(result.is_err(), replay);
+        }
+        // A changed output belongs to the second node: preflight must still
+        // reject it before the first node executes. Ordinary runs accept both.
+        assert_eq!(runs.load(Ordering::SeqCst), if replay { 2 } else { 6 });
+        run(&input, &mut output).unwrap();
+        assert_eq!(output, input);
+    }
 }

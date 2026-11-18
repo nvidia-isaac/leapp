@@ -83,6 +83,7 @@ struct Loaded {
     output_names: Vec<String>,
     output_shapes: Vec<Vec<i64>>,
     location: MemoryLocation,
+    replay: bool,
 }
 
 impl Model {
@@ -91,7 +92,27 @@ impl Model {
         location: MemoryLocation,
         stream: Option<crate::CudaStream>,
         tensorrt: Option<&HashMap<String, String>>,
+        replay: bool,
     ) -> Result<Self> {
+        let replay = replay
+            || tensorrt
+                .map(crate::session::onnx_tensorrt::replay_requested)
+                .transpose()?
+                .unwrap_or(false);
+        if replay {
+            ensure!(
+                matches!(location, MemoryLocation::Cuda { .. }),
+                "ONNX replay requires CUDA"
+            );
+            ensure!(
+                model
+                    .inputs
+                    .iter()
+                    .chain(&model.outputs)
+                    .all(|port| port.shape.iter().all(|&d| d > 0)),
+                "ONNX replay requires fixed, nonempty input and output shapes"
+            );
+        }
         let directory = std::env::var_os("LEAPP_NATIVE_BACKENDS")
             .map(PathBuf::from)
             .unwrap_or_else(|| "/opt/leapp-rt/backends".into());
@@ -112,8 +133,12 @@ impl Model {
             if let Some(parameters) = tensorrt {
                 let mut provider =
                     ort::ep::TensorRT::default().with_device_id(i32::try_from(device_id)?);
+                provider = provider
+                    .with_arbitrary_config("trt_cuda_graph_enable", if replay { "1" } else { "0" });
                 for (key, value) in crate::session::onnx_tensorrt::provider_options(parameters)? {
-                    provider = provider.with_arbitrary_config(key, value);
+                    if key != "trt_cuda_graph_enable" {
+                        provider = provider.with_arbitrary_config(key, value);
+                    }
                 }
                 if let Some(stream) = stream {
                     // SAFETY: the caller retains the validated stream through every peer.
@@ -123,7 +148,8 @@ impl Model {
             }
             let mut provider = ort::ep::CUDA::default()
                 .with_device_id(i32::try_from(device_id)?)
-                .with_tf32(false);
+                .with_tf32(false)
+                .with_cuda_graph(replay && tensorrt.is_none());
             if let Some(stream) = stream {
                 // SAFETY: initialization validated this stream. CudaStream's
                 // caller retains it through every peer sharing the ORT session.
@@ -156,6 +182,18 @@ impl Model {
             .with_context(|| {
                 format!("load ONNX model {}", model.parameters.model_path.display())
             })?;
+        if replay {
+            for port in session.inputs().iter().chain(session.outputs()) {
+                let ValueType::Tensor { shape, .. } = port.dtype() else {
+                    anyhow::bail!("ONNX replay supports only tensor ports");
+                };
+                ensure!(
+                    shape.iter().all(|&d| d > 0),
+                    "ONNX replay requires fixed ONNX dimensions for {}",
+                    port.name()
+                );
+            }
+        }
         let input_names = check_ports(&model.inputs, session.inputs()).context("ONNX inputs")?;
         let output_names =
             check_ports(&model.outputs, session.outputs()).context("ONNX outputs")?;
@@ -172,6 +210,7 @@ impl Model {
                     .map(|port| port.shape.clone())
                     .collect(),
                 location,
+                replay,
             }),
         })
     }
@@ -183,6 +222,10 @@ impl BackendPlugin for Model {
     }
 
     fn new_session(&self) -> Result<Box<dyn BackendPlugin>> {
+        ensure!(
+            !self.loaded.replay,
+            "new_session() is unavailable when ONNX CUDA replay is enabled; use Session::open()"
+        );
         Ok(Box::new(Self {
             prepared: None,
             loaded: self.loaded.clone(),
@@ -198,7 +241,19 @@ impl BackendPlugin for Model {
     }
 
     fn input_alignment(&self) -> usize {
-        usize::from(!self.loaded.custom_ops)
+        if self.loaded.replay {
+            256
+        } else {
+            usize::from(!self.loaded.custom_ops)
+        }
+    }
+
+    fn output_alignment(&self) -> usize {
+        if self.loaded.replay {
+            256
+        } else {
+            1
+        }
     }
 
     #[cfg(test)]

@@ -31,6 +31,7 @@ pub fn session_open(
     output_location: ffi::Location,
     overrides: &[ffi::Placement],
     onnx_tensorrt: &[ffi::OnnxTensorRT],
+    cuda_graph_replay: &[ffi::ReplayNode],
     output: &mut SessionHandle,
 ) -> ffi::StatusData {
     if output.0.is_some() {
@@ -72,6 +73,13 @@ pub fn session_open(
         options.output_placement.overrides.insert(name, location);
     }
     options.device = device;
+    for entry in cuda_graph_replay {
+        let node = match std::str::from_utf8(&entry.name) {
+            Ok(node) => node.to_owned(),
+            Err(_) => return crate::invalid("CUDA replay node name is not UTF-8"),
+        };
+        options.cuda_graph_replay.insert(node);
+    }
     for entry in onnx_tensorrt {
         let node = match std::str::from_utf8(&entry.node) {
             Ok(v) => v.to_owned(),
