@@ -11,7 +11,7 @@ from leapp.backends.export_backend import (
     SimplifiedONNXProgram,
 )
 from leapp.utils.logging import _get_logger
-from leapp.utils.shape_contracts import build_onnx_dynamic_axes
+from leapp.utils.shape_contracts import build_onnx_dynamic_axes, get_shape_contract
 from leapp.backends._onnxscript_compat import patch_onnxscript_matcher
 import os
 import onnx
@@ -261,6 +261,49 @@ class ONNXExportBackend(ExportBackend):
 
         return embedded
 
+    def _validate_shape_contracts(self, model):
+        initializers = {value.name for value in model.graph.initializer}
+        inputs = [
+            value for value in model.graph.input if value.name not in initializers
+        ]
+        for descriptions, values in (
+            (self.node_context.inputs, inputs),
+            (self.node_context.outputs, model.graph.output),
+        ):
+            expected_names = [desc.name for desc in descriptions]
+            if [value.name for value in values] != expected_names:
+                raise ValueError(
+                    f"{self.node_context.name}: ONNX artifact ports do not match {expected_names}"
+                )
+            for desc, value in zip(descriptions, values):
+                tensor_type = value.type.tensor_type
+                if not tensor_type.HasField("shape"):
+                    continue
+                contract = get_shape_contract(desc)
+                dimensions = tensor_type.shape.dim
+                name = f"{self.node_context.name}/{desc.name}"
+                if len(dimensions) != len(contract["shape"]):
+                    raise ValueError(
+                        f"{name}: ONNX artifact rank contradicts shape contract"
+                    )
+                for axis, (expected, actual) in enumerate(
+                    zip(contract["shape"], dimensions)
+                ):
+                    # ONNX symbols are opaque names, not executable shape expressions.
+                    if expected is None or not actual.HasField("dim_value"):
+                        continue
+                    size = actual.dim_value
+                    if isinstance(expected, str):
+                        bounds = contract["dimension_ranges"][expected]
+                        compatible = bounds["min"] == bounds["max"] == size
+                    else:
+                        compatible = expected == size
+                    if not compatible:
+                        raise ValueError(
+                            f"{name}: ONNX artifact dimension {axis} is fixed at {size}, "
+                            f"contradicting shape contract {expected}"
+                        )
+
     def save(self, save_path: str) -> Tuple[str, str, str]:
         onnx_path = os.path.join(save_path, f"{self.node_context.name}.onnx")
 
@@ -270,6 +313,11 @@ class ONNXExportBackend(ExportBackend):
             include_initializers=True,
             keep_initializers_as_inputs=False,
         )
+
+        if hasattr(self.node_context, "shape_program"):
+            self._validate_shape_contracts(
+                onnx.load(onnx_path, load_external_data=False)
+            )
 
         # Validate model (skip for large models as it can fail with protobuf limits)
         skip_validation = self.backend_params.get("skip_validation", False)

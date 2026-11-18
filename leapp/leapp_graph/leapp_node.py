@@ -105,6 +105,7 @@ class LeappNode:
 
         # storage for the fx graph or compiled module
         self.m = None
+        self.method_validation = None
 
     @property
     def node_index(self):
@@ -532,6 +533,14 @@ class LeappNode:
                 )
                 continue
 
+            if exported.dtype != source.dtype:
+                mismatches.add("dtype")
+                _get_logger().error(
+                    f"{self.name}/{output_name} {label}: Dtype mismatch - "
+                    f"got {exported.dtype}, expected {source.dtype}"
+                )
+                continue
+
             if exported.device != source.device:
                 exported = exported.to(source.device)
 
@@ -638,7 +647,7 @@ class LeappNode:
         # Replay the first sample with declared buffers restored. A different
         # result usually means the export kept undeclared state from the earlier calls.
         if sample_passed[0]:
-            with torch.no_grad():
+            with torch.inference_mode():
                 for name, buffer in buffers.items():
                     buffer.copy_(initial_buffers[name])
             # An ExecuTorch program keeps its buffers inside, so it starts over by
@@ -658,6 +667,9 @@ class LeappNode:
             mismatches=set().union(*sample_mismatches.values()),
             backend=self.backend,
         )
+        if self.method_validation is not None:
+            all_match = self.method_validation.validate(self, rtol, atol) and all_match
+
         if error_hint is not None:
             _get_logger().info(f"  {self.name}: {error_hint}")
 

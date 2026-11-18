@@ -36,6 +36,8 @@ from leapp.leapp_graph.datatypes.patching import (
     warn_if_script_functions_in_scope,
 )
 from leapp.utils.semantics import TensorSemantics
+from leapp.utils.shape_contracts import has_variable_inputs
+from leapp.utils.validation_inputs import MethodValidation
 from leapp.utils.tensor_description import (
     verify_data_exact_match,
     flatten_io_structure,
@@ -730,6 +732,10 @@ class ExportManager:
         self.nodes[node_name]._buffer_tracker = tracker
 
     def method(self, **params):
+        validation_inputs = params.get("validation_inputs")
+        if validation_inputs is not None and not callable(validation_inputs):
+            raise TypeError("validation_inputs must be callable")
+
         def decorator(func):
 
             name = params.get("node_name", func.__name__)
@@ -751,7 +757,12 @@ class ExportManager:
                 bound_args = sig.bind(*args, **kwargs)
                 bound_args.apply_defaults()
 
+                argument_ports = {}
+
                 def annotate_argument(key, value):
+                    argument_ports[key] = (
+                        value.name if isinstance(value, TensorSemantics) else key
+                    )
                     return self.input_tensors(
                         name,
                         value if isinstance(value, TensorSemantics) else {key: value},
@@ -788,6 +799,21 @@ class ExportManager:
                         new_kwargs[param_name] = traced
 
                 # ~~~~~~~~~~~~~~~~~~~ run the function ~~~~~~~~~~~~~~~~~~~~~~~~~ #
+                node = self.nodes[name]
+                if not node.captured and (
+                    validation_inputs is not None or has_variable_inputs(node)
+                ):
+                    ports = {
+                        alias: desc for desc in node.inputs for alias in desc.aliases
+                    }
+                    descriptions = {
+                        key: ports[port]
+                        for key, port in argument_ports.items()
+                        if port in ports
+                    }
+                    node.method_validation = MethodValidation(
+                        func, bound_args, validation_inputs, descriptions
+                    )
                 result = func(*new_args, **new_kwargs)
                 # ~~~~~~~~~~~~~~~~~~~ set up outputs ~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
                 return_names = extract_return_names(func)
@@ -1049,7 +1075,10 @@ class ExportManager:
         for node_name, node in self.nodes.items():
             _get_logger().info(f"Validating {node_name}...")
 
+            interpreting = ExportManager._interpret_graph
             try:
+                if node.method_validation is not None:
+                    ExportManager.set_interpret_graph(False)
                 passed, error_hint = node.validate_compiled_model(rtol=rtol, atol=atol)
                 results[node_name] = passed
                 if error_hint is not None:
@@ -1060,11 +1089,15 @@ class ExportManager:
                     f"{node_name}: Validation failed with exception: {e}"
                 )
                 results[node_name] = e
+                if node.method_validation is not None:
+                    error_hints.append(f"{node_name}: {e}")
 
             finally:
+                ExportManager.set_interpret_graph(interpreting)
                 # Free GPU memory after validating each model
                 # Delete the compiled model (validation is the last step)
                 node.delete_compiled_model()
+                node.method_validation = None
                 # Clear CUDA cache to ensure GPU memory is released
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
