@@ -36,9 +36,10 @@ class ExecuTorchProgram:
 
     Each input is moved to the device the program reads it from. Outputs come
     back on the device of the inputs, like :class:`SimplifiedONNXProgram`, so
-    nodes on different devices can feed each other. A ``cuda`` program is built
-    for GPU 0 of the visible GPUs and is loaded and run there. Owns ``temp_dir``
-    when given and removes it on delete.
+    nodes on different devices can feed each other. A program with no inputs
+    returns its outputs on the GPU when there is one. A ``cuda`` program is
+    built for GPU 0 of the visible GPUs and is loaded and run there. Owns
+    ``temp_dir`` when given and removes it on delete.
     """
 
     def __init__(self, program_path, data_path=None, cuda=False, temp_dir=None):
@@ -56,7 +57,7 @@ class ExecuTorchProgram:
             program_path, data_path=data_path, backend_options=backend_options
         )
         meta = program.metadata("forward")
-        self.input_devices = [
+        self._input_devices = [
             meta.input_tensor_meta(i).device() for i in range(meta.num_inputs())
         ]
         with self._gpu_context():
@@ -70,17 +71,20 @@ class ExecuTorchProgram:
         return torch.cuda.device(0)
 
     def __call__(self, *args):
-        if len(args) != len(self.input_devices):
+        if len(args) != len(self._input_devices):
             _get_logger().fatal(
-                f"Expected {len(self.input_devices)} inputs, got {len(args)}",
+                f"Expected {len(self._input_devices)} inputs, got {len(args)}",
                 error_type=ValueError,
             )
+        # With no inputs to follow, such as a node whose inputs were all pruned,
+        # use the GPU when there is one, as TorchScript and torch.export nodes do.
+        fallback = "cuda" if not args and torch.cuda.is_available() else "cpu"
         output_device = next(
-            (arg.device for arg in args if arg.is_cuda), torch.device("cpu")
+            (arg.device for arg in args if arg.is_cuda), torch.device(fallback)
         )
         inputs = [
             arg.detach().to(device).contiguous()
-            for arg, device in zip(args, self.input_devices)
+            for arg, device in zip(args, self._input_devices)
         ]
         with self._gpu_context():
             outputs = self._method.execute(inputs)
@@ -162,6 +166,9 @@ class ExecuTorchExportBackend(ExportBackend):
     def _lower(self, exported_program, program_path):
         from executorch.exir import EdgeCompileConfig, to_edge_transform_and_lower
         from executorch.exir.passes.constant_prop_pass import constant_prop_pass
+        from executorch.exir.passes.init_mutable_pass import (
+            InitializedMutableBufferPass,
+        )
 
         if self.delegate == "xnnpack":
             from executorch.backends.xnnpack.partition.xnnpack_partitioner import (
@@ -186,14 +193,36 @@ class ExecuTorchExportBackend(ExportBackend):
             # edge dialect check refuses.
             compile_config = EdgeCompileConfig(_check_ir_validity=False)
 
+        exported_program = exported_program.run_decompositions({})
+        config = self._backend_config()
         # Fold values computed from constants alone first: an op that only builds
         # a constant may be one the delegate lacks, and left in the graph it
         # would split the program and send work back to the CPU.
-        program = to_edge_transform_and_lower(
-            constant_prop_pass(exported_program.run_decompositions({})),
+        edge = to_edge_transform_and_lower(
+            constant_prop_pass(exported_program),
             partitioner=[partitioner],
             compile_config=compile_config,
-        ).to_executorch(self._backend_config())
+        )
+        # ExecuTorch leaves a buffer the program still writes after lowering
+        # uninitialized unless told to start it from its initial value, which
+        # it reads as host memory. The pass matches placeholder names, not buffer names.
+        lowered = edge.exported_program()
+        signature = lowered.graph_signature
+        written = set(signature.buffers_to_mutate.values())
+        names = []
+        for name, buffer in signature.inputs_to_buffers.items():
+            if buffer in written:
+                names.append(name)
+                # torch.export keeps a persistent=False buffer's value in constants.
+                values = (
+                    lowered.state_dict
+                    if buffer in lowered.state_dict
+                    else lowered.constants
+                )
+                values[buffer] = values[buffer].cpu()
+        if names:
+            config.passes.append(InitializedMutableBufferPass(names))
+        program = edge.to_executorch(config)
         with open(program_path, "wb") as f:
             program.write_to_file(f)
         program.write_tensor_data_to_file(os.path.dirname(program_path))
@@ -289,10 +318,22 @@ class ExecuTorchExportBackend(ExportBackend):
         # Copy every file the program was written as, such as the CUDA
         # backend's weights file beside the .pte. Each is renamed into place,
         # since a program still loaded from save_path keeps reading its file.
-        for filename in os.listdir(self._program_dir):
-            staged = os.path.join(save_path, f".{filename}.tmp")
-            shutil.copy2(os.path.join(self._program_dir, filename), staged)
-            os.replace(staged, os.path.join(save_path, filename))
+        # Renaming starts only once all are copied, so a failed copy leaves this
+        # node's previous files whole.
+        staged = {
+            filename: os.path.join(save_path, f".{filename}.tmp")
+            for filename in os.listdir(self._program_dir)
+        }
+        try:
+            for filename, path in staged.items():
+                shutil.copy2(os.path.join(self._program_dir, filename), path)
+        except BaseException:
+            for path in staged.values():
+                if os.path.exists(path):
+                    os.remove(path)
+            raise
+        for filename, path in staged.items():
+            os.replace(path, os.path.join(save_path, filename))
         path = os.path.join(save_path, f"{self.node_context.name}.pte")
         self.data_path = (
             os.path.join(save_path, os.path.basename(self._program_data))
