@@ -267,7 +267,8 @@ Generated artifacts
 ~~~~~~~~~~~~~~~~~~~
 
 * Compiled models --- one file per node (``.pt``, ``.pt2``, ``.onnx``,
-  ``.pte``), plus a ``.ptd`` weights file for an ExecuTorch CUDA node.
+  ``.pte``), plus a ``.ptd`` weights file for an ExecuTorch node that uses
+  the CUDA backend.
 * ``{name}.yaml`` --- model descriptions, pipeline connections
   (``data_flow`` and ``feedback_flow``), and system information.
 * ``{name}.png`` --- graph visualization (when ``visualize=True`` on
