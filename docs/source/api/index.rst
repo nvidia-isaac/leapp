@@ -139,8 +139,7 @@ Behavior
   written to ``{save_path}/{name}/log*``.
 * Enables graph interpretation mode for tracing.
 * If called while interpretation is already active, the graph resets
-  (this is discouraged), and the buffers that ``annotate.module()`` tracked
-  are made plain where they can be; see :ref:`buffer-tracking-details`.
+  (this is discouraged).
 
 Notes
 ~~~~~
@@ -166,8 +165,6 @@ Behavior
 ~~~~~~~~
 
 * Disables graph interpretation mode that was enabled by ``start()``.
-* Makes the buffers that ``annotate.module()`` tracked plain tensors again,
-  with some exceptions; see :ref:`buffer-tracking-details`.
 * Performs safety checks to ensure no active tracing is in progress.
 * Must be called after all tracing operations are complete and before
   ``compile_graph()``.

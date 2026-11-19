@@ -36,9 +36,9 @@ class LEAPPFunctionalTestBase(unittest.TestCase):
         if ExportManager.is_interpret_graph_enabled():
             ExportManager.set_interpret_graph(False)
         annotate.reset_nodes()
+        annotate.set_dry_run_and_non_traced(False, [])
         # Lasts for the process otherwise; each test stands for a new one.
         annotate.keep_buffers_tied = False
-        annotate.set_dry_run_and_non_traced(False, [])
 
     def verify_all_models_exist(self, *model_names):
         for model_name in model_names:

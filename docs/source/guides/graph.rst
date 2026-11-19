@@ -127,8 +127,6 @@ emits the updated hidden state as feedback output.
    For recurrent models such as ``nn.GRU`` or ``nn.LSTM``, prefer
    ``export_with="onnx-torchscript"`` when exporting to ONNX.
 
-.. _buffer-tracking-details:
-
 Buffer tracking details
 -----------------------
 
@@ -146,45 +144,14 @@ compiles the node, LEAPP determines which registered buffers changed.
   capture it.
 * When the session ends (``leapp.stop()``, or ``leapp.start()`` resetting a
   session that was not stopped), tracked buffers become plain tensors again,
-  so the model can be used and exported on its own. A buffer that the export
-  bakes in as a constant still shares memory with the capture, so an in-place
-  change to it before ``leapp.compile_graph()`` also changes what LEAPP
-  exports. Some buffers stay tied to the capture, so exporting the model with
-  ``torch.export`` can still fail:
-
-  * a buffer that requires grad;
-  * the second name of a tensor registered under two names of one model;
-  * another reference to a tracked buffer's tensor, also a buffer of a model
-    that ``annotate.module()`` did not track. After the session it is no
-    longer the same object as the model's buffer;
-  * a buffer left out by ``buffer_names`` that a forward reassigns;
-  * a buffer that is ``None`` or missing when ``annotate.module()`` runs;
-  * a buffer that only a failed ``annotate.module()`` call tracked;
-  * every buffer, in that session and in every later session of the Python
-    process (a new process starts over), once a buffer may hold another
-    tensor's values or a change that LEAPP does not see:
-
-    * a node gets one state name for two different values: the same buffer
-      name in two models, a model passed to ``annotate.module()`` again
-      after a forward reassigned its state, another tensor passed to
-      ``annotate.state_tensors()`` under a buffer's name, or two buffers of
-      one model whose names differ only by ``.`` and ``_``. Passing the same
-      ``torch.Tensor`` again is fine; any other value passed twice counts as
-      different;
-    * a buffer belongs, by its ``named_buffers()`` name, to an object that
-      is not an ``nn.Module``, or to a model whose ``register_buffer()``,
-      buffer containers or parameter dict are not torch's own, also when
-      they are replaced before or after ``annotate.module()``;
-    * a model's ``named_buffers()`` lists another tensor under the name of
-      one of its buffers or attributes, or of a buffer registered as
-      ``None``;
-    * a model's class has a ``__setattr__`` other than ``nn.Module``'s, an
-      RNN module's or a scripted module's, or a ``__getattr__`` or
-      ``__getattribute__`` that is not torch's own;
-    * reading a buffer back gives another tensor, for example through a
-      property;
-    * a buffer registration hook that is not torch's own is installed while
-      LEAPP assigns a buffer or puts one back.
+  so the model can be exported on its own. A buffer that requires grad stays
+  tied to the capture. If a node uses one state name for two different
+  tensors, for example two models with the same buffer name, every buffer
+  stays tied for the rest of the Python process and a warning says so.
+* LEAPP does not check model code that runs when a buffer is assigned, such
+  as a custom ``__setattr__`` or ``register_buffer()``, a property named like
+  a buffer, or a buffer registration hook. If such code writes another
+  model's buffer, the buffers made plain can hold values LEAPP did not see.
 
 .. warning::
 

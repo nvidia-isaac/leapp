@@ -87,13 +87,11 @@ class ExportManager:
             # tracetime variables
             self.nodes = {}
             self.buffer_trackers = []
-            # Set when a buffer may hold another tensor's state, for example
-            # when a node hands out one state name for two tensors. Never
+            # Set when a node hands out one state name for two different
+            # tensors, so a buffer may hold another tensor's values. Never
             # cleared: state computed later from such a buffer can reach any
-            # model, so no later session of the process makes buffers plain.
+            # model.
             self.keep_buffers_tied = False
-            # The TracedTensor module() put into each buffer that required grad.
-            self.grad_buffers = []
             self._next_completed_node_index = 0
 
             ExportManager._initialized = True
@@ -137,7 +135,7 @@ class ExportManager:
 
     def reset_nodes(self):
         self.nodes = {}
-        self.restore_pending_buffer_trackers()
+        self.release_buffer_trackers()
         self._next_completed_node_index = 0
 
     def get_nodes(self):
@@ -154,56 +152,19 @@ class ExportManager:
     def reset_tracing_lock(self):
         TracingLock().reset()
 
-    def restore_pending_buffer_trackers(self):
-        # Holds a tracker for every module() call that succeeded while its
-        # node was tracing, even if a later call in the same node replaced
-        # it. A tracker that fails is logged, so stop() still removes LEAPP's
-        # patches and start() still starts; its buffers can stay tied.
-        trackers, self.buffer_trackers = self.buffer_trackers, []
-        # start() empties the nodes first, so it has no latest trackers.
-        latest = [
-            getattr(node, "_buffer_tracker", None) for node in self.nodes.values()
-        ]
-        # Putting buffers back runs the owner's register_buffer() and buffer
-        # registration hooks, which may have changed since module().
-        try:
-            only_torch = all(tracker.only_torch_code_runs() for tracker in trackers)
-        except Exception as e:
-            _get_logger().error(f"BufferTracker: could not check the models: {e}")
-            only_torch = False
-        if not only_torch:
-            self.keep_buffers_tied = True
-        # If buffers must stay tied, only each node's latest tracker puts
-        # buffers back at stop(), none does at start(), and none is made plain.
-        tied = self.keep_buffers_tied
-        restored = []
-        for tracker in trackers:
-            is_latest = any(tracker is t for t in latest)
-            if tied and not is_latest:
-                continue
-            try:
-                tracker.restore(at_session_end=True, latest=is_latest)
-                restored.append(tracker)
-            except Exception as e:
-                _get_logger().error(f"BufferTracker: could not put buffers back: {e}")
-        # restore() can find a buffer that must stay tied, so no buffer is made
-        # plain until every tracker has put its buffers back.
-        if trackers and self.keep_buffers_tied:
+    def release_buffer_trackers(self):
+        # Every tracker of the session, also one a later module() call replaced.
+        for tracker in self.buffer_trackers:
+            tracker.restore()
+            if not self.keep_buffers_tied:
+                tracker.release()
+        if self.buffer_trackers and self.keep_buffers_tied:
             _get_logger().warning(
                 "BufferTracker: buffers stay tied to the capture for the rest of "
-                "this process, because a buffer may hold another tensor's values "
-                "or a change LEAPP does not see (see Buffer tracking details in "
-                "State capture and feedback)"
+                "this process, because a node used one state name for two "
+                "different tensors"
             )
-        else:
-            for tracker in restored:
-                try:
-                    tracker.release()
-                except Exception as e:
-                    _get_logger().error(
-                        f"BufferTracker: could not make buffers plain: {e}"
-                    )
-        self.grad_buffers = []
+        self.buffer_trackers = []
 
     def set_detected_graph(self, models: dict, pipeline: dict):
         self.detected_nodes = models["models"]
@@ -752,10 +713,10 @@ class ExportManager:
         from leapp.buffer_tracker import BufferTracker
 
         tracker = BufferTracker(model, node_name, self, buffer_names=buffer_names)
-        tracker.inject()
-        # A node that is no longer tracing gets nothing injected.
-        if self.nodes[node_name].is_tracing:
+        # Listed before inject(), which can fail after it changed some buffers.
+        if all(listed._model is not model for listed in self.buffer_trackers):
             self.buffer_trackers.append(tracker)
+        tracker.inject()
 
         self.nodes[node_name]._buffer_tracker = tracker
 
