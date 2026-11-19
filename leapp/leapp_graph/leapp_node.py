@@ -617,6 +617,10 @@ class LeappNode:
             with torch.no_grad():
                 for name, buffer in buffers.items():
                     buffer.copy_(initial_buffers[name])
+            # An ExecuTorch program keeps its buffers inside, so it starts over by
+            # loading again.
+            if self.backend == "executorch":
+                self.compiled_model.reload()
             _, input_values, source_outputs = examples[0]
             replay_mismatches = self._sample_mismatches(
                 "sample 0 (replayed)", input_values, source_outputs, rtol, atol
