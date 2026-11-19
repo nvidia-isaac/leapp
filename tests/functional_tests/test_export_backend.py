@@ -1642,13 +1642,12 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         cases = []
         if torch.cuda.is_available():
             cases += [("cuda", True), ("cuda", False)]
-            cases += [("tensorrt", True), ("tensorrt", False)]
+            if _has_tensorrt():
+                cases += [("tensorrt", True), ("tensorrt", False)]
         # Last, so the folder still holds the .ptd a CUDA case wrote.
         cases.append(("xnnpack", True))
         for delegate, device_io in cases:
             with self.subTest(delegate=delegate, device_io=device_io):
-                if delegate == "tensorrt" and not _has_tensorrt():
-                    self.skipTest(NO_TENSORRT)
                 backend_params = {"delegate": delegate}
                 if not device_io:
                     backend_params["device_io"] = False
@@ -1762,7 +1761,7 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         20 and 30. One declares its buffer, and another's module owns two. On a GPU
         machine, CPU inputs still give CPU outputs. A declared counter carries its
         value between calls, so validation replays sample 0 only after loading the
-        program again."""
+        program again. That node uses the short name "pte"."""
 
         class Counter(torch.nn.Module):
             def __init__(self):
@@ -1791,7 +1790,7 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
                 self.counter.total[0] = inputM[0]
                 return (self.counter.count + self.counter.total) / 2
 
-            @annotate._method(export_with="executorch", register_buffers=["self.steps"])
+            @annotate._method(export_with="pte", register_buffers=["self.steps"])
             def legacy_counter(self, inputK):
                 self.steps += 1
                 return inputK + self.steps
@@ -1884,12 +1883,14 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
     def test_executorch_backend_no_inputs(self):
         """A node whose output reads only a buffer loses its input when the graph
         is pruned. Its output must still reach a TorchScript node on the node's
-        device: the GPU when there is one, else the CPU. The CUDA case also shows
-        that a CUDA program with no inputs runs."""
+        device: the GPU when there is one, else the CPU. The GPU cases also show
+        that a GPU program with no inputs runs."""
         yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
         device = "cuda" if torch.cuda.is_available() else "cpu"
         weight = torch.tensor([1.0, 2.0, 3.0], device=device)
         delegates = ("xnnpack", "cuda") if device == "cuda" else ("xnnpack",)
+        if device == "cuda" and _has_tensorrt():
+            delegates += ("tensorrt",)
         for delegate in delegates:
             with self.subTest(delegate=delegate):
                 leapp.start(name=self.TEST_GRAPH_NAME)
@@ -1922,10 +1923,8 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         TorchScript node, and lowering while the caller's default device is the
         GPU."""
         yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
-        for delegate in ("cuda", "tensorrt"):
+        for delegate in ("cuda", "tensorrt") if _has_tensorrt() else ("cuda",):
             with self.subTest(delegate=delegate):
-                if delegate == "tensorrt" and not _has_tensorrt():
-                    self.skipTest(NO_TENSORRT)
                 leapp.start(name=self.TEST_GRAPH_NAME)
                 a, b = annotate.input_tensors(
                     "funcE", {"a": torch.ones(3), "b": torch.ones(3)}
@@ -2071,15 +2070,22 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
                 ExecuTorchExportBackend(
                     None, {"delegate": "tensorrt", "tensorrt_options": {key: None}}
                 )
-        for value in (True, False):
-            with self.assertRaisesRegex(ValueError, "release_weights_after_build"):
-                ExecuTorchExportBackend(
-                    None,
-                    {
-                        "delegate": "tensorrt",
-                        "tensorrt_options": {"release_weights_after_build": value},
-                    },
-                )
+        with self.assertRaisesRegex(ValueError, "release_weights_after_build"):
+            ExecuTorchExportBackend(
+                None,
+                {
+                    "delegate": "tensorrt",
+                    "tensorrt_options": {"release_weights_after_build": True},
+                },
+            )
+        # False releases nothing.
+        ExecuTorchExportBackend(
+            None,
+            {
+                "delegate": "tensorrt",
+                "tensorrt_options": {"release_weights_after_build": False},
+            },
+        )
         ExecuTorchExportBackend(
             None, {"delegate": "tensorrt", "tensorrt_options": {"min_block_size": 3}}
         )
@@ -2112,16 +2118,62 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         model = os.path.join(self.TEST_GRAPH_NAME, f"{funcB.__name__}.pte")
         with self.assertRaises(ValueError):
             ExecuTorchExportBackend(None).load(model, "0" * 64)
-        with (
-            mock.patch.dict("sys.modules", {"executorch.runtime": None}),
-            self.assertRaisesRegex(ImportError, "pip install"),
+
+        # Not a None in sys.modules: a cached executorch.runtime skips its parent.
+        class Missing(importlib.abc.MetaPathFinder):
+            def __init__(self, module, missing):
+                self.module, self.missing = module, missing
+
+            def find_spec(self, name, path, target=None):
+                if name == self.module:
+                    raise ModuleNotFoundError(
+                        f"No module named '{self.missing}'", name=self.missing
+                    )
+
+        # An installed ExecuTorch that lacks a dependency keeps its own error.
+        for module, missing, error in (
+            ("executorch", "executorch", "pip install"),
+            ("executorch.runtime", "executorch.runtime", "pip install"),
+            ("executorch.runtime", "et_inner_dep", "et_inner_dep"),
         ):
+            with (
+                self.subTest(missing=missing),
+                mock.patch.dict("sys.modules"),
+                mock.patch.object(
+                    sys, "meta_path", [Missing(module, missing), *sys.meta_path]
+                ),
+                self.assertRaisesRegex(ImportError, error),
+            ):
+                for key in (module, "executorch.runtime"):
+                    sys.modules.pop(key, None)
+                ExecuTorchExportBackend(None).load(model, sha256sum)
+        # Only a TensorRT program needs Torch-TensorRT or its runtime.
+        no_tensorrt = {
+            "torch_tensorrt": None,
+            "torch_tensorrt_executorch_runtime": None,
+        }
+        with mock.patch.dict("sys.modules", no_tensorrt):
             ExecuTorchExportBackend(None).load(model, sha256sum)
-        # Only a TensorRT program needs Torch-TensorRT's runtime.
-        with mock.patch.dict(
-            "sys.modules", {"torch_tensorrt_executorch_runtime": None}
-        ):
-            ExecuTorchExportBackend(None).load(model, sha256sum)
+            if torch.cuda.is_available():
+
+                @annotate.method(
+                    export_with="executorch", backend_params={"delegate": "cuda"}
+                )
+                def funcK(inputK: torch.Tensor):
+                    return inputK * 2
+
+                leapp.start(name=self.TEST_GRAPH_NAME)
+                funcK(torch.ones(3, device="cuda"))
+                leapp.stop()
+                leapp.compile_graph(visualize=False)
+                manager = leapp.InferenceManager(annotate.config_path)
+                (output_key,) = manager.outputs
+                torch.testing.assert_close(
+                    manager({"funcK/inputK": torch.ones(3, device="cuda")})[
+                        output_key
+                    ].cpu(),
+                    torch.full((3,), 2.0),
+                )
         backend = ExecuTorchExportBackend(None)
         with mock.patch.object(
             Runtime, "load_program", autospec=True, side_effect=Runtime.load_program
@@ -2304,28 +2356,45 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
                     leapp.compile_graph(visualize=False)
                 export.assert_not_called()
 
-        # A saved program asks for the runtime of the Torch-TensorRT that built it.
-        with (
-            mock.patch.dict("sys.modules", no_runtime),
-            self.assertRaisesRegex(
-                ImportError, r'pip install "torch_tensorrt\[executorch\]==2\.15\.0"'
-            ),
-        ):
-            ExecuTorchExportBackend(
-                None, {"delegate": "tensorrt", "torch_tensorrt_version": "2.15.0"}
-            ).load("missing.pte", "0")
+        # A saved program asks for the runtime of the Torch-TensorRT that built it,
+        # without the local version, which PyPI does not have.
+        for recorded in ("2.15.0", "2.15.0+cu132"):
+            with (
+                self.subTest(recorded=recorded),
+                mock.patch.dict("sys.modules", no_runtime),
+                self.assertRaisesRegex(
+                    ImportError,
+                    r'pip install "torch_tensorrt\[executorch\]==2\.15\.0"$',
+                ),
+            ):
+                ExecuTorchExportBackend(
+                    None, {"delegate": "tensorrt", "torch_tensorrt_version": recorded}
+                ).load("missing.pte", "0")
 
         # ExecuTorch would return the written input as an extra first output.
-        @annotate._method(export_with="pte")
-        def legacy_writes_input(inputW):
-            inputW.add_(3)
-            return inputW * 2
+        # The error names only the input that is written.
+        delegates = ["xnnpack", "cuda"] if torch.cuda.is_available() else ["xnnpack"]
+        for delegate in delegates:
+            device = "cpu" if delegate == "xnnpack" else "cuda"
+            # A stored tensor puts its placeholder before the inputs.
+            scale = torch.full((3,), 2.0, device=device)
 
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        legacy_writes_input(torch.ones(3))
-        leapp.stop()
-        with self.assertRaisesRegex(RuntimeError, "writes its inputs"):
-            leapp.compile_graph(visualize=False)
+            @annotate._method(export_with="pte", backend_params={"delegate": delegate})
+            def legacy_writes_input(inputA, inputW):
+                inputW.add_(3)
+                return inputA + inputW * scale
+
+            with self.subTest(delegate=delegate):
+                leapp.start(name=self.TEST_GRAPH_NAME)
+                legacy_writes_input(
+                    torch.ones(3, device=device), torch.ones(3, device=device)
+                )
+                leapp.stop()
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    r"writes its inputs \['inputW'\] in place, which ExecuTorch",
+                ):
+                    leapp.compile_graph(visualize=False)
 
     @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     @unittest.skipUnless(torch.cuda.is_available(), "Needs a CUDA GPU")
@@ -2418,6 +2487,32 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
             def legacy_detached_twice(self, inputW):
                 return inputW * 2, self.values.detach().detach()
 
+            # TensorRT can leave a slice that keeps the whole shape out of its
+            # engines, and ExecuTorch then removes it, so LEAPP refuses it.
+            @annotate._method(
+                export_with="executorch",
+                register_buffers=["self.values"],
+                backend_params={"delegate": "tensorrt"},
+            )
+            def legacy_sliced(self, inputW):
+                return inputW * 2, self.values[:]
+
+            @annotate._method(
+                export_with="executorch",
+                register_buffers=["self.values"],
+                backend_params={"delegate": "tensorrt"},
+            )
+            def legacy_cloned(self, inputW):
+                return inputW * 2, self.values.clone()
+
+            @annotate._method(
+                export_with="executorch",
+                register_buffers=["self.values"],
+                backend_params={"delegate": "tensorrt"},
+            )
+            def legacy_partial_slice(self, inputW):
+                return inputW * 2, self.values[1:]
+
             @annotate._method(
                 export_with="executorch", backend_params={"delegate": "tensorrt"}
             )
@@ -2430,17 +2525,29 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
             def legacy_constant(self, inputW):
                 return inputW * 2, table.detach()
 
+            @annotate._method(
+                export_with="executorch", backend_params={"delegate": "tensorrt"}
+            )
+            def legacy_writes_input(self, inputW):
+                inputW.add_(3)
+                return inputW * 2
+
         table = torch.tensor([1.0, 2.0, 3.0], device="cuda")
         import torch_tensorrt
 
         for name, message in (
             ("legacy_buffer", 'writes .* delegate "cuda"'),
             ("legacy_parameter", "writes .* with another backend\\."),
-            ("legacy_returned", "returns \\['values'\\] unchanged"),
-            ("legacy_detached", "returns \\['values'\\] unchanged"),
-            ("legacy_detached_twice", "returns \\['values'\\] unchanged"),
-            ("legacy_returned_parameter", "returns \\['module.steps'\\] unchanged"),
-            ("legacy_constant", "returns \\['lifted_tensor_0'\\] unchanged"),
+            ("legacy_returned", "returns \\['output2'\\] as a stored tensor"),
+            ("legacy_detached", "returns \\['output2'\\] as a stored tensor"),
+            ("legacy_detached_twice", "returns \\['output2'\\] as a stored tensor"),
+            ("legacy_sliced", "returns \\['output2'\\] as a stored tensor"),
+            ("legacy_returned_parameter", "returns \\['output2'\\] as a stored tensor"),
+            ("legacy_constant", "returns \\['output2'\\] as a stored tensor"),
+            (
+                "legacy_writes_input",
+                "writes its inputs \\['inputW'\\] in place, which ExecuTorch delegate \"tensorrt\"",
+            ),
         ):
             with self.subTest(node=name):
                 leapp.start(name=self.TEST_GRAPH_NAME)
@@ -2454,6 +2561,23 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
                 ):
                     leapp.compile_graph(visualize=False)
                 compile_trt.assert_not_called()
+
+        # A copy, or a slice that does not keep the whole shape, is not refused,
+        # so LEAPP goes on to build the engines.
+        for name in ("legacy_cloned", "legacy_partial_slice"):
+            with self.subTest(node=name):
+                leapp.start(name=self.TEST_GRAPH_NAME)
+                getattr(Overwriter(), name)(torch.ones(3, device="cuda"))
+                leapp.stop()
+                with (
+                    mock.patch.object(
+                        torch_tensorrt,
+                        "compile_and_save",
+                        side_effect=RuntimeError("built"),
+                    ),
+                    self.assertRaisesRegex(RuntimeError, "built"),
+                ):
+                    leapp.compile_graph(visualize=False)
 
         with self.subTest(node="static output"):
             leapp.start(name=self.TEST_GRAPH_NAME)
@@ -2470,7 +2594,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
             leapp.stop()
             with (
                 mock.patch.object(torch_tensorrt, "compile_and_save") as compile_trt,
-                self.assertRaisesRegex(RuntimeError, "returns .* unchanged"),
+                self.assertRaisesRegex(
+                    RuntimeError,
+                    r"returns \['bias'\] as a stored tensor.*static output cannot be",
+                ),
             ):
                 leapp.compile_graph(visualize=False)
             compile_trt.assert_not_called()
@@ -3024,11 +3151,10 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
         previous = torch.cuda.current_device()
         cases = [("cuda", True), ("cuda", False)]
-        cases += [("tensorrt", True), ("tensorrt", False)]
+        if _has_tensorrt():
+            cases += [("tensorrt", True), ("tensorrt", False)]
         for delegate, device_io in cases:
             with self.subTest(delegate=delegate, device_io=device_io):
-                if delegate == "tensorrt" and not _has_tensorrt():
-                    self.skipTest(NO_TENSORRT)
                 backend_params = {"delegate": delegate, "device_io": device_io}
                 if delegate == "tensorrt":
                     # The CUDA backend runs the mul, so the program has a part

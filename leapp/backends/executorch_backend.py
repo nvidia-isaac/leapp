@@ -40,7 +40,11 @@ _TENSORRT_RESERVED_OPTIONS = {
 def _import_executorch():
     try:
         from executorch.runtime import Runtime
-    except ImportError as exc:
+    except ModuleNotFoundError as exc:
+        # Only a missing ExecuTorch gets the install hint. One that is installed
+        # but lacks a dependency, or fails to load, keeps its own error.
+        if exc.name not in ("executorch", "executorch.runtime"):
+            raise
         _get_logger().fatal(
             "export_with='executorch' needs ExecuTorch: "
             'pip install "leapp[executorch]" (Python 3.11 or newer)',
@@ -55,8 +59,11 @@ def _import_tensorrt_runtime(torch_tensorrt_version=None):
     # a program holding TensorRT engines cannot load without it. It pins the
     # TensorRT the engines need, so a saved program asks for the runtime of the
     # Torch-TensorRT that built it.
+    # PyPI has no local versions such as 2.15.0+cu132, so ask for the release.
     version_spec = (
-        f"=={torch_tensorrt_version}" if torch_tensorrt_version else ">=2.15.0"
+        f"=={torch_tensorrt_version.split('+')[0]}"
+        if torch_tensorrt_version
+        else ">=2.15.0"
     )
     try:
         import torch_tensorrt_executorch_runtime  # noqa: F401
@@ -105,14 +112,11 @@ class ExecuTorchProgram:
     loaded and run there. Owns ``temp_dir`` when given and removes it on delete.
     """
 
-    def __init__(
-        self, program_path, data_path=None, cuda=False, tensorrt=False, temp_dir=None
-    ):
+    def __init__(self, program_path, data_path=None, cuda=False, temp_dir=None):
         self._temp_dir = temp_dir
         self._cuda = cuda
         self._program_path = program_path
         self._data_path = data_path
-        self._tensorrt = tensorrt
         self.reload()
 
     def reload(self):
@@ -122,10 +126,6 @@ class ExecuTorchProgram:
         program again starts the buffers over.
         """
         Runtime = _import_executorch()
-        # Only a TensorRT program needs the runtime, which maps TensorRT into the
-        # process and fails to import against some ExecuTorch builds.
-        if self._tensorrt:
-            _import_tensorrt_runtime()
 
         # Without the cache XNNPACK packs a weight once per use, so a layer
         # called in a loop, such as a denoising step, holds a copy per call.
@@ -189,8 +189,8 @@ class ExecuTorchExportBackend(ExportBackend):
     ``"tensorrt"`` (Torch-TensorRT engines, with what TensorRT does not take
     sent to the CUDA backend). The two GPU delegates keep inputs and outputs in
     GPU memory unless ``backend_params["device_io"]`` is ``False``. An input the
-    program returns unchanged, and that no GPU operator reads, stays in host
-    memory either way.
+    program passes straight to an output, and that no GPU operator reads, stays
+    in host memory either way.
     """
 
     def __init__(self, node_context, backend_params=None):
@@ -228,9 +228,9 @@ class ExecuTorchExportBackend(ExportBackend):
                 "program, its inputs and the GPU, and always builds the engines",
                 error_type=ValueError,
             )
-        if "release_weights_after_build" in self.tensorrt_options:
+        if self.tensorrt_options.get("release_weights_after_build"):
             _get_logger().fatal(
-                "tensorrt_options release_weights_after_build cannot be set: it "
+                "tensorrt_options release_weights_after_build cannot be True: it "
                 "frees the model's own weights when they are on the GPU, and the "
                 "model and later nodes still use them",
                 error_type=ValueError,
@@ -291,6 +291,33 @@ class ExecuTorchExportBackend(ExportBackend):
             ]
         )
 
+    def _refuse_input_writes(self, signature, reason):
+        """Refuse a node that writes one of its inputs in place.
+
+        Only a decomposed program records such a write in its signature.
+        """
+        from torch.export.graph_signature import InputKind
+
+        # torch.export renames the inputs, as inputW to inputw, so name them as
+        # the node does. The user inputs follow the node's inputs in order.
+        placeholders = [
+            spec.arg.name
+            for spec in signature.input_specs
+            if spec.kind == InputKind.USER_INPUT
+        ]
+        written = set(signature.user_inputs_to_mutate.values())
+        names = sorted(
+            desc.name
+            for desc, placeholder in zip(self.node_context.inputs, placeholders)
+            if placeholder in written
+        )
+        if names:
+            _get_logger().fatal(
+                f"Node '{self.node_context.name}' writes its inputs {names} in "
+                f"place, {reason}. Write to a copy instead, as in x = x.clone().",
+                error_type=RuntimeError,
+            )
+
     def _lower(self, exported_program, program_path):
         from executorch.exir import EdgeCompileConfig, to_edge_transform_and_lower
         from executorch.exir.passes.constant_prop_pass import constant_prop_pass
@@ -313,18 +340,11 @@ class ExecuTorchExportBackend(ExportBackend):
 
         exported_program = exported_program.run_decompositions({})
         # ExecuTorch returns an input written in place as an extra first output,
-        # which the node does not declare. The decomposition above is what
-        # records such a write in the signature.
-        mutated = sorted(
-            exported_program.graph_signature.user_inputs_to_mutate.values()
+        # which the node does not declare, or with device_io fails to export it.
+        self._refuse_input_writes(
+            exported_program.graph_signature,
+            "which ExecuTorch cannot export correctly",
         )
-        if mutated:
-            _get_logger().fatal(
-                f"Node '{self.node_context.name}' writes its inputs {mutated} in "
-                "place, which ExecuTorch returns as extra outputs. Write to a copy "
-                "instead, as in x = x.clone().",
-                error_type=RuntimeError,
-            )
         config = self._backend_config()
         # Fold values computed from constants alone first: an op that only builds
         # a constant may be one the delegate lacks, and left in the graph it
@@ -379,9 +399,15 @@ class ExecuTorchExportBackend(ExportBackend):
         # transpose into alias, as Torch-TensorRT's own lowering does.
         decomposed = exported_program.run_decompositions()
         signature = decomposed.graph_signature
+        # Torch-TensorRT either drops the write or fails to save the program.
+        self._refuse_input_writes(
+            signature, 'which ExecuTorch delegate "tensorrt" cannot keep'
+        )
         # Torch-TensorRT writes a buffer back outside its engines, where
-        # ExecuTorch keeps only its shape, so it starts from zeros, and with
-        # device_io the export fails. A write to a parameter is lost.
+        # ExecuTorch keeps only its shape, so a buffer the node writes starts from
+        # zeros, and with device_io a buffer it reads and writes fails to export.
+        # A write to a parameter is lost. A write that replaces a whole buffer
+        # would work, but every write is refused, to keep one simple rule.
         written = sorted(
             {
                 **signature.buffers_to_mutate,
@@ -396,9 +422,9 @@ class ExecuTorchExportBackend(ExportBackend):
                 else 'delegate "cuda" or "xnnpack" or another backend'
             )
             _get_logger().fatal(
-                f"Node '{self.node_context.name}' writes {written}, which "
-                'ExecuTorch delegate "tensorrt" cannot keep. Export this node with '
-                f"{others}.",
+                f"Node '{self.node_context.name}' writes {written}. LEAPP does not "
+                'export buffer or parameter writes with ExecuTorch delegate "tensorrt". '
+                f"Export this node with {others}.",
                 error_type=RuntimeError,
             )
         # Torch-TensorRT removes an alias, and leaves a held value it returns
@@ -409,21 +435,34 @@ class ExecuTorchExportBackend(ExportBackend):
             **signature.inputs_to_parameters,
             **signature.inputs_to_lifted_tensor_constants,
         }
+        # Writes are refused above, so the program returns the node's outputs
+        # in order. A slice that keeps the whole shape is refused too: TensorRT
+        # can leave it out of its engines, as with a larger min_block_size, and
+        # ExecuTorch then removes it. Which ops TensorRT takes is known only
+        # after the build.
         returned = []
-        for node in decomposed.graph.output_node().args[0]:
-            while (
-                isinstance(node, torch.fx.Node)
-                and node.target == torch.ops.aten.alias.default
+        for output, node in zip(
+            self.node_context.outputs, decomposed.graph.output_node().args[0]
+        ):
+            while isinstance(node, torch.fx.Node) and (
+                node.target == torch.ops.aten.alias.default
+                or (
+                    node.target == torch.ops.aten.slice.Tensor
+                    and node.meta["val"].shape == node.args[0].meta["val"].shape
+                )
             ):
                 node = node.args[0]
             if isinstance(node, torch.fx.Node) and node.name in held:
-                returned.append(held[node.name])
+                returned.append(output.name)
         returned.sort()
         if returned:
             _get_logger().fatal(
-                f"Node '{self.node_context.name}' returns {returned} unchanged, "
-                'which ExecuTorch delegate "tensorrt" cannot save. Export this node '
-                'with delegate "cuda" or "xnnpack" or another backend.',
+                f"Node '{self.node_context.name}' returns {returned} as a stored "
+                "tensor (a buffer, parameter or constant), which ExecuTorch delegate "
+                '"tensorrt" cannot save. Return a copy, such as buffer.clone(), or '
+                'export this node with delegate "cuda" or "xnnpack" or another backend. '
+                "A static output cannot be copied, so a node with one needs another "
+                "delegate.",
                 error_type=RuntimeError,
             )
         options = {
@@ -491,9 +530,9 @@ class ExecuTorchExportBackend(ExportBackend):
             # GPU 0, which the GPU delegates build the program for;
             # CUDA_VISIBLE_DEVICES picks the physical GPU.
             device = torch.device("cuda", 0)
-            # Shapes are fixed here. The CUDA backend cannot run such a program:
-            # it aborts the process with device_io and fails on every call
-            # without it. With "tensorrt", which parts the CUDA backend gets is
+            # Shapes are fixed here. The CUDA backend cannot run a tensor with no
+            # elements: it aborts the process with device_io and fails on every
+            # call without it. With "tensorrt", which parts the CUDA backend gets is
             # not known before the build.
             for desc in (*self.node_context.inputs, *self.node_context.outputs):
                 if 0 in desc.shape:
@@ -544,7 +583,6 @@ class ExecuTorchExportBackend(ExportBackend):
                 program_path,
                 program_data,
                 cuda=self.delegate in GPU_DELEGATES,
-                tensorrt=self.delegate == "tensorrt",
                 temp_dir=temp_dir,
             )
         except BaseException:
@@ -636,7 +674,6 @@ class ExecuTorchExportBackend(ExportBackend):
             model_path,
             data_path,
             cuda=self.delegate in GPU_DELEGATES,
-            tensorrt=self.delegate == "tensorrt",
         )
         # Like the TorchScript and torch.export backends, so the nodes of a
         # pipeline share one device; the program moves inputs and outputs as it
