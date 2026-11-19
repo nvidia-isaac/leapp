@@ -12,14 +12,9 @@ import unittest
 from pathlib import Path
 
 from isaac_deploy_trt.cli import main
-from isaac_deploy_trt.minimal_layers import minimal_supported_layers
+from isaac_deploy_trt.minimal_layers import _CATALOG_ROOT, minimal_supported_layers
 
-_CHECKED_IN = (
-    Path(__file__).resolve().parents[1]
-    / "tensorrt_catalogs"
-    / "minimal"
-    / "tensorrt_layers.json"
-)
+_CHECKED_IN = _CATALOG_ROOT / "minimal" / "tensorrt_layers.json"
 
 
 class MinimalLayersTests(unittest.TestCase):

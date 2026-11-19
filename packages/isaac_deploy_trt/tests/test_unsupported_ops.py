@@ -9,20 +9,15 @@ from __future__ import annotations
 
 import json
 import unittest
-from pathlib import Path
 
+from isaac_deploy_trt.minimal_layers import _CATALOG_ROOT
 from isaac_deploy_trt.tensorrt_onnx_ops import (
     format_unsupported_onnx_op_report,
     load_unsupported_onnx_op_report,
     unsupported_onnx_op_report,
 )
 
-_CATALOG = (
-    Path(__file__).resolve().parents[1]
-    / "tensorrt_catalogs"
-    / "v11.2"
-    / "tensorrt_layers_cuda132_x86.json"
-)
+_CATALOG = _CATALOG_ROOT / "v11.2" / "tensorrt_layers_cuda132_x86.json"
 
 
 class UnsupportedOpsTests(unittest.TestCase):

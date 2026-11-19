@@ -128,7 +128,6 @@ exclude = ["tests*"]
     "runtime/onnx/*.cc",
     "runtime/torch/*.cc",
 ]
-
 [tool.setuptools.exclude-package-data]
 "leapp.leapp_graph.custom_operator_registry.warp_operator" = [
     "runtime/build/*",

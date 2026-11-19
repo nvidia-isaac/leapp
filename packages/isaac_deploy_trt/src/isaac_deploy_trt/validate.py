@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Sequence
 
 import onnx
 
+from isaac_deploy_trt.catalog_paths import catalog_root
 from isaac_deploy_trt.tensorrt_onnx_ops import (
     TENSORRT_ONNX_DEFAULT_VERSION,
     onnx_ops_for_version,
@@ -22,7 +23,7 @@ from isaac_deploy_trt.tensorrt_onnx_ops import (
 
 logger = logging.getLogger(__name__)
 
-_CATALOG_ROOT = Path(__file__).resolve().parents[2] / "tensorrt_catalogs"
+_CATALOG_ROOT = catalog_root()
 
 
 @dataclass

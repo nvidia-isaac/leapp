@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import yaml
 
 from .utils.logging import _get_logger
@@ -245,7 +246,9 @@ def optimize_graph(
     and shapes are left unchanged. When optimization changes an ONNX file,
     it is re-run against the captured trace inputs and outputs. ``rtol``,
     ``atol``, and ``strict`` have the same meanings as in ``compile_graph``;
-    pass ``validate=False`` to skip this check. Requires ``isaac_deploy_trt``.
+    pass ``validate=False`` to skip this check. A numerical mismatch puts
+    that ONNX file and its YAML checksum back to the compiled original.
+    Requires ``isaac_deploy_trt``.
 
     The returned dict contains ``trt_compatible`` mapped to a list of release
     labels, such as ``["10.14"]`` or ``["minimal"]``, when every ONNX model
@@ -278,6 +281,7 @@ def optimize_graph(
     if trt_compatible:
         try:
             from isaac_deploy_trt.tensorrt_leapp_bundle import (
+                install_aligned_export,
                 rewrite_leapp_export_for_tensorrt,
             )
         except ImportError as exc:
@@ -291,24 +295,76 @@ def optimize_graph(
         result = rewrite_leapp_export_for_tensorrt(
             save_path,
             tensorrt=_tensorrt_release(trt_version),
+            commit=False,
         )
-        manager.record_rewritten_model_hashes(result.models)
-        rewritten = [model.filename for model in result.models if model.rewritten]
-        if rewritten:
-            _get_logger().info(
-                f"Optimized ONNX for TensorRT: {', '.join(rewritten)}"
-            )
-            if validate:
-                manager.validate_optimized_onnx_models(
-                    [os.path.join(save_path, filename) for filename in rewritten],
-                    rtol=rtol,
-                    atol=atol,
-                    strict=strict,
+        try:
+            rewritten = [model.filename for model in result.models if model.rewritten]
+            failed_files = set()
+            error_hints = []
+            if rewritten:
+                _get_logger().info(
+                    f"Optimized ONNX for TensorRT: {', '.join(rewritten)}"
                 )
-        else:
-            _get_logger().info(
-                "No TensorRT GraphSurgeon optimizations were needed for exported ONNX"
+                if validate:
+                    staged_paths = [
+                        os.path.join(result.staging_dir, filename)
+                        for filename in rewritten
+                    ]
+                    validated = manager.validate_optimized_onnx_models(
+                        staged_paths,
+                        rtol=rtol,
+                        atol=atol,
+                        strict=strict,
+                        raise_on_failure=False,
+                    )
+                    if isinstance(validated, tuple) and validated and isinstance(validated[0], dict):
+                        validation_results, error_hints = validated
+                    elif isinstance(validated, dict):
+                        validation_results = validated
+                    else:
+                        validation_results = {}
+                    nodes_by_name = {
+                        node.name: node for node in manager.nodes.values()
+                    }
+                    for node_name, outcome in validation_results.items():
+                        if outcome is True:
+                            continue
+                        node = nodes_by_name.get(node_name)
+                        if node is None or not node.model_path:
+                            continue
+                        failed_files.add(os.path.basename(node.model_path))
+                    if failed_files:
+                        _get_logger().warning(
+                            "Restored original ONNX after numerical mismatch: "
+                            + ", ".join(sorted(failed_files))
+                        )
+            else:
+                _get_logger().info(
+                    "No TensorRT GraphSurgeon optimizations were needed for exported ONNX"
+                )
+            install_aligned_export(
+                save_path,
+                result.staging_dir,
+                result,
+                skip_filenames=failed_files,
             )
+            for model in result.models:
+                if model.filename in failed_files:
+                    model.rewritten = False
+                    model.optimization = False
+            manager.record_rewritten_model_hashes(result.models)
+            if strict and failed_files:
+                message = (
+                    "Optimized ONNX validation failed for "
+                    f"{len(failed_files)} file(s): {sorted(failed_files)}. "
+                    "The original ONNX file was restored."
+                )
+                if error_hints:
+                    message += "\n\n" + "\n".join(error_hints)
+                _get_logger().fatal(message, error_type=Exception)
+        finally:
+            if result.staging_dir and os.path.isdir(result.staging_dir):
+                shutil.rmtree(result.staging_dir, ignore_errors=True)
         versions = []
         for model in result.models:
             if not model.optimization:

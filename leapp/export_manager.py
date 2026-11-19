@@ -982,6 +982,7 @@ class ExportManager:
         rtol: float = 1e-3,
         atol: float = 1e-5,
         strict: bool = True,
+        raise_on_failure: bool = True,
     ):
         """Validate rewritten ONNX models against the captured trace outputs.
 
@@ -989,12 +990,19 @@ class ExportManager:
         program. Optimization replaces the saved ONNX file, so this method
         temporarily runs the rewritten file through the same node-level
         validation and tolerance checks.
+
+        Paths may be staged copies. Nodes are matched by absolute path, then
+        by filename. ``raise_on_failure=False`` returns the per-node results
+        so the caller can put the original ONNX back before reporting the
+        mismatch.
         """
-        nodes_by_path = {
-            os.path.abspath(node.model_path): node
-            for node in self.nodes.values()
-            if node.model_path
-        }
+        nodes_by_path = {}
+        nodes_by_name = {}
+        for node in self.nodes.values():
+            if not node.model_path:
+                continue
+            nodes_by_path[os.path.abspath(node.model_path)] = node
+            nodes_by_name[os.path.basename(node.model_path)] = node
         results = {}
         error_hints = []
 
@@ -1002,6 +1010,8 @@ class ExportManager:
         for model_path in model_paths:
             model_path = os.path.abspath(model_path)
             node = nodes_by_path.get(model_path)
+            if node is None:
+                node = nodes_by_name.get(os.path.basename(model_path))
             if node is None:
                 _get_logger().warning(
                     f"Cannot validate optimized {os.path.basename(model_path)}: "
@@ -1026,7 +1036,12 @@ class ExportManager:
                 node.export_backend.compiled_model = previous_model
 
         failed_nodes = [name for name, result in results.items() if result is not True]
-        if strict and failed_nodes:
+        if results:
+            passed = sum(result is True for result in results.values())
+            _get_logger().info(
+                f"Optimized ONNX validation summary: {passed}/{len(results)} passed"
+            )
+        if strict and raise_on_failure and failed_nodes:
             message = (
                 "Optimized ONNX validation failed for "
                 f"{len(failed_nodes)} node(s): {failed_nodes}"
@@ -1035,12 +1050,7 @@ class ExportManager:
                 message += "\n\n" + "\n".join(error_hints)
             _get_logger().fatal(message, error_type=Exception)
 
-        if results:
-            passed = sum(result is True for result in results.values())
-            _get_logger().info(
-                f"Optimized ONNX validation summary: {passed}/{len(results)} passed"
-            )
-        return results
+        return results, error_hints
 
     def record_rewritten_model_hashes(self, models) -> None:
         """Store checksums of ONNX files changed by graph optimization.

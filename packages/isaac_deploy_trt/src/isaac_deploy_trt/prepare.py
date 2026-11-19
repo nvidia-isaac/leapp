@@ -29,6 +29,31 @@ from isaac_deploy_trt.validate import select_onnx_ops
 
 logger = logging.getLogger(__name__)
 
+_ONNX_BACKENDS = {"onnx", "onnx-dynamo", "onnx-torchscript"}
+_OTHER_BACKENDS = {
+    "jit",
+    "jit-script",
+    "jit-trace",
+    "pt2",
+    "exported-program",
+    "none",
+}
+
+
+def is_onnx_export(parameters: dict) -> bool:
+    """Return whether a YAML model entry is an ONNX artifact.
+
+    TorchScript and exported-program nodes stay beside the ONNX files. TensorRT
+    optimize and merge only read the ONNX ones.
+    """
+    backend = str((parameters or {}).get("backend") or "").strip().lower()
+    path = str((parameters or {}).get("model_path") or "")
+    if backend in _OTHER_BACKENDS:
+        return False
+    if backend in _ONNX_BACKENDS:
+        return path.endswith(".onnx") or not path
+    return path.endswith(".onnx")
+
 
 @dataclass
 class RewriteFileResult:

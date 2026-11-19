@@ -29,7 +29,11 @@ import onnx
 import yaml
 from onnx import compose, helper
 
-from isaac_deploy_trt.prepare import needs_tensorrt_rewrite, surgeon_ops_for_target
+from isaac_deploy_trt.prepare import (
+    is_onnx_export,
+    needs_tensorrt_rewrite,
+    surgeon_ops_for_target,
+)
 from isaac_deploy_trt.surgery import rewrite_onnx_for_tensorrt
 
 logger = logging.getLogger(__name__)
@@ -201,6 +205,18 @@ def merge_leapp_onnx_pipeline(
 
     model_names = list(models_cfg.keys())
     order = _topo_models(model_names, data_flow)
+    non_onnx = []
+    for name, cfg in models_cfg.items():
+        params = (cfg or {}).get("parameters") or {}
+        if is_onnx_export(params):
+            continue
+        label = params.get("backend") or params.get("model_path") or "unknown"
+        non_onnx.append(f"{name} ({label})")
+    if non_onnx:
+        raise ValueError(
+            "merge-pipeline only combines ONNX models. These models use another "
+            f"backend: {', '.join(non_onnx)}"
+        )
 
     prefixed: Dict[str, onnx.ModelProto] = {}
     opsets: List[int] = []

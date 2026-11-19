@@ -221,6 +221,49 @@ class TestTensorrtLeappBundle(unittest.TestCase):
                 "old",
             )
 
+    def test_mixed_backends_copy_non_onnx_models(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "src")
+            dst = os.path.join(tmp, "dst")
+            os.makedirs(src)
+            _write_resize_onnx(os.path.join(src, "vision.onnx"))
+            with open(os.path.join(src, "policy.pt"), "wb") as handle:
+                handle.write(b"torchscript")
+            spec = {
+                "models": {
+                    "vision": {
+                        "parameters": {
+                            "model_path": "vision.onnx",
+                            "backend": "onnx",
+                            "md5sum": "old",
+                            "sha256sum": "old",
+                        }
+                    },
+                    "policy": {
+                        "parameters": {
+                            "model_path": "policy.pt",
+                            "backend": "jit",
+                            "md5sum": "jit-md5",
+                            "sha256sum": "jit-sha",
+                        }
+                    },
+                }
+            }
+            with open(os.path.join(src, "graph.yaml"), "w", encoding="utf-8") as handle:
+                yaml.safe_dump(spec, handle)
+
+            result = align_leapp_export_for_tensorrt(src, dst)
+            self.assertEqual([model.filename for model in result.models], ["vision.onnx"])
+            self.assertTrue(result.models[0].rewritten)
+            with open(os.path.join(dst, "policy.pt"), "rb") as handle:
+                self.assertEqual(handle.read(), b"torchscript")
+            with open(os.path.join(dst, "graph.yaml"), encoding="utf-8") as handle:
+                out_spec = yaml.safe_load(handle)
+            self.assertEqual(
+                out_spec["models"]["policy"]["parameters"]["sha256sum"],
+                "jit-sha",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

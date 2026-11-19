@@ -11,7 +11,9 @@ import json
 from pathlib import Path
 from typing import Dict, List
 
-_CATALOG_ROOT = Path(__file__).resolve().parents[2] / "tensorrt_catalogs"
+from isaac_deploy_trt.catalog_paths import catalog_root
+
+_CATALOG_ROOT = catalog_root()
 
 
 def _release_sort_key(tag: str) -> tuple:

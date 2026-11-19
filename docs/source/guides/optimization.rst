@@ -26,7 +26,9 @@ When ``optimize_graph()`` changes an ONNX file, it reruns that file with the
 captured trace inputs and compares its outputs to the captured outputs.
 Validation uses ``rtol=1e-3`` and ``atol=1e-5`` by default, matching
 ``compile_graph()``. Pass ``rtol``, ``atol``, or ``strict=False`` to adjust
-the check, or ``validate=False`` to skip it. Captured trace values are
+the check, or ``validate=False`` to skip it. If a rewritten file misses that
+tolerance, that file and its YAML checksum are put back to the compiled
+original. Other ONNX files that pass are kept. Captured trace values are
 available only when optimization runs in the same Python process as
 ``compile_graph()``.
 
@@ -53,3 +55,8 @@ TensorRT fields into model parameters. ``optimize_graph()`` removes any
 leftover ``optimization`` or ``tensorrt_version`` parameter. Operators that
 fail the catalog are written to ``log.txt`` as
 ``tensorrt_blockers <model.onnx>: ...``.
+
+A pipeline can mix ONNX with TorchScript or exported-program nodes.
+``optimize_graph()`` rewrites the ONNX files and copies the other model files
+through unchanged. ``merge-pipeline`` only combines ONNX models and reports
+the non-ONNX node names when the YAML contains another backend.

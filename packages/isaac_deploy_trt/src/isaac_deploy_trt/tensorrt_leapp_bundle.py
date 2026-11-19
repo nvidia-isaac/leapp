@@ -26,6 +26,7 @@ import yaml
 
 from isaac_deploy_trt.prepare import (
     copy_external_data,
+    is_onnx_export,
     needs_tensorrt_rewrite,
     surgeon_ops_for_target,
 )
@@ -95,6 +96,7 @@ class AlignedBundleResult:
     output_dir: str
     models: List[AlignedOnnxResult] = field(default_factory=list)
     yaml_paths: List[str] = field(default_factory=list)
+    staging_dir: Optional[str] = None
 
 
 def _file_hashes(path: str) -> tuple[str, str]:
@@ -131,8 +133,16 @@ def _save_rewritten(
     copy_external_data(src_onnx, dst_onnx)
 
 
-def _yaml_model_files(export_dir: str) -> Optional[List[str]]:
-    names: List[str] = []
+def _yaml_model_files(export_dir: str) -> Optional[tuple[List[str], List[str]]]:
+    """Return ``(onnx filenames, other model filenames)`` listed by YAML.
+
+    ``None`` means the directory has no YAML model section, so callers may
+    scan for ``*.onnx``. An empty ONNX list means the YAML exists and its
+    models use other backends.
+    """
+    onnx_names: List[str] = []
+    other_names: List[str] = []
+    found = False
     for filename in sorted(os.listdir(export_dir)):
         if not filename.endswith((".yaml", ".yml")):
             continue
@@ -145,10 +155,17 @@ def _yaml_model_files(export_dir: str) -> Optional[List[str]]:
         for model_cfg in models.values():
             params = (model_cfg or {}).get("parameters") or {}
             model_path = params.get("model_path")
-            if model_path:
-                names.append(os.path.basename(str(model_path)))
-    # Preserve YAML order, drop duplicates.
-    return list(dict.fromkeys(names)) or None
+            if not model_path:
+                continue
+            found = True
+            name = os.path.basename(str(model_path))
+            if is_onnx_export(params):
+                onnx_names.append(name)
+            else:
+                other_names.append(name)
+    if not found:
+        return None
+    return list(dict.fromkeys(onnx_names)), list(dict.fromkeys(other_names))
 
 
 def _update_yaml_parameters(
@@ -208,13 +225,20 @@ def align_leapp_export_for_tensorrt(
         raise ValueError("output_dir must be different from export_dir")
     os.makedirs(output_dir, exist_ok=True)
 
-    yaml_names = _yaml_model_files(export_dir)
-    if yaml_names is not None:
+    classified = _yaml_model_files(export_dir)
+    if classified is not None:
+        onnx_names, other_names = classified
         onnx_files = [
             os.path.join(export_dir, name)
-            for name in yaml_names
+            for name in onnx_names
             if os.path.isfile(os.path.join(export_dir, name))
         ]
+        for name in other_names:
+            src_other = os.path.join(export_dir, name)
+            if not os.path.isfile(src_other):
+                continue
+            shutil.copy2(src_other, os.path.join(output_dir, name))
+            _emit("info", f"Copied {name} unchanged (backend is not ONNX)")
     else:
         onnx_files = [
             os.path.join(export_dir, name)
@@ -285,36 +309,126 @@ def align_leapp_export_for_tensorrt(
     return result
 
 
+def _checksums_by_filename(export_dir: str) -> Dict[str, tuple[str, str]]:
+    checksums: Dict[str, tuple[str, str]] = {}
+    for filename in os.listdir(export_dir):
+        if not filename.endswith((".yaml", ".yml")):
+            continue
+        path = os.path.join(export_dir, filename)
+        with open(path, "r", encoding="utf-8") as handle:
+            spec = yaml.safe_load(handle) or {}
+        models = spec.get("models")
+        if not isinstance(models, dict):
+            continue
+        for model_cfg in models.values():
+            params = (model_cfg or {}).get("parameters") or {}
+            model_path = params.get("model_path")
+            if not model_path:
+                continue
+            checksums[os.path.basename(str(model_path))] = (
+                params.get("md5sum"),
+                params.get("sha256sum"),
+            )
+    return checksums
+
+
+def _restore_skipped_checksums(
+    yaml_path: str,
+    original_checksums: Dict[str, tuple[str, str]],
+    skip_filenames: set[str],
+) -> None:
+    """Put compile-time checksums back for ONNX files that were not published."""
+    if not skip_filenames:
+        return
+    with open(yaml_path, "r", encoding="utf-8") as handle:
+        spec = yaml.safe_load(handle) or {}
+    models = spec.get("models")
+    if not isinstance(models, dict):
+        return
+    changed = False
+    for model_cfg in models.values():
+        params = (model_cfg or {}).get("parameters") or {}
+        model_path = params.get("model_path")
+        if not model_path:
+            continue
+        filename = os.path.basename(str(model_path))
+        if filename not in skip_filenames or filename not in original_checksums:
+            continue
+        md5sum, sha256sum = original_checksums[filename]
+        if params.get("md5sum") != md5sum or params.get("sha256sum") != sha256sum:
+            params["md5sum"] = md5sum
+            params["sha256sum"] = sha256sum
+            changed = True
+    if changed:
+        with open(yaml_path, "w", encoding="utf-8") as handle:
+            yaml.safe_dump(spec, handle, sort_keys=False)
+
+
+def install_aligned_export(
+    export_dir: str,
+    staging_dir: str,
+    result: AlignedBundleResult,
+    skip_filenames: Optional[set[str]] = None,
+) -> None:
+    """Copy a staged TensorRT export onto ``export_dir``.
+
+    ``skip_filenames`` stay as they were in ``export_dir``. Their YAML
+    checksums are put back to the compile-time values so a rejected rewrite
+    does not advertise the hash of a file that is no longer on disk.
+    """
+    export_dir = os.path.abspath(export_dir)
+    staging_dir = os.path.abspath(staging_dir)
+    skipped = set(skip_filenames or ())
+    original_checksums = _checksums_by_filename(export_dir)
+    for name in os.listdir(staging_dir):
+        src = os.path.join(staging_dir, name)
+        dst = os.path.join(export_dir, name)
+        if os.path.islink(src) or not os.path.isfile(src):
+            continue
+        if name in skipped:
+            continue
+        if name.endswith((".yaml", ".yml")):
+            _restore_skipped_checksums(src, original_checksums, skipped)
+        shutil.copy2(src, dst)
+    result.output_dir = export_dir
+    result.yaml_paths = [
+        os.path.join(export_dir, os.path.basename(path))
+        for path in result.yaml_paths
+    ]
+
+
 def rewrite_leapp_export_for_tensorrt(
     export_dir: str,
     *,
     tensorrt: Optional[str] = None,
+    commit: bool = True,
 ) -> AlignedBundleResult:
     """Apply TensorRT GraphSurgeon rewrites in place under ``export_dir``.
 
     Uses a temporary sibling directory so graph I/O and YAML checksums stay
     aligned, then copies rewritten ONNX / YAML back onto the compiled graph.
     Unchanged ONNX files are left as they were.
+
+    ``commit=False`` leaves the rewritten files in ``result.staging_dir`` so
+    the caller can reject a numerical mismatch before replacing the original
+    ONNX. The caller deletes that directory.
     """
     export_dir = os.path.abspath(export_dir)
     tmp_dir = tempfile.mkdtemp(prefix=".leapp_trt_opt_", dir=export_dir)
+    keep_staging = False
     try:
         result = align_leapp_export_for_tensorrt(
             export_dir,
             tmp_dir,
             tensorrt=tensorrt,
         )
-        for name in os.listdir(tmp_dir):
-            src = os.path.join(tmp_dir, name)
-            dst = os.path.join(export_dir, name)
-            if os.path.islink(src) or not os.path.isfile(src):
-                continue
-            shutil.copy2(src, dst)
-        result.output_dir = export_dir
-        result.yaml_paths = [
-            os.path.join(export_dir, os.path.basename(path))
-            for path in result.yaml_paths
-        ]
+        if not commit:
+            result.output_dir = tmp_dir
+            result.staging_dir = tmp_dir
+            keep_staging = True
+            return result
+        install_aligned_export(export_dir, tmp_dir, result)
         return result
     finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+        if not keep_staging:
+            shutil.rmtree(tmp_dir, ignore_errors=True)

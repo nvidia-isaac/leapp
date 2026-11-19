@@ -113,12 +113,15 @@ class TestOptimizeGraph(unittest.TestCase):
                 _MANAGER.nodes.pop("preprocess", None)
                 _MANAGER.detected_nodes = {}
             self.assertEqual(applied["trt_compatible"], ["minimal"])
-            validate.assert_called_once_with(
-                [onnx_path],
-                rtol=2e-3,
-                atol=3e-5,
-                strict=True,
+            validate.assert_called_once()
+            self.assertEqual(
+                [os.path.basename(path) for path in validate.call_args.args[0]],
+                ["preprocess.onnx"],
             )
+            self.assertEqual(validate.call_args.kwargs["rtol"], 2e-3)
+            self.assertEqual(validate.call_args.kwargs["atol"], 3e-5)
+            self.assertTrue(validate.call_args.kwargs["strict"])
+            self.assertFalse(validate.call_args.kwargs["raise_on_failure"])
             self.assertNotEqual(node.md5sum, "old")
             self.assertNotEqual(node.sha256sum, "old")
             self.assertEqual(detected_sha, node.sha256sum)
@@ -208,6 +211,103 @@ class TestOptimizeGraph(unittest.TestCase):
 
             applied = optimize_graph(trt_compatible=True, validate=False)
             self.assertNotIn("trt_compatible", applied)
+
+    def test_numerical_mismatch_restores_original_onnx(self):
+        try:
+            import isaac_deploy_trt.surgery  # noqa: F401
+        except ImportError:
+            raise unittest.SkipTest("isaac_deploy_trt is not installed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            _MANAGER.set_save_path(tmp)
+            _MANAGER.set_graph_name("opt_graph")
+            ExportManager.set_interpret_graph(False)
+            good_path = os.path.join(tmp, "good.onnx")
+            bad_path = os.path.join(tmp, "bad.onnx")
+            _write_resize_onnx(good_path)
+            _write_resize_onnx(bad_path)
+            with open(bad_path, "rb") as handle:
+                original_bad = handle.read()
+            spec = {
+                "models": {
+                    "good": {
+                        "parameters": {
+                            "model_path": "good.onnx",
+                            "backend": "onnx",
+                            "md5sum": "old-good",
+                            "sha256sum": "old-good",
+                        }
+                    },
+                    "bad": {
+                        "parameters": {
+                            "model_path": "bad.onnx",
+                            "backend": "onnx",
+                            "md5sum": "old-bad",
+                            "sha256sum": "old-bad",
+                        }
+                    },
+                }
+            }
+            yaml_path = os.path.join(tmp, "opt_graph.yaml")
+            with open(yaml_path, "w", encoding="utf-8") as handle:
+                yaml.safe_dump(spec, handle)
+
+            class _Backend:
+                compiled_model = None
+
+            class _Node:
+                def __init__(self, name, path, fail):
+                    self.name = name
+                    self.model_path = path
+                    self.md5sum = "old"
+                    self.sha256sum = "old"
+                    self.export_backend = _Backend()
+                    self._fail = fail
+
+                def validate_compiled_model(self, rtol, atol):
+                    if self._fail:
+                        return False, "numerical mismatch"
+                    return True, None
+
+            good = _Node("good", good_path, fail=False)
+            bad = _Node("bad", bad_path, fail=True)
+            _MANAGER.nodes["good"] = good
+            _MANAGER.nodes["bad"] = bad
+            _MANAGER.detected_nodes = {
+                "good": {"parameters": {"md5sum": "old", "sha256sum": "old"}},
+                "bad": {"parameters": {"md5sum": "old", "sha256sum": "old"}},
+            }
+            try:
+                with self.assertRaises(Exception) as raised:
+                    optimize_graph(trt_compatible=True)
+            finally:
+                _MANAGER.nodes.pop("good", None)
+                _MANAGER.nodes.pop("bad", None)
+                _MANAGER.detected_nodes = {}
+
+            self.assertIn("bad.onnx", str(raised.exception))
+            self.assertIn("original ONNX file was restored", str(raised.exception))
+            with open(bad_path, "rb") as handle:
+                self.assertEqual(handle.read(), original_bad)
+            good_model = onnx.load(good_path)
+            antialias = next(
+                attribute.i
+                for attribute in good_model.graph.node[0].attribute
+                if attribute.name == "antialias"
+            )
+            self.assertEqual(int(antialias), 0)
+            with open(yaml_path, encoding="utf-8") as handle:
+                updated = yaml.safe_load(handle)
+            self.assertEqual(
+                updated["models"]["bad"]["parameters"]["sha256sum"],
+                "old-bad",
+            )
+            self.assertNotEqual(
+                updated["models"]["good"]["parameters"]["sha256sum"],
+                "old-good",
+            )
+            self.assertEqual(bad.sha256sum, "old")
+            self.assertNotEqual(good.sha256sum, "old")
 
 
 if __name__ == "__main__":

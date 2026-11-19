@@ -266,6 +266,25 @@ class TestOnnxPipelineMerge(unittest.TestCase):
                 os.path.join(tmp, "again.onnx"),
             )
 
+    def test_mixed_backends_are_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            onnx.save(_abs_model(), os.path.join(tmp, "pre.onnx"))
+            with open(os.path.join(tmp, "policy.pt"), "wb") as handle:
+                handle.write(b"torchscript")
+            spec = {
+                "models": {
+                    "pre": {"parameters": {"model_path": "pre.onnx", "backend": "onnx"}},
+                    "policy": {"parameters": {"model_path": "policy.pt", "backend": "jit"}},
+                },
+                "pipeline": {"data_flow": {}, "inputs": {}, "outputs": {}},
+            }
+            yaml_path = os.path.join(tmp, "exported.yaml")
+            with open(yaml_path, "w", encoding="utf-8") as handle:
+                yaml.safe_dump(spec, handle)
+            with self.assertRaises(ValueError) as raised:
+                merge_leapp_onnx_pipeline(yaml_path)
+            self.assertIn("policy (jit)", str(raised.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
