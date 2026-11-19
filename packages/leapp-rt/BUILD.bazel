@@ -1,0 +1,141 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@leapp_crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+load("@rules_rust//cargo:cargo_build_script.bzl", "cargo_build_script")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:private"])
+
+exports_files([
+    "Cargo.toml",
+    "Cargo.lock",
+    "Cargo.Bazel.lock",
+    "tests/fixtures/pipeline.yaml",
+])
+
+cargo_build_script(
+    name = "model_config",
+    srcs = [
+        "build.rs",
+        "src/engines/build.rs",
+        "src/engines/triton/build.rs",
+    ],
+    crate_root = "build.rs",
+    data = ["src/engines/triton/convert/model_config.proto"],
+    edition = "2021",
+    deps = all_crate_deps(build = True),
+)
+
+rust_library(
+    name = "lrt",
+    srcs = glob([
+        "src/**/*.rs",
+        "tests/**/*.rs",
+    ]),
+    aliases = aliases(),
+    compile_data = glob(["tests/fixtures/*.yaml"]),
+    crate_name = "lrt",
+    crate_root = "src/lib.rs",
+    edition = "2021",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    target_compatible_with = ["@platforms//os:linux"],
+    version = "0.1.0",
+    visibility = ["//visibility:public"],
+    deps = [":model_config"] + all_crate_deps(normal = True),
+)
+
+rust_binary(
+    name = "run",
+    srcs = ["examples/run.rs"],
+    edition = "2021",
+    deps = [":lrt"],
+)
+
+rust_test(
+    name = "memory_test",
+    args = [
+        "engines::memory::",
+        "--test-threads=1",
+    ],
+    crate = ":lrt",
+)
+
+rust_test(
+    name = "native_onnx_test",
+    args = [
+        "engines::native::tests::onnx_peers_share_models_and_run_with_independent_workspaces",
+        "--exact",
+        "--test-threads=1",
+    ],
+    crate = ":lrt",
+    tags = ["manual"],
+)
+
+rust_test(
+    name = "bundle_test",
+    srcs = ["tests/unit_tests/bundle.rs"],
+    compile_data = ["tests/fixtures/pipeline.yaml"],
+    crate_root = "tests/unit_tests/bundle.rs",
+    edition = "2021",
+    deps = [":lrt"] + all_crate_deps(normal = True),
+)
+
+rust_test(
+    name = "dlpack_test",
+    srcs = glob(["tests/unit_tests/dlpack/**/*.rs"]) + ["tests/unit_tests/dlpack.rs"],
+    crate_root = "tests/unit_tests/dlpack.rs",
+    data = ["src/dlpack/include/dlpack/dlpack.h"],
+    edition = "2021",
+    rustc_env = {"CARGO_MANIFEST_DIR": "."},
+    deps = [":lrt"],
+)
+
+cc_library(
+    name = "dlpack_headers",
+    hdrs = ["src/dlpack/include/dlpack/dlpack.h"],
+    strip_include_prefix = "src/dlpack/include",
+)
+
+cc_library(
+    name = "native_backend",
+    hdrs = glob(["src/engines/native/backends/include/**/*.h"]),
+    strip_include_prefix = "src/engines/native/backends/include",
+    visibility = ["//visibility:public"],
+    deps = [":dlpack_headers"],
+)
+
+# Compile this source in the plugin target so its STL ABI matches the plugin.
+filegroup(
+    name = "native_backend_adapter",
+    srcs = ["src/engines/native/backends/cxx/src/adapter.cc"],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "runtime_types",
+    hdrs = [
+        "src/engines/native/backends/include/leapp/data_type.h",
+        "src/engines/native/backends/include/leapp/status.h",
+    ],
+    strip_include_prefix = "src/engines/native/backends/include",
+    visibility = ["//bindings/cxx:__pkg__"],
+    deps = [":dlpack_headers"],
+)
+
+alias(
+    name = "runtime",
+    actual = "//bindings/cxx:runtime",
+    visibility = ["//visibility:public"],
+)
+
+cc_test(
+    name = "native_backend_types_test",
+    srcs = [
+        "src/engines/native/backends/cxx/tests/types_test.cc",
+        ":native_backend_adapter",
+    ],
+    copts = ["-std=c++20"],
+    deps = [":native_backend"],
+)
