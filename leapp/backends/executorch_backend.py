@@ -336,24 +336,44 @@ class ExecuTorchExportBackend(ExportBackend):
             )
 
         # Copy every file the program was written as, such as the CUDA
-        # backend's weights file beside the .pte. Each is renamed into place,
+        # backend's weights file beside the .pte, then rename each into place,
         # since a program still loaded from save_path keeps reading its file.
-        # Renaming starts only once all are copied, so a failed copy leaves this
-        # node's previous files whole. Staged copies left by a failure are removed.
+        # Every file but the last is moved aside first, so a rename that raises
+        # puts this node's previous files back; the last replaces its old copy in
+        # one step. If the process dies right after a move aside, or the move back
+        # fails too, the node can be left with a missing or mismatched file. A
+        # staged copy that cannot be removed is left behind and does not replace
+        # the save's error.
         staged = {
             filename: os.path.join(save_path, f".{filename}.tmp")
             for filename in os.listdir(self._program_dir)
         }
+        last = list(staged)[-1]
+        previous = {}
         try:
             for filename, path in staged.items():
                 shutil.copy2(os.path.join(self._program_dir, filename), path)
             for filename, path in staged.items():
-                os.replace(path, os.path.join(save_path, filename))
+                destination = os.path.join(save_path, filename)
+                if filename != last and os.path.exists(destination):
+                    old = os.path.join(save_path, f".{filename}.old")
+                    os.replace(destination, old)
+                    previous[destination] = old
+                os.replace(path, destination)
         except BaseException:
-            for path in staged.values():
-                if os.path.exists(path):
-                    os.remove(path)
+            try:
+                for destination, old in previous.items():
+                    os.replace(old, destination)
+            finally:
+                for path in staged.values():
+                    with contextlib.suppress(OSError):
+                        os.remove(path)
             raise
+        # The new files are in place. A later save of this node that moves the
+        # same file aside replaces and removes a leftover.
+        for old in previous.values():
+            with contextlib.suppress(OSError):
+                os.remove(old)
         path = os.path.join(save_path, f"{self.node_context.name}.pte")
         self.data_path = (
             os.path.join(save_path, os.path.basename(self._program_data))

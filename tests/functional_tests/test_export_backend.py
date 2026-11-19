@@ -2008,8 +2008,8 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
 
     @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     def test_executorch_backend_errors(self):
-        """Covers the error paths, the checksum of the ``.pte`` file, and that
-        validation runs the program."""
+        """Covers the error paths, the checksum of the ``.pte`` file, that
+        validation runs the program, and that temporary folders are removed."""
         from executorch.runtime import Runtime
 
         with self.assertRaises(ValueError):
@@ -2055,8 +2055,17 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         )
         with self.assertRaisesRegex(ValueError, "Expected 1 inputs, got 2"):
             backend.compiled_model(torch.ones(3), torch.ones(3))
+        # A loaded program removes its folder when it is deleted.
+        folder = tempfile.mkdtemp()
+        shutil.copy2(model, folder)
+        program = ExecuTorchProgram(
+            os.path.join(folder, os.path.basename(model)), temp_dir=folder
+        )
+        torch.testing.assert_close(program(torch.ones(3))[0], torch.full((3,), 2.0))
+        del program
+        self.assertFalse(os.path.exists(folder))
 
-        # A program that fails to load leaves no temporary folder behind.
+        # A program that fails to lower or to load leaves no temporary folder behind.
         made = []
         mkdtemp = tempfile.mkdtemp
 
@@ -2064,19 +2073,23 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
             made.append(mkdtemp(*args, **kwargs))
             return made[-1]
 
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        funcB(torch.ones(3))
-        leapp.stop()
-        with (
-            mock.patch("tempfile.mkdtemp", recorded_mkdtemp),
-            mock.patch.object(
-                ExecuTorchProgram, "reload", side_effect=RuntimeError("loading")
-            ),
-            self.assertRaisesRegex(Exception, "loading"),
+        for owner, step in (
+            (ExecuTorchExportBackend, "_lower"),
+            (ExecuTorchProgram, "reload"),
         ):
-            leapp.compile_graph(visualize=False)
-        self.assertTrue(made)
-        self.assertEqual([path for path in made if os.path.exists(path)], [])
+            with self.subTest(step=step):
+                made.clear()
+                leapp.start(name=self.TEST_GRAPH_NAME)
+                funcB(torch.ones(3))
+                leapp.stop()
+                with (
+                    mock.patch("tempfile.mkdtemp", recorded_mkdtemp),
+                    mock.patch.object(owner, step, side_effect=RuntimeError(step)),
+                    self.assertRaisesRegex(Exception, step),
+                ):
+                    leapp.compile_graph(visualize=False)
+                self.assertTrue(made)
+                self.assertEqual([path for path in made if os.path.exists(path)], [])
 
         # Validation runs the program, so a program that returns other values fails it.
         run = ExecuTorchProgram.__call__
@@ -2130,11 +2143,20 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
     @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     def test_executorch_backend_export_again(self):
         """A program still loaded from the output folder keeps its values when the
-        graph is exported again into that folder."""
+        graph is exported again into that folder, also when that export fails."""
         yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
         index = torch.tensor([0, 1])
         managers = []
-        for value in (1.0, 7.0):
+        replace = os.replace
+
+        def rename_into_export_fails(src, dst, *args, **kwargs):
+            if os.path.dirname(os.path.abspath(dst)) == os.path.abspath(
+                self.TEST_GRAPH_NAME
+            ) and src.endswith((".tmp", ".old")):
+                raise OSError(errno.EIO, "Input/output error", dst)
+            return replace(src, dst, *args, **kwargs)
+
+        for value in (1.0, 7.0, 9.0):
             # XNNPACK does not take an embedding, so the program reads the
             # table from its file.
             table = torch.full((4, 3), value)
@@ -2146,9 +2168,18 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
             leapp.start(name=self.TEST_GRAPH_NAME)
             funcM(index)
             leapp.stop()
-            leapp.compile_graph(visualize=False)
+            if value == 9.0:
+                # A rename into place that keeps failing leaves the previous .pte
+                # in place, since a program with one file is never moved aside.
+                with (
+                    mock.patch.object(os, "replace", rename_into_export_fails),
+                    self.assertRaises(OSError),
+                ):
+                    leapp.compile_graph(visualize=False)
+            else:
+                leapp.compile_graph(visualize=False)
             managers.append(leapp.InferenceManager(yaml_path))
-        for manager, value in zip(managers, (1.0, 7.0)):
+        for manager, value in zip(managers, (1.0, 7.0, 7.0)):
             device = manager.nodes[funcM.__name__].device
             (actual,) = manager.run_policy(
                 {f"{funcM.__name__}/inputM": index.to(device)}
@@ -2219,27 +2250,42 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
     @unittest.skipUnless(torch.cuda.is_available(), "Needs a CUDA GPU")
     def test_executorch_backend_failed_save(self):
         """A copy or a rename that fails while a CUDA program and its ``.ptd`` are
-        saved leaves the node's previous files whole and no staged copies behind."""
+        saved leaves the node's previous files whole and no staged copies behind. A
+        staged copy that cannot be removed is the only file left, and the save's own
+        error is still raised. A failure to remove a moved-aside file does not fail
+        the save, and the next save removes it."""
         yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
         copy2 = shutil.copy2
         copies = []
+        renamed = []
         replace = os.replace
 
-        def replace_into_export_fails(src, dst, *args, **kwargs):
-            # The compilers rename their own cache files, which must still work.
-            if os.path.dirname(os.path.abspath(dst)) == os.path.abspath(
-                self.TEST_GRAPH_NAME
-            ):
-                raise OSError(errno.EIO, "Input/output error", dst)
-            return replace(src, dst, *args, **kwargs)
+        def rename_into_export_fails(n):
+            # Saving 2 files over 2 does 3 renames into the folder: moving the
+            # first old file aside, then renaming each new file into place.
+            def fail(src, dst, *args, **kwargs):
+                # The compilers rename their own cache files, which must still work.
+                if os.path.dirname(os.path.abspath(dst)) == os.path.abspath(
+                    self.TEST_GRAPH_NAME
+                ):
+                    renamed.append(dst)
+                    if len(renamed) == n:
+                        raise OSError(errno.EIO, "Input/output error", dst)
+                return replace(src, dst, *args, **kwargs)
+
+            return fail
 
         def copy_then_fail(src, dst, *args, **kwargs):
-            copies.append(dst)
-            if len(copies) == 2:
-                # A disk that fills up leaves part of the copy behind.
-                with open(dst, "wb") as f:
-                    f.write(b"partial")
-                raise OSError(errno.ENOSPC, "No space left on device", dst)
+            # Fail the second staged copy, not a copy the compilers make.
+            if os.path.dirname(os.path.abspath(dst)) == os.path.abspath(
+                self.TEST_GRAPH_NAME
+            ) and dst.endswith(".tmp"):
+                copies.append(dst)
+                if len(copies) == 2:
+                    # A disk that fills up leaves part of the copy behind.
+                    with open(dst, "wb") as f:
+                        f.write(b"partial")
+                    raise OSError(errno.ENOSPC, "No space left on device", dst)
             return copy2(src, dst, *args, **kwargs)
 
         for value in (1.0, 7.0):
@@ -2259,21 +2305,92 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
                 continue
             failures = (
                 mock.patch.object(shutil, "copy2", copy_then_fail),
-                mock.patch.object(os, "replace", replace_into_export_fails),
+                *(
+                    mock.patch.object(os, "replace", rename_into_export_fails(n))
+                    for n in (1, 2, 3)
+                ),
             )
             for failure in failures:
+                renamed.clear()
                 with failure, self.assertRaises(OSError):
                     leapp.compile_graph(visualize=False)
                 self.assertEqual(
-                    [f for f in os.listdir(self.TEST_GRAPH_NAME) if f.endswith(".tmp")],
+                    [
+                        f
+                        for f in os.listdir(self.TEST_GRAPH_NAME)
+                        if f.endswith((".tmp", ".old"))
+                    ],
                     [],
                 )
+        # A staged copy that cannot be removed does not hide the save's own
+        # error, and the other staged copy is still removed.
+        remove = os.remove
+        stuck = []
+
+        def remove_first_staged_fails(path, *args, **kwargs):
+            if (
+                not stuck
+                and os.path.dirname(os.path.abspath(path))
+                == os.path.abspath(self.TEST_GRAPH_NAME)
+                and path.endswith(".tmp")
+            ):
+                stuck.append(path)
+                raise OSError(errno.EACCES, "Permission denied", path)
+            return remove(path, *args, **kwargs)
+
+        renamed.clear()
+        with (
+            mock.patch.object(os, "replace", rename_into_export_fails(1)),
+            mock.patch.object(os, "remove", remove_first_staged_fails),
+            self.assertRaises(OSError) as caught,
+        ):
+            leapp.compile_graph(visualize=False)
+        self.assertEqual(caught.exception.errno, errno.EIO)
+        self.assertEqual(
+            [
+                f
+                for f in os.listdir(self.TEST_GRAPH_NAME)
+                if f.endswith((".tmp", ".old"))
+            ],
+            [os.path.basename(stuck[0])],
+        )
+        os.remove(stuck[0])
         (actual,) = (
             leapp.InferenceManager(yaml_path)
             .run_policy({f"{funcN.__name__}/inputN": torch.ones(2, 3, device="cuda")})
             .values()
         )
         torch.testing.assert_close(actual, torch.full((2, 3), 3.0, device="cuda"))
+
+        # A save removes the file it moved aside, and a failure to remove it does
+        # not fail the save, since the new files are already in place.
+        def remove_in_export_fails(path, *args, **kwargs):
+            if os.path.dirname(os.path.abspath(path)) == os.path.abspath(
+                self.TEST_GRAPH_NAME
+            ):
+                raise OSError(errno.EIO, "Input/output error", path)
+            return remove(path, *args, **kwargs)
+
+        leapp.compile_graph(visualize=False)
+        self.assertEqual(
+            [f for f in os.listdir(self.TEST_GRAPH_NAME) if f.endswith(".old")], []
+        )
+        with mock.patch.object(os, "remove", remove_in_export_fails):
+            leapp.compile_graph(visualize=False)
+        self.assertTrue(
+            [f for f in os.listdir(self.TEST_GRAPH_NAME) if f.endswith(".old")]
+        )
+        # The next save replaces that leftover and removes it.
+        leapp.compile_graph(visualize=False)
+        self.assertEqual(
+            [f for f in os.listdir(self.TEST_GRAPH_NAME) if f.endswith(".old")], []
+        )
+        (actual,) = (
+            leapp.InferenceManager(yaml_path)
+            .run_policy({f"{funcN.__name__}/inputN": torch.ones(2, 3, device="cuda")})
+            .values()
+        )
+        torch.testing.assert_close(actual, torch.full((2, 3), 21.0, device="cuda"))
 
     @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     @unittest.skipUnless(torch.cuda.device_count() > 1, "Needs 2 CUDA GPUs")
