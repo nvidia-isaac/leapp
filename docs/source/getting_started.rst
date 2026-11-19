@@ -190,8 +190,8 @@ artifacts and the metadata needed to wire them together.
       :class-card: sd-rounded-3
 
       ``control.onnx`` contains preprocessing, policy weights and inference,
-      and action processing. Other export formats include TorchScript and
-      ExportedProgram (``.pt2``).
+      and action processing. Other export formats include TorchScript,
+      ExportedProgram (``.pt2``) and ExecuTorch (``.pte``).
 
    .. grid-item-card:: Pipeline specification
       :class-card: sd-rounded-3

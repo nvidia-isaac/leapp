@@ -33,6 +33,12 @@ Use ``InferenceManager`` to:
    default. Install ``onnxruntime-gpu`` to enable CUDA execution; when the CUDA
    provider is available, LEAPP prefers it automatically.
 
+.. note::
+
+   An ExecuTorch program built for the CUDA delegate holds compiled native code
+   that runs when ``InferenceManager`` loads it, so load such a bundle only from
+   a source you trust.
+
 Running With Your Own Values
 ============================
 
@@ -93,7 +99,8 @@ feedback inputs from ``pipeline.initial_values``:
    manager.set_input_value("policy", "hidden", hidden_override)
 
 ``value_dict`` exposes values at LEAPP node boundaries; it does not expose
-intermediate operations inside a compiled TorchScript, ONNX, or ``pt2`` model.
+intermediate operations inside a compiled TorchScript, ONNX, ``pt2``, or
+ExecuTorch model.
 
 Feedback State
 ==============

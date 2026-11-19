@@ -257,18 +257,25 @@ class ExecuTorchExportBackend(ExportBackend):
             if device.type == "cuda"
             else contextlib.nullcontext()
         )
-        with torch.device("cpu"), gpu:
-            self._lower(exported_program, program_path)
+        # Remove temp_dir if lowering or loading fails.
+        try:
+            with torch.device("cpu"), gpu:
+                self._lower(exported_program, program_path)
+            data_path = os.path.splitext(program_path)[0] + ".ptd"
+            program_data = data_path if os.path.exists(data_path) else None
+            compiled_model = ExecuTorchProgram(
+                program_path,
+                program_data,
+                cuda=self.delegate == "cuda",
+                temp_dir=temp_dir,
+            )
+        except BaseException:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise
 
         self._program_dir = temp_dir
-        data_path = os.path.splitext(program_path)[0] + ".ptd"
-        self._program_data = data_path if os.path.exists(data_path) else None
-        self.compiled_model = ExecuTorchProgram(
-            program_path,
-            self._program_data,
-            cuda=self.delegate == "cuda",
-            temp_dir=temp_dir,
-        )
+        self._program_data = program_data
+        self.compiled_model = compiled_model
         self.compiled_module = m
         return self.compiled_model
 
