@@ -37,7 +37,10 @@ from leapp.leapp_graph.leapp_node import LeappNode
 from .base import LEAPPFunctionalTestBase
 import pytest
 
-HAS_EXECUTORCH = importlib.util.find_spec("executorch") is not None
+# The ExecuTorch backend refuses an older torch when it is imported.
+HAS_EXECUTORCH = importlib.util.find_spec("executorch") is not None and tuple(
+    int(part) for part in torch.__version__.split(".")[:2]
+) >= (2, 15)
 if HAS_EXECUTORCH:
     from leapp.backends.executorch_backend import (
         ExecuTorchExportBackend,
@@ -58,9 +61,19 @@ class TestBackendImports(unittest.TestCase):
     """Only nodes that use the ExecuTorch backend fail on a torch older than 2.15."""
 
     def _run(self, torch_version, code):
-        script = f"import torch\ntorch.__version__ = {torch_version!r}\n{code}"
+        script = (
+            "import torch\n"
+            f"torch.__version__ = torch.torch_version.TorchVersion({torch_version!r})\n"
+            f"{code}"
+        )
         root = os.path.dirname(os.path.dirname(leapp.__file__))
-        env = {**os.environ, "PYTHONPATH": root, "CUDA_VISIBLE_DEVICES": ""}
+        env = {
+            **os.environ,
+            "PYTHONPATH": root,
+            "CUDA_VISIBLE_DEVICES": "",
+            # Python 3.13+ colors tracebacks under FORCE_COLOR and breaks the checks.
+            "PYTHON_COLORS": "0",
+        }
         return subprocess.run(
             [sys.executable, "-c", script],
             capture_output=True,
@@ -76,9 +89,10 @@ class TestBackendImports(unittest.TestCase):
                     torch_version, "import leapp.backends.executorch_backend"
                 )
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn("ImportError", result.stderr)
                 self.assertIn(
-                    "needs torch 2.15 and Python 3.11 or newer", result.stderr
+                    "ImportError: LEAPP's ExecuTorch backend needs torch 2.15 and "
+                    "Python 3.11 or newer",
+                    result.stderr,
                 )
                 self.assertIn(f"found torch {torch_version}", result.stderr)
 
@@ -100,12 +114,22 @@ class TestBackendImports(unittest.TestCase):
             "from leapp.inference_manager import NodeManager\n"
             "for name in ('jit', 'onnx', 'pt2'):\n"
             "    print(type(NodeManager._create_backend(None, name, {})).__name__)\n"
+            "try:\n"
+            "    NodeManager._create_backend(None, 'pte', {})\n"
+            "except ImportError as exc:\n"
+            "    print('pte:', exc)\n"
         )
         result = self._run("2.7.0", code)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            result.stdout.split(),
-            ["TorchExportBackend", "ONNXExportBackend", "ExportedProgramExportBackend"],
+            result.stdout.splitlines(),
+            [
+                "TorchExportBackend",
+                "ONNXExportBackend",
+                "ExportedProgramExportBackend",
+                "pte: LEAPP's ExecuTorch backend needs torch 2.15 and Python 3.11 "
+                "or newer, as ExecuTorch 1.6 does; found torch 2.7.0",
+            ],
         )
 
     def test_import_leapp_registers_the_onnx_copy_lowering(self):
@@ -1581,7 +1605,7 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
             yaml_data["models"][funcA.__name__]["parameters"]["backend"], "pt2"
         )
 
-    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     def test_executorch_backend(self):
         """Covers the ExecuTorch delegates, which lower and run the graph outside
         PyTorch, so validation and the InferenceManager run the ``.pte`` file."""
@@ -1675,7 +1699,7 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
                         actual.cpu(), fresh.cpu() @ weight, rtol=1e-4, atol=1e-5
                     )
 
-    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     def test_executorch_backend_constants(self):
         """A legacy node is exported from its Python function, so a value it
         builds from constants alone reaches export. XNNPACK cannot run arange,
@@ -1698,7 +1722,7 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         )
         self.assertEqual([op.name for op in plan.operators], [])
 
-    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     def test_executorch_backend_written_buffers(self):
         """ExecuTorch leaves a buffer the program writes uninitialized unless told to
         keep its value, so these nodes would return zeros where the buffers held
@@ -1768,7 +1792,7 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         for actual in outputs.values():
             torch.testing.assert_close(actual, torch.tensor([7.0, 20.0, 30.0]))
 
-    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     @unittest.skipUnless(torch.cuda.is_available(), "Needs a CUDA GPU")
     def test_executorch_backend_cuda_written_buffer(self):
         """A CUDA node that returns the buffer it writes leaves the buffer outside
@@ -1823,7 +1847,7 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
             outputs["legacy_cuda_counter/output1"].cpu(), torch.full((3,), 8.0)
         )
 
-    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     def test_executorch_backend_no_inputs(self):
         """A node whose output reads only a buffer loses its input when the graph
         is pruned. Its output must still reach a TorchScript node on the node's
@@ -1856,7 +1880,7 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
                     torch.tensor([8.0, 20.0, 36.0], device=device),
                 )
 
-    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     @unittest.skipUnless(torch.cuda.is_available(), "Needs a CUDA GPU")
     def test_executorch_backend_devices(self):
         """Covers nodes on different devices: a GPU node that returns an input
@@ -1982,7 +2006,7 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
             torch.set_default_device(None)
         self.assertEqual(lowered_on, [torch.device("cpu")] * 2)
 
-    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     def test_executorch_backend_errors(self):
         """Covers the error paths, the checksum of the ``.pte`` file, and that
         validation runs the program."""
@@ -2103,7 +2127,7 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
                     ):
                         leapp.compile_graph(visualize=False)
 
-    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     def test_executorch_backend_export_again(self):
         """A program still loaded from the output folder keeps its values when the
         graph is exported again into that folder."""
@@ -2131,7 +2155,7 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
             ).values()
             torch.testing.assert_close(actual.cpu(), torch.full((2, 3), value))
 
-    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     @unittest.skipUnless(torch.cuda.is_available(), "Needs a CUDA GPU")
     def test_executorch_backend_gpu_weights(self):
         """Covers weights captured on another device than the delegate's, and the
@@ -2191,7 +2215,7 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         with self.assertRaises(ValueError):
             leapp.InferenceManager(yaml_path)
 
-    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     @unittest.skipUnless(torch.cuda.is_available(), "Needs a CUDA GPU")
     def test_executorch_backend_failed_save(self):
         """A copy or a rename that fails while a CUDA program and its ``.ptd`` are
@@ -2251,7 +2275,7 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         )
         torch.testing.assert_close(actual, torch.full((2, 3), 3.0, device="cuda"))
 
-    @unittest.skipUnless(HAS_EXECUTORCH, "ExecuTorch is not installed")
+    @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     @unittest.skipUnless(torch.cuda.device_count() > 1, "Needs 2 CUDA GPUs")
     def test_executorch_backend_second_gpu(self):
         """Covers a CUDA program exported with the second GPU current and as the
