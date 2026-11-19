@@ -260,6 +260,10 @@ The ``models`` mapping is deterministically ordered. LEAPP guarantees:
       (CPU) or ``cuda``. A ``cuda`` program runs on the first visible GPU. The
       ``.pte`` file itself decides what runs; this entry does not limit it.
 
+   ``torch_version`` and ``executorch_version``
+      The versions that built the artifact: ``torch_version`` for ``pt2`` and
+      ``pte`` nodes, and ``executorch_version`` for ``pte`` nodes.
+
 ``pipeline``
 ------------
 

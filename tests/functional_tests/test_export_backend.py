@@ -1726,7 +1726,7 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
     def test_executorch_backend_written_buffers(self):
         """ExecuTorch leaves a buffer the program writes uninitialized unless told to
         keep its value, so these nodes would return zeros where the buffers held
-        20 and 30. One declares its buffer, the other's module owns two. On a GPU
+        20 and 30. One declares its buffer, and another's module owns two. On a GPU
         machine, CPU inputs still give CPU outputs. A declared counter carries its
         value between calls, so validation replays sample 0 only after loading the
         program again."""
@@ -2139,6 +2139,18 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
                         self.assertRaisesRegex(RuntimeError, "has no elements"),
                     ):
                         leapp.compile_graph(visualize=False)
+
+        # ExecuTorch would return the written input as an extra first output.
+        @annotate._method(export_with="pte")
+        def legacy_writes_input(inputW):
+            inputW.add_(3)
+            return inputW * 2
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        legacy_writes_input(torch.ones(3))
+        leapp.stop()
+        with self.assertRaisesRegex(RuntimeError, "writes its inputs"):
+            leapp.compile_graph(visualize=False)
 
     @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     def test_executorch_backend_export_again(self):

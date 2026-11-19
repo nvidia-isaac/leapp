@@ -61,7 +61,8 @@ class ExecuTorchProgram:
     def reload(self):
         """Load the program again, so its buffers start from their initial values.
 
-        Loading only the method again keeps the values earlier calls wrote.
+        ``load_method`` returns the method already loaded, so only loading the
+        program again starts the buffers over.
         """
         Runtime = _import_executorch()
 
@@ -215,6 +216,19 @@ class ExecuTorchExportBackend(ExportBackend):
             compile_config = EdgeCompileConfig(_check_ir_validity=False)
 
         exported_program = exported_program.run_decompositions({})
+        # ExecuTorch returns an input written in place as an extra first output,
+        # which the node does not declare. The decomposition above is what
+        # records such a write in the signature.
+        mutated = sorted(
+            exported_program.graph_signature.user_inputs_to_mutate.values()
+        )
+        if mutated:
+            _get_logger().fatal(
+                f"Node '{self.node_context.name}' writes its inputs {mutated} in "
+                "place, which ExecuTorch returns as extra outputs. Write to a copy "
+                "instead, as in x = x.clone().",
+                error_type=RuntimeError,
+            )
         config = self._backend_config()
         # Fold values computed from constants alone first: an op that only builds
         # a constant may be one the delegate lacks, and left in the graph it

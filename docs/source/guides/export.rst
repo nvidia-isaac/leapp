@@ -44,6 +44,9 @@ LEAPP supports these public backend names:
    * - ``"executorch"``
      - ``executorch``
      - ExecuTorch ``.pte``
+   * - ``"pte"``
+     - ``executorch``
+     - ExecuTorch ``.pte``
    * - ``None``
      - ``NoneExportBackend``
      - No compilation
@@ -140,7 +143,8 @@ ExecuTorch export
 
 ``"executorch"`` exports each node with :func:`torch.export.export`, lowers
 it with `ExecuTorch <https://docs.pytorch.org/executorch/>`_, and saves a ``.pte``
-program. The YAML ``backend`` field is written as ``pte``. Validation and
+program. The YAML ``backend`` field is written as ``pte``, and ``"pte"`` is a
+shorthand alias for ``"executorch"``, like ``"pt2"``. Validation and
 :class:`~leapp.InferenceManager` run the ``.pte`` file through ExecuTorch's
 runtime, so they check the program a deployment runs. ExecuTorch programs
 also run from C++ without Python or libtorch.
@@ -148,7 +152,8 @@ also run from C++ without Python or libtorch.
 Install the ``executorch`` extra first (Python 3.11 or newer, since ExecuTorch
 1.6 has no Python 3.10 wheels). It needs PyTorch 2.15, whose PyPI wheels use
 CUDA 13, so with Warp add the ``warp-cu13`` extra in the same command, not
-``warp-cu12``:
+``warp-cu12``. With an older PyTorch, picking this backend raises an error
+that names both versions, and the other backends still work:
 
 .. code-block:: bash
 
@@ -217,8 +222,8 @@ back in GPU memory, but the CUDA backend copies it through host memory on
 every call, even with a batch of 1. A block of whole rows taken without a
 step, such as ``x[1:3]`` or ``x[0]``, does not take that round trip. A C++ app
 passes GPU tensors and sets GPU output buffers with ``Module::set_output``,
-since the program does not allocate them. LEAPP's runtime does that, and moves
-outputs to the device of the inputs.
+since the program does not allocate them. ExecuTorch's Python runtime, which
+LEAPP uses, allocates them, and LEAPP moves outputs to the device of the inputs.
 
 The CUDA backend writes the node's weights to ``<node>.ptd`` beside the
 ``.pte``; keep the two files together. The YAML records its checksum as
@@ -236,7 +241,10 @@ a larger ``atol`` to ``compile_graph()``.
 
 Boolean masks such as ``x[x > 0]`` do not export with either delegate, and
 the CUDA backend does not export ``nonzero``; both fail at export with an
-error. Export such a node with another backend. The CUDA backend also refuses
+error. With ``"xnnpack"``, ``nonzero`` of an input with 2 or more dimensions
+returns wrong indices, which validation catches. A node with no inputs that
+writes a buffer fails at export. Export such a node with another backend. The
+CUDA backend also refuses
 a node that reads or returns a tensor with no elements, since it cannot run
 one. Export such a node with ``"xnnpack"`` or another backend. With
 ``device_io``, a node that returns a buffer it changes in place can fail at

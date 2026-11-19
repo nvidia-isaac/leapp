@@ -2,7 +2,7 @@
 
 > NVIDIA's library for machine learning pipeline export. LEAPP stands for Lightweight Export Annotations for Policy Pipelines. Capture supported preprocessing, model inference, and postprocessing from existing Python code in deployable models.
 
-The Python package and import name are `leapp`: install with `pip install leapp` and use `import leapp`.
+The Python package and import name are `leapp`: install with `pip install leapp` and use `import leapp`. ExecuTorch export needs `pip install "leapp[executorch]"`, Python 3.11+ and PyTorch 2.15.
 
 One exported ONNX, TorchScript, PT2, or ExecuTorch model can span existing helper functions, class methods, and multiple input call sites. Separate models are optional. Capture supports PyTorch and supported NumPy operations, including conversions between them. Warp kernel regions require an additional runtime adapter.
 
