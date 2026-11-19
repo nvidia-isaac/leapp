@@ -166,30 +166,43 @@ class ExportManager:
         ]
         # Putting buffers back runs the owner's register_buffer() and buffer
         # registration hooks, which may have changed since module().
-        if not all(tracker.only_torch_code_runs() for tracker in trackers):
+        try:
+            only_torch = all(tracker.only_torch_code_runs() for tracker in trackers)
+        except Exception as e:
+            _get_logger().error(f"BufferTracker: could not check the models: {e}")
+            only_torch = False
+        if not only_torch:
             self.keep_buffers_tied = True
         # If buffers must stay tied, only each node's latest tracker puts
         # buffers back at stop(), none does at start(), and none is made plain.
-        make_plain = not self.keep_buffers_tied
-        if trackers and not make_plain:
+        tied = self.keep_buffers_tied
+        restored = []
+        for tracker in trackers:
+            is_latest = any(tracker is t for t in latest)
+            if tied and not is_latest:
+                continue
+            try:
+                tracker.restore(at_session_end=True, latest=is_latest)
+                restored.append(tracker)
+            except Exception as e:
+                _get_logger().error(f"BufferTracker: could not put buffers back: {e}")
+        # restore() can find a buffer that must stay tied, so no buffer is made
+        # plain until every tracker has put its buffers back.
+        if trackers and self.keep_buffers_tied:
             _get_logger().warning(
                 "BufferTracker: buffers stay tied to the capture for the rest of "
                 "this process, because a buffer may hold another tensor's values "
                 "or a change LEAPP does not see (see Buffer tracking details in "
                 "State capture and feedback)"
             )
-        for tracker in trackers:
-            is_latest = any(tracker is t for t in latest)
-            if not make_plain and not is_latest:
-                continue
-            try:
-                tracker.restore(at_session_end=True, latest=is_latest)
-                if make_plain:
+        else:
+            for tracker in restored:
+                try:
                     tracker.release()
-            except Exception as e:
-                _get_logger().error(
-                    f"BufferTracker: could not put buffers back or make them plain: {e}"
-                )
+                except Exception as e:
+                    _get_logger().error(
+                        f"BufferTracker: could not make buffers plain: {e}"
+                    )
         self.grad_buffers = []
 
     def set_detected_graph(self, models: dict, pipeline: dict):

@@ -44,6 +44,7 @@ Note:
 
 from __future__ import annotations
 
+import collections
 import torch
 import torch.nn as nn
 from dataclasses import dataclass
@@ -101,8 +102,12 @@ _TORCH_SETATTRS = (
 
 def _from_torch(obj) -> bool:
     # functools.wraps copies __module__ from what it wraps.
-    module = getattr(obj, "__module__", None) or ""
-    return module.startswith("torch.") and not hasattr(obj, "__wrapped__")
+    module = getattr(obj, "__module__", None)
+    return (
+        isinstance(module, str)
+        and module.startswith("torch.")
+        and not hasattr(obj, "__wrapped__")
+    )
 
 
 def _is_torch_register_buffer(module) -> bool:
@@ -123,19 +128,29 @@ def _is_torch_register_buffer(module) -> bool:
 def _only_torch_code_runs(owner) -> bool:
     """Whether registering a buffer of ``owner`` runs only torch's code.
 
-    That is ``owner``'s register_buffer(), __setattr__, buffer containers
-    and the buffer registration hooks. A read that gives back another
+    That is ``owner``'s register_buffer(), __setattr__, the attribute
+    reads that torch's register_buffer() makes, the parameter and buffer
+    containers and the buffer registration hooks. A read that gives back another
     tensor is caught in ``BufferTracker.restore()``.
     """
     if not _is_torch_register_buffer(owner):
         return False
     setattr_ = type(owner).__setattr__
-    buffers = type(owner.__dict__.get("_buffers"))
+    # nn.Module.__getattr__ looks in _parameters before _buffers.
+    containers = [
+        type(owner.__dict__.get(name)) for name in ("_parameters", "_buffers")
+    ]
     return (
         setattr_ in _TORCH_SETATTRS
         # Also a replacement made before this module was imported.
         and _from_torch(setattr_)
-        and (buffers is dict or _from_torch(buffers))
+        and type(owner).__getattribute__ is object.__getattribute__
+        and _from_torch(type(owner).__getattr__)
+        # torch 2.4 and older used OrderedDicts, which old pickles keep.
+        and all(
+            kind in (dict, collections.OrderedDict) or _from_torch(kind)
+            for kind in containers
+        )
         and type(getattr(owner, "_non_persistent_buffers_set", None)) is set
         # torch's own hooks are allowed too, such as the one a failed
         # torch.export leaves behind on torch 2.7.
@@ -256,11 +271,11 @@ class BufferTracker:
             # buffer, unseen. If named_buffers() lists another tensor under
             # the name of something the owner holds, even a buffer registered
             # as None, LEAPP would write that tensor over it.
-            slot = _slot(owning_module, attr_name)
             if (
                 clean_name in state_dict
                 or not _only_torch_code_runs(owning_module)
-                or (slot is not _EMPTY and slot is not buf)
+                or (slot := _slot(owning_module, attr_name)) is not _EMPTY
+                and slot is not buf
             ):
                 self._export_manager.keep_buffers_tied = True
             state_dict[clean_name] = buf
@@ -285,7 +300,12 @@ class BufferTracker:
                 isinstance(owning_module, nn.Module)
                 and attr_name in owning_module._buffers
             )
-            setattr(owning_module, attr_name, traced_tensor)
+            if was_buffer and _only_torch_code_runs(owning_module):
+                # setattr() would take the flag of an nn.Buffer, which the
+                # promoted tensor still carries, over the buffer's own.
+                _register_buffer(owning_module, attr_name, traced_tensor)
+            else:
+                setattr(owning_module, attr_name, traced_tensor)
             if full_name in grad_names:
                 grad_buffers.append(traced_tensor)
 

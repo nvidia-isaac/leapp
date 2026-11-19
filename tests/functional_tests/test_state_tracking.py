@@ -16,6 +16,7 @@
 #
 """Tests for state tensor API (state_tensors and update_state)."""
 
+import collections
 import contextlib
 import functools
 import os
@@ -969,7 +970,8 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
         """After stop(), the model's buffers are plain tensors, not views of TracedTensors.
 
         torch.export of the model then works, and the buffers keep their memory
-        and persistent flag. Also for a session that never reached
+        and persistent flag, also against an nn.Buffer's own flag. Also for a
+        model whose buffer dict is an OrderedDict, a session that never reached
         output_tensors(), a session restarted with start(), a second session,
         and the model of an earlier module() call of the node, which is checked
         for plain buffers and run. A buffer that requires grad stays as
@@ -991,12 +993,20 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
             "twice",
             "buffer_names",
             "autograd_history",
+            "ordered_dict",
         )
         for case in cases:
             with self.subTest(case=case):
                 annotate.keep_buffers_tied = False
                 model = NoMutationModel().eval()
                 model.register_buffer("window", torch.ones(4), persistent=False)
+                # register_buffer()'s flag wins over the nn.Buffer's in eager torch.
+                model.register_buffer(
+                    "marked", nn.Buffer(torch.ones(4), persistent=False)
+                )
+                if case == "ordered_dict":
+                    # As in a model pickled by torch 2.4 or older.
+                    model.__dict__["_buffers"] = collections.OrderedDict(model._buffers)
                 other = GRUModel(action_dim=4).eval()
                 other.register_buffer("memory", torch.ones(4), persistent=False)
                 grid = torch.empty_strided((4, 4), (1, 4))
@@ -1004,6 +1014,11 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
                 if case == "autograd_history":
                     model.register_buffer("pe", model.linear.weight.sum(0) * 2)
                     model.register_buffer("gain", torch.ones(4, requires_grad=True))
+                    # Never made plain, so only putting it back sets its flag.
+                    model.register_buffer(
+                        "marked_gain",
+                        nn.Buffer(torch.ones(4, requires_grad=True), persistent=False),
+                    )
                 keys = sorted(model.state_dict())
                 other_keys = sorted(other.state_dict())
                 untouched = model.bias
@@ -1898,23 +1913,30 @@ class TestBufferTrackingErrors(LEAPPFunctionalTestBase):
         Its buffers are put back as before but not made plain.
         """
 
-        for finish in (True, False):
-            with self.subTest(finish=finish):
-                annotate.keep_buffers_tied = False
-                model = NoMutationModel().eval()
-                facade = Facade(model)
-                leapp.start(name=self.TEST_GRAPH_NAME)
-                obs = annotate.input_tensors("policy", {"obs": torch.randn(1, 4)})
-                annotate.module("policy", facade)
-                action = facade(obs)
-                if finish:
-                    annotate.output_tensors(
-                        "policy", {"action": action}, export_with="jit"
-                    )
-                with self.assertNoLogs("leapp", level="ERROR"):
-                    leapp.stop()
-                self.assertNotIsInstance(model(torch.randn(1, 4)), TracedTensor)
-                self.assertTrue(tied_to_capture(model.scale))
+        class LookupFacade(Facade):
+            """Looks missing attributes up in a dict, so they raise KeyError."""
+
+            def __getattr__(self, name):
+                return {}[name]
+
+        for make in (Facade, LookupFacade):
+            for finish in (True, False):
+                with self.subTest(facade=make.__name__, finish=finish):
+                    annotate.keep_buffers_tied = False
+                    model = NoMutationModel().eval()
+                    facade = make(model)
+                    leapp.start(name=self.TEST_GRAPH_NAME)
+                    obs = annotate.input_tensors("policy", {"obs": torch.randn(1, 4)})
+                    annotate.module("policy", facade)
+                    action = facade(obs)
+                    if finish:
+                        annotate.output_tensors(
+                            "policy", {"action": action}, export_with="jit"
+                        )
+                    with self.assertNoLogs("leapp", level="ERROR"):
+                        leapp.stop()
+                    self.assertNotIsInstance(model(torch.randn(1, 4)), TracedTensor)
+                    self.assertTrue(tied_to_capture(model.scale))
 
     def test_object_that_forwards_buffers_keeps_the_session_tied(self):
         """A session that also tracks a model through an object that forwards its buffers makes no buffer plain.
@@ -2211,13 +2233,19 @@ class TestBufferTrackingErrors(LEAPPFunctionalTestBase):
 
         The node never finished, and the session ends with start(), whether or
         not the clashing module() call is the node's latest, or with stop()
-        where it is not.
+        where it is not. The same holds without a clash for a module() call
+        that is not the node's latest, when stop() finds a buffer
+        registration hook that is not torch's own.
         """
+
+        def no_op(module, name, buffer):
+            return None
 
         for end, clash_is_latest in (
             ("start", True),
             ("start", False),
             ("stop", False),
+            ("hook", False),
         ):
             with self.subTest(end=end, clash_is_latest=clash_is_latest):
                 annotate.keep_buffers_tied = False
@@ -2226,16 +2254,25 @@ class TestBufferTrackingErrors(LEAPPFunctionalTestBase):
                 obs = annotate.input_tensors("policy", {"obs": torch.randn(1, 4)})
                 annotate.module("policy", first)
                 hidden = first(obs)
-                annotate.module("policy", second)
-                second(hidden)
+                if end != "hook":
+                    annotate.module("policy", second)
+                    second(hidden)
                 if not clash_is_latest:
                     annotate.module("policy", NoBufferModel().eval())
                 if end == "stop":
                     leapp.stop()
+                if end == "hook":
+                    hook = nn.modules.module.register_module_buffer_registration_hook(
+                        no_op
+                    )
+                    try:
+                        leapp.stop()
+                    finally:
+                        hook.remove()
                 leapp.start(name=self.TEST_GRAPH_NAME)
                 obs = annotate.input_tensors("again", {"obs": torch.randn(1, 4)})
-                with self.assertRaises(Exception):
-                    annotate.module("again", second)
+                with self.assertRaisesRegex(Exception, "different node"):
+                    annotate.module("again", first if end == "hook" else second)
                 leapp.stop()
 
     def test_buffer_assigned_by_the_user_after_output_tensors_is_kept(self):
@@ -2401,14 +2438,16 @@ class TestBufferTrackingErrors(LEAPPFunctionalTestBase):
 
         The __setattr__ writes another model's buffer, also one whose node has
         already put it back, or clamps; a __getattr__ or a property halves
-        the buffer it reads; the register_buffer() override, also
-        another model's method set on the model, writes a model that module()
-        never saw; a hook changes the dtype, or writes another model's buffer
+        the buffer it reads, or a __getattr__ or __getattribute__ writes
+        another model's buffer when it reads one; the register_buffer()
+        override, also another model's method set on the model, writes a
+        model that module() never saw; a hook changes the dtype, or writes another model's buffer
         while module() or output_tensors() runs; an override set after
-        module() or output_tensors() writes another model's buffer; a
+        module() or output_tensors() writes another model's buffer, also on
+        one of two models that one module() call tracks; a
         named_buffers() lists another model's buffer under the model's own
-        buffer name, also one registered as None; the model's buffer dict or
-        non-persistent set, or a replaced nn.Module.register_buffer or
+        buffer name, also one registered as None; the model's buffer dict,
+        parameter dict or non-persistent set, or a replaced nn.Module.register_buffer or
         __setattr__, also one replaced before LEAPP was imported, writes
         another model's buffer.
         """
@@ -2459,6 +2498,23 @@ class TestBufferTrackingErrors(LEAPPFunctionalTestBase):
         class HalvingProperty(Plain):
             pass
 
+        class Reading(Plain):
+            def __getattr__(self, name):
+                value = super().__getattr__(name)
+                if name == "h" and "partner" in self.__dict__:
+                    self.partner.g = value
+                return value
+
+        class ReadingAll(Plain):
+            def __getattribute__(self, name):
+                if name == "h" and "partner" in object.__getattribute__(
+                    self, "__dict__"
+                ):
+                    value = nn.Module.__getattr__(self, name)
+                    self.partner.g = value
+                    return value
+                return super().__getattribute__(name)
+
         class Lister(Partner):
             def named_buffers(self, *args, **kwargs):
                 yield "g", self.partner.g
@@ -2475,6 +2531,12 @@ class TestBufferTrackingErrors(LEAPPFunctionalTestBase):
             def __setitem__(self, name, value):
                 mirror_hook(None, name, value)
                 super().__setitem__(name, value)
+
+        class MirrorParams(dict):
+            def __contains__(self, name):
+                if name == "h":
+                    mirror_hook(None, name, model._buffers[name])
+                return super().__contains__(name)
 
         class MirrorSet(set):
             def discard(self, name):
@@ -2503,16 +2565,20 @@ class TestBufferTrackingErrors(LEAPPFunctionalTestBase):
             "restored",
             "clamp",
             "halving",
+            "reading",
+            "reading_all",
             "register",
             "bound",
             "hook",
             "early_hook",
             "late_hook",
             "late_override",
+            "late_override_child",
             "end_override",
             "lister",
             "lister_none",
             "buffer_dict",
+            "parameter_dict",
             "persistent_set",
             "patched",
             "setattr_before",
@@ -2591,10 +2657,12 @@ class TestBufferTrackingErrors(LEAPPFunctionalTestBase):
                     annotate.module("policy", partner)
                     annotate.module("policy", model)
                     action = model(partner(obs))
-                elif case in ("buffer_dict", "persistent_set"):
+                elif case in ("buffer_dict", "parameter_dict", "persistent_set"):
                     model = Plain().eval()
                     if case == "buffer_dict":
                         model.__dict__["_buffers"] = MirrorDict(model._buffers)
+                    elif case == "parameter_dict":
+                        model.__dict__["_parameters"] = MirrorParams(model._parameters)
                     else:
                         model.__dict__["_non_persistent_buffers_set"] = MirrorSet()
                     annotate.module("policy", partner)
@@ -2604,6 +2672,13 @@ class TestBufferTrackingErrors(LEAPPFunctionalTestBase):
                     model = Plain().eval()
                     annotate.module("policy", partner)
                     annotate.module("policy", model)
+                    action = model(partner(obs))
+                elif case == "late_override_child":
+                    # One module() call tracks buffers of two owners.
+                    model = Plain().eval()
+                    pair = nn.Module()
+                    pair.partner, pair.model = partner, model
+                    annotate.module("policy", pair)
                     action = model(partner(obs))
                 elif case == "bound":
                     model = Plain().eval()
@@ -2617,6 +2692,8 @@ class TestBufferTrackingErrors(LEAPPFunctionalTestBase):
                     make = {
                         "clamp": Clamp,
                         "halving": Halving,
+                        "reading": Reading,
+                        "reading_all": ReadingAll,
                         "property": HalvingProperty,
                         "register": RegisterMirror,
                         "hook": Plain,
@@ -2631,7 +2708,7 @@ class TestBufferTrackingErrors(LEAPPFunctionalTestBase):
                     object.__setattr__(model, "partner", partner)
                     annotate.module("policy", model)
                     action = model(obs)
-                if case == "late_override":
+                if case in ("late_override", "late_override_child"):
                     model.register_buffer = mirror_register
                 if case == "late_hook":
                     # Installed for output_tensors() only, then removed.
@@ -2662,7 +2739,13 @@ class TestBufferTrackingErrors(LEAPPFunctionalTestBase):
                         hook.remove()
                 if case in ("clamp", "hook"):
                     check = model.h
-                elif case in ("halving", "property"):
+                elif case in (
+                    "halving",
+                    "reading",
+                    "reading_all",
+                    "parameter_dict",
+                    "property",
+                ):
                     check = model._buffers["h"]
                 elif case in ("lister", "lister_none"):
                     check = model.g
@@ -3072,7 +3155,7 @@ class TestBufferTrackingErrors(LEAPPFunctionalTestBase):
                 self.assertTrue(torch.equal(model.h_state, value))
 
     def test_inference_buffers_still_refuse_in_place_updates(self):
-        """A buffer created under inference_mode is plain after stop() and still refuses in-place updates."""
+        """A buffer created under inference_mode still refuses in-place updates after stop()."""
         with torch.inference_mode():
             model = NoMutationModel().eval()
         leapp.start(name=self.TEST_GRAPH_NAME)
@@ -3083,12 +3166,11 @@ class TestBufferTrackingErrors(LEAPPFunctionalTestBase):
             if node == "first":
                 annotate.output_tensors(node, {"action": action}, export_with="jit")
         leapp.stop()
-        self.assertFalse(tied_to_capture(model.scale))
         with self.assertRaises(RuntimeError):
             model.scale.add_(1)
 
     def test_buffer_reassigned_under_inference_mode_is_plain(self):
-        """A buffer a later forward reassigns under inference_mode is plain after stop() and stays an inference tensor."""
+        """A buffer a later forward reassigns under inference_mode is plain after stop() and still refuses in-place updates."""
 
         class Accumulator(nn.Module):
             def __init__(self):
@@ -3111,6 +3193,93 @@ class TestBufferTrackingErrors(LEAPPFunctionalTestBase):
         leapp.stop()
         self.assertFalse(tied_to_capture(model.h))
         self.assertTrue(model.h.is_inference())
+        with self.assertRaises(RuntimeError):
+            model.h.add_(1)
+
+    def test_forward_that_changes_a_buffer_flag_keeps_the_change(self):
+        """A forward that registers a buffer again with the other persistent flag keeps that flag after stop(), as in eager PyTorch."""
+
+        class Counter(nn.Module):
+            def __init__(self, persistent):
+                super().__init__()
+                self.persistent = persistent
+                self.register_buffer("step", torch.zeros(1), persistent=not persistent)
+
+            def forward(self, x):
+                self.register_buffer("step", self.step + 1, persistent=self.persistent)
+                return x * self.step
+
+        for persistent in (True, False):
+            for finish in (True, False):
+                with self.subTest(persistent=persistent, finish=finish):
+                    annotate.keep_buffers_tied = False
+                    model = Counter(persistent).eval()
+                    leapp.start(name=self.TEST_GRAPH_NAME)
+                    obs = annotate.input_tensors("policy", {"obs": torch.randn(1, 4)})
+                    annotate.module("policy", model)
+                    action = model(obs)
+                    if finish:
+                        annotate.output_tensors(
+                            "policy", {"action": action}, export_with="jit"
+                        )
+                    leapp.stop()
+                    self.assertEqual("step" in model.state_dict(), persistent)
+                    self.assertFalse(tied_to_capture(model.step))
+
+    def test_buffer_read_back_at_stop_keeps_the_session_tied(self):
+        """A buffer that reads back as another tensor at stop() keeps every buffer of that session tied.
+
+        The node never reaches output_tensors(), so stop() is where LEAPP
+        reads the buffer that requires grad back and finds another tensor.
+        The clean model of an earlier node, put back first, stays tied too.
+        """
+
+        class ReadBack(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.register_buffer("w", torch.ones(4, requires_grad=True))
+                self.register_buffer("s", torch.full((4,), 2.0))
+
+            def forward(self, x):
+                return x * self.s + self.w.detach()
+
+        clean = NoMutationModel().eval()
+        model = ReadBack().eval()
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        obs = annotate.input_tensors("first", {"obs": torch.randn(1, 4)})
+        annotate.module("first", clean)
+        annotate.output_tensors("first", {"action": clean(obs)}, export_with="jit")
+        obs = annotate.input_tensors("policy", {"obs": torch.randn(1, 4)})
+        annotate.module("policy", model)
+        model(obs)
+        ReadBack.w = property(lambda self: torch.full((4,), 9.0))
+        with self.assertLogs("leapp", level="WARNING") as logs:
+            leapp.stop()
+        self.assertTrue(any("stay tied" in line for line in logs.output))
+        self.assertTrue(tied_to_capture(model._buffers["s"]))
+        self.assertTrue(tied_to_capture(clean.scale))
+
+    def test_model_that_refuses_at_stop_still_ends_the_session(self):
+        """stop() logs an error and ends the session when a model starts refusing to be checked after output_tensors()."""
+
+        class Frozen(NoMutationModel):
+            def __getattribute__(self, name):
+                if name == "register_buffer" and object.__getattribute__(
+                    self, "__dict__"
+                ).get("frozen"):
+                    raise RuntimeError("model is frozen")
+                return super().__getattribute__(name)
+
+        model = Frozen().eval()
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        obs = annotate.input_tensors("policy", {"obs": torch.randn(1, 4)})
+        annotate.module("policy", model)
+        annotate.output_tensors("policy", {"action": model(obs)}, export_with="jit")
+        model.__dict__["frozen"] = True
+        with self.assertLogs("leapp", level="ERROR"):
+            leapp.stop()
+        self.assertTrue(annotate.keep_buffers_tied)
+        self.assertTrue(torch.jit._state._enabled.enabled)
 
     def test_first_session_of_a_process_makes_buffers_plain(self):
         """In a new Python process, the first session makes buffers plain.
