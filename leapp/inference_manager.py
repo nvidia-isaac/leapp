@@ -18,11 +18,6 @@ from leapp.utils.tensor_description import (
 )
 from leapp.utils.logging import _get_logger
 
-from leapp.backends.torch_export_backend import TorchExportBackend
-from leapp.backends.onnx_export_backend import ONNXExportBackend
-from leapp.backends.exported_program_backend import ExportedProgramExportBackend
-from leapp.backends.executorch_backend import ExecuTorchExportBackend
-
 
 class NodeManager:
     def __init__(self, name, model_path, inputs, outputs, parameters):
@@ -99,13 +94,25 @@ class NodeManager:
 
     def _create_backend(self, backend, parameters):
         """utilizes the backends just to load the model. the backend is not used for compilation or saving."""
+        # Each backend is imported only when a node uses it, so a backend that
+        # cannot load in this environment does not affect the others.
         if backend == "jit":
+            from leapp.backends.torch_export_backend import TorchExportBackend
+
             return TorchExportBackend(None)
         elif backend == "onnx":
+            from leapp.backends.onnx_export_backend import ONNXExportBackend
+
             return ONNXExportBackend(None)
         elif backend == "pt2":
+            from leapp.backends.exported_program_backend import (
+                ExportedProgramExportBackend,
+            )
+
             return ExportedProgramExportBackend(None)
         elif backend == "pte":
+            from leapp.backends.executorch_backend import ExecuTorchExportBackend
+
             return ExecuTorchExportBackend(None, parameters)
         else:
             _get_logger().fatal(

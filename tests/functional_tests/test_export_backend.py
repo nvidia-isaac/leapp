@@ -19,6 +19,8 @@ import importlib.util
 import os
 import json
 import shutil
+import subprocess
+import sys
 import unittest
 import tempfile
 from unittest import mock
@@ -30,13 +32,17 @@ from onnxscript.rewriter import _matcher
 import leapp
 from leapp.leapp import _MANAGER as annotate
 from leapp import TensorSemantics, InputKindEnum, OutputKindEnum
-from leapp.backends.executorch_backend import ExecuTorchExportBackend, ExecuTorchProgram
 from leapp.backends.export_backend import SimplifiedONNXProgram
 from leapp.leapp_graph.leapp_node import LeappNode
 from .base import LEAPPFunctionalTestBase
 import pytest
 
 HAS_EXECUTORCH = importlib.util.find_spec("executorch") is not None
+if HAS_EXECUTORCH:
+    from leapp.backends.executorch_backend import (
+        ExecuTorchExportBackend,
+        ExecuTorchProgram,
+    )
 
 
 def _execution_plan(program_path):
@@ -46,6 +52,77 @@ def _execution_plan(program_path):
     with open(program_path, "rb") as f:
         (plan,) = deserialize_pte_binary(f.read()).program.execution_plan
     return plan
+
+
+class TestBackendImports(unittest.TestCase):
+    """Only nodes that use the ExecuTorch backend fail on a torch older than 2.15."""
+
+    def _run(self, torch_version, code):
+        script = f"import torch\ntorch.__version__ = {torch_version!r}\n{code}"
+        root = os.path.dirname(os.path.dirname(leapp.__file__))
+        env = {**os.environ, "PYTHONPATH": root, "CUDA_VISIBLE_DEVICES": ""}
+        return subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=300,
+        )
+
+    def test_executorch_backend_needs_torch_2_15(self):
+        for torch_version in ("2.14.0", "2.7.0"):
+            with self.subTest(torch_version=torch_version):
+                result = self._run(
+                    torch_version, "import leapp.backends.executorch_backend"
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("ImportError", result.stderr)
+                self.assertIn(
+                    "needs torch 2.15 and Python 3.11 or newer", result.stderr
+                )
+                self.assertIn(f"found torch {torch_version}", result.stderr)
+
+        for torch_version in (
+            "2.15.0",
+            "2.15.0+cu132",
+            "2.15.0.dev20260909+cu132",
+            "2.16.0",
+        ):
+            with self.subTest(torch_version=torch_version):
+                result = self._run(
+                    torch_version, "import leapp.backends.executorch_backend"
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_other_backends_load_on_older_torch(self):
+        code = (
+            "import leapp\n"
+            "from leapp.inference_manager import NodeManager\n"
+            "for name in ('jit', 'onnx', 'pt2'):\n"
+            "    print(type(NodeManager._create_backend(None, name, {})).__name__)\n"
+        )
+        result = self._run("2.7.0", code)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout.split(),
+            ["TorchExportBackend", "ONNXExportBackend", "ExportedProgramExportBackend"],
+        )
+
+    def test_import_leapp_registers_the_onnx_copy_lowering(self):
+        code = (
+            "import os, sys, tempfile\n"
+            "import leapp\n"
+            "assert 'leapp.backends.onnx_export_backend' not in sys.modules\n"
+            "class Copy(torch.nn.Module):\n"
+            "    def forward(self, dst, src):\n"
+            "        return torch.ops.aten.copy.default(dst, src)\n"
+            "with tempfile.TemporaryDirectory() as tmp:\n"
+            "    torch.onnx.export(torch.fx.symbolic_trace(Copy()),\n"
+            "        (torch.zeros(2), torch.ones(2)), os.path.join(tmp, 'm.onnx'),\n"
+            "        dynamo=False, opset_version=17)\n"
+        )
+        result = self._run(torch.__version__, code)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class TestOnnxProviderSelection(unittest.TestCase):

@@ -15,6 +15,15 @@ import torch
 from leapp.backends.export_backend import ExportBackend, prepare_tensors_for_export
 from leapp.utils.logging import _get_logger
 
+# ExecuTorch 1.6 is built for torch 2.15. The dev and local parts, as in
+# 2.15.0.dev20260909+cu132, do not matter here.
+if tuple(int(part) for part in str(torch.__version__).split(".")[:2]) < (2, 15):
+    _get_logger().fatal(
+        "LEAPP's ExecuTorch backend needs torch 2.15 and Python 3.11 or newer, as "
+        f"ExecuTorch 1.6 does; found torch {torch.__version__}",
+        error_type=ImportError,
+    )
+
 DELEGATES = ("xnnpack", "cuda")
 
 
