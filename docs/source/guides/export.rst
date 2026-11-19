@@ -239,8 +239,9 @@ the CUDA backend does not export ``nonzero``; both fail at export with an
 error. Export such a node with another backend. The CUDA backend also refuses
 a node that reads or returns a tensor with no elements, since it cannot run
 one. Export such a node with ``"xnnpack"`` or another backend. With
-``device_io``, it also refuses a node that returns a buffer it writes; export
-such a node with ``device_io=False``.
+``device_io``, a node that returns a buffer it changes in place can fail at
+export with an ExecuTorch error about ``skip_h2d_for_method_inputs``. Return a
+copy, such as ``buf.clone()``, or export such a node with ``device_io=False``.
 
 
 ONNX export
