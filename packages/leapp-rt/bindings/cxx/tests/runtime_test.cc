@@ -70,6 +70,7 @@ lrt::ManagedTensor Step(lrt::Session& session, float value = 1,
   const std::array<float, 4> input = {value, value, value, value};
   int64_t shape = 4;
   auto descriptor = Cpu(input, &shape);
+#ifdef LEAPP_TEST_CUDA
   void* device = nullptr;
   if (cuda) {
     CHECK(cudaMalloc(&device, sizeof(input)) == cudaSuccess);
@@ -78,13 +79,18 @@ lrt::ManagedTensor Step(lrt::Session& session, float value = 1,
     descriptor.data = device;
     descriptor.device = {kDLCUDA, 0};
   }
+#else
+  CHECK(!cuda && "CUDA tests were not enabled at build time");
+#endif
   lrt::RunResult result;
   Ok(session.Run(
       {{"accumulator/observation", &descriptor}},
       &result));
+#ifdef LEAPP_TEST_CUDA
   if (cuda) {
     CHECK(cudaFree(device) == cudaSuccess);
   }
+#endif
   CHECK(result.names() == std::vector<std::string_view>{"accumulator/next"});
   lrt::ManagedTensor tensor;
   Ok(result.GetTensor("accumulator/next", &tensor));

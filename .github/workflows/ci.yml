@@ -39,10 +39,26 @@ jobs:
             runtime:
               - 'packages/leapp-rt/**'
               - '.github/scripts/runtime-backends.sh'
+              - '.github/scripts/runtime-bazel.sh'
               - '.github/scripts/install-runtime-tool.sh'
               - '.github/workflows/ci.yml'
               - '.github/workflows/runtime-release.yml'
               - 'LICENSE'
+
+  runtime-bazel:
+    name: Runtime Bazel module and external consumers
+    needs: runtime-changes
+    if: needs.runtime-changes.outputs.runtime == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Bazel and Buildifier
+        run: |
+          bash .github/scripts/install-runtime-tool.sh bazel
+          bash .github/scripts/install-runtime-tool.sh buildifier
+      - name: Test runtime and independent consumers
+        run: bash .github/scripts/runtime-bazel.sh
 
   runtime-packaging:
     name: Runtime packaging

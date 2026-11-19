@@ -39,6 +39,13 @@ See the [Python bindings](bindings/python/README.md) for `import lrt` and the
 [C++ bindings](bindings/cxx/README.md) for the `lrt` namespace and `lrt::runtime`
 CMake target.
 
+Bazel applications can consume this directory as the standalone `leapp_rt`
+Bzlmod module. Its public Rust and C++ targets are `@leapp_rt//:lrt` and
+`@leapp_rt//:runtime`. Dependencies and code generators are declared by the
+module; consumers do not need a Cargo, CMake, or Pixi setup. See the
+[Bazel integration guide](bazel/README.md) for pinned source dependencies,
+plugin authoring, and validation commands.
+
 Native C++ backend authors can start with
 [`BackendPlugin`](src/engines/native/backends/include/leapp/native/backend_plugin.h) and the
 [backend contribution guide](src/engines/native/backends/README.md#adding-a-backend).

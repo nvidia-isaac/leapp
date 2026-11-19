@@ -47,6 +47,11 @@ Set `CMAKE_PREFIX_PATH` to the installation prefix. C++ exceptions are not requi
 Operational failures return `Status` with code, phase, and message. Allocation
 failure and Rust panics are not recoverable status errors.
 
+Bazel consumers link `@leapp_rt//:runtime` and compile their application as
+C++20. This target supplies the same facade and shared library, including the
+public LEAPP and DLPack headers. See the [Bazel guide](../../bazel/README.md)
+for the module dependency declaration and a complete consumer example.
+
 ## Embed in an application
 
 For a local checkout, add the C++ binding directory and link the same target:
