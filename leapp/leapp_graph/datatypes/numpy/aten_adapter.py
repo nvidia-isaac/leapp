@@ -61,7 +61,7 @@ def _failed_numpy_capture(message, *inputs):
 
 def capture_numpy_call(source, func, args, kwargs):
     """Log recoverable translation errors and retain their output dependencies."""
-    label = f"NumPy {func.__module__}.{func.__name__} in node {source.context}"
+    label = f"NumPy {getattr(func, '__module__', 'numpy')}.{func.__name__} in node {source.context}"
     implementation = NUMPY_OVERRIDES.get(func, _implementations().get(func))
     if func is np.result_type:
         return func(
