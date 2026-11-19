@@ -684,6 +684,22 @@ class TestCompiledGraphExecution(unittest.TestCase):
                     else (x + 2, corner, -x),
                 )
 
+    def test_quantile_precision_replay(self):
+        """Quantile keeps NumPy dtypes and interpolation precision across exporters."""
+        for dtype in (np.float32, np.float64):
+            x = np.array([[100000000, 100000008], [-100000008, 100000000]], dtype=dtype)
+            for q in (0.37, [0.37, 0.5, 0.75], np.array([0.37, 0.5, 0.75])):
+                with self.subTest(dtype=dtype, q=q):
+                    fn = lambda x: np.quantile(x, q, axis=1)
+                    self._test_operation(
+                        "quantile_precision",
+                        fn,
+                        x,
+                        fn(x),
+                        backends=("fx", "jit", "jit-trace", "pt2"),
+                        replay_inputs=(-x,),
+                    )
+
     def test_integer_mean(self):
         x = np.arange(6, dtype=np.int32).reshape(2, 3)
         for fn in (np.mean, np.nanmean):
@@ -1345,6 +1361,24 @@ class TestCompiledGraphExecution(unittest.TestCase):
         )
 
 
+@pytest.mark.parametrize("width", [1, 4])
+def test_setitem_broadcast_traced_source(width):
+    """Broadcast traced NumPy values before flattening the assignment."""
+
+    def assign(x, q):
+        out = x.copy()
+        out[0, 1:3] = q[0, 0]
+        return out
+
+    x = np.zeros((1, 3, 4), dtype=np.float32)
+    q = np.arange(width, dtype=np.float32).reshape(1, 1, width)
+    model = _capture_numpy(assign, x, q)
+    for a, b in ((x, q), (x + 10, q + 5)):
+        _assert_numpy_output(
+            model(torch.from_numpy(a), torch.from_numpy(b)), assign(a, b)
+        )
+
+
 @pytest.mark.parametrize("equal_nan", [False, True])
 def test_isclose_special_values_and_broadcasting(equal_nan):
     fn = lambda x, y: np.isclose(x, y, rtol=1e-4, atol=1e-6, equal_nan=equal_nan)
@@ -1386,6 +1420,25 @@ def test_nanmean_nan_slices_and_explicit_dtype(axis):
         )
 
 
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"keepdims": True},
+        {"axis": -1, "keepdims": True},
+        {"axis": (0,), "method": "midpoint"},
+        {"axis": 1, "method": "lower"},
+        {"axis": 1, "method": "higher"},
+        {"axis": 1, "method": "nearest"},
+    ],
+)
+def test_quantile_options(kwargs):
+    sample = np.array([[3.0, np.nan, 1.0], [4.0, 2.0, 6.0]], dtype=np.float32)
+    fn = lambda x: np.quantile(x, [0, 0.25, 0.5, 0.75, 1], **kwargs)
+    model = _capture_numpy(fn, sample)
+    for changed in (sample, -sample):
+        _assert_numpy_output(model(torch.from_numpy(changed)), fn(changed))
+
+
 def test_structured_outputs_and_constant_snapshot():
     constant = np.array([1.0, 2.0, 3.0], dtype=np.float32)
     fn = lambda x: (np.cross(x, constant), *np.gradient(x))
@@ -1411,7 +1464,7 @@ def test_structured_outputs_and_constant_snapshot():
             id="capture_failure",
         ),
         pytest.param(
-            lambda x: np.sort(x, stable=True), "sorting", "fx", id="stable_sort"
+            lambda x: np.sort(x, kind="stable"), "sorting", "fx", id="stable_sort"
         ),
         pytest.param(
             lambda x: np.argsort(x, kind="mergesort"),

@@ -60,7 +60,7 @@ from .utils.semantics import (
     force_application_position,
 )
 
-__version__ = "0.8.0"
+__version__ = "0.8.1"
 __config_version__ = "1.4"
 __author__ = "Frank Lai"
 __email__ = "frlai@nvidia.com"

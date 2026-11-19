@@ -2,11 +2,8 @@
 Convenience API
 =======================
 
-Quantity helpers make common annotations easier to read at a model boundary.
-Instead of repeating ``TensorSemantics`` and a ``Kind`` member for every port,
-you can name the quantity directly: ``joint_position``, ``frame_twist``, or
-``image``. Each helper returns an ordinary ``TensorSemantics`` object that you
-pass to ``annotate.input_tensors`` or ``annotate.output_tensors``.
+Quantity helpers return ``TensorSemantics`` objects for common quantities.
+Pass them to ``annotate.input_tensors`` or ``annotate.output_tensors``.
 
 .. warning::
 
@@ -16,9 +13,8 @@ pass to ``annotate.input_tensors`` or ``annotate.output_tensors``.
 Choosing a helper
 =================
 
-Once you have identified :ref:`the quantity your tensor represents
-<semantics-quantities>`, use the matching helper below. Each name describes the
-annotation it creates.
+Choose the helper for :ref:`the quantity your tensor represents
+<semantics-quantities>`:
 
 .. list-table::
    :header-rows: 1
@@ -44,7 +40,8 @@ annotation it creates.
    * - ``image``
      - Image data with layout and encoding agreed with the consumer.
    * - ``point_cloud``
-     - Cartesian XYZ point coordinates in meters relative to a reference frame.
+     - Cartesian XYZ point coordinates in meters. ``reference`` names their
+       coordinate frame; use axes to describe point and component dimensions.
 
 For example, construct annotations for measured joint positions and a desired
 position input using the same helper:
@@ -95,9 +92,7 @@ using both annotations.
 Spatial choices
 ===============
 
-Spatial helpers only accept the spatial arguments appropriate for their
-quantity. The table distinguishes which arguments are available from which
-values they accept:
+Spatial arguments depend on the quantity:
 
 .. list-table::
    :header-rows: 1
@@ -116,26 +111,15 @@ values they accept:
      - Not accepted, does not describe a quantity relative to another frame
      - Frame name, ``None``, or ``SELF``
 
-Both arguments default to ``None`` wherever they are accepted. 
-Wrench and force-application-position helpers reject ``REFERENCE`` because
-they do not accept a ``reference`` argument.
+``None`` means global. See :doc:`spatial` for frame selectors and the optional
+pairing of wrenches with force-application positions.
 
 Validation and the generic constructor
 ======================================
 
-Helpers enforce standard component names for the common quantities listed
-below. If you provide names on a ``COMPONENT`` axis, they may contain any subset
-of the names listed for that helper, with no repeated or additional names.
-Other names raise ``ValueError``. This gives consumers a consistent
-vocabulary for these quantities.
-
-Omitted components remain unspecified; they do not imply zero values.
-The label count must still match the tensor dimension size.
-
-Any ordering of the supplied names is accepted. You should make sure that order
-matches what you actually have in your tensor: LEAPP cannot check the physical
-meaning of the values, so incorrect ordering can still pass validation and
-export successfully.
+For the helpers below, ``COMPONENT`` names must be a unique subset of the
+allowed names and match the dimension size. Order the labels to match your values.
+Omitted components remain unspecified; they do not imply zero.
 
 .. list-table::
    :header-rows: 1
@@ -146,9 +130,7 @@ export successfully.
      - ``x, y, z, qx, qy, qz, qw``
    * - ``frame_orientation``
      - ``qx, qy, qz, qw``
-   * - ``frame_position``, ``force_application_position``
-     - ``x, y, z``
-   * - ``point_cloud``
+   * - ``frame_position``, ``force_application_position``, ``point_cloud``
      - ``x, y, z``
    * - ``frame_twist``
      - ``x, y, z, angular_x, angular_y, angular_z``
@@ -157,128 +139,22 @@ export successfully.
    * - ``frame_angular_velocity``
      - ``angular_x, angular_y, angular_z``
 
-For a position, the allowed names are ``x``, ``y``, and ``z``. These examples
-show accepted subsets and orders, and rejected name selections:
-
-.. tabs::
-
-   .. tab:: Python
-
-      .. code-block:: python
-
-         import torch
-         from leapp import Axis, AxisKind, frame_position
-
-         # Accepted: labels match the position components in the tensor.
-         xyz = torch.tensor([1.0, 2.0, 3.0])
-         position = frame_position(
-             "position", xyz,
-             axes=[Axis(AxisKind.COMPONENT, names=["x", "y", "z"])],
-         )
-
-         # Accepted: a different order, with values and labels both ordered z, x, y.
-         zxy = torch.tensor([3.0, 1.0, 2.0])
-         reordered_position = frame_position(
-             "position", zxy,
-             axes=[Axis(AxisKind.COMPONENT, names=["z", "x", "y"])],
-         )
-
-         # Accepted: a planar position with only x and y components.
-         planar_position = frame_position(
-             "position", torch.tensor([1.0, 2.0]),
-             axes=[Axis(AxisKind.COMPONENT, names=["x", "y"])],
-         )
-
-         # Rejected (ValueError): angular labels cannot describe a position.
-         frame_position(
-             "position", xyz,
-             axes=[Axis(AxisKind.COMPONENT, names=["angular_x", "angular_y", "angular_z"])],
-         )
-
-         # Rejected (ValueError): y appears twice.
-         frame_position(
-             "position", xyz,
-             axes=[Axis(AxisKind.COMPONENT, names=["x", "y", "y"])],
-         )
-
-   .. tab:: YAML and errors
-
-      The accepted calls produce these semantic fields when exported separately.
-      Both rejected calls raise ``ValueError`` during construction, so neither
-      produces YAML. Run rejected calls individually to observe each error.
-
-      .. code-block:: yaml
-
-         # Accepted: values ordered x, y, z
-         name: position
-         kind: frame/position
-         axes:
-         - {kind: component, names: [x, y, z]}
-         spatial: {reference: null}
-
-         ---
-         # Accepted: values ordered z, x, y
-         name: position
-         kind: frame/position
-         axes:
-         - {kind: component, names: [z, x, y]}
-         spatial: {reference: null}
-
-         ---
-         # Accepted: planar values ordered x, y
-         name: position
-         kind: frame/position
-         axes:
-         - {kind: component, names: [x, y]}
-         spatial: {reference: null}
-
-These checks apply when names are supplied on a ``COMPONENT`` axis. Helpers do
-not infer missing labels or change the underlying representation.
-
-A planar twist can use ``frame_twist`` with component names
-``["x", "y", "angular_z"]`` and a component dimension of size three.
-Its kind remains ``frame/twist``.
-
-Use ``TensorSemantics`` directly for custom conventions or additional ``extra``
-metadata. For joint positions, the helper is equivalent to:
-
-.. code-block:: python
-
-   from leapp import Kind, TensorSemantics
-
-   measured = TensorSemantics("q", q, kind=Kind.JOINT_POSITION, axes=joint_axes)
-
-The generic constructor validates metadata structure without the helper-specific
-component-name checks. 
-
-Point clouds
-============
-
-``point_cloud`` describes XYZ coordinates relative to ``reference``.
-The coordinates use that frame's origin and axes. An omitted ``reference``
-means global, matching ``frame_position``.
-
-For an unordered cloud shaped ``[point, component]``:
+For example, a planar position uses two components:
 
 .. code-block:: python
 
    import torch
-   from leapp import Axis, AxisKind, point_cloud
+   from leapp import Axis, AxisKind, frame_position
 
-   points = torch.zeros(1024, 3)
-   annotation = point_cloud(
-       "points", points,
-       reference="camera",
-       axes=[
-           Axis("point"),
-           Axis(AxisKind.COMPONENT, names=["x", "y", "z"]),
-       ],
+   position = frame_position(
+       "position", torch.tensor([1.0, 2.0]),
+       axes=[Axis(AxisKind.COMPONENT, names=["x", "y"])],
    )
 
-This emits ``kind: point_cloud`` and ``spatial: {reference: camera}``.
-``"point"`` is a custom axis kind. Batched ``[batch, point, component]`` and
-organized ``[height, width, component]`` layouts can use additional axes.
-Supplied component names may be any unique subset of ``x, y, z``.
-Keep colors and other attributes in separate tensors with an agreed point order.
-The helper preserves the tensor's values, shape, and dtype. Point-count
-variability depends on the exported model's shape support.
+A planar twist similarly uses ``["x", "y", "angular_z"]``. Duplicate or
+unrecognized component names raise ``ValueError``.
+
+Use ``TensorSemantics`` directly for custom component conventions or ``extra``
+metadata. It validates metadata structure without the helper-specific name
+checks. Helpers describe existing values; they do not reshape, reorder, or
+transform the tensor.

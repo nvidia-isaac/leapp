@@ -75,10 +75,14 @@ docs, and tests.
 
 Apply these rules when adding or changing tests:
 
-1. **Search before adding.** Find the closest existing coverage and extend its
-   cases where possible. Each new test must add a distinct behavior, boundary
-   condition, or failure mode. Consolidate overlapping regressions instead of
-   keeping a separate test for every agent task or implementation change.
+1. **Extend existing tests first.** Before adding a test, check whether its
+   assertions or cases can be merged into an existing test with the same setup
+   and behavior. Consolidate overlapping regressions while keeping failures
+   understandable. Each new test must cover a distinct behavior, boundary
+   condition, or failure mode that does not fit existing coverage. Use existing
+   test files; create a new file only when no existing test module is a suitable
+   home, and explain why it is necessary. Do not create a separate test or file
+   for every agent task or implementation change.
 2. **Use the cheapest sufficient layer.** Check frontend tracing through FX
    replay. Add exporter coverage when export is part of the contract or the
    regression. Keep backend-specific lowerings and historical failures covered

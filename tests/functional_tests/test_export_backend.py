@@ -23,6 +23,7 @@ import torch
 import yaml
 import onnx
 import onnxruntime as ort
+from onnxscript.rewriter import _matcher
 import leapp
 from leapp.leapp import _MANAGER as annotate
 from leapp import TensorSemantics, InputKindEnum, OutputKindEnum
@@ -325,16 +326,35 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
                             )
 
     def test_onnx_backend(self):
+        """Exercise real export and verify the matcher patch is active beforehand."""
+
         @annotate.method(export_with="onnx")
         def funcA(inputA: torch.Tensor):
             return inputA * 2.0
 
         input_tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+        matcher = _matcher.SimplePatternMatcher
+        stock = matcher.match
+        if getattr(stock, "_leapp_root_guard", False):
+            stock = stock.__wrapped__
+        original_export = torch.onnx.export
 
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        funcA(input_tensor)
-        leapp.stop()
-        leapp.compile_graph(visualize=False)
+        def export(*args, **kwargs):
+            self.assertTrue(matcher.match._leapp_root_guard)
+            self.assertIs(matcher.match.__wrapped__, stock)
+            self.assertTrue(kwargs["optimize"])
+            return original_export(*args, **kwargs)
+
+        # Start unpatched even if another test exported first; restore on exit.
+        with (
+            mock.patch.object(matcher, "match", stock),
+            mock.patch("torch.onnx.export", side_effect=export) as export_mock,
+        ):
+            leapp.start(name=self.TEST_GRAPH_NAME)
+            funcA(input_tensor)
+            leapp.stop()
+            leapp.compile_graph(visualize=False)
+            export_mock.assert_called_once()
 
     def test_onnx_backend_reverse_scalar_mul(self):
         @annotate.method(export_with="onnx")

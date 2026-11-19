@@ -16,7 +16,11 @@
 #
 import functools
 import torch
-from leapp.utils.diagnostics import export_error_hint, validation_hint
+from leapp.utils.diagnostics import (
+    export_error_hint,
+    mismatch_type,
+    validation_hint,
+)
 from leapp.utils.semantics import TensorSemantics
 from leapp.utils.tensor_description import (
     describe_io,
@@ -531,7 +535,7 @@ class LeappNode:
                 continue
 
             if not torch.allclose(exported, source, rtol=rtol, atol=atol):
-                mismatches.add("tolerance")
+                mismatches.add(mismatch_type(exported, source, rtol=rtol, atol=atol))
                 diff = (exported - source).abs()
                 diff_flat = diff.flatten().float()
 
@@ -602,7 +606,7 @@ class LeappNode:
         replay_mismatches = set()
 
         # Replay the first sample with declared buffers restored. A different
-        # result means the export kept undeclared state from the earlier calls.
+        # result usually means the export kept undeclared state from the earlier calls.
         if sample_passed[0]:
             with torch.no_grad():
                 for name, buffer in buffers.items():
@@ -618,9 +622,10 @@ class LeappNode:
             sample_passed,
             replay_mismatches=replay_mismatches,
             mismatches=set().union(*sample_mismatches.values()),
+            backend=self.backend,
         )
         if error_hint is not None:
-            _get_logger().warning(f"  {self.name}: {error_hint}")
+            _get_logger().info(f"  {self.name}: {error_hint}")
 
         if all_match:
             num_examples = len(examples)

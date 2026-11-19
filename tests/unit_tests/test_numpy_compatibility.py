@@ -274,6 +274,20 @@ def test_public_lifecycle_export_and_replay(tmp_path):
     )
 
 
+def test_quantile_public_validation(tmp_path):
+    """PT2 validation compares quantile dtype and values to native NumPy samples."""
+    sample = np.array([[100000000, 100000008]], dtype=np.float32)
+    leapp.start("quantile", save_path=str(tmp_path), global_patching=False)
+    try:
+        for raw in (sample, -sample):
+            x = leapp.annotate.input_tensors("quantile", {"x": raw})
+            result = np.quantile(x, [0.37], axis=1)
+            leapp.annotate.output_tensors("quantile", {"y": result}, export_with="pt2")
+    finally:
+        leapp.stop()
+    leapp.compile_graph(visualize=False, validate=True, strict=True)
+
+
 @pytest.mark.parametrize("case", ["dtype_only", "bad_values", "cancelled"])
 def test_numpy_numerical_differences_checked_at_final_validation(
     case, monkeypatch, tmp_path
