@@ -26,8 +26,15 @@ impl Transfers {
                 .collect(),
         };
         for location in std::iter::once(location)
-            .chain(std::iter::once(options.output_placement.default_location))
-            .chain(options.output_placement.overrides.values().copied())
+            .chain(options.output_placement.default_location)
+            .chain(
+                options
+                    .output_placement
+                    .overrides
+                    .values()
+                    .copied()
+                    .flatten(),
+            )
         {
             if let MemoryLocation::Cuda { device_id } = location {
                 if let std::collections::hash_map::Entry::Vacant(entry) =

@@ -67,7 +67,7 @@ using DynamicOutputs = std::vector<std::optional<OwnedTensor>>;
 /// object, its callbacks, or context, or call it from a background thread.
 class Transfers {
  public:
-  /// Snapshot ready contiguous bytes to the workspace execution device. Source
+  /// Snapshot ready contiguous bytes on the source device. Source
   /// metadata/storage need only survive this synchronous operation. Complete
   /// SDK producer work, including auxiliary streams, before calling. The
   /// destination must be empty; failure leaves it empty. No backend allocator

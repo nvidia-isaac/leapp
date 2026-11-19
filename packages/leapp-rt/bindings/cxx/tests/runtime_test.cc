@@ -47,7 +47,7 @@ lrt::EngineKind TestEngine() {
 
 lrt::Session Open(const std::filesystem::path& fixtures,
                     std::string_view name, bool cuda = false,
-                    lrt::MemoryLocation output_location = {}) {
+                    std::optional<lrt::MemoryLocation> output_location = std::nullopt) {
   lrt::Bundle bundle;
   Ok(lrt::Bundle::Open(fixtures / (std::string(name) + ".yaml"), &bundle));
   lrt::Session runtime;
@@ -338,10 +338,14 @@ void CudaBuffers(const std::filesystem::path& fixtures) {
         cudaSuccess);
   CHECK(cudaDeviceSynchronize() == cudaSuccess);
   lrt::ManagedTensor retained;
-  for (auto output_type :
-       {lrt::MemoryType::kCpu, lrt::MemoryType::kPinnedCpu,
-        lrt::MemoryType::kCuda}) {
-    auto session = Open(fixtures, "dynamic", true, {output_type, 0});
+  for (const auto& output_location :
+       std::array<std::optional<lrt::MemoryLocation>, 4>{
+           std::nullopt, lrt::MemoryLocation{lrt::MemoryType::kCpu, 0},
+           lrt::MemoryLocation{lrt::MemoryType::kPinnedCpu, 0},
+           lrt::MemoryLocation{lrt::MemoryType::kCuda, 0}}) {
+    const auto output_type = output_location.value_or(
+        lrt::MemoryLocation{lrt::MemoryType::kCuda, 0}).type;
+    auto session = Open(fixtures, "dynamic", true, output_location);
     for (auto input_type :
          {lrt::MemoryType::kCpu, lrt::MemoryType::kPinnedCpu,
           lrt::MemoryType::kCuda}) {

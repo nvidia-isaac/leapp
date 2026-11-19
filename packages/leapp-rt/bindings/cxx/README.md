@@ -168,7 +168,9 @@ unspecified on failure. Calling `Run` without output buffers returns fresh stora
 
 Execution placement and storage placement are independent. Set
 `SessionOptions.device = ExecutionDevice::kCuda` for GPU model execution.
-Set `SessionOptions.output_location` or individual `output_overrides` at construction.
+`SessionOptions.output_location` defaults to `std::nullopt`, preserving
+each output's backend storage location. Select an explicit CPU, pinned, or CUDA
+location, or set individual `output_overrides`, to request output transfers.
 `Run` takes only inputs and a result destination. Configure the Triton installation
 before starting the application, as described
 in the [runtime guide](../../README.md#synchronous-execution).

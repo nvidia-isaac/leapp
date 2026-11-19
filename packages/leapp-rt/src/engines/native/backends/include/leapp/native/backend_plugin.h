@@ -123,7 +123,7 @@ class BackendPlugin {
   /// @brief Execute without fixed bindings and publish independent results.
   ///
   /// Return nullopt for supplied destinations and a populated OwnedTensor for
-  /// every other output. Results must be ready, contiguous, on the execution
+  /// every other output. Results must be ready, contiguous, retain their source
   /// device, and match declared count/order/dtype/rank/fixed dimensions.
   /// Establish SDK guarantees at load time and check unresolved values before
   /// returning. Transfers::copy isolates SDK storage from inputs and mutable

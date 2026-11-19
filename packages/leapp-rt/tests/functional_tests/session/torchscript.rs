@@ -57,7 +57,7 @@ fn scripted_traced_and_mixed_match_pytorch_with_positional_ports() {
                     device,
                     ..Default::default()
                 };
-                options.output_placement.default_location = location;
+                options.output_placement.default_location = Some(location);
                 let input = if name == "mixed" {
                     "preprocess/values"
                 } else {

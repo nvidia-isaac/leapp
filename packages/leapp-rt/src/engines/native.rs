@@ -51,8 +51,12 @@ impl NativeEngine {
         for (&device, &stream) in &options.cuda_streams {
             stream.validate(device)?;
         }
-        options.output_placement.default_location.validate()?;
-        for target in options.output_placement.overrides.values() {
+        for target in options
+            .output_placement
+            .default_location
+            .iter()
+            .chain(options.output_placement.overrides.values().flatten())
+        {
             target.validate()?;
         }
 
@@ -97,12 +101,24 @@ impl NativeEngine {
             ExecutionDevice::Cpu => MemoryLocation::Cpu,
             ExecutionDevice::Cuda { device_id } => MemoryLocation::Cuda { device_id },
         };
+        let mut locations = vec![location; plan.slots.len()];
+        for call in &plan.calls {
+            for (position, &id) in call.outputs.iter().enumerate() {
+                locations[id] = models[call.model]
+                    .output_location(position)
+                    .unwrap_or(location);
+            }
+        }
         let slots: Vec<_> = plan
             .slots
             .iter()
             .enumerate()
             .map(|(id, spec)| {
-                plan::Slot::new(spec.clone(), plan.terminal_outputs.contains(&id), location)
+                plan::Slot::new(
+                    spec.clone(),
+                    plan.terminal_outputs.contains(&id),
+                    locations[id],
+                )
             })
             .collect::<anyhow::Result<Vec<_>>>()
             .map_err(|e| RuntimeError::new("prepare", e))?;
@@ -643,7 +659,9 @@ impl Workspace {
                     // No caller destination; this slot has a fixed-shape tensor.
                     // Write into independent result storage when locations match;
                     // otherwise transfer the result after execution.
-                    if placement.location(name) == fixed.buffer.location {
+                    if placement.location(name).unwrap_or(fixed.buffer.location)
+                        == fixed.buffer.location
+                    {
                         let buffer = Arc::new(Buffer::allocate_for_copy(
                             fixed.buffer.len,
                             fixed.buffer.location,
@@ -693,7 +711,12 @@ impl Workspace {
                         )
                     }?
                 } else {
-                    self.slots[id].snapshot(placement.location(name), &mut self.transfers)?
+                    self.slots[id].snapshot(
+                        placement
+                            .location(name)
+                            .unwrap_or_else(|| self.slots[id].location()),
+                        &mut self.transfers,
+                    )?
                 };
                 Ok((name.clone(), value))
             })

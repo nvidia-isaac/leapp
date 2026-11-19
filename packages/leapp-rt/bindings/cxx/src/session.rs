@@ -54,14 +54,15 @@ pub fn session_open(
         },
         ..SessionOptions::default()
     };
-    options.output_placement.default_location = match location(output_location) {
+    options.output_placement.default_location = match optional_location(output_location) {
         Ok(v) => v,
         Err(e) => return e,
     };
     for p in overrides {
-        let location = match location(ffi::Location {
+        let location = match optional_location(ffi::Location {
             memory: p.location.memory,
             device: p.location.device,
+            present: p.location.present,
         }) {
             Ok(v) => v,
             Err(e) => return e,
@@ -223,6 +224,10 @@ pub fn result_tensor(result: &ResultHandle, name: &[u8], output: &mut usize) -> 
             format!("output {name} not found"),
         ),
     }
+}
+
+fn optional_location(v: ffi::Location) -> Result<Option<MemoryLocation>, ffi::StatusData> {
+    v.present.then(|| location(v)).transpose()
 }
 
 pub fn location(v: ffi::Location) -> Result<MemoryLocation, ffi::StatusData> {

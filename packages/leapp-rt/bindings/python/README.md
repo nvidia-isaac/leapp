@@ -144,7 +144,9 @@ remain valid after close. Context-manager exit closes only its session.
 `run` accepts inputs and optional output buffers. The default is `engine="native"`;
 set `engine` to `"triton"` or `"native"` to select either engine in the same extension.
 Unknown engine names raise `ValueError` when opening the session.
-Set `output_device` to `"cpu"`, `"pinned"`, or `"cuda:N"` and use `output_overrides`
+`output_device=None` is the default: outputs keep their backend storage
+location, including CPU outputs from a CUDA session. Set `output_device` to
+`"cpu"`, `"pinned"`, or `"cuda:N"` to request transfers, or use `output_overrides`
 for individual public outputs. Configure the engine installation before starting
 Python, as described in the
 [runtime guide](../../README.md#synchronous-execution).

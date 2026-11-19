@@ -50,7 +50,7 @@ def execute(backend, engine, device, inspect):
     values = xp.asarray(np.arange(1, 5, dtype=np.float32))
     inputs = {name: values}
     with lrt.Session.open(
-        bundle, lrt.SessionOptions(engine=engine, device=device)
+        bundle, lrt.SessionOptions(engine=engine, device=device, output_device="cpu")
     ) as session:
         peer = session.new_session()
         retained = np.from_dlpack(session.run(inputs)[output])
@@ -75,7 +75,8 @@ def execute(backend, engine, device, inspect):
         convolution = lrt.Bundle.open(root / "convolution.yaml")
         values = xp.asarray(np.arange(16, dtype=np.float32).reshape(1, 1, 4, 4))
         with lrt.Session.open(
-            convolution, lrt.SessionOptions(engine=engine, device=device)
+            convolution,
+            lrt.SessionOptions(engine=engine, device=device, output_device="cpu"),
         ) as session:
             result = session.run({"convolution/input": values})
             np.testing.assert_array_equal(
@@ -94,7 +95,7 @@ def execute_mixed(engine, inspect):
     root = Path(os.environ.get("LEAPP_TENSORRT_FIXTURES", "target/tensorrt-fixtures"))
     with lrt.Session.open(
         lrt.Bundle.open(root / "mixed.yaml"),
-        lrt.SessionOptions(engine=engine, device="cuda:0"),
+        lrt.SessionOptions(engine=engine, device="cuda:0", output_device="cpu"),
     ) as session:
         result = session.run(
             {
@@ -121,7 +122,7 @@ def execute_warp(backend, engine, inspect):
         )
         with lrt.Session.open(
             lrt.Bundle.open(root / f"{fixture}.yaml"),
-            lrt.SessionOptions(engine=engine, device=device),
+            lrt.SessionOptions(engine=engine, device=device, output_device="cpu"),
         ) as session:
             result = session.run({"model/x": values, "model/gain": gains})
             np.testing.assert_array_equal(

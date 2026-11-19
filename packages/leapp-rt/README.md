@@ -224,13 +224,15 @@ A backend may reject a data-dependent output buffer if it requires more capacity
 than the tensor's final shape.
 On failure, supplied buffer contents are unspecified; feedback does not advance.
 
-`SessionOptions::output_placement` sets a default location and per-output
-overrides keyed by public LEAPP names at construction.
-New sessions inherit this placement. Allocated outputs use the requested location;
-supplied buffers determine their own storage location.
+`SessionOptions::output_placement.default_location` defaults to `None`, preserving
+each output's backend storage location without an output device transfer. CUDA
+outputs stay on CUDA; CPU fallback and constant outputs can remain on CPU.
+Set `Some(location)` as the default or a per-output override to request a transfer;
+a `None` override preserves backend placement for that output.
+New sessions inherit this placement; supplied buffers determine their own location.
 Initial state, default inputs, and private feedback stay on the execution device.
-Public outputs retain their requested location, including outputs also used as
-feedback.
+Public outputs retain their selected location, including outputs also used as
+feedback. Copies needed for independent ownership and feedback still apply.
 Execution errors expose `code()`, `phase()`, and their source chain.
 
 A runnable example uses the generated policy fixture:

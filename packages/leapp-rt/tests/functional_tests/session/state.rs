@@ -28,7 +28,7 @@ fn native_outputs_allocate_fresh_storage_or_use_caller_buffers() {
                     engine: crate::EngineKind::Native,
                     device,
                     output_placement: OutputPlacement {
-                        default_location: location,
+                        default_location: Some(location),
                         ..Default::default()
                     },
                     ..Default::default()
@@ -108,7 +108,7 @@ fn feedback_with_host_and_device_memory_placement() {
                     onnx_tensorrt: Default::default(),
                     cuda_graph_replay: Default::default(),
                     output_placement: OutputPlacement {
-                        overrides: [("accumulator/next".into(), output_location)].into(),
+                        overrides: [("accumulator/next".into(), Some(output_location))].into(),
                         ..Default::default()
                     },
                 };
@@ -136,9 +136,9 @@ fn feedback_with_host_and_device_memory_placement() {
                 let mut invalid = options;
                 invalid.output_placement.overrides.insert(
                     "accumulator/next".into(),
-                    MemoryLocation::Cuda {
+                    Some(MemoryLocation::Cuda {
                         device_id: u32::MAX,
-                    },
+                    }),
                 );
                 assert!(Session::open(&bundle, invalid).is_err());
                 check_state(&session, 4.);

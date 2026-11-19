@@ -98,7 +98,7 @@ fn fixed_torch_buffers_and_bindings_survive_changed_inputs_and_placements() {
                             .run(
                                 &inputs,
                                 &OutputPlacement {
-                                    default_location: output_location,
+                                    default_location: Some(output_location),
                                     ..Default::default()
                                 },
                                 &mut HashMap::new(),

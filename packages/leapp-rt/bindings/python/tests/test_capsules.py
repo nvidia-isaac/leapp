@@ -124,7 +124,7 @@ def test_consumed_capsule_deleted_once_including_failure(stride):
 
 
 def test_versioned_flags_and_unconsumed_cleanup():
-    with open_session() as rt:
+    with open_session(output_device="cpu") as rt:
         tensor = step(rt.new_session())
         for producer, kwargs, expected in [
             (tensor, {}, 0),

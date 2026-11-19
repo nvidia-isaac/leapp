@@ -76,10 +76,10 @@ fn sessions_preserve_peer_and_retained_outputs() {
                 cuda_graph_replay: Default::default(),
                 device,
                 output_placement: OutputPlacement {
-                    default_location: match device {
+                    default_location: Some(match device {
                         ExecutionDevice::Cpu => MemoryLocation::Cpu,
                         ExecutionDevice::Cuda { device_id } => MemoryLocation::Cuda { device_id },
-                    },
+                    }),
                     ..Default::default()
                 },
             },
@@ -128,7 +128,7 @@ fn weights_noncontiguous_outputs_and_memory_placements() {
             let input = placed(&[1.0f32, 2.0, 3.0, 4.0], &[4], input_location).unwrap();
             for output_location in locations() {
                 let placement = OutputPlacement {
-                    default_location: output_location,
+                    default_location: Some(output_location),
                     ..Default::default()
                 };
                 retained = runtime

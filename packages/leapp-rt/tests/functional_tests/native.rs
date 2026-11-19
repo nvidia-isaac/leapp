@@ -259,7 +259,7 @@ fn fixed_buffers_and_ort_metadata_survive_changing_cpu_and_cuda_controls() {
                             ("slice/end", upper.view()),
                         ],
                         &OutputPlacement {
-                            default_location: output_location,
+                            default_location: Some(output_location),
                             ..Default::default()
                         },
                         &mut HashMap::new(),

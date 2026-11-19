@@ -57,7 +57,7 @@ def test_output_lifetime_feedback_and_close():
         np.testing.assert_array_equal(np.from_dlpack(step(session)), [1] * 4)
         assert view.shape == (4,)
         assert view.dtype == np.float32
-        assert tensor.__dlpack_device__() == (1, 0)
+        assert tensor.__dlpack_device__() in {(1, 0), (3, 0)}
     rt.close()
     np.testing.assert_array_equal(np.from_dlpack(step(session)), [2] * 4)
     peer = session.new_session()
@@ -139,7 +139,7 @@ def test_default_engine():
 
 def test_dlpack_exports_alias_and_retain_storage():
     torch = pytest.importorskip("torch")
-    with open_session() as rt:
+    with open_session(output_device="cpu") as rt:
         session = rt.new_session()
         tensor = step(session)
         first = torch.from_dlpack(tensor)
@@ -208,7 +208,7 @@ def test_serialization_and_concurrent_sessions():
 
 
 @pytest.mark.skipif(not CUDA, reason="set LEAPP_TEST_CUDA=1")
-@pytest.mark.parametrize("output_device", ["cpu", "pinned", "cuda:0"])
+@pytest.mark.parametrize("output_device", [None, "cpu", "pinned", "cuda:0"])
 def test_cuda_streams_and_output_placement(output_device):
     cp = pytest.importorskip("cupy")
     torch = pytest.importorskip("torch")
@@ -222,9 +222,11 @@ def test_cuda_streams_and_output_placement(output_device):
         tensor = result["accumulator/next"]
         assert (
             tensor.__dlpack_device__()
-            == {"cpu": (1, 0), "pinned": (3, 0), "cuda:0": (2, 0)}[output_device]
+            == {None: (2, 0), "cpu": (1, 0), "pinned": (3, 0), "cuda:0": (2, 0)}[
+                output_device
+            ]
         )
-        if output_device == "cuda:0":
+        if output_device in {None, "cuda:0"}:
             with cp.cuda.Stream(non_blocking=True):
                 copied = cp.from_dlpack(tensor)
                 shared = cp.from_dlpack(tensor)
@@ -309,7 +311,7 @@ def test_pinned_pytorch_input(device, legacy):
     producer = LegacyProducer() if legacy else source
     if ENGINE == "native" and device != "cpu":
         producer = source.to(device)
-    with open_session("dynamic", device) as rt:
+    with open_session("dynamic", device, output_device="cpu") as rt:
         result = rt.new_session().run({"dynamic/input": producer})
         np.testing.assert_array_equal(
             np.from_dlpack(result["dynamic/output"]), [0, 1, 2, 3]
@@ -343,7 +345,10 @@ def test_dlpack_selects_producer_device_and_restores_caller(legacy, fail):
                 raise ValueError("producer failed")
             return source.__dlpack__(stream=stream)
 
-    with open_session("dynamic", f"cuda:{target}") as rt, torch.cuda.stream(stream):
+    with (
+        open_session("dynamic", f"cuda:{target}", output_device="cpu") as rt,
+        torch.cuda.stream(stream),
+    ):
         source = torch.ones(4, dtype=torch.float32, device=f"cuda:{target}")
         source.mul_(3)
         torch.cuda.set_device(original)
@@ -390,7 +395,7 @@ def test_pytorch_input_layouts(device, layout):
         if device.startswith("cuda")
         else nullcontext()
     )
-    with open_session("dynamic", device) as rt, context:
+    with open_session("dynamic", device, output_device="cpu") as rt, context:
         source = torch.arange(12, dtype=torch.float32, device=device)
         source.mul_(3)
         views = {
@@ -416,7 +421,10 @@ def test_pytorch_input_layouts(device, layout):
 @pytest.mark.parametrize("layout", ["slice", "reverse", "broadcast", "offset", "empty"])
 def test_cupy_input_layouts(layout):
     cp = pytest.importorskip("cupy")
-    with open_session("dynamic", "cuda:0") as rt, cp.cuda.Stream(non_blocking=True):
+    with (
+        open_session("dynamic", "cuda:0", output_device="cpu") as rt,
+        cp.cuda.Stream(non_blocking=True),
+    ):
         source = cp.arange(12, dtype=cp.float32)
         source *= 3
         views = {
@@ -462,7 +470,7 @@ def test_generic_dlpack_reuses_handoff_and_drains_producer_errors():
             return values.__dlpack__(stream=stream, max_version=max_version)
 
     producer = Producer()
-    with open_session("dynamic", "cuda:0") as rt:
+    with open_session("dynamic", "cuda:0", output_device="cpu") as rt:
         session = rt.new_session()
         for _ in range(2):
             np.testing.assert_array_equal(
@@ -508,7 +516,7 @@ def test_multiple_dlpack_outputs_and_retained_placements(device, tmp_path):
                 retained.append(result)
         # Retained results must survive later runs with different placement.
         host_input = torch.arange(1, 5, dtype=torch.float32, device=device)
-        host_session = open_session(tmp_path / "policy", device)
+        host_session = open_session(tmp_path / "policy", device, output_device="cpu")
         again = host_session.run(
             {"preprocess/observation": host_input, "policy/bias": host_input * 10}
         )

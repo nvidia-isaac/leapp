@@ -172,7 +172,7 @@ fn invalid_requests_and_backend_errors_allow_subsequent_inference() {
                 .is_err());
         }
         let unknown_output = OutputPlacement {
-            overrides: [("missing".into(), MemoryLocation::Cpu)].into(),
+            overrides: [("missing".into(), Some(MemoryLocation::Cpu))].into(),
             ..Default::default()
         };
         assert_eq!(
@@ -265,7 +265,7 @@ fn all_input_output_memory_combinations_work_on_cpu_and_cuda_models() {
                     let data = vec![3.0f32; size];
                     let input = placed(&data, &[size as i64], input_location).unwrap();
                     let placement = OutputPlacement {
-                        default_location: output_location,
+                        default_location: Some(output_location),
                         ..Default::default()
                     };
                     let outputs = runtime
@@ -303,8 +303,8 @@ fn outputs_can_use_distinct_memory_locations() {
             (pipeline.inputs[1].tensor_name.as_str(), bias.view()),
         ];
         let placement = OutputPlacement {
-            default_location: MemoryLocation::Cuda { device_id: 0 },
-            overrides: [("policy/echo".into(), MemoryLocation::PinnedCpu)].into(),
+            default_location: Some(MemoryLocation::Cuda { device_id: 0 }),
+            overrides: [("policy/echo".into(), Some(MemoryLocation::PinnedCpu))].into(),
         };
         let outputs = runtime
             .native
@@ -325,9 +325,9 @@ fn outputs_can_use_distinct_memory_locations() {
         );
         assert_eq!(values(&outputs, "policy/action"), [14.0, 29.0, 46.0, 65.0]);
         let invalid = OutputPlacement {
-            default_location: MemoryLocation::Cuda {
+            default_location: Some(MemoryLocation::Cuda {
                 device_id: u32::MAX,
-            },
+            }),
             ..Default::default()
         };
         let error = invalid.validate().unwrap_err();
