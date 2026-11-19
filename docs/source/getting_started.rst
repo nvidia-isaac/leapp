@@ -219,6 +219,9 @@ Try it yourself
 2. Open the generated ``sample_pipeline/`` directory.
 3. Inspect the files to see your exported pipeline.
 
+Next, deploy this same bundle from Python, C++, or Rust with
+:doc:`runtime/getting_started`.
+
 Graph visualization
 -------------------
 

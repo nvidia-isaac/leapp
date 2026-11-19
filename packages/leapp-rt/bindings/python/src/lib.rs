@@ -1,6 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+//! Python adapters over the Rust bundle/session APIs and shared lifecycle layer.
+//!
+//! Building/importing the extension must not require Triton or CUDA SDKs. NumPy
+//! is the package dependency; PyTorch and CuPy are optional DLPack consumers and
+//! producers. Keep array operations, conversions, and transfers in those libraries
+//! rather than introducing a second tensor API here. Loading, execution, reset,
+//! and close release the GIL while the shared handle serializes one session.
+
 #![deny(unsafe_op_in_unsafe_fn)]
 
 mod bundle;

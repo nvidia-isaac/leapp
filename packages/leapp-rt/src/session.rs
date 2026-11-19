@@ -2,6 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Independent session state over a shared, backend-independent engine.
+//!
+//! Feedback/default inputs start from exported safetensors values or static-shape
+//! zeros; dynamic state needs a concrete initial tensor. Public inputs and forward
+//! routing supersede captured defaults. Publish next-state tensors together only
+//! after successful execution, preserving feedback on validation/inference errors.
+//! Retain public results independently of reusable workspace, and detach feedback
+//! outputs at their public placement before exposing them to writable consumers.
+//! Reset and peer creation use captured initial values, never live feedback or
+//! reread artifacts; mutable backend model state may remain shared and is not reset.
 pub(crate) mod graph;
 mod initial_state;
 pub(crate) mod onnx_tensorrt;

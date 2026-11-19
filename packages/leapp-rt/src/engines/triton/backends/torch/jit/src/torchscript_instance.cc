@@ -18,6 +18,10 @@
 namespace leapp::internal {
 namespace {
 
+// This Triton adapter accepts positional tensor arguments and tensor/flat-tuple
+// returns. Its INPUT__N/OUTPUT__N ports are mapped to public bundle names by the
+// runtime. Keep mutation isolation and response-buffer copies in the execution
+// path, and finish device work before releasing requests, including on failure.
 Status ValidateOutputs(const torch::jit::Module& module, size_t expected) {
   const auto& returns =
       module.get_method("forward").function().getSchema().returns();

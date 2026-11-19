@@ -2,6 +2,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! DLPack ABI, lifetime guards, borrowed CPU-slice access, and producer handoff.
+//!
+//! Compile these ownership types once as `lrt::dlpack` for every engine and
+//! binding. Allocation and CUDA selection/synchronization belong to the engine;
+//! this module has no framework conversion or allocation backend. The hidden
+//! HandoffStream only exposes the producer-synchronization bridge to bindings.
+//!
+//! ManagedTensor keeps a foreign producer lease on its importing thread.
+//! SharedTensor instead requires thread-independent deletion; its exports create
+//! separate leases that can alias writable storage. Safe to_cpu_vec copies lock
+//! against first exposure and reject already exposed storage on every clone.
+//! This prevents a safe read from racing with a foreign writable consumer.
+//!
+//! BorrowedTensor retains immutable descriptor/storage borrows; OutputBuffer
+//! retains exclusive writable caller storage only until synchronous completion.
+//! Neither wrapper transfers ownership. Raw constructors require the caller to
+//! guarantee pointer validity, allocation bounds, readiness, and storage lifetime.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 #[path = "dlpack/cpu.rs"]

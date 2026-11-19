@@ -214,7 +214,10 @@ Documentation Map
    :hidden:
    :maxdepth: 2
 
-   leapp_runtime
+   runtime/installation
+   runtime/getting_started
+   runtime/interface
+   runtime/session_options
    generated_configs
 
 .. toctree::

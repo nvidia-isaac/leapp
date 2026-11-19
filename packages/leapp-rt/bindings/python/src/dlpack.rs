@@ -2,6 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Python capsule protocol only. Tensor interpretation belongs to the selected engine.
+//!
+//! NumPy, PyTorch, CuPy, and returned outputs all use __dlpack__ and
+//! __dlpack_device__, with legacy/versioned capsules and no framework fallback.
+//! Retain producers and capsules through every participating device's handoff
+//! wait, including partial-import failures. Synchronize each device once per
+//! batch before inference. Output exports may share writable storage; reject
+//! explicit copy/cross-device requests rather than hiding a conversion here.
 use lrt::dlpack::{ManagedTensor, SharedTensor};
 use pyo3::{
     exceptions::{PyBufferError, PyTypeError},

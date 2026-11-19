@@ -40,7 +40,6 @@ PACKAGE_FILES = {
     "Cargo.toml.orig",
     "Cargo.lock",
     ".cargo_vcs_info.json",
-    "README.md",
     "LICENSE",
     "build.rs",
 }

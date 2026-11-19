@@ -6,7 +6,7 @@ The Python package and import name are `leapp`: install with `pip install leapp`
 
 One exported ONNX, TorchScript, or PT2 model can span existing helper functions, class methods, and multiple input call sites. Separate models are optional. Capture supports PyTorch and supported NumPy operations, including conversions between them. Warp kernel regions require an additional runtime adapter.
 
-LEAPP is a standalone library with ecosystem integrations, including Isaac Lab and Isaac ROS Deploy. Its Python `InferenceManager` provides bundle replay; exported artifacts can also run in compatible backend runtimes, including C++ applications. Runtime operator support and any custom adapters must match the export.
+LEAPP is a standalone library with ecosystem integrations, including Isaac Lab and Isaac ROS Deploy. Its deployment runtime provides bundle inspection and synchronous execution in Python, C++, and Rust. Runtime operator support and any custom adapters must match the export.
 
 Capture follows the executed tensor path. Data-dependent Python branches are not preserved dynamically, and unsupported operations or scalar extraction can freeze values. Cached validation includes exported state updates; sequential replay checks accumulated drift and runtime feedback. Check the installed version against the documentation before using an API.
 
@@ -29,7 +29,9 @@ Capture follows the executed tensor path. Data-dependent Python branches are not
 
 - [Validation guide](https://nvidia-isaac.github.io/leapp/guides/debugging.html): Cached samples, fresh inputs, sequential replay, and tracing diagnostics.
 - [Generated configuration](https://nvidia-isaac.github.io/leapp/generated_configs.html): Model paths, tensor interfaces, and graph connections in the YAML bundle.
-- [Python bundle runtime](https://nvidia-isaac.github.io/leapp/leapp_runtime.html): Load and replay bundles with InferenceManager.
+- [Runtime deployment](https://nvidia-isaac.github.io/leapp/leapp_runtime.html): Install and deploy bundles in Python, C++, and Rust.
+- [Runtime interface](https://nvidia-isaac.github.io/leapp/runtime/interface.html): Bundle getters, session functions, and memory ownership.
+- [Session options](https://nvidia-isaac.github.io/leapp/runtime/session_options.html): Execution placement and ONNX TensorRT optimization.
 - [Deployment semantics](https://nvidia-isaac.github.io/leapp/semantics/usage.html): Describe tensor roles, element names, and timing for downstream integrations.
 - [Ecosystem integrations](https://nvidia-isaac.github.io/leapp/ecosystem.html): Isaac Lab export and Isaac ROS Deploy runtime documentation.
 

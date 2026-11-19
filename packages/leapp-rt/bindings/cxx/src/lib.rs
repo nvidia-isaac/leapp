@@ -2,6 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Private cxx transport for the public C++ facade.
+//!
+//! Public headers expose standard C++ types and Status returns; generated cxx
+//! headers are build artifacts and must not be installed. The Rust core owns
+//! parsing, validation, execution, feedback, and tensor storage. Keep this layer
+//! to descriptor/status translation and retained C++ inspection values, with
+//! session locking and closure shared through bindings/common.
+//! The separate native-backend SDK does not depend on this consumer facade.
 #![deny(unsafe_op_in_unsafe_fn)]
 
 mod bridge;
