@@ -221,6 +221,56 @@ SDKs and sources are build dependencies; deployment needs the installed librarie
 The backend library paths and `LEAPP_NATIVE_BACKENDS` override are listed in
 [Installation](../../docs/source/runtime/installation.rst).
 
+### Manual plugin builds
+
+Use these CMake recipes when developing plugins outside the package producer.
+Set `LEAPP_NATIVE_BACKENDS` to the install prefix and supply matching SDKs as in
+[Model Dependencies](../../docs/source/runtime/dependencies.rst). `TORCH_CXX11_ABI`
+defaults to `1`; match LibTorch. `CUDAToolkit_ROOT` selects a nonstandard toolkit.
+
+#### TorchScript
+
+```sh
+cmake -S src/engines/native/backends/torchscript -B target/torchscript \
+  -DCMAKE_BUILD_TYPE=Release -DTORCH_ROOT="$TORCH_ROOT" \
+  -DCMAKE_INSTALL_PREFIX="$LEAPP_NATIVE_BACKENDS"
+cmake --build target/torchscript -j4
+cmake --install target/torchscript
+```
+
+#### PT2
+
+```sh
+cmake -S src/engines/triton/backends/torch/nativert -B target/nativert-source \
+  -DCMAKE_BUILD_TYPE=Release -DPYTORCH_SOURCE=/path/to/pytorch-v2.12.1 \
+  -DTORCH_ROOT="$TORCH_ROOT"
+cmake --build target/nativert-source -j4
+cmake -S src/engines/native/backends/nativert -B target/pt2 \
+  -DCMAKE_BUILD_TYPE=Release -DTORCH_ROOT="$TORCH_ROOT" \
+  -DPYTORCH_SOURCE=/path/to/pytorch-v2.12.1 \
+  -DNATIVERT_LIBRARY="$PWD/target/nativert-source/libleapp_nativert.so" \
+  -DCMAKE_INSTALL_PREFIX="$LEAPP_NATIVE_BACKENDS"
+cmake --build target/pt2 -j4
+cmake --install target/pt2
+```
+
+#### Warp adapters
+
+Build both adapters against the deployed ONNX Runtime and LibTorch, then install
+and link them beside their native backends:
+
+```sh
+leapp-build-warp-runtime --build-dir <warp-build-dir> -- \
+  -DLEAPP_WARP_ONNXRUNTIME_VERSION=<installed-onnxruntime-version> \
+  -DCMAKE_INSTALL_LIBDIR=lib
+cmake --install <warp-build-dir> --prefix <warp-adapter-prefix>
+mkdir -p "$LEAPP_NATIVE_BACKENDS/onnxruntime" "$LEAPP_NATIVE_BACKENDS/nativert"
+ln -s <warp-adapter-prefix>/lib/libleapp_wrp_onnx_custom_op.so \
+  "$LEAPP_NATIVE_BACKENDS/onnxruntime/libleapp_wrp_onnx_custom_op.so"
+ln -s <warp-adapter-prefix>/lib/libleapp_wrp_torch_custom_op.so \
+  "$LEAPP_NATIVE_BACKENDS/nativert/libleapp_wrp_torch_custom_op.so"
+```
+
 ### Adding a backend
 
 Register the backend in [`src/engines/native/backends.rs`](src/engines/native/backends.rs). Rust implementations
