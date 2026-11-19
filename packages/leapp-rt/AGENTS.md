@@ -212,6 +212,13 @@ interoperability and CUDA tests. Normal builds do not run the generator.
 
 ## Native backend plugins
 
+The standalone `../../scripts/leapp-build-runtime-backends` installs TorchScript
+and PT2 plugins without Pixi. Keep it standard-library-only and let CMake own
+SDK/version/linkage checks. Test it with
+`python -m unittest discover -s tests/deployment -p test_build_backends.py -v`.
+Its native build fixtures need no model SDKs or GPU; test real SDK builds locally
+when changing orchestration or install layout.
+
 Build plugins from the same source revision as the core, using CMake 3.24+
 and C++20. Follow [Model Dependencies](../../docs/source/runtime/dependencies.rst)
 for ONNX, TorchScript, NativeRT, and Warp build/install commands and SDK settings.

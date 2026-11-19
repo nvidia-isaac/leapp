@@ -88,7 +88,13 @@ warp-cu13 = [
 required-version = "==0.17.1"
 target-version = "py310"
 line-length = 88
-include = ["*.py", "*.pyi", "*.ipynb", "scripts/leapp-build-warp-runtime"]
+include = [
+    "*.py",
+    "*.pyi",
+    "*.ipynb",
+    "scripts/leapp-build-warp-runtime",
+    "scripts/leapp-build-runtime-backends",
+]
 force-exclude = true
 
 [tool.ruff.format]
@@ -112,6 +118,7 @@ include-package-data = true
 zip-safe = false
 script-files = [
     "scripts/leapp-build-warp-runtime",
+    "scripts/leapp-build-runtime-backends",
 ]
 
 [tool.setuptools.packages.find]

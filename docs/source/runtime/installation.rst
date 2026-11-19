@@ -250,10 +250,11 @@ a compatible NVIDIA driver, rather than the exporter environment or build tools.
 
    .. tab-item:: SDKs and CMake
 
-      Follow :doc:`dependencies` for manual source recipes or building a local
-      backend channel and wheelhouse. Backend plugin builds require CMake 3.24+
-      and C++20. SDK headers and sources are build dependencies; deployment needs
-      the resulting libraries and their shared-library dependencies.
+      Use ``leapp-build-runtime-backends`` to build TorchScript and PT2 plugins
+      without Pixi. Follow :doc:`dependencies` for the command and SDK setup, or
+      for producing a local backend channel and wheelhouse. Plugin builds require
+      CMake 3.24+ and C++20. SDK headers and sources are build dependencies;
+      deployment needs the resulting libraries and their shared dependencies.
 
       Set the backend directory before launching the application:
 

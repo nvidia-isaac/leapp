@@ -2,9 +2,9 @@ Model Dependencies
 ==================
 
 Use the packaged environments or Python extras on :doc:`installation` when
-available. This page describes building backend packages from existing SDKs
-using the runtime's build helpers. Commands run from ``packages/leapp-rt`` in a
-matching LEAPP checkout.
+available. To build against your own SDKs, use the standalone commands below;
+Pixi is optional. Commands run from ``packages/leapp-rt`` in a matching LEAPP
+checkout unless specified otherwise.
 Values in ``<...>`` are installation-specific paths.
 
 .. warning::
@@ -14,8 +14,49 @@ Values in ``<...>`` are installation-specific paths.
    creation and builds. Review how users obtain compatible SDKs and whether
    that remaining setup needs an installer. These helpers do not acquire SDKs.
 
-Build ONNX, TorchScript, and PT2 backends
------------------------------------------
+Build plugins without Pixi
+--------------------------
+
+``leapp-build-runtime-backends`` builds and installs TorchScript and PT2 plugins.
+It uses only Python 3.10+ and the standard library, CMake 3.24+, a C++20 compiler,
+and the selected SDKs. The command is installed with the LEAPP exporter, alongside
+``leapp-build-warp-runtime``. You can also run
+``../../scripts/leapp-build-runtime-backends`` directly from this checkout
+without installing or importing LEAPP.
+
+Set ``TORCH_ROOT`` to a CUDA-enabled LibTorch SDK. PT2 additionally requires
+PyTorch v2.12.1 sources with submodules in ``PYTORCH_SOURCE`` and LibTorch 2.12.1.
+Use C++11 ABI ``1``. Set ``CUDAToolkit_ROOT`` or ``CUDA_ROOT`` for a nonstandard
+CUDA Toolkit; both plugins need it even for CPU execution.
+
+.. code-block:: bash
+
+   leapp-build-runtime-backends --backends torchscript nativert \
+     --install-prefix <backend-install-prefix>
+   export LEAPP_NATIVE_BACKENDS=<backend-install-prefix>
+
+Select just ``torchscript`` or ``nativert`` when you need one plugin. PT2 builds
+its NativeRT dependency automatically; ``NATIVERT_LIBRARY`` can select an
+existing matching library instead. The helper installs plugins and the NativeRT
+library it builds; LibTorch, CUDA, and other SDK dependencies stay in their
+existing locations and must be available to the dynamic loader.
+
+Sources are discovered in the checkout. When running the installed command
+elsewhere, pass ``--source-dir <leapp-checkout>/packages/leapp-rt`` from the same
+revision as the deployed core. ``--build-dir`` selects the CMake build directory
+and ``--jobs`` controls parallelism. The default build directory is
+``<runtime-source>/target/standalone-backends``, with plugins installed into its
+``backends/`` directory unless ``--install-prefix`` is supplied. Builds can
+reuse that directory; the command does not delete it or install SDK dependencies.
+
+ONNX needs no LEAPP plugin build. Point ``ORT_DYLIB_PATH`` at a compatible ONNX
+Runtime shared library, or place it under
+``$LEAPP_NATIVE_BACKENDS/onnxruntime/libonnxruntime.so``. GPU execution needs its
+matching CUDA provider libraries; TensorRT acceleration also needs the ONNX
+Runtime TensorRT provider and its dependencies.
+
+Build backend packages with Pixi
+--------------------------------
 
 Build a local channel on the target Linux architecture in an environment with
 the required SDKs. Set ``ORT_DYLIB_PATH`` for ONNX Runtime and ``TORCH_ROOT``
@@ -32,7 +73,7 @@ plugins, including CPU execution. ONNX TensorRT additionally requires
      --sdk-origin 'sdk-artifact@sha256:<verified-digest>'
    pixi run package-runtime --input <package-output>
 
-``build-runtime`` is the shared build helper, implemented in
+To create backend packages, use the shared ``build-runtime`` producer in
 ``packaging/build.py``. It runs the required configure, build, and install steps
 into a staging directory. Choose the backend with these arguments:
 
