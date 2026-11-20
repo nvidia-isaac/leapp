@@ -170,12 +170,6 @@ Pixi is the default for locked deployments. Python applications can also use
 pip extras. Deployment needs compatible shared libraries and, for GPU work,
 a compatible NVIDIA driver, rather than the exporter environment or build tools.
 
-.. warning::
-
-   **TODO: Revisit backend discovery before release.** The manual fallback is
-   now ``/opt/leapp-rt/backends``. Review whether ``LEAPP_NATIVE_BACKENDS`` should
-   remain public or be removed in favor of package-managed discovery.
-
 .. tab-set::
 
    .. tab-item:: Pixi packages

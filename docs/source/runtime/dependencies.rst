@@ -7,13 +7,6 @@ Pixi is optional. Commands run from ``packages/leapp-rt`` in a matching LEAPP
 checkout unless specified otherwise.
 Values in ``<...>`` are installation-specific paths.
 
-.. warning::
-
-   **TODO: Review dependency installation before release.** The Pixi consumer
-   generator, backend producer, and Warp builder already automate environment
-   creation and builds. Review how users obtain compatible SDKs and whether
-   that remaining setup needs an installer. These helpers do not acquire SDKs.
-
 Build plugins without Pixi
 --------------------------
 
