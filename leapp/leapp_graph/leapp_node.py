@@ -106,6 +106,8 @@ class LeappNode:
         # storage for the fx graph or compiled module
         self.m = None
         self.method_validation = None
+        # call sites of indexed writes, named when a variable-shape export fails
+        self.assignment_sites = []
 
     @property
     def node_index(self):

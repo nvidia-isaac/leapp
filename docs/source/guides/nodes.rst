@@ -159,17 +159,36 @@ What stays variable during capture
 ----------------------------------
 
 Inside a node with a variable input, ``tensor.shape[i]``, ``tensor.size(i)``,
-and ``tensor.numel()`` return traced sizes. Passing them to tensor operations,
-and combining them with ``+``, ``-``, ``*``, ``//`` and ``%``, records the
-arithmetic in the exported graph.
+and ``tensor.numel()`` return traced sizes. The exported graph records a traced
+size when it is:
+
+* combined with ``+``, ``-``, ``*``, ``//`` or ``%``;
+* passed to an operation that also takes a traced tensor, such as
+  ``x.reshape(...)``, ``x[:, :n]`` or ``torch.split(x, n)``;
+* passed to ``torch.reshape``, ``torch.zeros``, ``torch.ones``, ``torch.full``,
+  ``torch.arange``, ``torch.eye``, ``torch.linspace`` or ``torch.logspace``.
 
 .. warning::
 
-   Python code that converts a traced size to a plain value uses the size of
-   the captured sample. This includes ``int(...)``, ``len(tensor)``,
-   comparisons such as ``if tensor.shape[1] == 8``, and ``range(tensor.shape[1])``.
-   The exported graph then follows the captured branch or loop count for every
-   input. Use tensor operations for size-dependent logic.
+   Everywhere else a traced size is used as the size of the captured sample:
+
+   * Python conversions and control flow: ``int(...)``, ``len(tensor)``,
+     comparisons such as ``if tensor.shape[1] == 8``, and
+     ``range(tensor.shape[1])``. The exported graph follows the captured branch
+     or loop count for every input.
+   * Indexing a constant tensor, such as ``table[:, :n]``. Register the constant
+     first with ``annotate.register_buffer()`` and index the returned tensor.
+   * Other factories that take no traced tensor, such as ``torch.rand`` and
+     ``torch.empty``.
+
+   ``torch.linspace`` and ``torch.logspace`` are recorded, but the exporter
+   fixes their step count, so a variable count is rejected by
+   ``compile_graph()``. Build the range from ``torch.arange`` instead.
+
+Indexed assignment (``y[:, 0] = value``, ``y[mask] = value``) and ``copy_()``
+into a tensor with a variable dimension are rejected by ``compile_graph()``,
+which names the assignment. Build the result with ``torch.where`` instead.
+Assignment into a tensor whose dimensions are all fixed is unaffected.
 
 What ``compile_graph()`` checks
 -------------------------------
@@ -181,10 +200,11 @@ derived sizes such as ``length // 2`` expressed in terms of the declared
 variables. Downstream nodes inherit the dimensions of the outputs they
 consume. See :ref:`config-variable-dimensions` for the YAML fields.
 
-Variable dimensions require an export backend (``export_with``) and Torch
-tensor ports: a node with variable dimensions cannot have NumPy or Warp inputs
-or outputs. NumPy operations inside such a node use the captured sizes.
-Feedback-state inputs with variable dimensions are rejected.
+Variable dimensions require an export backend (``export_with``) other than
+``executorch``, which exports the captured shapes only, and Torch tensor ports:
+a node with variable dimensions cannot have NumPy or Warp inputs or outputs.
+NumPy operations inside such a node use the captured sizes. A tensor with a
+variable dimension cannot be fed back to an earlier node.
 
 ``InferenceManager`` checks every input against the contract and raises
 ``ValueError`` for a wrong rank, a changed fixed dimension, a size outside the
@@ -256,7 +276,8 @@ and manually annotated nodes retain cached-sample validation.
 and reference replay.
 
 This first version supports top-level Torch tensor arguments, including
-those passed through ``*args`` and ``**kwargs``, and tensor or flat tuple outputs.
+those passed through ``*args`` and ``**kwargs``. Outputs may be a tensor or a
+tuple, list or dict of tensors.
 Other arguments may be scalars or lists, tuples and dicts that contain only
 scalars; each replay receives its own copy. A call cannot be replayed when an
 argument holds a tensor inside a container, is any other object, or when the

@@ -17,6 +17,7 @@
 
 import os
 import site
+import sys
 import sysconfig
 import traceback
 from dataclasses import dataclass
@@ -117,6 +118,17 @@ def get_caller_stack_identity():
         frame for frame in closest_first[1:] if _is_context_relevant_frame(frame)
     )[:2]
     return CallerIdentity(anchor=anchor, context=context)
+
+
+def get_caller_location() -> str:
+    """Return ``file:line`` of the closest frame outside LEAPP."""
+    frame = sys._getframe(1)
+    while frame is not None:
+        filename = _normalize_frame_path(frame.f_code.co_filename)
+        if filename and not filename.startswith(_LEAPP_PKG_DIR):
+            return f"{filename}:{frame.f_lineno}"
+        frame = frame.f_back
+    return "<unknown>"
 
 
 def format_caller_identity(identity):

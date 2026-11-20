@@ -11,7 +11,11 @@ from leapp.backends.export_backend import (
     SimplifiedONNXProgram,
 )
 from leapp.utils.logging import _get_logger
-from leapp.utils.shape_contracts import build_onnx_dynamic_axes, get_shape_contract
+from leapp.utils.shape_contracts import (
+    build_onnx_dynamic_axes,
+    export_shape_program,
+    get_shape_contract,
+)
 from leapp.backends._onnxscript_compat import patch_onnxscript_matcher
 import os
 import onnx
@@ -543,15 +547,19 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
         return num_fixed
 
     @staticmethod
-    def _clone_aliased_outputs(module):
+    def _clone_aliased_outputs(module) -> bool:
+        """Give each output its own value; return whether the graph changed."""
         # Dynamo names shared ONNX values in place, losing input or output names.
         if not isinstance(module, torch.fx.GraphModule):
-            return
+            return False
         output = next(node for node in module.graph.nodes if node.op == "output")
         seen = set()
+        cloned = False
 
         def separate(node):
+            nonlocal cloned
             if node.op == "placeholder" or node in seen:
+                cloned = True
                 return module.graph.call_function(torch.clone, (node,))
             seen.add(node)
             return node
@@ -559,12 +567,13 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
         with module.graph.inserting_before(output):
             output.args = torch.fx.node.map_arg(output.args, separate)
         module.recompile()
+        return cloned
 
     def compile(self, m: torch.nn.Module = None):
         if m is None:
             m = self.module_builder()
         m = m.eval()
-        self._clone_aliased_outputs(m)
+        aliased_outputs = self._clone_aliased_outputs(m)
         try:
             patch_onnxscript_matcher()
         except Exception as error:
@@ -586,6 +595,9 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
             raise ValueError(
                 "ONNX Dynamo identity-only variable graphs are unsupported by the tested exporter; use PT2 or a validated legacy/JIT backend"
             )
+        if program is not None and aliased_outputs:
+            # The shape program predates the clones that separate the outputs.
+            program = export_shape_program(self.node_context, m)
         onnx_program = torch.onnx.export(
             program if program is not None else m,
             input_values,

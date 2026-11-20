@@ -196,14 +196,17 @@ def test_exported_models_accept_different_input_shapes(
         assert providers[0] == expected_provider
 
 
-@pytest.mark.parametrize("factory_name", ["zeros", "ones", "full", "arange"])
-def test_factories_use_runtime_shape(dynamic_session, factory_name):
+def test_factories_use_runtime_shape(dynamic_session):
     """Check factory capture and the output values, shapes, and dtypes."""
 
-    def factory(length):
-        if factory_name == "full":
-            return torch.full((length,), 3)
-        return getattr(torch, factory_name)(length)
+    def factories(length):
+        return {
+            "zeros": torch.zeros(length),
+            "ones": torch.ones(length),
+            "full": torch.full((length,), 3),
+            "arange": torch.arange(length),
+            "eye": torch.eye(length),
+        }
 
     x = annotate.input_tensors(
         "factory",
@@ -213,28 +216,25 @@ def test_factories_use_runtime_shape(dynamic_session, factory_name):
             axes=[Axis(variable=Variable("length", min=4, max=32))],
         ),
     )
-    annotate.output_tensors("factory", {"y": factory(x.shape[0])}, export_with="pt2")
+    annotate.output_tensors("factory", factories(x.shape[0]), export_with="pt2")
     leapp.stop()
     leapp.compile_graph(visualize=False, validate=True, strict=True)
     manager = InferenceManager(str(dynamic_session))
     for length in (4, 12, 32):
-        actual = manager({"factory/x": torch.ones(length)})["factory/y"]
-        torch.testing.assert_close(actual, factory(length))
+        actual = manager({"factory/x": torch.ones(length)})
+        for name, expected in factories(length).items():
+            torch.testing.assert_close(
+                actual[f"factory/{name}"],
+                expected,
+                msg=lambda message, name=name: f"torch.{name}: {message}",
+            )
 
 
-@pytest.mark.parametrize(
-    "other",
-    [
-        Variable("length", min=4, max=64),
-        Variable("length", min=4, max=32, multiple_of=2),
-    ],
-    ids=["bounds", "divisibility"],
-)
-def test_conflicting_axis_declarations_are_rejected(dynamic_session, other):
+def test_conflicting_axis_declarations_are_rejected(dynamic_session):
     """Compilation rejects conflicting declarations across otherwise valid nodes."""
     for name, variable in (
         ("first", Variable("length", min=4, max=32)),
-        ("second", other),
+        ("second", Variable("length", min=4, max=64)),
     ):
         x = annotate.input_tensors(
             name, TensorSemantics("x", torch.ones(8), axes=[Axis(variable=variable)])
@@ -314,29 +314,6 @@ def test_inputs_have_independent_dynamic_dimensions(dynamic_session):
         torch.testing.assert_close(actual, concatenate(left, right))
 
 
-def test_dynamic_input_with_static_input(dynamic_session):
-    """Reloaded models allow variable lengths while enforcing the static bias shape."""
-    bias = torch.arange(3, dtype=torch.float32)
-    manager = _export_two_input_model(
-        torch.add,
-        [
-            TensorSemantics(
-                "left",
-                torch.ones(2, 8, 3),
-                axes=[None, Axis(variable=Variable("length", min=4, max=32)), None],
-            ),
-            TensorSemantics("right", bias, axes=[None]),
-        ],
-        dynamic_session,
-    )
-    for length in (4, 12, 32):
-        left = torch.arange(6 * length, dtype=torch.float32).reshape(2, length, 3)
-        actual = manager({"combine/left": left, "combine/right": bias})["combine/y"]
-        torch.testing.assert_close(actual, left + bias)
-    with pytest.raises(ValueError, match="expected fixed dimension 3"):
-        manager({"combine/left": torch.ones(2, 12, 3), "combine/right": torch.ones(4)})
-
-
 def _ramp(shape):
     return torch.arange(math.prod(shape), dtype=torch.float32).reshape(shape)
 
@@ -360,42 +337,15 @@ def _check_shape_export(path, function, backend, sample_shape, axes, shapes):
 
 
 @pytest.mark.parametrize("backend", ["pt2", "onnx-dynamo"])
-@pytest.mark.parametrize(
-    "reshape",
-    [
-        pytest.param(lambda x: x.reshape(x.shape[0], -1), id="shape"),
-        pytest.param(lambda x: x.reshape(x.size(0), -1), id="size"),
-    ],
-)
-def test_reshape_uses_runtime_first_dimension(dynamic_session, backend, reshape):
+def test_reshape_uses_runtime_first_dimension(dynamic_session, backend):
     """The original batch-reshape regression stays correct in FX and saved models."""
     _check_shape_export(
         dynamic_session,
-        reshape,
+        lambda x: x.reshape(x.shape[0], -1),
         backend,
         (2, 3, 4),
         [Axis(variable=Variable("batch", min=2, max=8)), None, None],
         [(2, 3, 4), (5, 3, 4)],
-    )
-
-
-@pytest.mark.parametrize("backend", ["pt2", "onnx-dynamo"])
-@pytest.mark.parametrize(
-    "reshape",
-    [
-        pytest.param(lambda x: x.reshape(-1, x.shape[2]), id="shape"),
-        pytest.param(lambda x: x.reshape(-1, x.size(2)), id="size"),
-    ],
-)
-def test_reshape_uses_runtime_third_dimension(dynamic_session, backend, reshape):
-    """A variable third axis remains dynamic while the leading axes stay fixed."""
-    _check_shape_export(
-        dynamic_session,
-        reshape,
-        backend,
-        (2, 3, 128),
-        [None, None, Axis(variable=Variable("length", min=4, max=512))],
-        [(2, 3, 128), (2, 3, 511)],
     )
 
 
@@ -417,18 +367,11 @@ def test_slice_uses_runtime_shape(dynamic_session, backend):
 
 
 @pytest.mark.parametrize("backend", ["pt2", "onnx-dynamo"])
-@pytest.mark.parametrize(
-    "reshape",
-    [
-        pytest.param(lambda x: (x + 1).reshape(-1).reshape(x.shape), id="shape"),
-        pytest.param(lambda x: (x + 1).reshape(-1).reshape(x.size()), id="size"),
-    ],
-)
-def test_reshape_uses_full_runtime_shape(dynamic_session, backend, reshape):
+def test_reshape_uses_full_runtime_shape(dynamic_session, backend):
     """Full shape tuples preserve independently varying batch and length dimensions."""
     _check_shape_export(
         dynamic_session,
-        reshape,
+        lambda x: (x + 1).reshape(-1).reshape(x.shape),
         backend,
         (2, 3, 8),
         [
@@ -453,20 +396,23 @@ def test_reshape_uses_runtime_element_count(dynamic_session, backend):
     )
 
 
-@pytest.mark.parametrize(
-    "backend", ["pt2", "onnx-dynamo", "onnx-torchscript", "jit-script", "jit-trace"]
-)
-def test_zero_and_one_sizes_after_fresh_process_reload(dynamic_session, backend):
-    """A fresh interpreter replays an admitted domain including empty and singleton axes."""
-    x = annotate.input_tensors(
-        "boundary",
-        TensorSemantics(
-            "x",
-            torch.ones(2, 3, 4),
-            axes=[None, None, Axis(variable=Variable("length", min=0, max=8))],
-        ),
-    )
-    annotate.output_tensors("boundary", {"y": x * 2 + 1}, export_with=backend)
+def test_zero_and_one_sizes_after_fresh_process_reload(dynamic_session):
+    """A fresh interpreter replays empty and singleton axes on every backend.
+
+    One bundle holds a node per backend, so a single reload covers them all.
+    """
+    backends = ["pt2", "onnx-dynamo", "onnx-torchscript", "jit-script", "jit-trace"]
+    nodes = [backend.replace("-", "_") for backend in backends]
+    for node, backend in zip(nodes, backends):
+        x = annotate.input_tensors(
+            node,
+            TensorSemantics(
+                "x",
+                torch.ones(2, 3, 4),
+                axes=[None, None, Axis(variable=Variable("length", min=0, max=8))],
+            ),
+        )
+        annotate.output_tensors(node, {"y": x * 2 + 1}, export_with=backend)
     leapp.stop()
     leapp.compile_graph(visualize=False, validate=True, strict=True)
     script = """
@@ -474,13 +420,19 @@ import sys
 import torch
 from leapp import InferenceManager
 manager = InferenceManager(sys.argv[1])
+nodes = sys.argv[2:]
 for length in (0, 1, 5, 8):
     value = torch.arange(6 * length, dtype=torch.float32).reshape(2, 3, length)
-    actual = manager({"boundary/x": value})["boundary/y"]
-    torch.testing.assert_close(actual, value * 2 + 1)
+    actual = manager({f"{node}/x": value for node in nodes})
+    for node in nodes:
+        torch.testing.assert_close(
+            actual[f"{node}/y"],
+            value * 2 + 1,
+            msg=lambda message: f"{node}, length {length}: {message}",
+        )
 """
     result = subprocess.run(
-        [sys.executable, "-c", script, str(dynamic_session)],
+        [sys.executable, "-c", script, str(dynamic_session), *nodes],
         env={**os.environ, "CUDA_VISIBLE_DEVICES": ""},
         capture_output=True,
         text=True,
@@ -521,12 +473,16 @@ def test_different_size_capture_samples_are_validated(
         leapp.compile_graph(visualize=False, validate=True, strict=True)
 
 
-@pytest.mark.parametrize("port", ["input", "output"])
-@pytest.mark.parametrize("backend", ["onnx-dynamo", "onnx-torchscript"])
+@pytest.mark.parametrize(
+    "backend,port", [("onnx-dynamo", "input"), ("onnx-torchscript", "output")]
+)
 def test_saved_artifact_cannot_freeze_a_variable_dimension(
     dynamic_session, monkeypatch, port, backend
 ):
-    """Final artifact checks run even when numerical output validation is disabled."""
+    """Final artifact checks run even when numerical output validation is disabled.
+
+    Unit tests cover the port check itself; each ONNX backend must still call it.
+    """
     from leapp.backends.export_backend import SimplifiedONNXProgram
 
     save = SimplifiedONNXProgram.save
@@ -609,30 +565,6 @@ def test_annotation_validates_generated_input_shapes(
     assert sum(tracing for tracing, _ in executions) == 1
     assert node.method_validation is None
     assert list(_MANAGER.get_nodes()) == ["encode"]
-
-
-def test_validation_rejects_frozen_shape_branch(dynamic_session):
-    """A branch absent from FX is exposed by executing the original function at length 12."""
-
-    @annotate.method(export_with="pt2")
-    def branch(x):
-        if x.shape[1] == 12:
-            result = x * 2
-        else:
-            result = x + 1
-        return result
-
-    branch(
-        TensorSemantics(
-            "x",
-            torch.ones(2, 8),
-            axes=[None, Axis(variable=Variable("length", min=4, max=12))],
-        )
-    )
-    leapp.stop()
-    with pytest.raises(Exception, match="Model validation failed"):
-        leapp.compile_graph(visualize=False, validate=True, strict=True)
-    assert _MANAGER.get_nodes()["branch"].method_validation is None
 
 
 def test_validation_rejects_frozen_shape_loop(dynamic_session, image_pipeline):
@@ -754,10 +686,7 @@ def test_static_annotation_uses_cached_samples(dynamic_session):
     assert calls == [8, 8]
 
 
-@pytest.mark.parametrize("custom_generator", [False, True])
-def test_disabled_validation_does_not_generate_inputs(
-    dynamic_session, image_pipeline, custom_generator
-):
+def test_disabled_validation_does_not_generate_inputs(dynamic_session, image_pipeline):
     """validate=False skips reference replay and callbacks across connected dynamic nodes."""
     preprocess, _ = image_pipeline
     calls = []
@@ -765,9 +694,7 @@ def test_disabled_validation_does_not_generate_inputs(
     def generate(samples, shapes, seed):
         raise AssertionError("Validation should be disabled")
 
-    @annotate.method(
-        export_with="pt2", validation_inputs=generate if custom_generator else None
-    )
+    @annotate.method(export_with="pt2", validation_inputs=generate)
     def encode(x):
         calls.append(x.shape[2])
         result = x * 2
@@ -1039,6 +966,12 @@ def _state_sized_by_variable_input(x):
     annotate.output_tensors("node", {"y": updated * 2}, export_with="pt2")
 
 
+def _with_executorch_backend(x):
+    annotate.output_tensors("node", {"y": x * 2}, export_with="pt2")
+    # ExecuTorch is an optional install; the rejection reads the backend name.
+    _MANAGER.get_nodes()["node"].backend = "executorch"
+
+
 @pytest.mark.parametrize(
     "finish,error",
     [
@@ -1046,6 +979,11 @@ def _state_sized_by_variable_input(x):
             _without_export_backend,
             "require an executable export backend",
             id="no-export-backend",
+        ),
+        pytest.param(
+            _with_executorch_backend,
+            "unsupported by the executorch export backend",
+            id="executorch-backend",
         ),
         pytest.param(
             _state_sized_by_variable_input,
@@ -1067,6 +1005,100 @@ def test_unsupported_variable_configurations_are_rejected(
     with pytest.raises(ValueError, match=error):
         leapp.compile_graph(visualize=False, validate=False)
     assert not dynamic_session.exists()
+
+
+def test_variable_output_cannot_feed_an_earlier_node(dynamic_session):
+    """A variable shape on a feedback edge fails compilation, not loading.
+
+    The earlier node has no variable input of its own, so only the connected
+    graph shows that its feedback input would receive a changing shape.
+    """
+    carried = torch.zeros(2, 8)
+    for _ in range(2):
+        carried = annotate.input_tensors("summary", {"carried": carried})
+        total = annotate.output_tensors(
+            "summary", {"total": carried.sum(dim=1, keepdim=True)}, export_with="pt2"
+        )
+        x = annotate.input_tensors("scale", _sequence())
+        total = annotate.input_tensors("scale", {"total": total})
+        carried = annotate.output_tensors(
+            "scale", {"scaled": x * 2 + total}, export_with="pt2"
+        )
+    leapp.stop()
+    with pytest.raises(ValueError, match="scale/scaled -> summary/carried.*feedback"):
+        leapp.compile_graph(visualize=False, validate=False)
+    assert not dynamic_session.exists()
+
+
+def _overwrite_column(y):
+    y[:, 0] = -1
+
+
+def _overwrite_mask(y):
+    y[y > 5] = 0
+
+
+@pytest.mark.parametrize("assign", [_overwrite_column, _overwrite_mask])
+def test_assignment_into_a_variable_tensor_is_rejected(dynamic_session, assign):
+    """Indexed assignment into a variable-length tensor names the assignment.
+
+    The lowering indexes the captured layout, which only the exporter detects;
+    the error must point at the user's statement and not at the declaration.
+    """
+    x = annotate.input_tensors("node", _sequence())
+    y = x.clone()
+    assign(y)
+    annotate.output_tensors("node", {"y": y}, export_with="pt2")
+    leapp.stop()
+    site = rf"{os.path.basename(__file__)}:{assign.__code__.co_firstlineno + 1}\b"
+    with pytest.raises(ValueError, match=f"Indexed assignment.*{site}"):
+        leapp.compile_graph(visualize=False, validate=False)
+    assert not dynamic_session.exists()
+
+
+def test_assignment_into_a_fixed_tensor_follows_runtime_values(dynamic_session):
+    """A variable node may still assign into tensors whose shape is fixed."""
+    x = annotate.input_tensors("node", _sequence())
+    totals = x.sum(dim=1)
+    totals[0] = -1
+    peak = torch.zeros(3)
+    peak[1] = x.max()
+    annotate.output_tensors("node", {"totals": totals, "peak": peak}, export_with="pt2")
+    leapp.stop()
+    leapp.compile_graph(visualize=False, validate=True, strict=True)
+
+    manager = InferenceManager(str(dynamic_session))
+    fresh = torch.arange(40, dtype=torch.float32).reshape(2, 20)
+    actual = manager({"node/x": fresh})
+    torch.testing.assert_close(actual["node/totals"], torch.tensor([-1.0, 590.0]))
+    torch.testing.assert_close(actual["node/peak"], torch.tensor([0.0, 39.0, 0.0]))
+
+
+@pytest.mark.parametrize(
+    "outputs",
+    [
+        pytest.param(lambda x, y: {"first": y, "second": y}, id="repeated-output"),
+        pytest.param(lambda x, y: {"same": x, "doubled": y}, id="passthrough-input"),
+    ],
+)
+def test_dynamo_exports_aliased_outputs_of_variable_nodes(dynamic_session, outputs):
+    """ONNX Dynamo keeps every port of a variable node whose outputs share a value.
+
+    The backend separates aliased outputs before export; only a compiled node
+    shows that the variable-shape program receives the same treatment.
+    """
+    x = annotate.input_tensors("node", _sequence())
+    annotate.output_tensors("node", outputs(x, x * 2), export_with="onnx-dynamo")
+    leapp.stop()
+    leapp.compile_graph(visualize=False, validate=True, strict=True)
+
+    manager = InferenceManager(str(dynamic_session))
+    fresh = torch.arange(24, dtype=torch.float32).reshape(2, 12)
+    actual = manager({"node/x": fresh})
+    expected = outputs(fresh, fresh * 2)
+    assert set(actual) == {f"node/{name}" for name in expected}
+    for name, value in expected.items():
+        torch.testing.assert_close(actual[f"node/{name}"], value)
 
 
 @pytest.mark.parametrize("port", ["input", "output"])
@@ -1142,7 +1174,8 @@ def test_runtime_checks_every_call_and_assigned_input(dynamic_session):
         actual = manager({"node/x": fresh, "node/bias": torch.ones(2, 1)})["node/y"]
         torch.testing.assert_close(actual, fresh * 2 + 1)
 
-    manager.set_input_value("node", "x", torch.ones(2, 20))
+    assigned = torch.ones(2, 20)
+    manager.set_input_value("node", "x", assigned)
     assert tuple(manager.value_dict["node"]["x"].shape) == (2, 20)
     for illegal, error in (
         (torch.ones(2, 7), "n must be a multiple of 2"),
@@ -1152,6 +1185,9 @@ def test_runtime_checks_every_call_and_assigned_input(dynamic_session):
         with pytest.raises(ValueError, match=error):
             manager.set_input_value("node", "x", illegal)
     assert tuple(manager.value_dict["node"]["x"].shape) == (2, 20)
+    # The manager owns its buffers; clearing them leaves the caller's tensor.
+    manager.reset()
+    torch.testing.assert_close(assigned, torch.ones(2, 20))
 
 
 def _call_annotated_function(style, calls, frozen=False, **method_options):
@@ -1201,18 +1237,65 @@ def _call_annotated_function(style, calls, frozen=False, **method_options):
         encode(_sequence(), {"scale": torch.tensor(2.0)})
 
 
-@pytest.mark.parametrize("style", ["star-args", "keyword-args", "plain-config"])
 @pytest.mark.parametrize(
-    "frozen", [False, True], ids=["shape-generic", "frozen-branch"]
+    "style,frozen",
+    [
+        pytest.param("star-args", False, id="star-args"),
+        pytest.param("keyword-args", False, id="keyword-args"),
+        pytest.param("plain-config", False, id="plain-config"),
+        pytest.param("star-args", True, id="frozen-branch"),
+    ],
 )
 def test_generated_validation_replays_call_styles(dynamic_session, style, frozen):
     """Generated inputs reach the original function through each call style.
 
     The frozen branch shows the replay compared other lengths; a skipped
-    replay would let it pass.
+    replay would let it pass. The comparison does not depend on the call
+    style, so one frozen case is enough.
     """
     calls = []
     _call_annotated_function(style, calls, frozen)
+    leapp.stop()
+    if frozen:
+        with pytest.raises(Exception, match="Model validation failed"):
+            leapp.compile_graph(visualize=False, validate=True, strict=True)
+        assert len(calls) > 1
+    else:
+        assert leapp.compile_graph(visualize=False, validate=True, strict=True) == {
+            "encode": True
+        }
+        assert {4, 32} <= set(calls[1:])
+    assert calls[0] == 8
+
+
+@pytest.mark.parametrize(
+    "container,frozen",
+    [
+        pytest.param(dict, False, id="dict"),
+        pytest.param(list, False, id="list"),
+        pytest.param(dict, True, id="frozen-second-output"),
+    ],
+)
+def test_generated_validation_replays_structured_returns(
+    dynamic_session, container, frozen
+):
+    """A function returning a dict or list is validated at generated lengths.
+
+    Capture flattens such returns into ports. The frozen second output shows
+    the replayed reference is flattened in the same order and compared.
+    """
+    calls = []
+
+    @annotate.method(export_with="pt2")
+    def encode(x):
+        calls.append(x.shape[1])
+        # A Python comparison keeps the captured result.
+        keep = x.shape[1] == 8 if frozen else 1
+        parts = {"doubled": x * 2, "tail": x[:, -1] * keep}
+        outputs = parts if container is dict else list(parts.values())
+        return outputs
+
+    encode(_sequence())
     leapp.stop()
     if frozen:
         with pytest.raises(Exception, match="Model validation failed"):

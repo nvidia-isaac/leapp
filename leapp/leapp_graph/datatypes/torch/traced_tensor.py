@@ -31,6 +31,7 @@ from ..proxy import (
 )
 from ..traced_data import TracedData
 from ..primitives.traced_int import TracedInt, graph_sizes, find_recording_int
+from leapp.utils.caller_identity import get_caller_location
 from leapp.utils.shape_contracts import has_variable_inputs
 from leapp.utils.shape_values import (
     dimension,
@@ -504,6 +505,11 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             and self._is_full_assignment_key(key)
         ):
             return True
+
+        if has_variable_inputs(self._context):
+            site = get_caller_location()
+            if site not in self._context.assignment_sites:
+                self._context.assignment_sites.append(site)
 
         if isinstance(value, TracedInt):
             if not value.is_recording:

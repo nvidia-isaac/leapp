@@ -25,6 +25,20 @@ class TorchPatchBackend:
         (torch, "tensor"),
     ]
 
+    # Called without a traced tensor, so ``__torch_function__`` never sees
+    # their size arguments. Random and uninitialized factories are excluded:
+    # recording them would replace the captured values.
+    _SHAPE_FUNCTIONS = (
+        "reshape",
+        "zeros",
+        "ones",
+        "full",
+        "arange",
+        "eye",
+        "linspace",
+        "logspace",
+    )
+
     def __init__(self) -> None:
         self._patches = AttributePatchRegistry()
         self._installed = False
@@ -41,7 +55,7 @@ class TorchPatchBackend:
                 original = getattr(module, name)
                 patched = self._create_patch(original)
                 self._patches.install(module, name, original, patched)
-            for name in ("reshape", "zeros", "ones", "full", "arange"):
+            for name in self._SHAPE_FUNCTIONS:
                 original = getattr(torch, name)
                 self._patches.install(
                     torch, name, original, self._shape_patch(original)

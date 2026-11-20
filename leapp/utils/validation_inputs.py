@@ -15,6 +15,7 @@ from leapp.backends.export_backend import prepare_tensors_for_export
 from leapp.leapp_graph.datatypes import TracedData, to_export_torch_tensor
 from leapp.utils.logging import _get_logger
 from leapp.utils.semantics import TensorSemantics
+from leapp.utils.tensor_description import flatten_io_structure
 from leapp.utils.shape_contracts import (
     evaluate_dimension_expression,
     get_dimension_expression,
@@ -394,11 +395,9 @@ class MethodValidation:
                     "generated inputs; provide validation_inputs for domain-specific data. "
                     f"{exc}"
                 ) from exc
-        expected = expected if isinstance(expected, tuple) else (expected,)
-        if not all(isinstance(v, torch.Tensor) for v in expected):
-            raise ValueError(
-                "Generated validation requires a tensor or flat tuple of tensor outputs"
-            )
+        # Capture registers nested returns through the same flattening, so the
+        # reference outputs follow the node's port order.
+        expected = list(flatten_io_structure(expected, "").values())
         expected = prepare_tensors_for_export(
             [to_export_torch_tensor(value) for value in expected]
         )

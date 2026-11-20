@@ -56,6 +56,7 @@ from leapp.utils.utils import (
 )
 from contextlib import nullcontext
 from leapp.utils.shape_contracts import (
+    validate_feedback_shape_contracts,
     validate_variable_declarations,
     prepare_shape_contracts,
     validate_reentry_variable_axes,
@@ -1033,6 +1034,7 @@ class ExportManager:
             prepare_shape_contracts(node_context)
             node_context.compile_model()
             _get_logger().info("Success\n")
+        validate_feedback_shape_contracts(self.nodes.values())
 
     def save_models(self):
         if self.SAVE_PATH is None:

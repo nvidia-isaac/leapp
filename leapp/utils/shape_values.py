@@ -88,6 +88,9 @@ def trace_call(function, args, kwargs, *, shape, method=False):
                     "Shape consumers and tensors belong to different nodes"
                 )
             return item.proxy if proxy else item.tensor
+        if proxy and isinstance(item, torch.nn.Parameter):
+            # FX accepts parameters only as module members; record a constant.
+            return item.data
         return item
 
     real_args = TracedData._map_structure(args, lambda x: leaf(x, False))

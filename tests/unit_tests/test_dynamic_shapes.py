@@ -30,27 +30,6 @@ from leapp.utils.shape_contracts import (
 
 
 class TestDynamicShapes(unittest.TestCase):
-    def test_reshape_uses_runtime_shape(self):
-        sample = torch.arange(16).reshape(2, 8)
-        ctx = TracedTensorNode(name="pairs", node_index=0)
-        semantics = TensorSemantics(
-            "x",
-            sample,
-            axes=[
-                None,
-                Axis(variable=Variable("length", min=4, max=32, multiple_of=2)),
-            ],
-        )
-        x = ctx.create_input(sample, name="x", semantics=semantics)
-        n = x.size(1)
-        pairs = n // 2
-        self.assertIs(type(n), TracedInt)
-        self.assertIs(type(pairs), TracedInt)
-        self.assertEqual(int(pairs), 4)
-        ctx.compile_trace({"y": x.reshape(2, pairs, 2)})
-        fresh = torch.arange(24).reshape(2, 12)
-        torch.testing.assert_close(ctx.m(fresh), fresh.reshape(2, 6, 2))
-
     def test_inactive_shape_values_are_constants(self):
         for replaced in (False, True):
             with self.subTest(replaced=replaced):
@@ -554,6 +533,8 @@ def _topk(x):
 @pytest.mark.parametrize(
     "operation",
     [
+        pytest.param(lambda x: x.reshape(2, x.size(1) // 2, 2), id="reshape"),
+        pytest.param(lambda x: (x + 1).reshape(-1).reshape(x.size()), id="full-size"),
         pytest.param(lambda x: x.view(2, x.shape[1] // 2, 2), id="view"),
         pytest.param(
             lambda x: x.sum(dim=1, keepdim=True).expand(2, x.shape[1]), id="expand"
@@ -583,6 +564,25 @@ def test_shape_consumers_use_runtime_shape(operation):
     assert len(actual) == len(expected)
     for exported, reference in zip(actual, expected):
         torch.testing.assert_close(exported, reference)
+
+
+def test_shape_consumer_accepts_parameter_operands():
+    weight = torch.nn.Parameter(torch.full((8,), 2.0))
+    bias = torch.nn.Parameter(torch.ones(8))
+
+    def normalize(x):
+        return torch.nn.functional.layer_norm(x, x.shape[-1:], weight, bias)
+
+    sample = torch.arange(16.0).reshape(2, 8)
+    ctx = TracedTensorNode(name="normalize", node_index=0)
+    semantics = TensorSemantics(
+        "x", sample, axes=[Axis(variable=Variable("batch", min=1, max=8)), None]
+    )
+    ctx.compile_trace(
+        {"y": normalize(ctx.create_input(sample, name="x", semantics=semantics))}
+    )
+    fresh = torch.arange(40.0).flip(0).reshape(5, 8)
+    torch.testing.assert_close(ctx.m(fresh), normalize(fresh))
 
 
 @pytest.mark.parametrize(

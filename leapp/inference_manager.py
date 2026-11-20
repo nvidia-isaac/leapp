@@ -557,8 +557,9 @@ class InferenceManager:
                 if d["name"] == input_name
             )
             self._validate_tensor(node_name, desc, value, {})
-            self.value_dict[node_name][input_name] = value.to(
-                self.nodes[node_name].device
+            # ``reset()`` zeroes stored buffers, so never keep the caller's tensor.
+            self.value_dict[node_name][input_name] = value.detach().to(
+                self.nodes[node_name].device, copy=True
             )
         else:
             self.value_dict[node_name][input_name].copy_(value)

@@ -493,7 +493,8 @@ def build_onnx_dynamic_axes(node):
     return axes or None
 
 
-def _export_shape_program(node) -> torch.export.ExportedProgram:
+def export_shape_program(node, module=None) -> torch.export.ExportedProgram:
+    """Export ``module`` (default: the node's graph) under the declared domain."""
     unsupported = [
         d.name for d in node.inputs + node.outputs if not d.dynamic_array_supported
     ]
@@ -515,14 +516,25 @@ def _export_shape_program(node) -> torch.export.ExportedProgram:
         ):
             kwargs["strict"] = node.export_backend.backend_params["strict"]
         program = torch.export.export(
-            node.m.eval(),
+            (node.m if module is None else module).eval(),
             values,
             dynamic_shapes=build_torch_dynamic_shapes(node),
             **kwargs,
         )
     except Exception as exc:
+        assignments = ""
+        if node.assignment_sites:
+            # Assignment lowering indexes the captured layout.
+            assignments = (
+                " Indexed assignment and copy_() into a tensor with a variable "
+                "dimension are unsupported; build the result with torch.where() "
+                f"instead (assigned at {', '.join(node.assignment_sites[:3])})."
+            )
         raise ValueError(
-            f"{node.name}: cannot honor requested variable-axis domain; use a nondegenerate example and inspect compiler constraints: {exc}"
+            f"{node.name}: cannot honor requested variable-axis domain; use a "
+            f"nondegenerate example and inspect compiler constraints.{assignments} "
+            "A size may have been fixed by a Python conversion, by indexing a "
+            f"constant tensor, or by a factory LEAPP does not trace: {exc}"
         ) from exc
     return program
 
@@ -675,7 +687,7 @@ def _validate_cached_shapes(node):
 
 
 def export_and_infer_shape_contracts(node):
-    program = _export_shape_program(node)
+    program = export_shape_program(node)
     node.shape_program = program
     by_name = {n.name: n for n in program.graph.nodes}
     substitutions, ranges = _map_input_dimensions(node, program, by_name)
@@ -712,12 +724,42 @@ def prepare_shape_contracts(node):
     ):
         if not node.exports_model:
             raise ValueError("Variable axes require an executable export backend")
+        if node.backend == "executorch":
+            # That backend exports the captured shapes only.
+            raise ValueError(
+                f"{node.name}: variable axes are unsupported by the executorch "
+                "export backend"
+            )
         for desc in node.inputs:
             if desc.has_source and desc.source_node.node_index >= node.node_index:
                 raise ValueError(
                     "Variable feedback-state shapes are outside the current variable-shape subset"
                 )
         export_and_infer_shape_contracts(node)
+
+
+def validate_feedback_shape_contracts(nodes):
+    """Reject a variable shape carried over a feedback edge.
+
+    ``prepare_shape_contracts`` sees a consumer before its later producer, so
+    an edge into a consumer with no variable input of its own is checked here,
+    once every contract is known.
+    """
+    for node in nodes:
+        for desc in node.inputs:
+            if not (desc.has_source and desc.source_node.node_index >= node.node_index):
+                continue
+            source = next(
+                (d for d in desc.source_node.outputs if d.port == desc.port), None
+            )
+            if source is not None and any(
+                isinstance(size, str) for size in get_shape_contract(source)["shape"]
+            ):
+                raise ValueError(
+                    f"{desc.source_node.name}/{source.name} -> {node.name}/{desc.name}: "
+                    "Variable feedback-state shapes are outside the current "
+                    "variable-shape subset"
+                )
 
 
 def validate_reentry_variable_axes(metadata, descriptions):
