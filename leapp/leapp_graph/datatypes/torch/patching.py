@@ -13,6 +13,7 @@ import torch
 
 from .._attribute_patching import AttributePatchRegistry
 from ..proxy import conversion_proxy
+from leapp.utils.shape_contracts import has_variable_inputs
 from leapp.utils.shape_values import suppress_dynamic_shape_tracing, trace_call
 
 
@@ -35,9 +36,10 @@ class TorchPatchBackend:
         "full",
         "arange",
         "eye",
-        "linspace",
-        "logspace",
     )
+    # torch.export cannot take a traced step count. A variable node records it
+    # so that the export fails; a static node keeps the captured count.
+    _VARIABLE_NODE_SHAPE_FUNCTIONS = ("linspace", "logspace")
 
     def __init__(self) -> None:
         self._patches = AttributePatchRegistry()
@@ -55,11 +57,12 @@ class TorchPatchBackend:
                 original = getattr(module, name)
                 patched = self._create_patch(original)
                 self._patches.install(module, name, original, patched)
-            for name in self._SHAPE_FUNCTIONS:
+            for name in self._SHAPE_FUNCTIONS + self._VARIABLE_NODE_SHAPE_FUNCTIONS:
                 original = getattr(torch, name)
-                self._patches.install(
-                    torch, name, original, self._shape_patch(original)
+                patched = self._shape_patch(
+                    original, name in self._VARIABLE_NODE_SHAPE_FUNCTIONS
                 )
+                self._patches.install(torch, name, original, patched)
             torch.jit._state.disable()
         except Exception:
             self._patches.restore()
@@ -137,10 +140,13 @@ class TorchPatchBackend:
         return patched
 
     @staticmethod
-    def _shape_patch(original):
+    def _shape_patch(original, variable_node_only=False):
         @functools.wraps(original)
         def patched(*args, **kwargs):
-            if (shape := find_recording_int((args, kwargs))) is not None:
+            shape = find_recording_int((args, kwargs))
+            if shape is not None and (
+                not variable_node_only or has_variable_inputs(shape.context_obj)
+            ):
                 return trace_call(original, args, kwargs, shape=shape)
             return original(*args, **kwargs)
 

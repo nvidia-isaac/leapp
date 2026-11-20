@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-"""Capture and ownership of variable input dimensions."""
+"""Variable dimension contracts, declarations, loading, and capture."""
 
 import dataclasses
 import unittest
@@ -27,10 +27,15 @@ from leapp.utils.shape_contracts import (
     serialize_shape_axes,
     validate_shape_contract,
 )
+from leapp.utils.validation_inputs import (
+    generate_validation_inputs,
+    sample_validation_shapes,
+)
 
 
 class TestDynamicShapes(unittest.TestCase):
     def test_inactive_shape_values_are_constants(self):
+        """A traced size from a finished or replaced node is recorded as a constant."""
         for replaced in (False, True):
             with self.subTest(replaced=replaced):
                 old = TracedTensorNode(name="old", node_index=0)
@@ -52,6 +57,7 @@ class TestDynamicShapes(unittest.TestCase):
                 )
 
     def test_shape_dependent_out_mutations_are_rejected(self):
+        """An ``out=`` operation with a traced size raises and changes nothing."""
         ctx = TracedTensorNode(name="mutation", node_index=0)
         sample = torch.ones(2, 8)
         x = ctx.create_input(
@@ -82,6 +88,7 @@ class TestDynamicShapes(unittest.TestCase):
     ],
 )
 def test_onnx_metadata_agrees_with_shape_contract(shape, error):
+    """A saved ONNX model may rename or omit a symbol but not fix or contradict it."""
     contract = {
         "shape": [2, "length"],
         "dimension_ranges": {"length": {"min": 4, "max": 32}},
@@ -108,8 +115,7 @@ def test_onnx_metadata_agrees_with_shape_contract(shape, error):
 
 
 def test_generated_shapes_follow_axis_constraints():
-    from leapp.utils.validation_inputs import sample_validation_shapes
-
+    """Generated shapes keep shared symbols equal and stay within each domain."""
     bounds = {"length": {"min": 4, "max": 12, "multiple_of": 2}}
     contracts = {
         "ids": {"shape": [2, "length"], "dimension_ranges": bounds},
@@ -137,8 +143,7 @@ def test_generated_shapes_follow_axis_constraints():
 
 
 def test_shape_sampling_is_reproducible_and_bounded():
-    from leapp.utils.validation_inputs import sample_validation_shapes
-
+    """Sampling is seeded and reports sizes dropped by the sample and memory budgets."""
     contracts = {
         "x": {
             "shape": ["length"],
@@ -163,8 +168,7 @@ def test_shape_sampling_is_reproducible_and_bounded():
 
 @pytest.mark.parametrize("dtype", ["float32", "int64", "bool", "complex64"])
 def test_default_generator_preserves_input_metadata(dtype):
-    from leapp.utils.validation_inputs import generate_validation_inputs
-
+    """Generated inputs keep type, dtype and device; an unchanged shape keeps a copy."""
     samples = {
         "x": torch.ones((2, 8), dtype=getattr(torch, dtype)),
         "bias": torch.ones((2, 1), dtype=getattr(torch, dtype)),
@@ -182,7 +186,9 @@ def test_default_generator_preserves_input_metadata(dtype):
     assert first["x"].device == samples["x"].device
 
 
-# --- Shape contracts ---------------------------------------------------------
+# =============================================================================
+# Shape contracts
+# =============================================================================
 
 _LENGTH = {"min": 4, "max": 32, "multiple_of": 2}
 _PLAIN = {"shape": [2, "length"], "dimension_ranges": {"length": _LENGTH}}
@@ -214,6 +220,7 @@ _GROWN = {
     ],
 )
 def test_shape_contract_accepts_admitted_shapes(contract, shape, bindings, expected):
+    """An admitted shape returns the size bound to each symbol, including roots."""
     assert validate_shape_contract(contract, shape, dict(bindings)) == expected
 
 
@@ -261,6 +268,7 @@ def test_shape_contract_accepts_admitted_shapes(contract, shape, bindings, expec
     ],
 )
 def test_shape_contract_rejects_other_shapes(contract, shape, bindings, error):
+    """Each violation of rank, fixed size, bounds, divisor or derived size is named."""
     with pytest.raises(ValueError, match=error):
         validate_shape_contract(contract, shape, dict(bindings), name="x")
 
@@ -284,12 +292,14 @@ def test_shape_contract_rejects_other_shapes(contract, shape, bindings, error):
     ],
 )
 def test_shape_contract_survives_yaml_axes(contract, capture_shape):
+    """A contract written to YAML ``axes`` and parsed back is unchanged."""
     axes = serialize_shape_axes(SimpleNamespace(shape_contract=contract), [])
     assert len(axes) == len(capture_shape)
     assert parse_shape_contract({"shape": capture_shape, "axes": axes}) == contract
 
 
 def test_serialized_axes_keep_declared_metadata():
+    """Serialization adds ``variable`` beside declared metadata and copies the list."""
     declared = [{"kind": "system"}, {"kind": "custom"}]
     axes = serialize_shape_axes(SimpleNamespace(shape_contract=_PLAIN), declared)
     assert axes[0] == {"kind": "system"}
@@ -323,6 +333,7 @@ def test_serialized_axes_keep_declared_metadata():
     ],
 )
 def test_dimension_expressions_evaluate(expression, expected):
+    """Affine expressions and each formula operation use integer arithmetic."""
     assert evaluate_dimension_expression(expression, {"n": 5, "m": 3}) == expected
 
 
@@ -354,13 +365,17 @@ def test_dimension_expressions_evaluate(expression, expected):
     ],
 )
 def test_shape_contract_version_follows_used_features(contract, version):
+    """Only ``multiple_of`` and formulas need contract version 2."""
     assert get_shape_contract_version([{"shape": [3]}, contract]) == version
 
 
-# --- Declarations ------------------------------------------------------------
+# =============================================================================
+# Declarations
+# =============================================================================
 
 
 def test_variable_defaults_and_identity():
+    """``Variable`` has the documented defaults, compares by value and is immutable."""
     assert Variable("n").to_dict() == {"symbol": "n", "min": 1, "max": 2**31 - 1}
     assert Variable("n", min=4, max=32, multiple_of=2).to_dict() == {
         "symbol": "n",
@@ -400,11 +415,13 @@ def test_variable_defaults_and_identity():
     ],
 )
 def test_variable_rejects_invalid_domains(arguments, error):
+    """Invalid names, bounds and divisors are rejected at construction."""
     with pytest.raises(ValueError, match=error):
         Variable(**arguments)
 
 
 def test_axis_variable_values():
+    """``Axis.variable`` takes a ``Variable`` or a bool and excludes ``names``."""
     length = Variable("length", min=4, max=32)
     assert Axis(variable=length).to_dict() == {"variable": length.to_dict()}
     assert Axis(variable=True).to_dict() == {"variable": True}
@@ -422,6 +439,8 @@ def test_axis_variable_values():
 
 
 def test_axis_shorthand_declares_independent_dimensions():
+    """``Axis(variable=True)`` gets its own generated symbol with the default bounds."""
+
     def declared(name, variable):
         return SimpleNamespace(
             name=name,
@@ -441,7 +460,9 @@ def test_axis_shorthand_declares_independent_dimensions():
     }
 
 
-# --- Loading -----------------------------------------------------------------
+# =============================================================================
+# Loading
+# =============================================================================
 
 
 @pytest.mark.parametrize(
@@ -482,6 +503,7 @@ def test_axis_shorthand_declares_independent_dimensions():
 def test_loader_rejects_inconsistent_contract_versions(
     tmp_path, contract_version, variable, error
 ):
+    """A bundle fails to load when its contract version does not cover its axes."""
     system = {}
     if contract_version is not None:
         system["shape contract version"] = contract_version
@@ -513,13 +535,16 @@ def test_loader_rejects_inconsistent_contract_versions(
     ],
 )
 def test_only_variable_mappings_require_a_shape_contract(axes, expected):
+    """Only an axis with a ``variable`` mapping marks a serialized port as variable."""
     description = {"name": "x", "shape": [2, 8]}
     if axes is not None:
         description["axes"] = axes
     assert declares_variable_axis(description) is expected
 
 
-# --- Capture -----------------------------------------------------------------
+# =============================================================================
+# Capture
+# =============================================================================
 
 
 def _split(x):
@@ -545,6 +570,7 @@ def _topk(x):
     ],
 )
 def test_shape_consumers_use_runtime_shape(operation):
+    """An operation given a traced size follows the input length in FX replay."""
     sample = torch.arange(16.0).reshape(2, 8)
     ctx = TracedTensorNode(name="consumer", node_index=0)
     semantics = TensorSemantics(
@@ -567,6 +593,7 @@ def test_shape_consumers_use_runtime_shape(operation):
 
 
 def test_shape_consumer_accepts_parameter_operands():
+    """A shape-dependent operation records ``nn.Parameter`` operands as constants."""
     weight = torch.nn.Parameter(torch.full((8,), 2.0))
     bias = torch.nn.Parameter(torch.ones(8))
 

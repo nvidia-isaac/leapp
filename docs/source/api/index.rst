@@ -524,7 +524,7 @@ Parameters
   ``"jit"``, ``"onnx"``, and ``"exported-program"`` (alias ``"pt2"``).
 * ``backend_params`` (dict, optional): Backend-specific parameters.
 * ``validation_inputs`` (callable | False | None, optional): Generate additional
-  inputs for dynamic-shape validation. Called as ``factory(samples, shapes, seed)``;
+  inputs for shape validation. Called as ``factory(samples, shapes, seed)``;
   return a dict of all explicit tensor parameters, keyed by function parameter
   name (``arg_0``, ``arg_1``, ... for ``*args``). Preserve each sample's dtype
   and device and use the requested shape. Defaults to ``None`` (automatic

@@ -276,8 +276,9 @@ class ONNXExportBackend(ExportBackend):
         ):
             expected_names = [desc.name for desc in descriptions]
             if [value.name for value in values] != expected_names:
-                raise ValueError(
-                    f"{self.node_context.name}: ONNX artifact ports do not match {expected_names}"
+                _get_logger().fatal(
+                    f"{self.node_context.name}: ONNX artifact ports do not match {expected_names}",
+                    error_type=ValueError,
                 )
             for desc, value in zip(descriptions, values):
                 tensor_type = value.type.tensor_type
@@ -287,8 +288,9 @@ class ONNXExportBackend(ExportBackend):
                 dimensions = tensor_type.shape.dim
                 name = f"{self.node_context.name}/{desc.name}"
                 if len(dimensions) != len(contract["shape"]):
-                    raise ValueError(
-                        f"{name}: ONNX artifact rank contradicts shape contract"
+                    _get_logger().fatal(
+                        f"{name}: ONNX artifact rank contradicts shape contract",
+                        error_type=ValueError,
                     )
                 for axis, (expected, actual) in enumerate(
                     zip(contract["shape"], dimensions)
@@ -303,9 +305,10 @@ class ONNXExportBackend(ExportBackend):
                     else:
                         compatible = expected == size
                     if not compatible:
-                        raise ValueError(
+                        _get_logger().fatal(
                             f"{name}: ONNX artifact dimension {axis} is fixed at {size}, "
-                            f"contradicting shape contract {expected}"
+                            f"contradicting shape contract {expected}",
+                            error_type=ValueError,
                         )
 
     def save(self, save_path: str) -> Tuple[str, str, str]:
@@ -592,8 +595,10 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
         if program is not None and all(
             n.op in {"placeholder", "output"} for n in program.graph.nodes
         ):
-            raise ValueError(
-                "ONNX Dynamo identity-only variable graphs are unsupported by the tested exporter; use PT2 or a validated legacy/JIT backend"
+            _get_logger().fatal(
+                f"{self.node_context.name}: onnx-dynamo cannot export a variable "
+                "node that returns its inputs unchanged; use another backend",
+                error_type=ValueError,
             )
         if program is not None and aliased_outputs:
             # The shape program predates the clones that separate the outputs.

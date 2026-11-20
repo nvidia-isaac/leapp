@@ -739,7 +739,10 @@ class ExportManager:
             and validation_inputs is not False
             and not callable(validation_inputs)
         ):
-            raise TypeError("validation_inputs must be callable, False, or None")
+            _get_logger().fatal(
+                "validation_inputs must be callable, False, or None",
+                error_type=TypeError,
+            )
 
         def decorator(func):
 

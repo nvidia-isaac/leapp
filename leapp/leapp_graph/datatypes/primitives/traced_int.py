@@ -23,6 +23,8 @@ import yaml
 from torch.fx.proxy import Proxy
 
 from ..traced_data import TracedData
+from leapp.utils.logging import _get_logger
+from leapp.utils.shape_contracts import has_variable_inputs
 
 
 class TracedInt(int, TracedData):
@@ -31,7 +33,9 @@ class TracedInt(int, TracedData):
     It behaves like the integer it holds. While its node is tracing, integer
     arithmetic with other integers is recorded, so derived sizes stay symbolic
     too. Once the node stops tracing, or its graph has been replaced,
-    arithmetic returns plain ``int`` results and records nothing.
+    arithmetic returns plain ``int`` results and records nothing. A size read
+    in a node with variable dimensions keeps its origin instead, so that
+    recording it into another graph is rejected.
     """
 
     def __new__(cls, value: int, name: str, context, proxy: Proxy):
@@ -76,7 +80,10 @@ class TracedInt(int, TracedData):
         value = op(int(lhs), int(rhs))
         anchor = find_recording_int((lhs, rhs))
         if anchor is None:
-            return value
+            # Keep the origin of a variable size, so that recording the
+            # result into another graph is rejected.
+            origin = next((v for v in (lhs, rhs) if _is_variable_size(v)), None)
+            return value if origin is None else origin._new(value, origin.proxy)
         # Fails when operands belong to different tracing nodes.
         anchor.validate_status((lhs, rhs))
         proxy = anchor._context.tracer.create_proxy(
@@ -174,8 +181,32 @@ def graph_value(value):
     the graph being built and is used as the plain integer it holds.
     """
     if isinstance(value, TracedInt):
-        return value.proxy if value.is_recording else int(value)
+        return value.proxy if value.is_recording else settled_value(value)
     return value
+
+
+def _is_variable_size(value) -> bool:
+    return (
+        isinstance(value, TracedInt)
+        and value.context_obj is not None
+        and has_variable_inputs(value.context_obj)
+    )
+
+
+def settled_value(value: TracedInt) -> int:
+    """Return the integer held by a traced integer that stopped recording.
+
+    A size read in a node with variable dimensions changes at run time, so
+    recording the captured value into another graph would freeze it.
+    """
+    if _is_variable_size(value):
+        _get_logger().fatal(
+            f"A size read in node '{value.context}' is used after that node "
+            f"finished, which would export the captured size {int(value)}. Read "
+            "the size from a tensor of the node that uses it",
+            error_type=ValueError,
+        )
+    return int(value)
 
 
 def _contains_traced_int(obj) -> bool:
@@ -202,7 +233,7 @@ def graph_sizes(obj):
 
     def convert(item):
         if isinstance(item, TracedInt):
-            return item if item.is_recording else int(item)
+            return item if item.is_recording else settled_value(item)
         if isinstance(item, torch.Size):
             return tuple(convert(size) for size in item)
         if isinstance(item, slice):

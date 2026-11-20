@@ -30,7 +30,12 @@ from ..proxy import (
     conversion_proxy,
 )
 from ..traced_data import TracedData
-from ..primitives.traced_int import TracedInt, graph_sizes, find_recording_int
+from ..primitives.traced_int import (
+    TracedInt,
+    find_recording_int,
+    graph_sizes,
+    settled_value,
+)
 from leapp.utils.caller_identity import get_caller_location
 from leapp.utils.shape_contracts import has_variable_inputs
 from leapp.utils.shape_values import (
@@ -41,6 +46,13 @@ from leapp.utils.shape_values import (
     trace_call,
 )
 
+
+_SIZE_READS = (
+    torch.numel,
+    torch._C.TensorBase.numel,
+    torch._C.TensorBase.nelement,
+    torch._C.TensorBase.size,
+)
 
 # torch dtype object -> common name string. Lives with the torch node library
 # so the backend's dtype knowledge is unified with its implementation; the
@@ -513,7 +525,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
         if isinstance(value, TracedInt):
             if not value.is_recording:
-                value = real_value = int(value)
+                value = real_value = settled_value(value)
             else:
                 # The assignment source must be a tensor in the graph, but a
                 # traced integer's proxy is a Python int there.
@@ -755,7 +767,6 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         return True, tensor_out
 
     @classmethod
-    @suppress_dynamic_shape_tracing
     def __torch_function__(cls, func, types, args=(), kwargs=None):
         """Intercept torch operations to record them in the graph.
 
@@ -764,6 +775,34 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         """
         if kwargs is None:
             kwargs = {}
+        sizes = cls._variable_size_query(func, args, kwargs)
+        if sizes is not None:
+            return sizes
+        return cls._traced_torch_function(func, types, args, kwargs)
+
+    @classmethod
+    def _variable_size_query(cls, func, args, kwargs):
+        """Answer function-form size reads in a node with variable inputs.
+
+        ``x.shape``, ``x.size()`` and ``x.numel()`` are answered by the
+        overrides below. ``torch.numel(x)``, ``x.nelement()`` and unbound calls
+        such as ``torch.Tensor.size(x, 1)`` arrive here instead.
+        """
+        is_shape = getattr(func, "__self__", None) is torch._C.TensorBase.shape
+        if not is_shape and func not in _SIZE_READS:
+            return None
+        receiver = args[0] if args else None
+        if not isinstance(receiver, TracedTensor) or not enabled(receiver):
+            return None
+        if is_shape:
+            return receiver.shape
+        if func is torch._C.TensorBase.size:
+            return receiver.size(args[1] if len(args) > 1 else kwargs.get("dim"))
+        return receiver.numel()
+
+    @classmethod
+    @suppress_dynamic_shape_tracing
+    def _traced_torch_function(cls, func, types, args, kwargs):
         sizes = cls._traced_size_query(func, args, kwargs)
         if sizes is not None:
             return sizes

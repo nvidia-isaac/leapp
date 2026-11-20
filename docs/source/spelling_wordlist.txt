@@ -35,6 +35,7 @@ SHA-256
 CPU
 GPU
 md5sum
+MiB
 sha256sum
 
 # Python / library names

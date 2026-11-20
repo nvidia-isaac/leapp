@@ -1,5 +1,8 @@
+#
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+
 """Generate bounded shape samples and replay annotated functions for validation."""
 
 import copy
@@ -48,15 +51,31 @@ def sample_validation_shapes(
     rng = random.Random(seed)
     seen = {tuple(sample_shapes.values())}
     samples, omitted = [], []
+    candidates = {}
     for symbol, bounds in ranges.items():
         stride = bounds.get("multiple_of", 1)
         lower = (bounds["min"] + stride - 1) // stride
         upper = bounds["max"] // stride
-        sizes = [lower, upper, (lower + upper) // 2, rng.randint(lower, upper)]
+        captured = bindings[symbol] // stride
+        # Sizes near the captured one stay within the memory budget when the
+        # declared range is far larger than the sample.
+        sizes = [
+            lower,
+            upper,
+            min(upper, captured * 2),
+            max(lower, captured // 2),
+            (lower + upper) // 2,
+            rng.randint(lower, upper),
+        ]
         if lower <= 1 <= upper:
             sizes.insert(2, 1)
-        for size in sizes:
-            values = {**bindings, symbol: size * stride}
+        candidates[symbol] = [size * stride for size in sizes]
+    # Take one size per variable in turn, so the sample budget covers them all.
+    for rank in range(max(map(len, candidates.values()), default=0)):
+        for symbol, sizes in candidates.items():
+            if rank >= len(sizes):
+                continue
+            values = {**bindings, symbol: sizes[rank]}
             shapes = {
                 name: tuple(
                     evaluate_dimension_expression(
@@ -286,11 +305,14 @@ class MethodValidation:
             {name: tuple(value.shape) for name, value in samples.items()},
             {name: value.element_size() for name, value in samples.items()},
         )
-        for reason in omitted:
-            _get_logger().warning(f"{node.name}: generated validation omitted {reason}")
+        if omitted:
+            more = f" and {len(omitted) - 1} more" if len(omitted) > 1 else ""
+            _get_logger().warning(
+                f"{node.name}: generated validation omitted {omitted[0]}{more}"
+            )
         if not shapes:
             raise ValueError(
-                "No additional dynamic shapes could be validated; provide bounded variable axes within the input memory budget"
+                "No additional variable shapes could be validated; provide bounded variable axes within the input memory budget"
             )
         node.export_backend.load(node.model_path, node.sha256sum)
         for seed, target_shapes in enumerate(shapes):

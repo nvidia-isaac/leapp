@@ -338,7 +338,7 @@ def _check_shape_export(path, function, backend, sample_shape, axes, shapes):
 
 @pytest.mark.parametrize("backend", ["pt2", "onnx-dynamo"])
 def test_reshape_uses_runtime_first_dimension(dynamic_session, backend):
-    """The original batch-reshape regression stays correct in FX and saved models."""
+    """``x.reshape(x.shape[0], -1)`` follows the runtime batch in FX and saved models."""
     _check_shape_export(
         dynamic_session,
         lambda x: x.reshape(x.shape[0], -1),
@@ -351,7 +351,7 @@ def test_reshape_uses_runtime_first_dimension(dynamic_session, backend):
 
 @pytest.mark.parametrize("backend", ["pt2", "onnx-dynamo"])
 def test_slice_uses_runtime_shape(dynamic_session, backend):
-    """Reloaded slices preserve half-length bounds over an explicit even-length domain."""
+    """A slice to half the length follows the runtime length over an even domain."""
 
     def first_half(x):
         return x[..., : x.shape[2] // 2]
@@ -385,7 +385,7 @@ def test_reshape_uses_full_runtime_shape(dynamic_session, backend):
 
 @pytest.mark.parametrize("backend", ["pt2", "onnx-dynamo"])
 def test_reshape_uses_runtime_element_count(dynamic_session, backend):
-    """Total element counts remain executable dependencies through export/reload."""
+    """``x.numel()`` stays a runtime value through export and reload."""
     _check_shape_export(
         dynamic_session,
         lambda x: x.reshape(x.numel()),
@@ -448,7 +448,7 @@ for length in (0, 1, 5, 8):
 def test_different_size_capture_samples_are_validated(
     dynamic_session, corrupt_last_sample
 ):
-    """Default caching validates later original outputs, not only the capture sample."""
+    """Every cached sample is validated against its own output, whatever its length."""
     for length in (8, 4, 12, 32):
         x = annotate.input_tensors(
             "cached",
@@ -778,7 +778,7 @@ def test_image_pipeline_preserves_static_input_values(dynamic_session, image_pip
 def test_image_pipeline_does_not_skip_pruned_dynamic_inputs(
     dynamic_session, image_pipeline
 ):
-    """A frozen branch must not lose its validation obligation when its inherited input is pruned."""
+    """A branch frozen on the size of a pruned input still fails validation."""
     preprocess, _ = image_pipeline
 
     @annotate.method(export_with="pt2")
@@ -941,11 +941,12 @@ def test_derived_output_dimension_is_enforced_downstream(dynamic_session):
         manager.set_input_value("halve", "grown", torch.ones(2, 12))
 
 
-def test_graph_that_fixes_a_declared_dimension_is_rejected(dynamic_session):
+def test_graph_that_fixes_a_declared_dimension_is_rejected(dynamic_session, caplog):
     """Compilation refuses a graph that only works at the captured length.
 
     This is the compile-time guarantee behind a declared range; numerical
-    validation is disabled to show the rejection does not depend on it.
+    validation is disabled to show the rejection does not depend on it. The
+    rejection is also written to the LEAPP log.
     """
     x = annotate.input_tensors("node", _sequence())
     annotate.output_tensors("node", {"y": x.reshape(4, 4)}, export_with="pt2")
@@ -953,6 +954,7 @@ def test_graph_that_fixes_a_declared_dimension_is_rejected(dynamic_session):
     with pytest.raises(ValueError, match="cannot honor requested variable-axis"):
         leapp.compile_graph(visualize=False, validate=False)
     assert not dynamic_session.exists()
+    assert "cannot honor requested variable-axis" in caplog.text
 
 
 def _without_export_backend(x):
@@ -1030,6 +1032,51 @@ def test_variable_output_cannot_feed_an_earlier_node(dynamic_session):
     assert not dynamic_session.exists()
 
 
+def test_silently_frozen_or_narrowed_sizes_are_rejected(dynamic_session):
+    """A node must not export a size that no longer follows its declared range.
+
+    Both cases passed strict validation and returned wrong values at other
+    sizes: a size read in one node and used in a later one, and a slice bound
+    that the exporter turns into a narrower range without raising.
+    """
+    x = annotate.input_tensors("first", _sequence(multiple_of=2))
+    length = x.shape[1]
+    y = annotate.output_tensors("first", {"y": x[:, :12] * 2}, export_with="pt2")
+    y = annotate.input_tensors("second", {"y": y})
+    with pytest.raises(ValueError, match="used after that node finished"):
+        y.sum(dim=1) / length
+    annotate.output_tensors("second", {"z": y.sum(dim=1)}, export_with="pt2")
+    leapp.stop()
+    with pytest.raises(ValueError, match="accepts n up to 10 only, not 4 to 32"):
+        leapp.compile_graph(visualize=False, validate=False)
+    assert not dynamic_session.exists()
+
+
+def test_fixed_shape_feedback_runs_on_a_variable_node(dynamic_session):
+    """A node with a variable input may feed a fixed-shape output back to itself.
+
+    Only a variable shape on the feedback edge is unsupported; the reloaded
+    bundle must carry the fixed-shape total across calls of different lengths.
+    """
+    total = torch.zeros(2, 1)
+    for _ in range(2):
+        x = annotate.input_tensors("node", _sequence())
+        total = annotate.input_tensors("node", {"total": total})
+        total = total + x.sum(dim=1, keepdim=True)
+        _, total = annotate.output_tensors(
+            "node", {"y": x * 2 + total, "total": total}, export_with="pt2"
+        )
+    leapp.stop()
+    leapp.compile_graph(visualize=False, validate=True, strict=True)
+
+    manager = InferenceManager(str(dynamic_session))
+    running = 0.0
+    for length in (20, 5):
+        running += length
+        actual = manager({"node/x": torch.ones(2, length)})["node/y"]
+        torch.testing.assert_close(actual, torch.full((2, length), 2.0 + running))
+
+
 def _overwrite_column(y):
     y[:, 0] = -1
 
@@ -1038,17 +1085,29 @@ def _overwrite_mask(y):
     y[y > 5] = 0
 
 
-@pytest.mark.parametrize("assign", [_overwrite_column, _overwrite_mask])
-def test_assignment_into_a_variable_tensor_is_rejected(dynamic_session, assign):
+@pytest.mark.parametrize(
+    "assign,output_uses_it",
+    [
+        pytest.param(_overwrite_column, True, id="column"),
+        pytest.param(_overwrite_mask, True, id="mask"),
+        pytest.param(_overwrite_column, False, id="unused-copy"),
+    ],
+)
+def test_assignment_into_a_variable_tensor_is_rejected(
+    dynamic_session, assign, output_uses_it
+):
     """Indexed assignment into a variable-length tensor names the assignment.
 
     The lowering indexes the captured layout, which only the exporter detects;
     the error must point at the user's statement and not at the declaration.
+    An assignment no output uses still fixes the length for the whole node, so
+    it must fail too instead of exporting ``x.shape[1]`` as the captured size.
     """
     x = annotate.input_tensors("node", _sequence())
     y = x.clone()
     assign(y)
-    annotate.output_tensors("node", {"y": y}, export_with="pt2")
+    result = y if output_uses_it else x.sum(dim=1) / x.shape[1]
+    annotate.output_tensors("node", {"y": result}, export_with="pt2")
     leapp.stop()
     site = rf"{os.path.basename(__file__)}:{assign.__code__.co_firstlineno + 1}\b"
     with pytest.raises(ValueError, match=f"Indexed assignment.*{site}"):
@@ -1156,11 +1215,12 @@ def test_static_bundle_keeps_existing_schema(dynamic_session):
     assert tuple(manager({"node/x": torch.ones(2, 3)})["node/y"].shape) == (2, 3, 1)
 
 
-def test_runtime_checks_every_call_and_assigned_input(dynamic_session):
+def test_runtime_checks_every_call_and_assigned_input(dynamic_session, caplog):
     """One loaded bundle serves several lengths and validates assigned inputs.
 
     Covers runtime state across calls, which export-time tests do not: a later
-    call is not tied to an earlier length, and a rejected value is not stored.
+    call is not tied to an earlier length, and a rejected value is not stored
+    but is written to the LEAPP log.
     """
     x = annotate.input_tensors("node", _sequence(multiple_of=2))
     bias = annotate.input_tensors("node", {"bias": torch.ones(2, 1)})
@@ -1184,7 +1244,13 @@ def test_runtime_checks_every_call_and_assigned_input(dynamic_session):
     ):
         with pytest.raises(ValueError, match=error):
             manager.set_input_value("node", "x", illegal)
+        assert error.replace("\\", "") in caplog.text
     assert tuple(manager.value_dict["node"]["x"].shape) == (2, 20)
+    # A rejected call keeps the stored input for the next call.
+    with pytest.raises(ValueError, match="n must be in"):
+        manager({"node/x": torch.ones(2, 34)})
+    actual = manager({"node/bias": torch.ones(2, 1)})["node/y"]
+    torch.testing.assert_close(actual, torch.full((2, 20), 3.0))
     # The manager owns its buffers; clearing them leaves the caller's tensor.
     manager.reset()
     torch.testing.assert_close(assigned, torch.ones(2, 20))

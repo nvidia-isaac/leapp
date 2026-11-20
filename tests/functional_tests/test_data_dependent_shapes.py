@@ -105,6 +105,20 @@ class TestDataDependentShapes(LEAPPFunctionalTestBase):
     def test_tensor_built_from_shape(self):
         self._export_and_check(_shape_tensor)
 
+    def test_linspace_count_stays_captured_in_static_node(self):
+        """``torch.export`` cannot take a traced step count, so it is not recorded.
+
+        Recording it would fail the export of a node that has no variable axis.
+        """
+        leapp.start(self.TEST_GRAPH_NAME)
+        x = annotate.input_tensors("node", [TensorSemantics("x", SAMPLES[0])])
+        steps = torch.linspace(0, 1, torch.nonzero(x > 0).shape[0] + 1)
+        annotate.output_tensors(
+            "node", [TensorSemantics("y", x.sum() + steps.sum())], export_with="pt2"
+        )
+        leapp.stop()
+        leapp.compile_graph(visualize=False, validate=True, strict=True)
+
     def test_static_shapes_stay_plain_ints(self):
         leapp.start(self.TEST_GRAPH_NAME)
         x = annotate.input_tensors("node", [TensorSemantics("x", torch.zeros(2, 3))])

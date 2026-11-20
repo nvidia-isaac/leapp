@@ -36,6 +36,7 @@ def functionalize_graph(graph, root, inputs, *, dynamic_shapes=None):
     preserving mutations until their alias effects have been normalized.
     """
     original_inputs = [node.target for node in graph.nodes if node.op == "placeholder"]
+    graph.fixed_input_dimensions = []
     raw = fx.GraphModule(root, graph)
     with torch.inference_mode(False):
         samples = tuple(value.detach().clone() for value in inputs)
@@ -66,6 +67,19 @@ def functionalize_graph(graph, root, inputs, *, dynamic_shapes=None):
         return raw
     normalized = program.graph_module.graph
     signature = program.graph_signature
+    if dynamic_shapes is not None:
+        # ``Dim.AUTO`` lets the exporter fix a dimension without an error; the
+        # caller rejects such a dimension when its contract is variable.
+        placeholders = (node for node in normalized.nodes if node.op == "placeholder")
+        graph.fixed_input_dimensions = [
+            {
+                index
+                for index, size in enumerate(node.meta["val"].shape)
+                if not isinstance(size, torch.SymInt) or size.node.expr.is_number
+            }
+            for node, spec in zip(placeholders, signature.input_specs)
+            if spec.kind == InputKind.USER_INPUT
+        ]
     input_specs = iter(signature.input_specs)
     user_inputs = iter(original_inputs)
     mapping = {}

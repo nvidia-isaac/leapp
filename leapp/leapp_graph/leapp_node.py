@@ -460,7 +460,10 @@ class LeappNode:
                         name=f"{self.name}/{existing_io_description.name}",
                     )
                 if len(existing_io_description.shape) != len(io_description.shape):
-                    raise ValueError("Variable axes retain a fixed tensor rank")
+                    _get_logger().fatal(
+                        "Variable axes retain a fixed tensor rank",
+                        error_type=ValueError,
+                    )
                 existing_io_description_dict.pop("shape", None)
                 current_io_description_dict.pop("shape", None)
             common_keys = (

@@ -1,17 +1,22 @@
+#
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+
 """Variable-axis contracts, inference, and runtime validation."""
 
-from dataclasses import dataclass
 import copy
-import json
 import itertools
+import json
 import operator
 import re
+from dataclasses import dataclass
 from typing import Literal, TypedDict
 
 import sympy
 import torch
+
+from leapp.utils.logging import _get_logger
 
 
 class _DimensionBounds(TypedDict):
@@ -20,15 +25,21 @@ class _DimensionBounds(TypedDict):
 
 
 class DimensionRange(_DimensionBounds, total=False):
+    """Inclusive size bounds of a dimension, with an optional divisor."""
+
     multiple_of: int
 
 
 class AffineExpression(TypedDict):
+    """A size written as ``sum(coefficient * symbol) + offset``."""
+
     terms: dict[str, int]
     offset: int
 
 
 class FormulaOperation(TypedDict):
+    """One integer operation in a shape formula."""
+
     op: Literal["add", "mul", "floordiv", "mod"]
     args: list["ShapeFormula"]
 
@@ -37,6 +48,8 @@ ShapeFormula = int | str | FormulaOperation
 
 
 class FormulaExpression(TypedDict):
+    """A size computed by a shape formula, used when it is not affine."""
+
     formula: ShapeFormula
 
 
@@ -48,6 +61,8 @@ class _TensorShape(TypedDict):
 
 
 class ShapeContract(_TensorShape, total=False):
+    """A port's shape: fixed sizes and symbols, with what each symbol admits."""
+
     dimension_ranges: dict[str, DimensionRange]
     dimension_expressions: dict[str, DimensionExpression]
 
@@ -94,6 +109,7 @@ class Variable:
 
 
 def has_variable_axis_declaration(desc):
+    """Whether the port's semantics declare a variable axis."""
     axes = getattr(desc.semantics, "axes", None) or []
     return any(
         a is not None and a.variable is not None and a.variable is not False
@@ -102,6 +118,7 @@ def has_variable_axis_declaration(desc):
 
 
 def has_variable_inputs(node, seen=None):
+    """Whether an input of the node, or of any producer, declares a variable axis."""
     seen = set() if seen is None else seen
     if id(node) in seen:
         return False
@@ -114,12 +131,14 @@ def has_variable_inputs(node, seen=None):
 
 
 def get_shape_contract(desc) -> ShapeContract:
+    """Return the port's contract; without one, the captured shape is fixed."""
     if hasattr(desc, "shape_contract"):
         return desc.shape_contract
     return {"shape": list(desc.shape)}
 
 
 def serialize_shape_axes(desc, axes):
+    """Return the YAML ``axes`` list with a ``variable`` mapping per symbol."""
     specification = get_shape_contract(desc)
     axes = copy.deepcopy(axes)
     shape = specification["shape"]
@@ -157,6 +176,7 @@ def declares_variable_axis(description) -> bool:
 
 
 def parse_shape_contract(description) -> ShapeContract:
+    """Rebuild a shape contract from a serialized tensor description."""
     shape = list(get_capture_shape(description))
     ranges: dict[str, DimensionRange] = {}
     expressions: dict[str, DimensionExpression] = {}
@@ -173,7 +193,9 @@ def parse_shape_contract(description) -> ShapeContract:
         }
         for root, domain in {**variable.get("roots", {}), symbol: bounds}.items():
             if root in ranges and ranges[root] != domain:
-                raise ValueError(f"Conflicting bounds for {root}")
+                _get_logger().fatal(
+                    f"Conflicting bounds for {root}", error_type=ValueError
+                )
             ranges[root] = domain
         if "expression" in variable:
             expressions[symbol] = variable["expression"]
@@ -186,6 +208,7 @@ def parse_shape_contract(description) -> ShapeContract:
 
 
 def iter_root_dimension_ranges(specification: ShapeContract):
+    """Yield ``(symbol, bounds)`` for declared symbols, skipping derived ones."""
     derived = specification.get("dimension_expressions", {})
     return (
         (symbol, bounds)
@@ -195,6 +218,7 @@ def iter_root_dimension_ranges(specification: ShapeContract):
 
 
 def get_shape_contract_version(specifications: list[ShapeContract]) -> int:
+    """Return 2 when a contract uses ``multiple_of`` or a formula, else 1."""
     return (
         2
         if any(
@@ -207,6 +231,10 @@ def get_shape_contract_version(specifications: list[ShapeContract]) -> int:
 
 
 def build_declared_shape_contract(desc, prefix: str) -> ShapeContract:
+    """Build a port's contract from its axis declarations alone.
+
+    ``prefix`` keeps the symbol generated for ``Axis(variable=True)`` unique.
+    """
     shape = list(desc.shape)
     ranges: dict[str, DimensionRange] = {}
     for i, axis in enumerate(getattr(desc.semantics, "axes", None) or []):
@@ -222,7 +250,9 @@ def build_declared_shape_contract(desc, prefix: str) -> ShapeContract:
             symbol = variable.name
             bounds = {k: v for k, v in variable.to_dict().items() if k != "symbol"}
         if symbol in ranges and ranges[symbol] != bounds:
-            raise ValueError(f"Conflicting bounds for {symbol}")
+            _get_logger().fatal(
+                f"Conflicting bounds for {symbol}", error_type=ValueError
+            )
         ranges[symbol] = bounds
         shape[i] = symbol
     if not ranges:
@@ -238,6 +268,7 @@ def build_declared_shape_contract(desc, prefix: str) -> ShapeContract:
 def get_dimension_expression(
     symbol: str, specification: ShapeContract
 ) -> DimensionExpression:
+    """Return how ``symbol`` is computed; a declared symbol is itself."""
     return specification.get("dimension_expressions", {}).get(
         symbol, {"terms": {symbol: 1}, "offset": 0}
     )
@@ -274,7 +305,9 @@ def _encode_shape_formula(expr) -> ShapeFormula:
             "op": "floordiv" if expr.func.__name__ == "FloorDiv" else "mod",
             "args": [_encode_shape_formula(a) for a in expr.args],
         }
-    raise ValueError(f"Unsupported runtime output shape formula: {expr}")
+    _get_logger().fatal(
+        f"Unsupported runtime output shape formula: {expr}", error_type=ValueError
+    )
 
 
 def _collect_formula_symbols(formula: ShapeFormula) -> set[str]:
@@ -305,8 +338,9 @@ def _compute_formula_bounds(
     left, right = [_compute_formula_bounds(a, ranges) for a in formula["args"]]
     op = formula["op"]
     if op in {"floordiv", "mod"} and (right[0] != right[1] or right[0] <= 0):
-        raise ValueError(
-            "Output shape division/modulo requires a positive constant divisor"
+        _get_logger().fatal(
+            "Output shape division/modulo requires a positive constant divisor",
+            error_type=ValueError,
         )
     if op == "mod":
         return 0, right[0] - 1
@@ -317,6 +351,7 @@ def _compute_formula_bounds(
 def evaluate_dimension_expression(
     expr: DimensionExpression, bindings: dict[str, int]
 ) -> int:
+    """Compute a derived size from the sizes bound to its symbols."""
     if "formula" in expr:
         return _evaluate_formula(expr["formula"], bindings)
     return expr["offset"] + sum(c * bindings[s] for s, c in expr["terms"].items())
@@ -334,8 +369,9 @@ def _resolve_expression_roots(
         formula = expression["formula"]
         missing = _collect_formula_symbols(formula) - bindings.keys()
         if missing:
-            raise ValueError(
-                f"{name}: cannot resolve shape formula roots {sorted(missing)}"
+            _get_logger().fatal(
+                f"{name}: cannot resolve shape formula roots {sorted(missing)}",
+                error_type=ValueError,
             )
     else:
         expr = expression
@@ -347,26 +383,39 @@ def _resolve_expression_roots(
             )
             coefficient = expr["terms"][symbol]
             if (size - rest) % coefficient:
-                raise ValueError(
-                    f"{name}: size {size} violates derived dimension {expected}"
+                _get_logger().fatal(
+                    f"{name}: size {size} violates derived dimension {expected}",
+                    error_type=ValueError,
                 )
             bindings[symbol] = (size - rest) // coefficient
             root = specification["dimension_ranges"][symbol]
             if not root["min"] <= bindings[symbol] <= root["max"] or bindings[
                 symbol
             ] % root.get("multiple_of", 1):
-                raise ValueError(f"{name}: root dimension {symbol} outside bounds")
+                _get_logger().fatal(
+                    f"{name}: root dimension {symbol} outside bounds",
+                    error_type=ValueError,
+                )
         elif missing:
-            raise ValueError(f"{name}: cannot resolve derived dimensions {missing}")
+            _get_logger().fatal(
+                f"{name}: cannot resolve derived dimensions {missing}",
+                error_type=ValueError,
+            )
 
 
 def validate_shape_contract(
     specification: ShapeContract, actual, bindings=None, *, name="tensor"
 ):
+    """Check ``actual`` against the contract and return the symbol sizes.
+
+    ``bindings`` holds sizes already bound by other tensors, so shared symbols
+    must agree. The first violation is fatal.
+    """
     bindings = {} if bindings is None else bindings
     if len(actual) != len(specification["shape"]):
-        raise ValueError(
-            f"{name}: expected rank {len(specification['shape'])}, got {len(actual)}"
+        _get_logger().fatal(
+            f"{name}: expected rank {len(specification['shape'])}, got {len(actual)}",
+            error_type=ValueError,
         )
     expressions = specification.get("dimension_expressions", {})
     for expected, size in zip(specification["shape"], actual):
@@ -374,18 +423,21 @@ def validate_shape_contract(
             continue
         if isinstance(expected, int):
             if expected != size:
-                raise ValueError(
-                    f"{name}: expected fixed dimension {expected}, got {size}"
+                _get_logger().fatal(
+                    f"{name}: expected fixed dimension {expected}, got {size}",
+                    error_type=ValueError,
                 )
             continue
         bounds = specification["dimension_ranges"][expected]
         if not bounds["min"] <= size <= bounds["max"]:
-            raise ValueError(
-                f"{name}: {expected} must be in [{bounds['min']}, {bounds['max']}], got {size}"
+            _get_logger().fatal(
+                f"{name}: {expected} must be in [{bounds['min']}, {bounds['max']}], got {size}",
+                error_type=ValueError,
             )
         if size % bounds.get("multiple_of", 1):
-            raise ValueError(
-                f"{name}: {expected} must be a multiple of {bounds['multiple_of']}"
+            _get_logger().fatal(
+                f"{name}: {expected} must be a multiple of {bounds['multiple_of']}",
+                error_type=ValueError,
             )
         if expected in expressions:
             _resolve_expression_roots(
@@ -393,27 +445,31 @@ def validate_shape_contract(
             )
             predicted = evaluate_dimension_expression(expressions[expected], bindings)
             if predicted != size:
-                raise ValueError(
-                    f"{name}: derived dimension {expected} must be {predicted}, got {size}"
+                _get_logger().fatal(
+                    f"{name}: derived dimension {expected} must be {predicted}, got {size}",
+                    error_type=ValueError,
                 )
         if expected in bindings and bindings[expected] != size:
-            raise ValueError(
-                f"{name}: shared dimension {expected} is {bindings[expected]}, got {size}"
+            _get_logger().fatal(
+                f"{name}: shared dimension {expected} is {bindings[expected]}, got {size}",
+                error_type=ValueError,
             )
         bindings[expected] = size
     return bindings
 
 
 def get_capture_shape(specification):
+    """Return the captured shape, stored as a list or a JSON string."""
     shape = specification["shape"]
     return json.loads(shape) if isinstance(shape, str) else shape
 
 
 def inherit_shape_contract(source, target):
+    """Give a connected input its producer's contract and reject conflicts."""
     inherited = copy.deepcopy(get_shape_contract(source))
     requested = get_shape_contract(target)
     if len(inherited["shape"]) != len(requested["shape"]):
-        raise ValueError("Connected ranks conflict")
+        _get_logger().fatal("Connected ranks conflict", error_type=ValueError)
     axes = getattr(target.semantics, "axes", None) or []
     for i, axis in enumerate(axes):
         if (
@@ -421,58 +477,81 @@ def inherit_shape_contract(source, target):
             and axis.names is not None
             and isinstance(inherited["shape"][i], str)
         ):
-            raise ValueError(
-                "Inherited variable axis cannot have fixed exhaustive names"
+            _get_logger().fatal(
+                "Inherited variable axis cannot have fixed exhaustive names",
+                error_type=ValueError,
             )
         if axis is None or axis.variable is None:
             continue
         left, right = inherited["shape"][i], requested["shape"][i]
         if isinstance(left, int):
             if isinstance(right, str):
-                raise ValueError(
-                    f"{target.name}: requested variable dimension is static at producer"
+                _get_logger().fatal(
+                    f"{target.name}: requested variable dimension is static at producer",
+                    error_type=ValueError,
                 )
         elif axis.variable is False:
-            raise ValueError(
-                f"{target.name}: explicit static axis conflicts with producer"
+            _get_logger().fatal(
+                f"{target.name}: explicit static axis conflicts with producer",
+                error_type=ValueError,
             )
         elif axis.variable is not True:
             offered = inherited["dimension_ranges"][left]
             wanted = requested["dimension_ranges"][right]
             if offered != wanted or left != right:
-                raise ValueError(
-                    f"{target.name}: explicit consumer dimension conflicts with producer contract"
+                _get_logger().fatal(
+                    f"{target.name}: explicit consumer dimension conflicts with producer contract",
+                    error_type=ValueError,
                 )
     target.shape_contract = inherited
 
 
+def _dim_name(symbol: str) -> str:
+    """Return a ``torch.export.Dim`` name for ``symbol``.
+
+    The exporter parses names with sympy, which reads names such as ``N`` or
+    ``max`` as functions.
+    """
+    try:
+        parsed = sympy.sympify(symbol)
+    except (sympy.SympifyError, TypeError):
+        parsed = None
+    return symbol if isinstance(parsed, sympy.Symbol) else "__leapp_dim_" + symbol
+
+
 def build_torch_dynamic_shapes(node):
+    """Return the ``dynamic_shapes`` argument of ``torch.export.export``."""
     specifications = [get_shape_contract(desc) for desc in node.inputs]
     symbols = {}
     for spec in specifications:
         for symbol, bounds in iter_root_dimension_ranges(spec):
             if symbol in symbols:
                 if symbols[symbol][0] != bounds:
-                    raise ValueError(
-                        f"Conflicting bounds for shared dimension {symbol}"
+                    _get_logger().fatal(
+                        f"Conflicting bounds for shared dimension {symbol}",
+                        error_type=ValueError,
                     )
                 continue
             stride = bounds.get("multiple_of", 1)
             root = torch.export.Dim(
-                symbol if stride == 1 else "__leapp_factor_" + symbol,
+                _dim_name(symbol) if stride == 1 else "__leapp_factor_" + symbol,
                 min=(bounds["min"] + stride - 1) // stride,
                 max=bounds["max"] // stride,
             )
             symbols[symbol] = (bounds, root if stride == 1 else stride * root)
     result = []
-    for spec in specifications:
+    for desc, spec in zip(node.inputs, specifications):
         dimensions = {}
         for i, dimension in enumerate(spec["shape"]):
             if isinstance(dimension, str):
                 expr = get_dimension_expression(dimension, spec)
                 if "formula" in expr or len(expr["terms"]) != 1:
-                    raise ValueError(
-                        "Consumer export currently requires a single-root affine dimension"
+                    _get_logger().fatal(
+                        f"{node.name}/{desc.name}: dimension {i} is computed with "
+                        "//, % or more than one variable by its producer; a node "
+                        "input accepts a declared dimension or a linear size such "
+                        "as 2 * n + 1",
+                        error_type=ValueError,
                     )
                 root, coefficient = next(iter(expr["terms"].items()))
                 dimensions[i] = symbols[root][1] * coefficient + expr["offset"]
@@ -481,6 +560,7 @@ def build_torch_dynamic_shapes(node):
 
 
 def build_onnx_dynamic_axes(node):
+    """Return ONNX ``dynamic_axes`` naming each symbolic dimension, or None."""
     axes = {}
     for desc in node.inputs + node.outputs:
         dimensions = {
@@ -493,49 +573,79 @@ def build_onnx_dynamic_axes(node):
     return axes or None
 
 
+def _describe_assignments(node) -> str:
+    """Name the node's indexed writes, which index the captured layout."""
+    if not node.assignment_sites:
+        return ""
+    return (
+        " Indexed assignment and copy_() into a tensor with a variable "
+        "dimension are unsupported; if a write at "
+        f"{', '.join(node.assignment_sites[:3])} targets one, build the result "
+        "with torch.where() instead."
+    )
+
+
+def _reject_dimensions_fixed_by_writes(node):
+    """Reject a variable input dimension that write normalization fixed.
+
+    Normalizing in-place writes exports the graph once more. That export may
+    replace a size with the captured value without reporting it, whichever
+    operation in the node required the fixed size.
+    """
+    for desc in node.inputs:
+        fixed = getattr(desc, "write_fixed_dimensions", ())
+        for index, size in enumerate(get_shape_contract(desc)["shape"]):
+            if isinstance(size, str) and index in fixed:
+                _get_logger().fatal(
+                    f"{node.name}/{desc.name}: dimension {index} is variable, but the "
+                    f"node only works at size {desc.shape[index]}; the size was "
+                    "fixed while its in-place writes were "
+                    f"normalized.{_describe_assignments(node)}",
+                    error_type=ValueError,
+                )
+
+
 def export_shape_program(node, module=None) -> torch.export.ExportedProgram:
     """Export ``module`` (default: the node's graph) under the declared domain."""
     unsupported = [
         d.name for d in node.inputs + node.outputs if not d.dynamic_array_supported
     ]
     if unsupported:
-        raise TypeError(
+        _get_logger().fatal(
             f"{node.name}: variable dimensions support Torch tensor ports only; "
-            f"NumPy and Warp ports are unsupported: {unsupported}"
+            f"NumPy and Warp ports are unsupported: {unsupported}",
+            error_type=TypeError,
         )
     from leapp.backends.export_backend import prepare_tensors_for_export
 
     values = tuple(prepare_tensors_for_export([d.value for d in node.inputs]))
     # This is also the constraint proof for legacy/JIT paths; they do not infer
     # their own executable dynamic shape domain from axis names.
+    kwargs = {}
+    if (
+        node.backend == "exported-program"
+        and "strict" in node.export_backend.backend_params
+    ):
+        kwargs["strict"] = node.export_backend.backend_params["strict"]
+    dynamic_shapes = build_torch_dynamic_shapes(node)
     try:
-        kwargs = {}
-        if (
-            node.backend == "exported-program"
-            and "strict" in node.export_backend.backend_params
-        ):
-            kwargs["strict"] = node.export_backend.backend_params["strict"]
         program = torch.export.export(
             (node.m if module is None else module).eval(),
             values,
-            dynamic_shapes=build_torch_dynamic_shapes(node),
+            dynamic_shapes=dynamic_shapes,
             **kwargs,
         )
+    # torch.export reports constraint failures through several exception types.
     except Exception as exc:
-        assignments = ""
-        if node.assignment_sites:
-            # Assignment lowering indexes the captured layout.
-            assignments = (
-                " Indexed assignment and copy_() into a tensor with a variable "
-                "dimension are unsupported; build the result with torch.where() "
-                f"instead (assigned at {', '.join(node.assignment_sites[:3])})."
-            )
-        raise ValueError(
+        _get_logger().fatal(
             f"{node.name}: cannot honor requested variable-axis domain; use a "
-            f"nondegenerate example and inspect compiler constraints.{assignments} "
+            "nondegenerate example and inspect compiler "
+            f"constraints.{_describe_assignments(node)} "
             "A size may have been fixed by a Python conversion, by indexing a "
-            f"constant tensor, or by a factory LEAPP does not trace: {exc}"
-        ) from exc
+            f"constant tensor, or by a factory LEAPP does not trace: {exc}",
+            error_type=ValueError,
+            cause=exc,
+        )
     return program
 
 
@@ -549,14 +659,17 @@ def _map_input_dimensions(node, program, by_name):
         spec = get_shape_contract(desc)
         for symbol, bounds in spec.get("dimension_ranges", {}).items():
             if symbol in ranges and ranges[symbol] != bounds:
-                raise ValueError(f"Conflicting bounds for {symbol}")
+                _get_logger().fatal(
+                    f"Conflicting bounds for {symbol}", error_type=ValueError
+                )
             ranges[symbol] = bounds
         actual = by_name[input_spec.arg.name].meta["val"].shape
         for wanted, produced in zip(spec["shape"], actual):
             if isinstance(wanted, str):
                 if not isinstance(produced, torch.SymInt):
-                    raise ValueError(
-                        f"{desc.name}: requested variable axis became static"
+                    _get_logger().fatal(
+                        f"{desc.name}: requested variable axis became static",
+                        error_type=ValueError,
                     )
                 e = get_dimension_expression(wanted, spec)
                 desired = (
@@ -566,23 +679,67 @@ def _map_input_dimensions(node, program, by_name):
                 # Input expressions are affine in one compiler root.
                 roots = list(produced.node.expr.free_symbols)
                 if len(roots) != 1:
-                    raise ValueError("Unsupported compiler input dimension expression")
+                    _get_logger().fatal(
+                        "Unsupported compiler input dimension expression",
+                        error_type=ValueError,
+                    )
                 root = roots[0]
                 solved = sympy.solve(produced.node.expr - desired, root)
                 if len(solved) != 1 or (
                     root in substitutions and substitutions[root] != solved[0]
                 ):
-                    raise ValueError("Compiler tied independently declared dimensions")
+                    _get_logger().fatal(
+                        "Compiler tied independently declared dimensions",
+                        error_type=ValueError,
+                    )
                 substitutions[root] = solved[0]
+                _reject_narrowed_range(
+                    f"{node.name}/{desc.name}",
+                    wanted,
+                    spec["dimension_ranges"][wanted],
+                    produced.node.expr,
+                    program.range_constraints.get(root),
+                )
     return substitutions, ranges
+
+
+def _reject_narrowed_range(port, symbol, bounds, expression, root_range):
+    """Reject an export that accepts fewer sizes than the contract declares.
+
+    ``torch.export`` raises when a graph restricts a plain dimension, but it
+    narrows a derived one, such as ``2 * n``, without an error.
+    """
+    if root_range is None:
+        return
+    (root,) = expression.free_symbols
+    stride = bounds.get("multiple_of", 1)
+    first = (bounds["min"] + stride - 1) // stride * stride
+    last = bounds["max"] // stride * stride
+    lowest = expression.subs(root, root_range.lower)
+    highest = expression.subs(root, root_range.upper)
+    # The exporter reports a lower bound of 2 for a derived root even when the
+    # graph accepts sizes 0 and 1, so only a larger bound shows a restriction.
+    narrowed_below = bool(root_range.lower > 2) and bool(lowest > first)
+    if narrowed_below or bool(highest < last):
+        accepted = (
+            f"from {lowest} to {highest}" if narrowed_below else f"up to {highest}"
+        )
+        _get_logger().fatal(
+            f"{port}: cannot honor requested variable-axis domain; the exported "
+            f"graph accepts {symbol} {accepted} only, not {first} to {last}. An "
+            "operation in the node, such as a slice with a constant bound, "
+            "restricts the size",
+            error_type=ValueError,
+        )
 
 
 def _infer_output_contract(
     node_name: str, desc, value, substitutions, ranges: dict[str, DimensionRange]
 ) -> ShapeContract:
     if not isinstance(value, torch.Tensor):
-        raise ValueError(
-            "Unknown output rank/type is unsupported in the current variable-shape subset"
+        _get_logger().fatal(
+            "Unknown output rank/type is unsupported in the current variable-shape subset",
+            error_type=ValueError,
         )
     shape: list[int | str | None] = []
     derived: dict[str, DimensionExpression] = {}
@@ -596,8 +753,9 @@ def _infer_output_contract(
             shape.append(int(expr))
             continue
         if any(str(s) not in ranges for s in expr.free_symbols):
-            raise ValueError(
-                "Data-dependent/unknown output dimensions require an explicit supported extension"
+            _get_logger().fatal(
+                "Data-dependent/unknown output dimensions require an explicit supported extension",
+                error_type=ValueError,
             )
         output_ranges.update(
             (str(s), copy.deepcopy(ranges[str(s)])) for s in expr.free_symbols
@@ -631,7 +789,10 @@ def _infer_output_contract(
             formula = _encode_shape_formula(expr)
             lower, upper = _compute_formula_bounds(formula, ranges)
             if lower < 0:
-                raise ValueError(f"Cannot prove nonnegative output shape: {expr}")
+                _get_logger().fatal(
+                    f"Cannot prove nonnegative output shape: {expr}",
+                    error_type=ValueError,
+                )
             derived[symbol] = {"formula": formula}
             output_ranges[symbol] = {"min": lower, "max": upper}
         shape.append(symbol)
@@ -653,22 +814,27 @@ def _validate_output_contract(node_name: str, desc, inferred: ShapeContract):
             continue
         actual, wanted = inferred["shape"][i], requested["shape"][i]
         if isinstance(actual, str) and axis.names is not None:
-            raise ValueError(
-                "Inferred variable output axis cannot have fixed exhaustive names"
+            _get_logger().fatal(
+                "Inferred variable output axis cannot have fixed exhaustive names",
+                error_type=ValueError,
             )
         if axis.variable is False and isinstance(actual, str):
-            raise ValueError(
-                "Explicit static output axis conflicts with inferred variability"
+            _get_logger().fatal(
+                "Explicit static output axis conflicts with inferred variability",
+                error_type=ValueError,
             )
         if axis.variable is True and not isinstance(actual, str):
-            raise ValueError("Requested variable output became static")
+            _get_logger().fatal(
+                "Requested variable output became static", error_type=ValueError
+            )
         if isinstance(axis.variable, Variable) and (
             actual != wanted
             or inferred.get("dimension_ranges", {}).get(actual)
             != requested["dimension_ranges"][wanted]
         ):
-            raise ValueError(
-                f"{desc.name}: explicit output axis conflicts with inferred contract"
+            _get_logger().fatal(
+                f"{desc.name}: explicit output axis conflicts with inferred contract",
+                error_type=ValueError,
             )
 
 
@@ -687,6 +853,7 @@ def _validate_cached_shapes(node):
 
 
 def export_and_infer_shape_contracts(node):
+    """Export the node under its input contracts and infer its output contracts."""
     program = export_shape_program(node)
     node.shape_program = program
     by_name = {n.name: n for n in program.graph.nodes}
@@ -695,7 +862,10 @@ def export_and_infer_shape_contracts(node):
         s for s in program.graph_signature.output_specs if s.kind.name == "USER_OUTPUT"
     ]
     if len(output_specs) != len(node.outputs):
-        raise ValueError("Exported user-output count does not match node ports")
+        _get_logger().fatal(
+            "Exported user-output count does not match node ports",
+            error_type=ValueError,
+        )
     for desc, out in zip(node.outputs, output_specs):
         value = by_name[out.arg.name].meta.get("val")
         inferred = _infer_output_contract(node.name, desc, value, substitutions, ranges)
@@ -705,6 +875,7 @@ def export_and_infer_shape_contracts(node):
 
 
 def prepare_shape_contracts(node):
+    """Build the node's input contracts and, if any is variable, infer its outputs."""
     output_requested = any(has_variable_axis_declaration(d) for d in node.outputs)
     if not has_variable_inputs(node) and not output_requested:
         return
@@ -715,7 +886,10 @@ def prepare_shape_contracts(node):
                 (d for d in desc.source_node.outputs if d.port == desc.port), None
             )
             if source is None:
-                raise ValueError(f"Missing producer port for {node.name}/{desc.name}")
+                _get_logger().fatal(
+                    f"Missing producer port for {node.name}/{desc.name}",
+                    error_type=ValueError,
+                )
             inherit_shape_contract(source, desc)
     if output_requested or any(
         isinstance(size, str)
@@ -723,23 +897,37 @@ def prepare_shape_contracts(node):
         for size in get_shape_contract(d)["shape"]
     ):
         if not node.exports_model:
-            raise ValueError("Variable axes require an executable export backend")
+            _get_logger().fatal(
+                "Variable axes require an executable export backend",
+                error_type=ValueError,
+            )
         if node.backend == "executorch":
             # That backend exports the captured shapes only.
-            raise ValueError(
+            _get_logger().fatal(
                 f"{node.name}: variable axes are unsupported by the executorch "
-                "export backend"
+                "export backend",
+                error_type=ValueError,
             )
         for desc in node.inputs:
-            if desc.has_source and desc.source_node.node_index >= node.node_index:
-                raise ValueError(
-                    "Variable feedback-state shapes are outside the current variable-shape subset"
+            # A later producer is checked once its output contract is known.
+            if (
+                desc.has_source
+                and desc.source_node.node_index >= node.node_index
+                and any(
+                    isinstance(size, str) for size in get_shape_contract(desc)["shape"]
                 )
+            ):
+                _get_logger().fatal(
+                    f"{node.name}/{desc.name}: Variable feedback-state shapes are "
+                    "outside the current variable-shape subset",
+                    error_type=ValueError,
+                )
+        _reject_dimensions_fixed_by_writes(node)
         export_and_infer_shape_contracts(node)
 
 
 def validate_feedback_shape_contracts(nodes):
-    """Reject a variable shape carried over a feedback edge.
+    """Reject a variable shape carried over a feedback edge or a state update.
 
     ``prepare_shape_contracts`` sees a consumer before its later producer, so
     an edge into a consumer with no variable input of its own is checked here,
@@ -755,15 +943,28 @@ def validate_feedback_shape_contracts(nodes):
             if source is not None and any(
                 isinstance(size, str) for size in get_shape_contract(source)["shape"]
             ):
-                raise ValueError(
+                _get_logger().fatal(
                     f"{desc.source_node.name}/{source.name} -> {node.name}/{desc.name}: "
                     "Variable feedback-state shapes are outside the current "
-                    "variable-shape subset"
+                    "variable-shape subset",
+                    error_type=ValueError,
+                )
+        for state, update in node.state_feedback_pairs():
+            if any(
+                isinstance(size, str) for size in get_shape_contract(update)["shape"]
+            ):
+                _get_logger().fatal(
+                    f"{node.name}/{state.name}: Variable feedback-state shapes are "
+                    "outside the current variable-shape subset",
+                    error_type=ValueError,
                 )
 
 
 def validate_reentry_variable_axes(metadata, descriptions):
-    """Changing accepted shapes requires a new capture, not metadata enrichment."""
+    """Reject a re-entry that changes a port's variable declarations.
+
+    Re-entry may add metadata; changing the accepted shapes needs a new capture.
+    """
     for desc in descriptions:
         current = metadata.get(desc.name)
         if current is None:
@@ -774,12 +975,14 @@ def validate_reentry_variable_axes(metadata, descriptions):
         ]
         new = [getattr(a, "variable", None) for a in current.axes or []]
         if old != new and any(v is not None and v is not False for v in old + new):
-            raise ValueError(
-                f"{desc.name}: variable declarations changed on re-entry; recapture the node"
+            _get_logger().fatal(
+                f"{desc.name}: variable declarations changed on re-entry; recapture the node",
+                error_type=ValueError,
             )
 
 
 def validate_variable_declarations(nodes):
+    """Reject a ``Variable`` name declared with different bounds across nodes."""
     declarations = {}
     for node in nodes:
         for desc in node.inputs + node.outputs:
@@ -790,7 +993,8 @@ def validate_variable_declarations(nodes):
                         variable.name in declarations
                         and declarations[variable.name] != variable
                     ):
-                        raise ValueError(
-                            f"Conflicting bounds for shared variable {variable.name}"
+                        _get_logger().fatal(
+                            f"Conflicting bounds for shared variable {variable.name}",
+                            error_type=ValueError,
                         )
                     declarations[variable.name] = variable
