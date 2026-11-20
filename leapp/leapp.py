@@ -205,8 +205,6 @@ def compile_graph(
 
     system_info = get_system_info()
     if any(hasattr(n, "shape_program") for n in manager.get_nodes().values()):
-        system_info["system information"]["leapp config version"] = "1.4"
-
         specs = [
             get_shape_contract(d)
             for n in manager.get_nodes().values()

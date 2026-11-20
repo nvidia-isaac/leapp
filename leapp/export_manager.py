@@ -733,8 +733,12 @@ class ExportManager:
 
     def method(self, **params):
         validation_inputs = params.get("validation_inputs")
-        if validation_inputs is not None and not callable(validation_inputs):
-            raise TypeError("validation_inputs must be callable")
+        if (
+            validation_inputs is not None
+            and validation_inputs is not False
+            and not callable(validation_inputs)
+        ):
+            raise TypeError("validation_inputs must be callable, False, or None")
 
         def decorator(func):
 
@@ -745,7 +749,16 @@ class ExportManager:
             @functools.wraps(func)
             def wrapper(*args, **kwargs):
                 if not ExportManager._interpret_graph:
-                    return func(*args, **kwargs)
+                    # TensorSemantics only annotates a tensor; pass its value.
+                    def value(argument):
+                        if isinstance(argument, TensorSemantics):
+                            return argument.ref
+                        return argument
+
+                    return func(
+                        *(value(a) for a in args),
+                        **{key: value(v) for key, v in kwargs.items()},
+                    )
 
                 # ~~~~~~~~~~~~~~~~~~~ ensure node exists ~~~~~~~~~~~~~~~~~~~~~~~~ #
                 if name not in self.nodes:
@@ -800,8 +813,10 @@ class ExportManager:
 
                 # ~~~~~~~~~~~~~~~~~~~ run the function ~~~~~~~~~~~~~~~~~~~~~~~~~ #
                 node = self.nodes[name]
-                if not node.captured and (
-                    validation_inputs is not None or has_variable_inputs(node)
+                if (
+                    not node.captured
+                    and validation_inputs is not False
+                    and (validation_inputs is not None or has_variable_inputs(node))
                 ):
                     ports = {
                         alias: desc for desc in node.inputs for alias in desc.aliases

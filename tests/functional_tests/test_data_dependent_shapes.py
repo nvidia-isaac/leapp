@@ -50,6 +50,21 @@ def _shape_tensor(x):
     return count.reshape(1, 1)
 
 
+def _size_after_reshape(x):
+    idx = torch.nonzero(x > 0)
+    picked = x[idx[:, 0], idx[:, 1]].reshape(idx.shape[0], 1)
+    viewed = picked.view(idx.shape[0], 1)
+    # The reshaped tensors keep a data-dependent size of their own.
+    return picked.sum(dim=0, keepdim=True) / picked.shape[0] + viewed.size(0)
+
+
+def _size_after_factory(x):
+    idx = torch.nonzero(x > 0)
+    filled = torch.ones(idx.shape[0]) + torch.arange(idx.shape[0])
+    # Factories take the traced count, and so does a size read from their result.
+    return (x.sum() * 0 + filled.sum() + filled.shape[0]).reshape(1, 1)
+
+
 class TestDataDependentShapes(LEAPPFunctionalTestBase):
     def _export_and_check(self, fn):
         leapp.start(self.TEST_GRAPH_NAME, max_cached_io=len(SAMPLES))
@@ -74,6 +89,12 @@ class TestDataDependentShapes(LEAPPFunctionalTestBase):
 
     def test_reshape_with_nonzero_count(self):
         self._export_and_check(_shape_index)
+
+    def test_size_read_after_reshape_and_view(self):
+        self._export_and_check(_size_after_reshape)
+
+    def test_size_read_after_factory(self):
+        self._export_and_check(_size_after_factory)
 
     def test_size_numel_and_arithmetic(self):
         self._export_and_check(_size_arithmetic)

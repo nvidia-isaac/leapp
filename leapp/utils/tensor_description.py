@@ -19,7 +19,6 @@ import collections.abc
 from dataclasses import dataclass, fields
 from typing import Optional, Any, Dict, Tuple, List
 
-import numpy as np
 import torch
 
 # Dtype mapping lives in a dependency-free module; re-exported here (explicit
@@ -102,7 +101,7 @@ class TensorDescription:
             source_node = value.context_obj
             port = value.output_port
 
-        self.dynamic_array_supported = isinstance(value, (torch.Tensor, np.ndarray))
+        self.dynamic_array_supported = isinstance(value, torch.Tensor)
 
         # unwrap TracedData to the underlying tensor
         if isinstance(value, TracedData):

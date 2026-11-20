@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Generate bounded shape samples and replay annotated functions for validation."""
 
+import copy
 import inspect
 import math
 import random
@@ -85,24 +86,33 @@ def sample_validation_shapes(
     return samples, omitted
 
 
+def _is_plain_config(value):
+    """Whether ``value`` is a scalar or a container holding only scalars."""
+    if isinstance(value, (list, tuple)):
+        return all(_is_plain_config(item) for item in value)
+    if isinstance(value, dict):
+        return all(_is_plain_config(item) for pair in value.items() for item in pair)
+    return isinstance(value, (int, float, bool, str, type(None)))
+
+
 def _copy_input(value):
     value = TracedData.unwrap_traced_data(value)
     if isinstance(value, torch.Tensor):
         return value.detach().clone()
-    if isinstance(value, np.ndarray):
-        return value.copy()
+    if isinstance(value, (list, tuple, dict)) and _is_plain_config(value):
+        # The function may edit its configuration; every call gets its own.
+        return copy.deepcopy(value)
     return value
 
 
 def generate_validation_inputs(samples, shapes, seed):
     """Generate numeric inputs, retaining captured values when shapes do not change."""
-    numpy_rng = np.random.default_rng(seed)
     generated = {}
     for index, (name, sample) in enumerate(samples.items()):
         shape = shapes[name]
         if tuple(sample.shape) == shape:
             value = _copy_input(sample)
-        elif isinstance(sample, torch.Tensor):
+        else:
             generator = torch.Generator(device=sample.device).manual_seed(seed + index)
             options = {
                 "dtype": sample.dtype,
@@ -113,16 +123,6 @@ def generate_validation_inputs(samples, shapes, seed):
                 value = torch.rand(shape, **options)
             else:
                 value = torch.randint(0, 2, shape, **options)
-        else:
-            if sample.dtype.kind in "fc":
-                value = numpy_rng.random(shape)
-                if sample.dtype.kind == "c":
-                    value = value + 1j * numpy_rng.random(shape)
-            elif sample.dtype.kind in "biu":
-                value = numpy_rng.integers(0, 2, size=shape)
-            else:
-                raise TypeError(f"Cannot generate inputs with dtype {sample.dtype}")
-            value = value.astype(sample.dtype)
         generated[name] = value
     return generated
 
@@ -151,7 +151,12 @@ def _validation_random_state(samples, seed):
 
 
 class MethodValidation:
-    """Keep a reference callable and its flat tensor argument bindings until validation."""
+    """Keep a reference callable and its argument bindings until validation.
+
+    Arguments are stored under the names ``annotate.method`` gives their ports:
+    the parameter name, ``arg_<i>`` for the i-th ``*args`` value, and the
+    keyword for a ``**kwargs`` value.
+    """
 
     def __init__(self, function, bound, factory, descriptions):
         self.function = function
@@ -175,10 +180,13 @@ class MethodValidation:
         }
         self.arguments = {}
         self.argument_groups = {}
-        for name, value in bound.arguments.items():
-            if name in ("self", "cls"):
-                self.arguments[name] = value
-                continue
+        self.positional_count = 0
+        self.keyword_names = []
+        self.ambiguous_name = None
+
+        def keep(name, value):
+            if name in self.arguments:
+                self.ambiguous_name = name
             if isinstance(value, TensorSemantics):
                 value = value.ref
             if name in descriptions:
@@ -186,19 +194,55 @@ class MethodValidation:
             value = TracedData.unwrap_traced_data(value)
             self.arguments[name] = _copy_input(value)
 
-    def validate(self, node, rtol, atol):
+        for name, value in bound.arguments.items():
+            kind = self.signature.parameters[name].kind
+            if name in ("self", "cls"):
+                self.arguments[name] = value
+            elif kind is inspect.Parameter.VAR_POSITIONAL:
+                self.positional_count = len(value)
+                for index, item in enumerate(value):
+                    keep(f"arg_{index}", item)
+            elif kind is inspect.Parameter.VAR_KEYWORD:
+                self.keyword_names = list(value)
+                for keyword, item in value.items():
+                    keep(keyword, item)
+            else:
+                keep(name, value)
+
+    def _bind(self, arguments):
+        """Rebuild the captured call from arguments stored under port names."""
+        bound = {}
+        for name, parameter in self.signature.parameters.items():
+            if parameter.kind is parameter.VAR_POSITIONAL:
+                bound[name] = tuple(
+                    arguments[f"arg_{index}"] for index in range(self.positional_count)
+                )
+            elif parameter.kind is parameter.VAR_KEYWORD:
+                bound[name] = {key: arguments[key] for key in self.keyword_names}
+            elif name in arguments:
+                bound[name] = arguments[name]
+        return inspect.BoundArguments(self.signature, bound)
+
+    def _replay_obstacle(self, node):
+        """Why the captured call cannot be replayed on generated inputs, or None."""
+        if self.ambiguous_name is not None:
+            return (
+                f"generated validation cannot tell apart two arguments named "
+                f"{self.ambiguous_name!r}"
+            )
         for name, value in self.arguments.items():
-            parameter = self.signature.parameters[name]
-            if parameter.kind in (parameter.VAR_POSITIONAL, parameter.VAR_KEYWORD):
-                raise ValueError(
-                    "Generated validation requires named, non-variadic parameters"
+            if name in ("self", "cls"):
+                continue
+            if not isinstance(value, torch.Tensor) and not _is_plain_config(value):
+                return (
+                    f"generated validation does not support argument {name!r}; "
+                    "pass tensors, scalars, or containers of scalars"
                 )
-            if name not in ("self", "cls") and not isinstance(
-                value, (torch.Tensor, np.ndarray, int, float, bool, str, type(None))
-            ):
-                raise TypeError(
-                    f"Generated validation does not support argument {name!r}; use flat tensor parameters and immutable scalar configuration"
-                )
+        if set(node.inputs) - set(self.descriptions.values()):
+            return "generated validation requires all node inputs to be function parameters"
+        return None
+
+    def validate(self, node, rtol, atol):
         for names in self.argument_groups.values():
             retained = next(
                 (
@@ -219,24 +263,27 @@ class MethodValidation:
             raise ValueError(
                 "Cannot validate a variable input removed from the exported graph"
             )
-        if set(node.inputs) - set(self.descriptions.values()):
-            raise ValueError(
-                "validation_inputs requires all node inputs to be function parameters"
-            )
         contracts = {
             name: get_shape_contract(desc) for name, desc in self.descriptions.items()
         }
+        # A static contract admits no other shape, so nothing is replayed.
         if not any(contract.get("dimension_ranges") for contract in contracts.values()):
+            return True
+        obstacle = self._replay_obstacle(node)
+        if obstacle is not None:
+            # A requested callback must run; automatic generation is best effort.
+            if self.factory is not None:
+                raise ValueError(f"{node.name}: {obstacle}")
+            _get_logger().warning(
+                f"{node.name}: skipped generated shape validation: {obstacle}. "
+                "Only the captured samples were compared; pass "
+                "validation_inputs=False to disable generated validation."
+            )
             return True
         shapes, omitted = sample_validation_shapes(
             contracts,
             {name: tuple(value.shape) for name, value in samples.items()},
-            {
-                name: value.element_size()
-                if isinstance(value, torch.Tensor)
-                else value.dtype.itemsize
-                for name, value in samples.items()
-            },
+            {name: value.element_size() for name, value in samples.items()},
         )
         for reason in omitted:
             _get_logger().warning(f"{node.name}: generated validation omitted {reason}")
@@ -295,10 +342,7 @@ class MethodValidation:
         bindings = {}
         for name, value in generated.items():
             sample = samples[name]
-            library_type = (
-                torch.Tensor if isinstance(sample, torch.Tensor) else np.ndarray
-            )
-            if not isinstance(value, library_type) or isinstance(value, TracedData):
+            if not isinstance(value, torch.Tensor) or isinstance(value, TracedData):
                 raise TypeError(
                     f"validation_inputs returned an invalid tensor type for {name}"
                 )
@@ -306,7 +350,7 @@ class MethodValidation:
                 raise ValueError(
                     f"validation_inputs returned the wrong shape or dtype for {name}"
                 )
-            if isinstance(value, torch.Tensor) and value.device != sample.device:
+            if value.device != sample.device:
                 raise ValueError(
                     f"validation_inputs returned the wrong device for {name}"
                 )
@@ -319,12 +363,7 @@ class MethodValidation:
             if desc in by_port:
                 shared = by_port[desc]
                 if self.factory is not None:
-                    equal = (
-                        torch.equal
-                        if isinstance(value, torch.Tensor)
-                        else np.array_equal
-                    )
-                    if not equal(value, shared):
+                    if not torch.equal(value, shared):
                         raise ValueError(
                             f"validation_inputs returned conflicting values for aliased parameter {name}"
                         )
@@ -339,7 +378,7 @@ class MethodValidation:
             if id(value) not in copies:
                 copies[id(value)] = _copy_input(value)
             arguments[name] = copies[id(value)]
-        bound = inspect.BoundArguments(self.signature, arguments)
+        bound = self._bind(arguments)
         with _validation_random_state(samples, seed), ExitStack() as context:
             context.enter_context(torch.inference_mode(self.inference_mode))
             context.enter_context(torch.set_grad_enabled(self.grad_enabled))
@@ -356,7 +395,7 @@ class MethodValidation:
                     f"{exc}"
                 ) from exc
         expected = expected if isinstance(expected, tuple) else (expected,)
-        if not all(isinstance(v, (torch.Tensor, np.ndarray)) for v in expected):
+        if not all(isinstance(v, torch.Tensor) for v in expected):
             raise ValueError(
                 "Generated validation requires a tensor or flat tuple of tensor outputs"
             )

@@ -62,7 +62,7 @@ from .utils.semantics import (
 )
 
 __version__ = "0.8.1"
-__config_version__ = "1.4"
+__config_version__ = "1.5"
 __author__ = "Frank Lai"
 __email__ = "frlai@nvidia.com"
 

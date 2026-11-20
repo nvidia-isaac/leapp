@@ -94,7 +94,7 @@ YAML structure
 
    system information:
      leapp version: 0.8.1
-     leapp config version: '1.4'
+     leapp config version: '1.5'
      torch version: 2.9.1+cu128
      python version: 3.12.9
      cuda version: '12.8'
@@ -184,6 +184,10 @@ tensor has a name or a particular shape.
    * - ``axes[i].period_ms``
      - Required for a ``TIME`` axis; otherwise omitted.
      - No sample period is declared.
+   * - ``axes[i].variable``
+     - The dimension accepts a range of sizes. See
+       :ref:`config-variable-dimensions`.
+     - The dimension is fixed at the size in ``shape``.
    * - ``is_setpoint``
      - Emitted when explicitly set to ``true`` or ``false``.
      - Unspecified (``None`` in Python); no setpoint purpose is declared.
@@ -349,6 +353,80 @@ spacing in milliseconds. For example, a tensor with shape ``[4, 3]`` can use:
    - {kind: element, names: [hip, knee, ankle]}
 
 See :ref:`semantics-time-axes`. Axis periods are independent of graph frequency.
+
+.. _config-variable-dimensions:
+
+Variable dimensions
+-------------------
+
+A dimension declared with ``Axis(variable=...)``, or inferred from one, has a
+``variable`` mapping in its ``axes`` entry. ``shape`` still records the size of
+the captured sample, so the two must be read together:
+
+.. code-block:: yaml
+
+   inputs:
+   - name: tokens
+     dtype: float32
+     shape: [2, 8]
+     type: tensor
+     axes:
+     - null
+     - variable:
+         symbol: length
+         min: 4
+         max: 32
+         multiple_of: 2
+   outputs:
+   - name: pairs
+     dtype: float32
+     shape: [2, 4]
+     type: tensor
+     axes:
+     - null
+     - variable:
+         symbol: __leapp_derived_7061697273_7061697273_1
+         min: 2
+         max: 16
+         expression:
+           formula:
+             op: floordiv
+             args: [length, 2]
+         roots:
+           length: {min: 4, max: 32, multiple_of: 2}
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 75
+
+   * - Field
+     - Meaning
+   * - ``symbol``
+     - Name of the dimension. Every axis in the bundle with the same symbol
+       must have the same size in one ``run_policy()`` call. Symbols starting
+       with ``__leapp_`` are generated.
+   * - ``min``, ``max``
+     - Inclusive bounds on the size.
+   * - ``multiple_of``
+     - Present when the size must be a multiple of this value.
+   * - ``expression``
+     - Present on a derived dimension. Either ``terms`` (symbol to integer
+       coefficient) with an integer ``offset``, or a ``formula`` tree whose
+       nodes are integers, symbols, or ``{op, args}`` with ``op`` one of
+       ``add``, ``mul``, ``floordiv``, ``mod``.
+   * - ``roots``
+     - Present with ``expression``. The declared symbols the expression
+       depends on, with their bounds.
+
+Variable dimensions were added in config version ``1.5``. A bundle that uses
+them also writes a ``shape contract version`` under ``system information``:
+``2`` when any dimension uses ``multiple_of`` or a ``formula``, otherwise ``1``.
+Bundles without variable dimensions have no ``shape contract version``.
+
+A consumer must validate inputs against these fields before running a model.
+``InferenceManager`` does this on every call, and refuses to load a bundle whose
+axes declare ``variable`` without a supported ``shape contract version``. LEAPP
+releases that predate config ``1.5`` ignore these fields.
 
 ``spatial``
 -----------

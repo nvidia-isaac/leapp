@@ -5,11 +5,12 @@
 
 """Variable dimensions through export, serialization, and runtime inference."""
 
+import logging
+import math
 import os
 import subprocess
 import sys
 
-import numpy as np
 import onnx
 import onnxruntime as ort
 import pytest
@@ -152,23 +153,14 @@ def _compile_image_pipeline(path):
 @pytest.mark.parametrize(
     "backend", ["pt2", "onnx-dynamo", "onnx-torchscript", "jit-script", "jit-trace"]
 )
-@pytest.mark.parametrize(
-    "library,device",
-    [
-        pytest.param(torch, "cpu", id="torch-cpu"),
-        pytest.param(torch, "cuda", id="torch-cuda"),
-        pytest.param(np, "cpu", id="numpy-cpu"),
-    ],
-    indirect=["device"],
-)
+@pytest.mark.parametrize("device", ["cpu", "cuda"], indirect=True)
 def test_exported_models_accept_different_input_shapes(
-    device, dynamic_session, backend, library
+    device, dynamic_session, backend
 ):
     """Check saved backend artifacts on sizes never used for capture."""
 
     if device == "cuda" and backend.startswith("onnx"):
         assert "CUDAExecutionProvider" in ort.get_available_providers()
-    array_options = {"device": device} if library is torch else {}
 
     def pair_tokens(x):
         return (x * 2).reshape(2, x.shape[1] // 2, 2)
@@ -177,7 +169,7 @@ def test_exported_models_accept_different_input_shapes(
         "pairs",
         TensorSemantics(
             "x",
-            library.arange(16, dtype=library.float32, **array_options).reshape(2, 8),
+            torch.arange(16, dtype=torch.float32, device=device).reshape(2, 8),
             axes=[
                 None,
                 Axis(variable=Variable("length", min=4, max=32, multiple_of=2)),
@@ -189,12 +181,11 @@ def test_exported_models_accept_different_input_shapes(
     leapp.compile_graph(visualize=False, validate=True, strict=True)
     manager = InferenceManager(str(dynamic_session))
     for length in (4, 12, 32):
-        fresh = library.arange(
-            2 * length, dtype=library.float32, **array_options
-        ).reshape(2, length)
+        fresh = torch.arange(2 * length, dtype=torch.float32, device=device).reshape(
+            2, length
+        )
         torch.testing.assert_close(
-            manager({"pairs/x": torch.as_tensor(fresh)})["pairs/y"],
-            torch.as_tensor(pair_tokens(fresh)),
+            manager({"pairs/x": fresh})["pairs/y"], pair_tokens(fresh)
         )
 
     if backend.startswith("onnx"):
@@ -206,20 +197,19 @@ def test_exported_models_accept_different_input_shapes(
 
 
 @pytest.mark.parametrize("factory_name", ["zeros", "ones", "full", "arange"])
-@pytest.mark.parametrize("library", [torch, np], ids=["torch", "numpy"])
-def test_factories_use_runtime_shape(dynamic_session, factory_name, library):
-    """Check factory capture and each library's output values, shapes, and dtypes."""
+def test_factories_use_runtime_shape(dynamic_session, factory_name):
+    """Check factory capture and the output values, shapes, and dtypes."""
 
     def factory(length):
         if factory_name == "full":
-            return library.full((length,), 3)
-        return getattr(library, factory_name)(length)
+            return torch.full((length,), 3)
+        return getattr(torch, factory_name)(length)
 
     x = annotate.input_tensors(
         "factory",
         TensorSemantics(
             "x",
-            library.ones(8, dtype=library.float32),
+            torch.ones(8, dtype=torch.float32),
             axes=[Axis(variable=Variable("length", min=4, max=32))],
         ),
     )
@@ -229,7 +219,7 @@ def test_factories_use_runtime_shape(dynamic_session, factory_name, library):
     manager = InferenceManager(str(dynamic_session))
     for length in (4, 12, 32):
         actual = manager({"factory/x": torch.ones(length)})["factory/y"]
-        torch.testing.assert_close(actual, torch.as_tensor(factory(length)))
+        torch.testing.assert_close(actual, factory(length))
 
 
 @pytest.mark.parametrize(
@@ -347,50 +337,41 @@ def test_dynamic_input_with_static_input(dynamic_session):
         manager({"combine/left": torch.ones(2, 12, 3), "combine/right": torch.ones(4)})
 
 
-def _check_shape_export(path, function, library, backend, sample_shape, axes, shapes):
-    sample = library.arange(int(np.prod(sample_shape)), dtype=library.float32).reshape(
-        sample_shape
-    )
+def _ramp(shape):
+    return torch.arange(math.prod(shape), dtype=torch.float32).reshape(shape)
+
+
+def _check_shape_export(path, function, backend, sample_shape, axes, shapes):
+    sample = _ramp(sample_shape)
     x = annotate.input_tensors("shape", TensorSemantics("x", sample, axes=axes))
     annotate.output_tensors("shape", {"y": function(x)}, export_with=backend)
     leapp.stop()
     captured = _MANAGER.get_nodes()["shape"].m
     for shape in shapes:
-        value = library.arange(int(np.prod(shape)), dtype=library.float32).reshape(
-            shape
-        )
-        torch.testing.assert_close(
-            captured(torch.as_tensor(value)), torch.as_tensor(function(value))
-        )
+        value = _ramp(shape)
+        torch.testing.assert_close(captured(value), function(value))
     leapp.compile_graph(visualize=False, validate=True, strict=True)
     manager = InferenceManager(str(path))
     for shape in shapes:
-        value = library.arange(int(np.prod(shape)), dtype=library.float32).reshape(
-            shape
-        )
+        value = _ramp(shape)
         torch.testing.assert_close(
-            manager({"shape/x": torch.as_tensor(value)})["shape/y"],
-            torch.as_tensor(function(value)),
+            manager({"shape/x": value})["shape/y"], function(value)
         )
 
 
 @pytest.mark.parametrize("backend", ["pt2", "onnx-dynamo"])
 @pytest.mark.parametrize(
-    "library,reshape",
+    "reshape",
     [
-        pytest.param(torch, lambda x: x.reshape(x.shape[0], -1), id="torch-shape"),
-        pytest.param(torch, lambda x: x.reshape(x.size(0), -1), id="torch-size"),
-        pytest.param(np, lambda x: x.reshape(x.shape[0], -1), id="numpy-shape"),
+        pytest.param(lambda x: x.reshape(x.shape[0], -1), id="shape"),
+        pytest.param(lambda x: x.reshape(x.size(0), -1), id="size"),
     ],
 )
-def test_reshape_uses_runtime_first_dimension(
-    dynamic_session, backend, library, reshape
-):
+def test_reshape_uses_runtime_first_dimension(dynamic_session, backend, reshape):
     """The original batch-reshape regression stays correct in FX and saved models."""
     _check_shape_export(
         dynamic_session,
         reshape,
-        library,
         backend,
         (2, 3, 4),
         [Axis(variable=Variable("batch", min=2, max=8)), None, None],
@@ -400,21 +381,17 @@ def test_reshape_uses_runtime_first_dimension(
 
 @pytest.mark.parametrize("backend", ["pt2", "onnx-dynamo"])
 @pytest.mark.parametrize(
-    "library,reshape",
+    "reshape",
     [
-        pytest.param(torch, lambda x: x.reshape(-1, x.shape[2]), id="torch-shape"),
-        pytest.param(torch, lambda x: x.reshape(-1, x.size(2)), id="torch-size"),
-        pytest.param(np, lambda x: x.reshape(-1, x.shape[2]), id="numpy-shape"),
+        pytest.param(lambda x: x.reshape(-1, x.shape[2]), id="shape"),
+        pytest.param(lambda x: x.reshape(-1, x.size(2)), id="size"),
     ],
 )
-def test_reshape_uses_runtime_third_dimension(
-    dynamic_session, backend, library, reshape
-):
+def test_reshape_uses_runtime_third_dimension(dynamic_session, backend, reshape):
     """A variable third axis remains dynamic while the leading axes stay fixed."""
     _check_shape_export(
         dynamic_session,
         reshape,
-        library,
         backend,
         (2, 3, 128),
         [None, None, Axis(variable=Variable("length", min=4, max=512))],
@@ -423,8 +400,7 @@ def test_reshape_uses_runtime_third_dimension(
 
 
 @pytest.mark.parametrize("backend", ["pt2", "onnx-dynamo"])
-@pytest.mark.parametrize("library", [torch, np], ids=["torch", "numpy"])
-def test_slice_uses_runtime_shape(dynamic_session, backend, library):
+def test_slice_uses_runtime_shape(dynamic_session, backend):
     """Reloaded slices preserve half-length bounds over an explicit even-length domain."""
 
     def first_half(x):
@@ -433,7 +409,6 @@ def test_slice_uses_runtime_shape(dynamic_session, backend, library):
     _check_shape_export(
         dynamic_session,
         first_half,
-        library,
         backend,
         (2, 3, 128),
         [None, None, Axis(variable=Variable("length", min=4, max=512, multiple_of=2))],
@@ -443,25 +418,17 @@ def test_slice_uses_runtime_shape(dynamic_session, backend, library):
 
 @pytest.mark.parametrize("backend", ["pt2", "onnx-dynamo"])
 @pytest.mark.parametrize(
-    "library,reshape",
+    "reshape",
     [
-        pytest.param(
-            torch, lambda x: (x + 1).reshape(-1).reshape(x.shape), id="torch-shape"
-        ),
-        pytest.param(
-            torch, lambda x: (x + 1).reshape(-1).reshape(x.size()), id="torch-size"
-        ),
-        pytest.param(
-            np, lambda x: (x + 1).reshape(-1).reshape(x.shape), id="numpy-shape"
-        ),
+        pytest.param(lambda x: (x + 1).reshape(-1).reshape(x.shape), id="shape"),
+        pytest.param(lambda x: (x + 1).reshape(-1).reshape(x.size()), id="size"),
     ],
 )
-def test_reshape_uses_full_runtime_shape(dynamic_session, backend, library, reshape):
+def test_reshape_uses_full_runtime_shape(dynamic_session, backend, reshape):
     """Full shape tuples preserve independently varying batch and length dimensions."""
     _check_shape_export(
         dynamic_session,
         reshape,
-        library,
         backend,
         (2, 3, 8),
         [
@@ -474,19 +441,11 @@ def test_reshape_uses_full_runtime_shape(dynamic_session, backend, library, resh
 
 
 @pytest.mark.parametrize("backend", ["pt2", "onnx-dynamo"])
-@pytest.mark.parametrize(
-    "library,flatten",
-    [
-        pytest.param(torch, lambda x: x.reshape(x.numel()), id="torch-numel"),
-        pytest.param(np, lambda x: x.reshape(x.size), id="numpy-size"),
-    ],
-)
-def test_reshape_uses_runtime_element_count(dynamic_session, backend, library, flatten):
+def test_reshape_uses_runtime_element_count(dynamic_session, backend):
     """Total element counts remain executable dependencies through export/reload."""
     _check_shape_export(
         dynamic_session,
-        flatten,
-        library,
+        lambda x: x.reshape(x.numel()),
         backend,
         (2, 3, 128),
         [None, None, Axis(variable=Variable("length", min=4, max=512))],
@@ -597,29 +556,17 @@ def test_saved_artifact_cannot_freeze_a_variable_dimension(
 
 def _generated_arrays(samples, shapes, seed):
     return {
-        name: (
-            torch.full(
-                shape, seed + 3, dtype=samples[name].dtype, device=samples[name].device
-            )
-            if isinstance(samples[name], torch.Tensor)
-            else np.full(shape, seed + 3, dtype=samples[name].dtype)
+        name: torch.full(
+            shape, seed + 3, dtype=samples[name].dtype, device=samples[name].device
         )
         for name, shape in shapes.items()
     }
 
 
 @pytest.mark.parametrize("backend", ["pt2", "onnx-dynamo"])
-@pytest.mark.parametrize(
-    "library,device",
-    [
-        pytest.param(torch, "cpu", id="torch-cpu"),
-        pytest.param(torch, "cuda", id="torch-cuda"),
-        pytest.param(np, "cpu", id="numpy-cpu"),
-    ],
-    indirect=["device"],
-)
+@pytest.mark.parametrize("device", ["cpu", "cuda"], indirect=True)
 def test_annotation_validates_generated_input_shapes(
-    device, dynamic_session, monkeypatch, library, backend
+    device, dynamic_session, monkeypatch, backend
 ):
     """Generated references use the original callable and validation reloads the saved artifact."""
     executions = []
@@ -633,11 +580,7 @@ def test_annotation_validates_generated_input_shapes(
     encode(
         TensorSemantics(
             "pixels",
-            library.ones(
-                (2, 8),
-                dtype=library.float32,
-                **({"device": device} if library is torch else {}),
-            ),
+            torch.ones((2, 8), dtype=torch.float32, device=device),
             axes=[None, Axis(variable=Variable("length", min=4, max=12))],
         )
     )
@@ -1014,3 +957,295 @@ def test_validation_restores_inference_buffers(
         assert leapp.compile_graph(visualize=False, validate=True, strict=True) == {
             "encode": True
         }
+
+
+def _sequence(name="x", **bounds):
+    domain = {"min": 4, "max": 32, **bounds}
+    return TensorSemantics(
+        name,
+        torch.arange(16, dtype=torch.float32).reshape(2, 8),
+        axes=[None, Axis(variable=Variable("n", **domain))],
+    )
+
+
+def test_derived_output_dimension_is_enforced_downstream(dynamic_session):
+    """An inferred affine length reaches YAML and the consumer that inherits it.
+
+    Unit tests cover the contract functions in isolation. Only a compiled,
+    connected graph shows that inference, inheritance and the reloaded runtime
+    agree on the same derived dimension.
+    """
+    x = annotate.input_tensors("grow", _sequence())
+    grown = annotate.output_tensors(
+        "grow", {"grown": torch.cat((x, x, x[:, :1]), dim=1)}, export_with="pt2"
+    )
+    grown = annotate.input_tensors("halve", {"grown": grown})
+    annotate.output_tensors(
+        "halve", {"half": grown[:, : grown.shape[1] // 2]}, export_with="pt2"
+    )
+    leapp.stop()
+    leapp.compile_graph(visualize=False, validate=True, strict=True)
+
+    with open(dynamic_session) as file:
+        bundle = yaml.safe_load(file)
+    produced = bundle["models"]["grow"]["outputs"][0]
+    consumed = bundle["models"]["halve"]["inputs"][0]
+    variable = produced["axes"][1]["variable"]
+    assert produced["shape"] == [2, 17]
+    assert variable["expression"] == {"terms": {"n": 2}, "offset": 1}
+    assert (variable["min"], variable["max"]) == (9, 65)
+    assert variable["roots"] == {"n": {"min": 4, "max": 32}}
+    assert consumed["axes"] == produced["axes"]
+    # (2 * n + 1) // 2 is n again.
+    assert bundle["models"]["halve"]["outputs"][0]["axes"][1]["variable"] == {
+        "symbol": "n",
+        "min": 4,
+        "max": 32,
+    }
+    system = bundle["system information"]
+    assert system["shape contract version"] == 1
+    assert system["leapp config version"] == leapp.__config_version__
+
+    manager = InferenceManager(str(dynamic_session))
+    for length in (4, 11, 32):
+        fresh = torch.arange(2 * length, dtype=torch.float32).reshape(2, length)
+        torch.testing.assert_close(manager({"grow/x": fresh})["halve/half"], fresh)
+    with pytest.raises(ValueError, match="violates derived dimension"):
+        manager.set_input_value("halve", "grown", torch.ones(2, 12))
+
+
+def test_graph_that_fixes_a_declared_dimension_is_rejected(dynamic_session):
+    """Compilation refuses a graph that only works at the captured length.
+
+    This is the compile-time guarantee behind a declared range; numerical
+    validation is disabled to show the rejection does not depend on it.
+    """
+    x = annotate.input_tensors("node", _sequence())
+    annotate.output_tensors("node", {"y": x.reshape(4, 4)}, export_with="pt2")
+    leapp.stop()
+    with pytest.raises(ValueError, match="cannot honor requested variable-axis"):
+        leapp.compile_graph(visualize=False, validate=False)
+    assert not dynamic_session.exists()
+
+
+def _without_export_backend(x):
+    annotate.output_tensors("node", {"y": x * 2})
+
+
+def _state_sized_by_variable_input(x):
+    state = annotate.state_tensors("node", {"state": torch.zeros(2, 8)})
+    updated = state + x
+    annotate.update_state("node", {"state": updated})
+    annotate.output_tensors("node", {"y": updated * 2}, export_with="pt2")
+
+
+@pytest.mark.parametrize(
+    "finish,error",
+    [
+        pytest.param(
+            _without_export_backend,
+            "require an executable export backend",
+            id="no-export-backend",
+        ),
+        pytest.param(
+            _state_sized_by_variable_input,
+            "feedback-state|cannot honor requested variable-axis",
+            id="state-sized-by-variable-input",
+        ),
+    ],
+)
+def test_unsupported_variable_configurations_are_rejected(
+    dynamic_session, finish, error
+):
+    """Configurations outside the variable-shape subset fail compilation.
+
+    Each case would otherwise write a bundle that claims a range it cannot
+    serve, which no unit-level check observes.
+    """
+    finish(annotate.input_tensors("node", _sequence()))
+    leapp.stop()
+    with pytest.raises(ValueError, match=error):
+        leapp.compile_graph(visualize=False, validate=False)
+    assert not dynamic_session.exists()
+
+
+@pytest.mark.parametrize("port", ["input", "output"])
+def test_numpy_ports_cannot_have_variable_dimensions(dynamic_session, port):
+    """Variable dimensions are limited to Torch tensor ports.
+
+    NumPy capture does not trace sizes, so a NumPy port in a variable node
+    must fail compilation instead of exporting captured sizes.
+    """
+    sample = torch.ones(2, 8)
+    x = annotate.input_tensors(
+        "node",
+        TensorSemantics(
+            "x",
+            sample.numpy() if port == "input" else sample,
+            axes=[None, Axis(variable=Variable("n", min=4, max=32))],
+        ),
+    )
+    y = x * 2
+    annotate.output_tensors(
+        "node", {"y": y if port == "input" else y.numpy()}, export_with="pt2"
+    )
+    leapp.stop()
+    with pytest.raises(TypeError, match="Torch tensor ports only"):
+        leapp.compile_graph(visualize=False, validate=False)
+    assert not dynamic_session.exists()
+
+
+def test_static_bundle_keeps_existing_schema(dynamic_session):
+    """A graph without variable axes writes the schema static readers expect.
+
+    Guards the written file as a whole: config version, absence of the shape
+    contract version, and unchanged axis metadata.
+    """
+    names = ["a", "b", "c"]
+    x = annotate.input_tensors(
+        "node",
+        TensorSemantics(
+            "x", torch.ones(2, 3), axes=[None, Axis("element", names=names)]
+        ),
+    )
+    annotate.output_tensors("node", {"y": (x * 2).reshape(2, 3, 1)}, export_with="pt2")
+    leapp.stop()
+    leapp.compile_graph(visualize=False, validate=True, strict=True)
+
+    with open(dynamic_session) as file:
+        bundle = yaml.safe_load(file)
+    system = bundle["system information"]
+    assert system["leapp config version"] == leapp.__config_version__
+    assert "shape contract version" not in system
+    model = bundle["models"]["node"]
+    assert model["inputs"][0]["axes"] == [None, {"kind": "element", "names": names}]
+    assert "axes" not in model["outputs"][0]
+    manager = InferenceManager(str(dynamic_session))
+    assert tuple(manager({"node/x": torch.ones(2, 3)})["node/y"].shape) == (2, 3, 1)
+
+
+def test_runtime_checks_every_call_and_assigned_input(dynamic_session):
+    """One loaded bundle serves several lengths and validates assigned inputs.
+
+    Covers runtime state across calls, which export-time tests do not: a later
+    call is not tied to an earlier length, and a rejected value is not stored.
+    """
+    x = annotate.input_tensors("node", _sequence(multiple_of=2))
+    bias = annotate.input_tensors("node", {"bias": torch.ones(2, 1)})
+    annotate.output_tensors("node", {"y": x * 2 + bias}, export_with="pt2")
+    leapp.stop()
+    leapp.compile_graph(visualize=False, validate=True, strict=True)
+
+    manager = InferenceManager(str(dynamic_session))
+    for length in (12, 4, 30):
+        fresh = torch.arange(2 * length, dtype=torch.float32).reshape(2, length)
+        actual = manager({"node/x": fresh, "node/bias": torch.ones(2, 1)})["node/y"]
+        torch.testing.assert_close(actual, fresh * 2 + 1)
+
+    manager.set_input_value("node", "x", torch.ones(2, 20))
+    assert tuple(manager.value_dict["node"]["x"].shape) == (2, 20)
+    for illegal, error in (
+        (torch.ones(2, 7), "n must be a multiple of 2"),
+        (torch.ones(2, 34), r"n must be in \[4, 32\], got 34"),
+        (torch.ones(3, 8), "expected fixed dimension 2, got 3"),
+    ):
+        with pytest.raises(ValueError, match=error):
+            manager.set_input_value("node", "x", illegal)
+    assert tuple(manager.value_dict["node"]["x"].shape) == (2, 20)
+
+
+def _call_annotated_function(style, calls, frozen=False, **method_options):
+    """Capture ``encode`` with inputs arriving in the given call style."""
+
+    def gain(x):
+        # A Python branch keeps the captured choice; replay at another length differs.
+        return 3.0 if frozen and x.shape[1] != 8 else 2.0
+
+    if style == "star-args":
+
+        @annotate.method(export_with="pt2", **method_options)
+        def encode(*inputs):
+            calls.append(inputs[0].shape[1])
+            result = (inputs[0] + inputs[1]) * gain(inputs[0])
+            return result
+
+        encode(_sequence(), _sequence("other"))
+    elif style == "keyword-args":
+
+        @annotate.method(export_with="pt2", **method_options)
+        def encode(x, **extra):
+            calls.append(x.shape[1])
+            result = (x + extra["other"]) * extra["scale"] * gain(x)
+            return result
+
+        encode(_sequence(), other=_sequence("other"), scale=1.5)
+    elif style == "plain-config":
+
+        @annotate.method(export_with="pt2", **method_options)
+        def encode(x, config):
+            calls.append(x.shape[1])
+            # Each replay must start from the captured configuration.
+            config["calls"] += 1
+            result = x * config["scales"][0] * gain(x) + config["calls"]
+            return result
+
+        encode(_sequence(), {"scales": [1.5, 2.5], "calls": 0})
+    else:
+
+        @annotate.method(export_with="pt2", **method_options)
+        def encode(x, extras):
+            calls.append(x.shape[1])
+            result = x * extras["scale"]
+            return result
+
+        encode(_sequence(), {"scale": torch.tensor(2.0)})
+
+
+@pytest.mark.parametrize("style", ["star-args", "keyword-args", "plain-config"])
+@pytest.mark.parametrize(
+    "frozen", [False, True], ids=["shape-generic", "frozen-branch"]
+)
+def test_generated_validation_replays_call_styles(dynamic_session, style, frozen):
+    """Generated inputs reach the original function through each call style.
+
+    The frozen branch shows the replay compared other lengths; a skipped
+    replay would let it pass.
+    """
+    calls = []
+    _call_annotated_function(style, calls, frozen)
+    leapp.stop()
+    if frozen:
+        with pytest.raises(Exception, match="Model validation failed"):
+            leapp.compile_graph(visualize=False, validate=True, strict=True)
+        assert len(calls) > 1
+    else:
+        assert leapp.compile_graph(visualize=False, validate=True, strict=True) == {
+            "encode": True
+        }
+        assert {4, 32} <= set(calls[1:])
+    assert calls[0] == 8
+
+
+@pytest.mark.parametrize(
+    "style,method_options,warns",
+    [
+        pytest.param("nested-tensor", {}, True, id="unreplayable-call"),
+        pytest.param("star-args", {"validation_inputs": False}, False, id="opt-out"),
+    ],
+)
+def test_generated_validation_is_skipped_without_replay(
+    dynamic_session, caplog, style, method_options, warns
+):
+    """A call that cannot or must not be replayed keeps cached-sample validation.
+
+    The function runs once, during capture; only the unreplayable call warns.
+    """
+    calls = []
+    _call_annotated_function(style, calls, **method_options)
+    leapp.stop()
+    with caplog.at_level(logging.WARNING):
+        assert leapp.compile_graph(visualize=False, validate=True, strict=True) == {
+            "encode": True
+        }
+    assert calls == [8]
+    assert ("skipped generated shape validation" in caplog.text) is warns

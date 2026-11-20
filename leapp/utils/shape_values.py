@@ -6,7 +6,6 @@ from contextvars import ContextVar
 from functools import wraps
 import operator
 
-import numpy as np
 import torch
 
 from leapp.leapp_graph.datatypes.primitives.traced_int import TracedInt, graph_value
@@ -109,75 +108,44 @@ def trace_call(function, args, kwargs, *, shape, method=False):
                 and d.proxy.node.args == (source.proxy.node, i)
                 for i, d in enumerate(dimensions)
             ):
-                return source._new_alias(value)
+                alias = source._new_alias(value)
+                TracedTensor._mark_data_dependent_shape(alias)
+                return alias
+    if not isinstance(value, (torch.Tensor, tuple, list)):
+        raise ValueError(
+            f"Unsupported shape-dependent operation {name or function!r} in node "
+            f"{owner.context}: expected tensor outputs, got {type(value).__name__}"
+        )
     proxy_args = TracedData._map_structure(args, lambda x: leaf(x, True))
     proxy_kwargs = TracedData._map_structure(kwargs, lambda x: leaf(x, True))
-    proxy = owner.context_obj.tracer.create_proxy(
+    tracer = owner.context_obj.tracer
+    proxy = tracer.create_proxy(
         "call_method" if method else "call_function", function, proxy_args, proxy_kwargs
     )
-    if not isinstance(value, torch.Tensor):
-        raise ValueError("Unsupported non-tensor shape consumer")
     from leapp.leapp_graph.datatypes import as_traced
 
-    return as_traced(value, proxy.node.name, owner.context_obj, proxy)
-
-
-def _normalize_numpy_factory_args(function, proxy_args, proxy_kwargs, dtype):
-    if set(proxy_kwargs) - {"dtype", "shape", "start", "stop", "step", "fill_value"}:
-        raise TypeError("Unsupported NumPy factory keyword")
-    # NumPy and Torch have different factory defaults; retain NumPy's dtype.
-    proxy_kwargs["dtype"] = torch.from_numpy(np.empty((), dtype=dtype)).dtype
-    if "shape" in proxy_kwargs:
-        proxy_kwargs["size"] = proxy_kwargs.pop("shape")
-    if "stop" in proxy_kwargs:
-        proxy_kwargs["end"] = proxy_kwargs.pop("stop")
-    if function.__name__ in {"zeros", "ones", "full"}:
-        data_arguments = 2 if function.__name__ == "full" else 1
-        # Optional positional dtype is represented by the result dtype above.
-        if len(proxy_args) > data_arguments + 1:
-            raise TypeError("Unsupported NumPy factory positional arguments")
-        proxy_args = proxy_args[:data_arguments]
-        if proxy_args and not isinstance(proxy_args[0], (tuple, list)):
-            proxy_args = ((proxy_args[0],),) + proxy_args[1:]
-    elif len(proxy_args) == 4:
-        proxy_args = proxy_args[:3]  # arange(start, stop, step, dtype)
-    if "size" in proxy_kwargs and not isinstance(proxy_kwargs["size"], (tuple, list)):
-        proxy_kwargs["size"] = (proxy_kwargs["size"],)
-    return proxy_args, proxy_kwargs
-
-
-@suppress_dynamic_shape_tracing
-def trace_numpy_factory(function, args, kwargs, shape):
-    """Execute NumPy factories on concrete sizes and record Torch equivalents."""
-    from leapp.leapp_graph.datatypes.numpy.traced_np_array import TracedNpArray
-
-    owner = shape
-
-    real_args = TracedData._map_structure(
-        args, lambda v: _convert_shape_value(v, owner, False)
-    )
-    real_kwargs = TracedData._map_structure(
-        kwargs, lambda v: _convert_shape_value(v, owner, False)
-    )
-    result = function(*real_args, **real_kwargs)
-    proxy_args = TracedData._map_structure(
-        args, lambda v: _convert_shape_value(v, owner, True)
-    )
-    proxy_kwargs = TracedData._map_structure(
-        kwargs, lambda v: _convert_shape_value(v, owner, True)
-    )
-    try:
-        proxy_args, proxy_kwargs = _normalize_numpy_factory_args(
-            function, proxy_args, proxy_kwargs, result.dtype
+    def wrap(output, output_proxy):
+        traced = as_traced(
+            output, output_proxy.node.name, owner.context_obj, output_proxy
         )
-        proxy = owner.context_obj.tracer.create_proxy(
-            "call_function", getattr(torch, function.__name__), proxy_args, proxy_kwargs
-        )
-    except (TypeError, ValueError, NotImplementedError) as exc:
-        from leapp.leapp_graph.datatypes.numpy.aten_adapter import (
-            record_numpy_capture_failure,
-        )
+        # Size reads in a static node return traced sizes only for flagged
+        # tensors; callers that bypass ``__torch_function__`` skip its flag.
+        TracedTensor._mark_data_dependent_shape(traced)
+        return traced
 
-        message = f"NumPy {function.__name__} in node {owner.context}: {exc}"
-        return record_numpy_capture_failure(owner, result, args, kwargs, message)
-    return TracedNpArray(result, proxy.node.name, owner.context_obj, proxy)
+    if isinstance(value, torch.Tensor):
+        return wrap(value, proxy)
+    # Multi-output operations such as ``torch.split`` index the recorded call.
+    return type(value)(
+        [
+            wrap(
+                output,
+                tracer.create_proxy(
+                    "call_function", operator.getitem, (proxy, index), {}
+                ),
+            )
+            if isinstance(output, torch.Tensor)
+            else output
+            for index, output in enumerate(value)
+        ]
+    )

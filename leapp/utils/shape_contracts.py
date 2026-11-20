@@ -122,10 +122,13 @@ def get_shape_contract(desc) -> ShapeContract:
 def serialize_shape_axes(desc, axes):
     specification = get_shape_contract(desc)
     axes = copy.deepcopy(axes)
-    for index, symbol in enumerate(specification["shape"]):
+    shape = specification["shape"]
+    if any(isinstance(symbol, str) for symbol in shape):
+        # A written ``axes`` list has one entry per dimension.
+        axes.extend([None] * (len(shape) - len(axes)))
+    for index, symbol in enumerate(shape):
         if not isinstance(symbol, str):
             continue
-        axes.extend([None] * (index + 1 - len(axes)))
         axis = axes[index] or {}
         variable = {"symbol": symbol, **specification["dimension_ranges"][symbol]}
         expression = specification.get("dimension_expressions", {}).get(symbol)
@@ -143,6 +146,14 @@ def serialize_shape_axes(desc, axes):
         axis["variable"] = variable
         axes[index] = axis
     return axes
+
+
+def declares_variable_axis(description) -> bool:
+    """Whether a serialized tensor description has a variable axis."""
+    return any(
+        isinstance(axis, dict) and isinstance(axis.get("variable"), dict)
+        for axis in description.get("axes") or []
+    )
 
 
 def parse_shape_contract(description) -> ShapeContract:
@@ -483,9 +494,13 @@ def build_onnx_dynamic_axes(node):
 
 
 def _export_shape_program(node) -> torch.export.ExportedProgram:
-    if any(not d.dynamic_array_supported for d in node.inputs + node.outputs):
+    unsupported = [
+        d.name for d in node.inputs + node.outputs if not d.dynamic_array_supported
+    ]
+    if unsupported:
         raise TypeError(
-            "Dynamic Warp ports are unsupported: the APIC runner uses fixed buffers and launch dimensions"
+            f"{node.name}: variable dimensions support Torch tensor ports only; "
+            f"NumPy and Warp ports are unsupported: {unsupported}"
         )
     from leapp.backends.export_backend import prepare_tensors_for_export
 

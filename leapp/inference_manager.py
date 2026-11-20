@@ -6,6 +6,7 @@
 import os
 import yaml
 from leapp.utils.shape_contracts import (
+    declares_variable_axis,
     get_capture_shape,
     parse_shape_contract,
     validate_shape_contract,
@@ -198,22 +199,21 @@ class InferenceManager:
                     f"Model description must contain inputs, outputs, and parameters, got {description.keys()}",
                     error_type=ValueError,
                 )
-        if shape_version is None:
-            return
-        specs = [
-            parse_shape_contract(d)
-            for m in self.models.values()
-            for d in m["inputs"] + m["outputs"]
+        descriptions = [
+            d for m in self.models.values() for d in m["inputs"] + m["outputs"]
         ]
+        if shape_version is None:
+            # Without a version the contract is never checked at run time.
+            if any(declares_variable_axis(d) for d in descriptions):
+                raise ValueError(
+                    "Variable shape bundles require shape contract version 1 or 2"
+                )
+            return
+        specs = [parse_shape_contract(d) for d in descriptions]
         if get_shape_contract_version(specs) == 2 and shape_version != 2:
             raise ValueError(
                 "Integer shape formulas and divisibility require shape contract version 2"
             )
-        if any("dimension_ranges" in d for d in specs):
-            if self.system_info.get("leapp config version") != "1.4":
-                raise ValueError(
-                    "Variable shape bundles require config 1.4 and shape contract version 1 or 2"
-                )
 
     def _create_nodes(self):
         nodes = {}
