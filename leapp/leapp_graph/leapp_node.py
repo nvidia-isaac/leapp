@@ -197,6 +197,7 @@ class LeappNode:
             "onnx-dynamo",
             "onnx-torchscript",
             "exported-program",
+            "executorch",
         ]
         if backend is None:
             self.backend = "None"
@@ -230,6 +231,11 @@ class LeappNode:
             )
 
             self.export_backend = ExportedProgramExportBackend(self, backend_params)
+        elif backend == "executorch":
+            self.backend = "executorch"
+            from leapp.backends.executorch_backend import ExecuTorchExportBackend
+
+            self.export_backend = ExecuTorchExportBackend(self, backend_params)
         elif backend == "cpp":
             _get_logger().fatal("C++ backend not implemented", error_type=Exception)
         elif backend == "py":
@@ -611,6 +617,10 @@ class LeappNode:
             with torch.no_grad():
                 for name, buffer in buffers.items():
                     buffer.copy_(initial_buffers[name])
+            # An ExecuTorch program keeps its buffers inside, so it starts over by
+            # loading again.
+            if self.backend == "executorch":
+                self.compiled_model.reload()
             _, input_values, source_outputs = examples[0]
             replay_mismatches = self._sample_mismatches(
                 "sample 0 (replayed)", input_values, source_outputs, rtol, atol

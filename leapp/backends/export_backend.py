@@ -30,6 +30,20 @@ from leapp.backends.module_builder import ModuleBuilder
 from leapp.warp_runtime import resolve_warp_runtime_library
 
 
+def _functional_copy_symbolic(graph, destination, source, non_blocking):
+    """Legacy ONNX equivalent of the functional copy emitted by PyTorch."""
+    from torch.onnx import symbolic_opset9
+
+    cast = symbolic_opset9.type_as(graph, source, destination)
+    return symbolic_opset9.expand_as(graph, cast, destination)
+
+
+# Registered here, not in the lazily imported ONNX backend, so that a legacy
+# torch.onnx.export of a LEAPP graph still lowers aten::copy after
+# "import leapp".
+torch.onnx.register_custom_op_symbolic("aten::copy", _functional_copy_symbolic, 9)
+
+
 class SimplifiedONNXProgram:
     """Wrapper for ONNX models.
 

@@ -4,7 +4,7 @@
 
 The Python package and import name are `leapp`: install with `pip install leapp` and use `import leapp`.
 
-One exported ONNX, TorchScript, or PT2 model can span existing helper functions, class methods, and multiple input call sites. Separate models are optional. Capture supports PyTorch and supported NumPy operations, including conversions between them. Warp kernel regions require an additional runtime adapter.
+One exported ONNX, TorchScript, PT2, or ExecuTorch model can span existing helper functions, class methods, and multiple input call sites. Separate models are optional. Capture supports PyTorch and supported NumPy operations, including conversions between them. Warp kernel regions require an additional runtime adapter.
 
 LEAPP is a standalone library with ecosystem integrations, including Isaac Lab and Isaac ROS Deploy. Its Python `InferenceManager` provides bundle replay; exported artifacts can also run in compatible backend runtimes, including C++ applications. Runtime operator support and any custom adapters must match the export.
 
