@@ -144,6 +144,11 @@ class TracedInt(int, TracedData):
     def __array__(self, dtype=None, copy=None):
         return np.asarray(int(self), dtype=dtype)
 
+    def __fx_create_arg__(self, tracer):
+        # FX calls this for every recorded argument. Without it FX stores an
+        # ``int`` subclass as the constant it holds.
+        return tracer.create_arg(graph_value(self))
+
     def __repr__(self) -> str:
         return f"TracedInt({int(self)})"
 

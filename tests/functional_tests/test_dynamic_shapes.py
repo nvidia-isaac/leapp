@@ -165,6 +165,10 @@ def test_exported_models_accept_different_input_shapes(
     def pair_tokens(x):
         return (x * 2).reshape(2, x.shape[1] // 2, 2)
 
+    def select_rows(x):
+        # A two-dimensional index tensor with a variable dimension.
+        return x[(x > 7).long()]
+
     x = annotate.input_tensors(
         "pairs",
         TensorSemantics(
@@ -176,7 +180,9 @@ def test_exported_models_accept_different_input_shapes(
             ],
         ),
     )
-    annotate.output_tensors("pairs", {"y": pair_tokens(x)}, export_with=backend)
+    annotate.output_tensors(
+        "pairs", {"y": pair_tokens(x), "rows": select_rows(x)}, export_with=backend
+    )
     leapp.stop()
     leapp.compile_graph(visualize=False, validate=True, strict=True)
     manager = InferenceManager(str(dynamic_session))
@@ -184,9 +190,9 @@ def test_exported_models_accept_different_input_shapes(
         fresh = torch.arange(2 * length, dtype=torch.float32, device=device).reshape(
             2, length
         )
-        torch.testing.assert_close(
-            manager({"pairs/x": fresh})["pairs/y"], pair_tokens(fresh)
-        )
+        outputs = manager({"pairs/x": fresh})
+        torch.testing.assert_close(outputs["pairs/y"], pair_tokens(fresh))
+        torch.testing.assert_close(outputs["pairs/rows"], select_rows(fresh))
 
     if backend.startswith("onnx"):
         providers = manager.nodes["pairs"].model._session.get_providers()
