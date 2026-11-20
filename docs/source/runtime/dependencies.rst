@@ -129,37 +129,13 @@ outputs in exported-program order. AOTInductor and CUDA Triton delegates are
 unsupported. TorchScript accepts positional tensor arguments and a tensor,
 flat tuple, or flat list of tensors; bundle port order determines argument order.
 
-Build Warp adapters
--------------------
+.. note::
 
-ONNX and PT2 models containing embedded Warp operators need the optional LEAPP
-adapters, built against matching ONNX Runtime and LibTorch versions. Follow
-:doc:`../tensor_libraries/installation` for exporter and build prerequisites.
-``leapp-build-warp-runtime`` builds both adapters in the environment containing
-those dependencies. Pass its output directory to the shared backend helper to
-place the adapters beside the selected backends. For a build that includes Warp,
-use this sequence instead of the build above:
-
-.. code-block:: bash
-
-   leapp-build-warp-runtime --build-dir <warp-build-dir> -- \
-     -DLEAPP_WARP_ONNXRUNTIME_VERSION=<installed-onnxruntime-version> \
-     -DCMAKE_INSTALL_LIBDIR=lib
-   pixi run build-runtime --output <package-output> --glibc <deployment-glibc> \
-     --backends onnx --cuda --warp <warp-build-dir> \
-     --sdk-origin 'sdk-artifact@sha256:<verified-digest>'
-   pixi run package-runtime --input <package-output>
-
-For PT2 Warp models, select ``--backends nativert``; use ``--backends onnx nativert``
-for both. The Warp builder does not install SDK dependencies, and ``--warp``
-packages existing adapters rather than building them. ``ORT_INCLUDE_DIR`` can
-select installed ONNX headers instead of downloading them; ``WARP_ROOT``,
-``Torch_DIR``, and ``CUDAToolkit_ROOT`` select existing SDKs. Warp adapters use
-Pixi packages or manual installation; the backend-wheel producer does not
-package them.
-
-Keep Warp export and runtime releases aligned and expose Warp's ``bin/`` directory
-to the loader. Embedded Warp execution requires CUDA device 0, even for CPU model
-placement. Warm each model serially before concurrent use. These adapters do not
-support Warp operators in TorchScript artifacts. Invalid installed adapters fail
-loading even for ordinary models using the same backend.
+   **Models with Warp operators:** Follow
+   :doc:`Warp installation <../tensor_libraries/installation>` to build the
+   optional ONNX/PT2 adapters with
+   ``leapp-build-warp-runtime --build-dir <warp-build-dir>``. Add
+   ``--cuda --warp <warp-build-dir>`` to ``build-runtime`` above, selecting
+   ``onnx``, ``nativert``, or both. Packaging includes the existing adapters;
+   backend wheels do not include them. See the
+   :ref:`Warp runtime requirements <warp-runtime-deployment>` before deployment.

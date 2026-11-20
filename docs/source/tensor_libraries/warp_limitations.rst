@@ -160,3 +160,15 @@ build command:
    or set LEAPP_WARP_PT2_CUSTOM_OP_LIBRARY.
 
 See :doc:`installation`.
+
+.. _warp-runtime-deployment:
+
+Runtime deployment
+==================
+
+Build adapters against the ONNX Runtime and LibTorch versions used for deployment.
+Keep Warp export and runtime releases aligned and expose Warp's ``bin/`` directory
+to the loader. Embedded Warp execution requires CUDA device 0, even for CPU model
+placement. Warm each model serially before concurrent use. These adapters do not
+support Warp operators in TorchScript artifacts. Invalid installed adapters fail
+loading even for ordinary models using the same backend.
