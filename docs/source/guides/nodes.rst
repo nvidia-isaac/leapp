@@ -162,10 +162,10 @@ Inside a node with a variable input, ``tensor.shape[i]``, ``tensor.size(i)``,
 and ``tensor.numel()`` return traced sizes. The exported graph records a traced
 size when it is:
 
-* combined with ``+``, ``-``, ``*``, ``//`` or ``%``;
+* combined with another integer by ``+``, ``-``, ``*``, ``//`` or ``%``;
 * passed to an operation that also takes a traced tensor, such as
   ``x.reshape(...)``, ``x[:, :n]`` or ``torch.split(x, n)``;
-* passed to ``torch.reshape``, ``torch.zeros``, ``torch.ones``, ``torch.full``,
+* passed to ``torch.tensor``, ``torch.zeros``, ``torch.ones``, ``torch.full``,
   ``torch.arange`` or ``torch.eye``.
 
 .. warning::
@@ -184,15 +184,23 @@ size when it is:
      ``torch.empty``.
    * NumPy operations inside the node.
 
-A traced size belongs to the node it was read in. Using it in another node
-raises an error; read the size again from a tensor of that node.
+   LEAPP does not detect these uses. The export fails when the captured size
+   conflicts with a variable dimension. Otherwise the node is exported and
+   returns wrong results at other sizes. :ref:`generated-shape-validation`
+   reports this for a decorated function, but not for a manually annotated
+   node.
+
+A traced size belongs to the node it was read in. Using it in a recorded
+operation while another node is recording raises an error; read the size again
+from a tensor of that node. The uses in the warning above are not detected
+across nodes either.
 
 What ``compile_graph()`` checks
 -------------------------------
 
-LEAPP exports each node with the declared ranges and reports an error when an
-operation fixes a declared dimension to one size or cannot accept the whole
-range. Output dimensions are inferred from the graph and written to YAML, with
+LEAPP exports each node with the declared ranges and reports an error when the
+exporter fixes a declared dimension to one size or reports a narrower range.
+Output dimensions are inferred from the graph and written to YAML, with
 derived sizes such as ``length // 2`` expressed in terms of the declared
 variables. Downstream nodes inherit the dimensions of the outputs they
 consume. See :ref:`config-variable-dimensions` for the YAML fields.
@@ -306,8 +314,8 @@ validation. ``validate=False`` disables both cached and generated validation.
    A node built with ``annotate.input_tensors()`` and
    ``annotate.output_tensors()`` has no function to run again, so its saved
    model is compared at the captured sizes only. A backend can still convert an
-   operation in a way that fails at other sizes. Run the saved model at the
-   sizes you need, or use ``annotate.method``.
+   operation in a way that fails or returns different values at other sizes.
+   Run the saved model at the sizes you need, or use ``annotate.method``.
 
 Nested data connections
 =======================

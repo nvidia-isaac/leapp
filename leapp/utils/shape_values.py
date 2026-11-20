@@ -9,9 +9,7 @@ import operator
 from contextvars import ContextVar
 from functools import wraps
 
-import torch
-
-from leapp.leapp_graph.datatypes.primitives.traced_int import TracedInt, graph_value
+from leapp.leapp_graph.datatypes.primitives.traced_int import TracedInt, graph_sizes
 from leapp.leapp_graph.datatypes.traced_data import TracedData
 from leapp.utils.logging import _get_logger
 from leapp.utils.shape_contracts import has_variable_inputs
@@ -65,112 +63,48 @@ def numel(tensor):
     return TracedInt(tensor.tensor.numel(), proxy.node.name, tensor.context_obj, proxy)
 
 
-def _convert_shape_value(value, owner, proxy):
-    if isinstance(value, TracedInt):
-        if value.is_recording and value.context_obj is not owner.context_obj:
-            _get_logger().fatal(
-                "Shape expressions belong to different nodes", error_type=ValueError
-            )
-        return graph_value(value) if proxy else int(value)
-    return value
-
-
 @suppress_dynamic_shape_tracing
-def trace_call(function, args, kwargs, *, shape, method=False):
-    """Run a shape-dependent operation and record it with its traced sizes.
+def trace_factory(function, args, kwargs, *, shape):
+    """Run a tensor factory and record it with its traced sizes.
 
-    ``shape`` is a traced size among the arguments and identifies the node.
-    With ``method``, ``function`` is the name of a Tensor method.
+    ``shape`` is a recording size among the arguments and identifies the node.
     """
+    from leapp.leapp_graph.datatypes import as_traced
     from leapp.leapp_graph.datatypes.torch.traced_tensor import TracedTensor
 
-    owner = shape
-    name = function if method else getattr(function, "__name__", "")
+    node = shape.context_obj
     if kwargs.get("out") is not None:
         _get_logger().fatal(
-            "Shape-dependent out= operations are unsupported", error_type=ValueError
-        )
-    if name.endswith("_") and not name.startswith("__"):
-        target = getattr(torch.Tensor, name) if method else function
-        handled, result = TracedTensor._handle_functional_inplace(target, args, kwargs)
-        if handled:
-            return result
-        _get_logger().fatal(
-            f"Unsupported shape-dependent mutation: {name}", error_type=ValueError
-        )
-
-    def leaf(item, proxy):
-        if isinstance(item, TracedInt):
-            return _convert_shape_value(item, owner, proxy)
-        if isinstance(item, TracedData):
-            if item.context_obj is not owner.context_obj:
-                _get_logger().fatal(
-                    "Shape consumers and tensors belong to different nodes",
-                    error_type=ValueError,
-                )
-            return item.proxy if proxy else item.tensor
-        if proxy and isinstance(item, torch.nn.Parameter):
-            # FX accepts parameters only as module members; record a constant.
-            return item.data
-        return item
-
-    real_args = TracedData._map_structure(args, lambda x: leaf(x, False))
-    real_kwargs = TracedData._map_structure(kwargs, lambda x: leaf(x, False))
-    if method:
-        value = getattr(real_args[0], function)(*real_args[1:], **real_kwargs)
-    else:
-        value = function(*real_args, **real_kwargs)
-    # Only elide a view when the argument expressions prove identity for every
-    # admitted shape. Equal sample layouts alone are not sufficient.
-    if name in {"reshape", "view"} and len(args) == 2:
-        source, dimensions = args
-        if isinstance(source, TracedData) and isinstance(dimensions, (tuple, list)):
-            if len(dimensions) == source.tensor.ndim and all(
-                isinstance(d, TracedInt)
-                and d.proxy.node.op == "call_method"
-                and d.proxy.node.target == "size"
-                and d.proxy.node.args == (source.proxy.node, i)
-                for i, d in enumerate(dimensions)
-            ):
-                alias = source._new_alias(value)
-                TracedTensor._mark_data_dependent_shape(alias)
-                return alias
-    if not isinstance(value, (torch.Tensor, tuple, list)):
-        _get_logger().fatal(
-            f"Unsupported shape-dependent operation {name or function!r} in node "
-            f"{owner.context}: expected tensor outputs, got {type(value).__name__}",
+            f"{function.__name__}() with a traced size does not support out=",
             error_type=ValueError,
         )
-    proxy_args = TracedData._map_structure(args, lambda x: leaf(x, True))
-    proxy_kwargs = TracedData._map_structure(kwargs, lambda x: leaf(x, True))
-    tracer = owner.context_obj.tracer
-    proxy = tracer.create_proxy(
-        "call_method" if method else "call_function", function, proxy_args, proxy_kwargs
-    )
-    from leapp.leapp_graph.datatypes import as_traced
+    # A torch.Size cannot hold the proxies that replace its sizes below.
+    args, kwargs = graph_sizes((args, kwargs))
 
-    def wrap(output, output_proxy):
-        traced = as_traced(
-            output, output_proxy.node.name, owner.context_obj, output_proxy
-        )
-        # Size reads in a static node return traced sizes only for flagged
-        # tensors; callers that bypass ``__torch_function__`` skip its flag.
-        TracedTensor._mark_data_dependent_shape(traced)
-        return traced
+    def leaf(item, proxy):
+        if isinstance(item, TracedData):
+            if item.context_obj is not node:
+                _get_logger().fatal(
+                    f"{function.__name__}() in node {node.name} takes a size or "
+                    f"tensor of node {item.context}",
+                    error_type=ValueError,
+                )
+            if proxy:
+                return item.proxy
+            return int(item) if isinstance(item, TracedInt) else item.tensor
+        return item
 
-    if isinstance(value, torch.Tensor):
-        return wrap(value, proxy)
-    # Multi-output operations such as ``torch.split`` index the recorded call.
-    return type(value)(
-        [
-            wrap(
-                output,
-                tracer.create_proxy(
-                    "call_function", operator.getitem, (proxy, index), {}
-                ),
-            )
-            if isinstance(output, torch.Tensor)
-            else output
-            for index, output in enumerate(value)
-        ]
+    value = function(
+        *TracedData._map_structure(args, lambda x: leaf(x, False)),
+        **TracedData._map_structure(kwargs, lambda x: leaf(x, False)),
     )
+    proxy = node.tracer.create_proxy(
+        "call_function",
+        function,
+        TracedData._map_structure(args, lambda x: leaf(x, True)),
+        TracedData._map_structure(kwargs, lambda x: leaf(x, True)),
+    )
+    traced = as_traced(value, proxy.node.name, node, proxy)
+    # Size reads in a static node return traced sizes only for flagged tensors.
+    TracedTensor._mark_data_dependent_shape(traced)
+    return traced

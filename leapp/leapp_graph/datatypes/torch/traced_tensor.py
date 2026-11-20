@@ -32,7 +32,6 @@ from ..proxy import (
 from ..traced_data import TracedData
 from ..primitives.traced_int import (
     TracedInt,
-    find_recording_int,
     graph_sizes,
     settled_value,
 )
@@ -43,7 +42,6 @@ from leapp.utils.shape_values import (
     enabled,
     numel,
     suppress_dynamic_shape_tracing,
-    trace_call,
 )
 
 
@@ -823,11 +821,6 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         if kwargs is None:
             kwargs = {}
 
-        if (
-            shape := find_recording_int((args, kwargs))
-        ) is not None and has_variable_inputs(shape.context_obj):
-            return trace_call(func, args, kwargs, shape=shape)
-
         stale = False
 
         def shed_replaced_graph(value):
@@ -1184,14 +1177,6 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     def numel(self):
         return numel(self) if enabled(self) else torch.Tensor.numel(self)
 
-    def view(self, *args, **kwargs):
-        if (shape := find_recording_int((args, kwargs))) is not None:
-            dimensions = self._normalize_shape_args(args)
-            return trace_call(
-                "view", (self, dimensions), kwargs, method=True, shape=shape
-            )
-        return torch.Tensor.view(self, *args, **kwargs)
-
     @staticmethod
     def _normalize_shape_args(args):
         """Normalize Tensor method shape/dim args for torch function calls."""
@@ -1502,8 +1487,6 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         """
         self._close_warp_segment()
 
-        if (shape := find_recording_int(key)) is not None:
-            return trace_call(operator.getitem, (self, key), {}, shape=shape)
         # Check for boolean mask indexing with TracedTensor
         if isinstance(key, TracedTensor):
             result_tensor = self.tensor[key.tensor]

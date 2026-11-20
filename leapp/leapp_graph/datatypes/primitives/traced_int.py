@@ -35,7 +35,7 @@ class TracedInt(int, TracedData):
     too. Once the node stops tracing, or its graph has been replaced,
     arithmetic returns plain ``int`` results and records nothing. A size read
     in a node with variable dimensions keeps its origin instead, so that
-    recording it into another graph is rejected.
+    recording it while another node is recording is rejected.
     """
 
     def __new__(cls, value: int, name: str, context, proxy: Proxy):
@@ -80,8 +80,8 @@ class TracedInt(int, TracedData):
         value = op(int(lhs), int(rhs))
         anchor = find_recording_int((lhs, rhs))
         if anchor is None:
-            # Keep the origin of a variable size, so that recording the
-            # result into another graph is rejected.
+            # Keep the origin of a variable size, so that a node recording
+            # the result later rejects it.
             origin = next((v for v in (lhs, rhs) if _is_variable_size(v)), None)
             return value if origin is None else origin._new(value, origin.proxy)
         # Fails when operands belong to different tracing nodes.
@@ -196,16 +196,22 @@ def _is_variable_size(value) -> bool:
 def settled_value(value: TracedInt) -> int:
     """Return the integer held by a traced integer that stopped recording.
 
-    A size read in a node with variable dimensions changes at run time, so
-    recording the captured value into another graph would freeze it.
+    A size read in a node with variable dimensions changes at run time. While
+    a node is recording, that node would store the captured value, so the use
+    is rejected. With no node recording, nothing is exported.
     """
     if _is_variable_size(value):
-        _get_logger().fatal(
-            f"A size read in node '{value.context}' is used after that node "
-            f"finished, which would export the captured size {int(value)}. Read "
-            "the size from a tensor of the node that uses it",
-            error_type=ValueError,
-        )
+        from leapp.export_manager import ExportManager
+
+        for node in ExportManager().nodes.values():
+            if node.is_tracing:
+                _get_logger().fatal(
+                    f"A size read in node '{value.context}' is used while node "
+                    f"'{node.name}' is recording, which would store it there "
+                    f"as the constant {int(value)}. Read the size from a tensor "
+                    f"of node '{node.name}'",
+                    error_type=ValueError,
+                )
     return int(value)
 
 

@@ -60,8 +60,9 @@ def _size_after_reshape(x):
 
 def _size_after_factory(x):
     idx = torch.nonzero(x > 0)
-    filled = torch.ones(idx.shape[0]) + torch.arange(idx.shape[0])
-    # Factories take the traced count, and so does a size read from their result.
+    filled = torch.ones(idx.shape)[:, 0] + torch.arange(idx.shape[0])
+    # Factories take the traced count, alone or in a torch.Size, and so does a
+    # size read from their result.
     return (x.sum() * 0 + filled.sum() + filled.shape[0]).reshape(1, 1)
 
 

@@ -7,14 +7,14 @@
 
 import functools
 
-from ..primitives.traced_int import find_recording_int
+from ..primitives.traced_int import find_recording_int, graph_sizes
 
 import torch
 
 from .._attribute_patching import AttributePatchRegistry
 from ..proxy import conversion_proxy
 from leapp.utils.shape_contracts import has_variable_inputs
-from leapp.utils.shape_values import suppress_dynamic_shape_tracing, trace_call
+from leapp.utils.shape_values import suppress_dynamic_shape_tracing, trace_factory
 
 
 class TorchPatchBackend:
@@ -30,7 +30,6 @@ class TorchPatchBackend:
     # their size arguments. Random and uninitialized factories are excluded:
     # recording them would replace the captured values.
     _SHAPE_FUNCTIONS = (
-        "reshape",
         "zeros",
         "ones",
         "full",
@@ -85,7 +84,6 @@ class TorchPatchBackend:
         def patched(data, *args, **kwargs):
             from leapp.leapp_graph.datatypes import (
                 TracedData,
-                TracedInt,
                 TracedTensor,
                 as_traced,
                 is_traced_type,
@@ -107,9 +105,9 @@ class TorchPatchBackend:
                 )
                 traced._data_dependent_shape = True
                 return traced
-            if isinstance(data, TracedInt):
-                # An integer that no longer records is a plain value.
-                data = int(data)
+            # An integer that no longer records is a plain value, unless it is
+            # a size of a finished variable node, which is rejected.
+            data = graph_sizes(data)
 
             is_traced = is_traced_type(data)
 
@@ -147,7 +145,9 @@ class TorchPatchBackend:
             if shape is not None and (
                 not variable_node_only or has_variable_inputs(shape.context_obj)
             ):
-                return trace_call(original, args, kwargs, shape=shape)
+                return trace_factory(original, args, kwargs, shape=shape)
+            # Rejects a size of a finished variable node.
+            args, kwargs = graph_sizes((args, kwargs))
             return original(*args, **kwargs)
 
         return patched

@@ -56,23 +56,6 @@ class TestDynamicShapes(unittest.TestCase):
                     ctx.m(torch.ones(12)), torch.full((12,), 3.0)
                 )
 
-    def test_shape_dependent_out_mutations_are_rejected(self):
-        """An ``out=`` operation with a traced size raises and changes nothing."""
-        ctx = TracedTensorNode(name="mutation", node_index=0)
-        sample = torch.ones(2, 8)
-        x = ctx.create_input(
-            sample,
-            name="x",
-            semantics=TensorSemantics(
-                "x",
-                sample,
-                axes=[None, Axis(variable=Variable("length", min=4, max=32))],
-            ),
-        )
-        with self.assertRaisesRegex(ValueError, "Shape-dependent out="):
-            torch.add(x, x.size(1) - 8, out=x)
-        torch.testing.assert_close(x.tensor, torch.ones(2, 8))
-
 
 @pytest.mark.parametrize(
     "shape,error",

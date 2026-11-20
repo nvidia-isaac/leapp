@@ -72,7 +72,8 @@ class Variable:
     """A named dimension shared by explicitly reusing its name and bounds.
 
     Unspecified bounds use the domain [1, 2**31-1].
-    The compiler must honor this domain; it may not silently specialize it.
+    Export fails when the exporter fixes the dimension or reports a narrower
+    domain.
     """
 
     name: str
@@ -619,8 +620,8 @@ def export_shape_program(node, module=None) -> torch.export.ExportedProgram:
     from leapp.backends.export_backend import prepare_tensors_for_export
 
     values = tuple(prepare_tensors_for_export([d.value for d in node.inputs]))
-    # This is also the constraint proof for legacy/JIT paths; they do not infer
-    # their own executable dynamic shape domain from axis names.
+    # Every backend takes its ranges from this export. The JIT and TorchScript
+    # ONNX conversions are not checked against them.
     kwargs = {}
     if (
         node.backend == "exported-program"

@@ -1042,9 +1042,12 @@ def test_silently_frozen_or_narrowed_sizes_are_rejected(dynamic_session):
     x = annotate.input_tensors("first", _sequence(multiple_of=2))
     length = x.shape[1]
     y = annotate.output_tensors("first", {"y": x[:, :12] * 2}, export_with="pt2")
+    # No node is recording here, so the size is used as a plain integer.
+    assert y[:, : length // 2].shape == (2, 4)
     y = annotate.input_tensors("second", {"y": y})
-    with pytest.raises(ValueError, match="used after that node finished"):
-        y.sum(dim=1) / length
+    for use in (lambda: y.sum(dim=1) / length, lambda: torch.full((2,), length)):
+        with pytest.raises(ValueError, match="while node 'second' is recording"):
+            use()
     annotate.output_tensors("second", {"z": y.sum(dim=1)}, export_with="pt2")
     leapp.stop()
     with pytest.raises(ValueError, match="accepts n up to 10 only, not 4 to 32"):
