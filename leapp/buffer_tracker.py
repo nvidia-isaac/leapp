@@ -131,6 +131,9 @@ class BufferTracker:
         state_dict = {}
         for full_name, (buf, _, _) in buffers_to_track.items():
             clean_name = full_name.replace(".", "_")
+            # Such as "a.b" and "a_b": they would share one TracedTensor.
+            if clean_name in state_dict:
+                self._export_manager.keep_buffers_tied = True
             state_dict[clean_name] = buf
 
         # Create state tensors via public API
@@ -250,6 +253,30 @@ class BufferTracker:
             raw = current.tensor if hasattr(current, "tensor") else current
             if not isinstance(raw, torch.Tensor):
                 raw = info.original_buffer
-            info.owning_module.register_buffer(info.attr_name, raw)
+            info.owning_module.register_buffer(
+                info.attr_name,
+                raw,
+                persistent=info.attr_name
+                not in info.owning_module._non_persistent_buffers_set,
+            )
 
         self._injected.clear()
+
+    def release(self) -> None:
+        """Give each buffer of the model a plain tensor once the session ends.
+
+        It waits for the end of the session, so capture and export behave as
+        before. It replaces only the model's buffers, since the nodes' graphs
+        keep their own tensors. A buffer that requires grad stays as before, so
+        autograd through it works as before.
+        """
+        from leapp.leapp_graph.datatypes import is_traced_type
+
+        for module in self._model.modules():
+            for name, value in module._buffers.items():
+                if value is None or value.requires_grad:
+                    continue
+                if is_traced_type(value):
+                    module._buffers[name] = value.tensor.detach()
+                elif is_traced_type(value._base):
+                    module._buffers[name] = value.detach()

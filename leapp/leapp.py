@@ -123,7 +123,7 @@ def stop():
         )
 
     ExportManager.set_interpret_graph(False)
-    manager.restore_pending_buffer_trackers()
+    manager.release_buffer_trackers()
 
     # Remove patches to restore original function behavior.
     if manager.patcher.installed:
