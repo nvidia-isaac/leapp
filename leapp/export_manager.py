@@ -86,6 +86,12 @@ class ExportManager:
 
             # tracetime variables
             self.nodes = {}
+            self.buffer_trackers = []
+            # Set when a node hands out one state name for two different
+            # tensors, so a buffer may hold another tensor's values. Never
+            # cleared: state computed later from such a buffer can reach any
+            # model.
+            self.keep_buffers_tied = False
             self._next_completed_node_index = 0
 
             ExportManager._initialized = True
@@ -129,6 +135,7 @@ class ExportManager:
 
     def reset_nodes(self):
         self.nodes = {}
+        self.release_buffer_trackers()
         self._next_completed_node_index = 0
 
     def get_nodes(self):
@@ -145,10 +152,19 @@ class ExportManager:
     def reset_tracing_lock(self):
         TracingLock().reset()
 
-    def restore_pending_buffer_trackers(self):
-        for node in self.nodes.values():
-            if hasattr(node, "_buffer_tracker") and node._buffer_tracker is not None:
-                node._buffer_tracker.restore()
+    def release_buffer_trackers(self):
+        # Every tracker of the session, also one a later module() call replaced.
+        for tracker in self.buffer_trackers:
+            tracker.restore()
+            if not self.keep_buffers_tied:
+                tracker.release()
+        if self.buffer_trackers and self.keep_buffers_tied:
+            _get_logger().warning(
+                "BufferTracker: buffers stay tied to the capture for the rest of "
+                "this process, because a node used one state name for two "
+                "different tensors"
+            )
+        self.buffer_trackers = []
 
     def set_detected_graph(self, models: dict, pipeline: dict):
         self.detected_nodes = models["models"]
@@ -599,6 +615,11 @@ class ExportManager:
             traced_node.reentry_validate_inputs(tensors)
             return self._passthrough_dict_values(tensors)
 
+        existing = traced_node._state_tensors
+        for name, tensor in tensors.items():
+            if name in existing and tensor is not existing[name]["input"]:
+                self.keep_buffers_tied = True
+
         # Create state tensors (input placeholders that will also be outputs)
         state_dict = traced_node.create_state_tensors(tensors)
         values = list(state_dict.values())
@@ -692,6 +713,9 @@ class ExportManager:
         from leapp.buffer_tracker import BufferTracker
 
         tracker = BufferTracker(model, node_name, self, buffer_names=buffer_names)
+        # Listed before inject(), which can fail after it changed some buffers.
+        if all(listed._model is not model for listed in self.buffer_trackers):
+            self.buffer_trackers.append(tracker)
         tracker.inject()
 
         self.nodes[node_name]._buffer_tracker = tracker

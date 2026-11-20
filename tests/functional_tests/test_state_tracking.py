@@ -927,6 +927,150 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
                 f"Buffer '{name}' should be a torch.Tensor after restore",
             )
 
+    def test_shared_state_name_keeps_buffers_tied(self):
+        """One state name for two buffers keeps buffers tied, in that session and later.
+
+        That is two models of one node with the same buffer name, or two
+        names of one model that differ only by "." and "_". One buffer gets
+        the other's state, so making it plain would let torch.export bake in
+        the wrong values. The same model passed twice is fine.
+        """
+        from leapp.leapp_graph.datatypes import is_traced_type
+
+        class Scaler(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.register_buffer("scale", torch.full((4,), 3.0))
+
+            def forward(self, obs):
+                return obs * self.scale
+
+        def tied(buf):
+            return is_traced_type(buf) or is_traced_type(buf._base)
+
+        model = NoMutationModel().eval()
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        obs = annotate.input_tensors("policy", {"obs": torch.randn(1, 4)})
+        annotate.module("policy", model)
+        annotate.module("policy", model)
+        annotate.output_tensors("policy", {"action": model(obs)}, export_with="jit")
+        leapp.stop()
+        self.assertFalse(annotate.keep_buffers_tied)
+        self.assertFalse(tied(model.scale))
+
+        for clash in ("two_models", "one_model"):
+            annotate.keep_buffers_tied = False
+            for session in ("clash", "later"):
+                first, second = NoMutationModel().eval(), Scaler().eval()
+                leapp.start(name=self.TEST_GRAPH_NAME)
+                obs = annotate.input_tensors("policy", {"obs": torch.randn(1, 4)})
+                if session == "clash" and clash == "one_model":
+                    # "linear.scale" and "linear_scale" share a state name.
+                    first.linear.register_buffer("scale", torch.ones(4))
+                    first.register_buffer("linear_scale", torch.zeros(4))
+                annotate.module("policy", first)
+                action = first(obs)
+                if session == "clash" and clash == "two_models":
+                    annotate.module("policy", second)
+                    action = second(action)
+                annotate.output_tensors("policy", {"action": action}, export_with="jit")
+                with self.assertLogs("leapp", level="WARNING") as logs:
+                    leapp.stop()
+                self.assertIn("rest of this process", "\n".join(logs.output))
+                self.assertTrue(tied(first.scale), (clash, session))
+
+    def test_buffers_plain_after_session(self):
+        """After stop(), the model's buffers are plain tensors, not views of TracedTensors.
+
+        torch.export of the model then works, and the buffers keep their memory
+        and persistent flag. Also for a session that never reached
+        output_tensors(), a buffer registered under more names or set to None, a
+        module() call that fails, a session restarted with start(), a second
+        session, and the model of an earlier module() call of the node, which is
+        checked for plain buffers and run. A buffer that requires grad stays as
+        before, so autograd through it still reaches the parameter.
+        """
+        from leapp.leapp_graph.datatypes import is_traced_type
+
+        def check_plain(model, keys):
+            for name, buf in model.named_buffers(remove_duplicate=False):
+                self.assertFalse(is_traced_type(buf), name)
+                self.assertFalse(
+                    buf._base is not None and is_traced_type(buf._base), name
+                )
+            self.assertEqual(sorted(model.state_dict()), keys)
+
+        cases = (
+            "traced",
+            "earlier_module_call",
+            "no_output_tensors",
+            "extra",
+            "extra_no_output_tensors",
+            "module_call_fails",
+            "restart",
+            "twice",
+            "autograd_history",
+        )
+        for case in cases:
+            with self.subTest(case=case):
+                model = NoMutationModel().eval()
+                model.register_buffer("window", torch.ones(4), persistent=False)
+                other = GRUModel(action_dim=4).eval()
+                other.register_buffer("memory", torch.ones(4), persistent=False)
+                if case.startswith("extra"):
+                    model.linear.register_buffer("scale_alias", model.scale)
+                    model.linear.register_buffer("scale_alias2", model.scale)
+                    model.linear.register_buffer("unset", None)
+                if case == "module_call_fails":
+                    # Named like the node input, so module() fails part way.
+                    model.register_buffer("obs", torch.zeros(4))
+                if case == "autograd_history":
+                    model.register_buffer("pe", model.linear.weight.sum(0) * 2)
+                    model.register_buffer("gain", torch.ones(4, requires_grad=True))
+                keys = sorted(model.state_dict())
+                other_keys = sorted(other.state_dict())
+                pointers = {
+                    n: b.data_ptr()
+                    for n, b in model.named_buffers(remove_duplicate=False)
+                }
+                for _ in range(2 if case == "twice" else 1):
+                    leapp.start(name=self.TEST_GRAPH_NAME)
+                    obs = annotate.input_tensors("policy", {"obs": torch.randn(1, 4)})
+                    if case == "earlier_module_call":
+                        annotate.module("policy", other)
+                        obs = other(obs)
+                    if case == "module_call_fails":
+                        with self.assertRaises(Exception):
+                            annotate.module("policy", model)
+                        leapp.stop()
+                        break
+                    annotate.module("policy", model)
+                    action = model(obs)
+                    if not case.endswith("no_output_tensors"):
+                        annotate.output_tensors(
+                            "policy", {"action": action}, export_with="jit"
+                        )
+                    if case != "restart":
+                        leapp.stop()
+                if case == "restart":
+                    # start() resets a session that was never stopped.
+                    leapp.start(name=self.TEST_GRAPH_NAME)
+                    leapp.stop()
+                if case == "autograd_history":
+                    (grad,) = torch.autograd.grad(model.pe.sum(), model.linear.weight)
+                    self.assertTrue(torch.equal(grad, torch.full_like(grad, 2.0)))
+                    self.assertTrue(model.gain.requires_grad)
+                    torch.autograd.grad((model.gain * 3).sum(), model.gain)
+                    continue
+                check_plain(model, keys)
+                # The buffers keep their memory, so tensors the user holds still see them.
+                for name, buf in model.named_buffers(remove_duplicate=False):
+                    self.assertEqual(buf.data_ptr(), pointers[name], name)
+                torch.export.export(model, (torch.randn(1, 4),))
+                if case == "earlier_module_call":
+                    check_plain(other, other_keys)
+                    other(torch.randn(1, 4))
+
     def test_non_mutated_buffers_baked_as_constants(self):
         """Non-mutated buffers should be baked into the model, not dynamic inputs.
 
