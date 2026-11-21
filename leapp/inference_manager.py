@@ -4,8 +4,14 @@
 #
 
 import os
-import json
 import yaml
+from leapp.utils.shape_contracts import (
+    declares_variable_axis,
+    get_capture_shape,
+    parse_shape_contract,
+    validate_shape_contract,
+    get_shape_contract_version,
+)
 
 import torch
 
@@ -61,11 +67,7 @@ class NodeManager:
         input_values_to_populate = {}
         for input_val in self.input_descriptions:
             input_name = input_val["name"]
-            input_shape = (
-                json.loads(input_val["shape"])
-                if isinstance(input_val["shape"], str)
-                else input_val["shape"]
-            )
+            input_shape = get_capture_shape(input_val)
             input_dtype = input_val["dtype"]
             input_value = torch.zeros(
                 tuple(input_shape), dtype=map_to_torch_dtype(input_dtype)
@@ -79,11 +81,7 @@ class NodeManager:
         output_values_to_populate = {}
         for output_val in self.output_descriptions:
             output_name = output_val["name"]
-            output_shape = (
-                json.loads(output_val["shape"])
-                if isinstance(output_val["shape"], str)
-                else output_val["shape"]
-            )
+            output_shape = get_capture_shape(output_val)
             output_dtype = output_val["dtype"]
             output_value = torch.zeros(
                 tuple(output_shape), dtype=map_to_torch_dtype(output_dtype)
@@ -190,10 +188,13 @@ class InferenceManager:
         self.models = self.leapp_description["models"]
         self.pipeline = self.leapp_description["pipeline"]
         self.system_info = self.leapp_description["system information"]
-
-    def _create_nodes(self):
-        nodes = {}
-        for name, description in self.models.items():
+        shape_version = self.system_info.get("shape contract version")
+        if shape_version is not None and shape_version not in (1, 2):
+            _get_logger().fatal(
+                f"Unsupported shape contract version {shape_version}",
+                error_type=ValueError,
+            )
+        for description in self.models.values():
             if any(
                 key not in description for key in ["inputs", "outputs", "parameters"]
             ):
@@ -201,6 +202,27 @@ class InferenceManager:
                     f"Model description must contain inputs, outputs, and parameters, got {description.keys()}",
                     error_type=ValueError,
                 )
+        descriptions = [
+            d for m in self.models.values() for d in m["inputs"] + m["outputs"]
+        ]
+        if shape_version is None:
+            # Without a version the contract is never checked at run time.
+            if any(declares_variable_axis(d) for d in descriptions):
+                _get_logger().fatal(
+                    "Variable shape bundles require shape contract version 1 or 2",
+                    error_type=ValueError,
+                )
+            return
+        specs = [parse_shape_contract(d) for d in descriptions]
+        if get_shape_contract_version(specs) == 2 and shape_version != 2:
+            _get_logger().fatal(
+                "Integer shape formulas and divisibility require shape contract version 2",
+                error_type=ValueError,
+            )
+
+    def _create_nodes(self):
+        nodes = {}
+        for name, description in self.models.items():
             # load the model
             parameters = description["parameters"]
             if any(
@@ -272,11 +294,7 @@ class InferenceManager:
 
             for output_name in output_names:
                 desc = output_descs[output_name]
-                output_shape = (
-                    json.loads(desc["shape"])
-                    if isinstance(desc["shape"], str)
-                    else desc["shape"]
-                )
+                output_shape = get_capture_shape(desc)
                 output_dtype = map_to_torch_dtype(desc["dtype"])
                 # Create cache tensor with unique key: node_name/output_name
                 cache_key = f"{node_name}/{output_name}"
@@ -356,10 +374,10 @@ class InferenceManager:
                 for desc in source_node.output_descriptions
                 if desc["name"] == source_output_name
             )
+            dynamic = self.system_info.get("shape contract version") in (1, 2)
+            source_contract = parse_shape_contract(source_desc) if dynamic else None
             source_shape = (
-                json.loads(source_desc["shape"])
-                if isinstance(source_desc["shape"], str)
-                else source_desc["shape"]
+                source_contract["shape"] if dynamic else get_capture_shape(source_desc)
             )
             source_dtype = map_to_torch_dtype(source_desc["dtype"])
 
@@ -383,13 +401,31 @@ class InferenceManager:
                     )
 
                 target_tensor = self.value_dict[target_node_name][target_input_name]
+                target_shape = target_tensor.shape
+                if dynamic:
+                    target_desc = next(
+                        d
+                        for d in self.nodes[target_node_name].input_descriptions
+                        if d["name"] == target_input_name
+                    )
+                    target_contract = parse_shape_contract(target_desc)
+                    for field in ("dimension_ranges", "dimension_expressions"):
+                        if source_contract.get(field, {}) != target_contract.get(
+                            field, {}
+                        ):
+                            _get_logger().fatal(
+                                f"Shape contract mismatch in connection {source} -> {target}",
+                                error_type=ValueError,
+                            )
+
+                    target_shape = target_contract["shape"]
 
                 validate_connection_compatibility(
                     source_name=source,
                     source_shape=source_shape,
                     source_dtype=source_dtype,
                     target_name=target,
-                    target_shape=target_tensor.shape,
+                    target_shape=target_shape,
                     target_dtype=target_tensor.dtype,
                 )
 
@@ -431,7 +467,9 @@ class InferenceManager:
                 )
 
     def run_policy(self, inputs: dict[str, torch.Tensor]):
-        # Update input tensors with provided values (keys are "node_name/input_name")
+        shape_bindings = {}
+        dynamic = self.system_info.get("shape contract version") in (1, 2)
+        provided = {}
         for key, input_value in inputs.items():
             try:
                 node_name, input_name = key.split("/")
@@ -441,6 +479,21 @@ class InferenceManager:
                     error_type=ValueError,
                     cause=e,
                 )
+            provided[node_name, input_name] = input_value
+        if dynamic:
+            # A rejected call must not change the stored inputs, so the provided
+            # tensors are checked together with the stored ones they join.
+            bindings = {}
+            for node_name, names in self.pipeline["inputs"].items():
+                for desc in self.nodes[node_name].input_descriptions:
+                    name = desc["name"]
+                    if name in names:
+                        value = provided.get(
+                            (node_name, name), self.value_dict[node_name][name]
+                        )
+                        self._validate_tensor(node_name, desc, value, bindings)
+        # Update input tensors with provided values (keys are "node_name/input_name")
+        for (node_name, input_name), input_value in provided.items():
             self.value_dict[node_name][input_name] = input_value
 
         for node_name, node in self.nodes.items():
@@ -450,12 +503,18 @@ class InferenceManager:
                 self.value_dict[node_name][name] for name in node.input_names
             ]
 
+            if dynamic:
+                for desc, value in zip(node.input_descriptions, node_inputs):
+                    self._validate_tensor(node_name, desc, value, shape_bindings)
             outputs = node(*node_inputs)
             output_order = node.output_names
             # Ensure outputs is always a tuple/list for consistent iteration
             if len(output_order) == 1:
                 outputs = (outputs,)
 
+            if dynamic:
+                for desc, value in zip(node.output_descriptions, outputs):
+                    self._validate_tensor(node_name, desc, value, shape_bindings)
             pipeline_map = self.organized_pipeline_connections[node_name]
             for output_name, output_value in zip(output_order, outputs):
                 targets = pipeline_map[output_name]
@@ -498,8 +557,47 @@ class InferenceManager:
             keys.extend(targets)
         return keys
 
+    @staticmethod
+    def _validate_tensor(node_name, desc, value, bindings):
+        if not isinstance(value, torch.Tensor) or value.dtype != map_to_torch_dtype(
+            desc["dtype"]
+        ):
+            actual = (
+                value.dtype if isinstance(value, torch.Tensor) else type(value).__name__
+            )
+            _get_logger().fatal(
+                f"{node_name}/{desc['name']}: expected a {desc['dtype']} torch "
+                f"tensor, got {actual}",
+                error_type=ValueError,
+            )
+        validate_shape_contract(
+            parse_shape_contract(desc),
+            value.shape,
+            bindings,
+            name=f"{node_name}/{desc['name']}",
+        )
+
     def set_input_value(self, node_name: str, input_name: str, value: torch.Tensor):
-        self.value_dict[node_name][input_name].copy_(value)
+        if self.system_info.get("shape contract version") in (1, 2):
+            desc = next(
+                (
+                    d
+                    for d in self.nodes[node_name].input_descriptions
+                    if d["name"] == input_name
+                ),
+                None,
+            )
+            if desc is None:
+                _get_logger().fatal(
+                    f"Unknown input {node_name}/{input_name}", error_type=KeyError
+                )
+            self._validate_tensor(node_name, desc, value, {})
+            # ``reset()`` zeroes stored buffers, so never keep the caller's tensor.
+            self.value_dict[node_name][input_name] = value.detach().to(
+                self.nodes[node_name].device, copy=True
+            )
+        else:
+            self.value_dict[node_name][input_name].copy_(value)
 
     def get_mock_input(self):
         """Generate random tensors for all external pipeline inputs.
@@ -516,11 +614,7 @@ class InferenceManager:
 
             for input_name in input_names:
                 desc = input_descs[input_name]
-                shape = (
-                    json.loads(desc["shape"])
-                    if isinstance(desc["shape"], str)
-                    else desc["shape"]
-                )
+                shape = get_capture_shape(desc)
                 dtype = map_to_torch_dtype(desc["dtype"])
                 device = node.device
 

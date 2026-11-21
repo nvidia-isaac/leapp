@@ -36,6 +36,8 @@ from leapp.leapp_graph.datatypes.patching import (
     warn_if_script_functions_in_scope,
 )
 from leapp.utils.semantics import TensorSemantics
+from leapp.utils.shape_contracts import has_variable_inputs
+from leapp.utils.validation_inputs import MethodValidation
 from leapp.utils.tensor_description import (
     verify_data_exact_match,
     flatten_io_structure,
@@ -53,6 +55,12 @@ from leapp.utils.utils import (
     frame_to_namespace,
 )
 from contextlib import nullcontext
+from leapp.utils.shape_contracts import (
+    validate_feedback_shape_contracts,
+    validate_variable_declarations,
+    prepare_shape_contracts,
+    validate_reentry_variable_axes,
+)
 
 
 class ExportManager:
@@ -334,6 +342,8 @@ class ExportManager:
                     f"New call site:\n{format_caller_identity(_caller_identity)}"
                 )
                 traced_tensors_node._caller_identities.add(_caller_identity)
+
+            validate_reentry_variable_axes(metadata, traced_tensors_node.inputs)
             traced_tensors_node.reentry_validate_inputs(tensors)
             rebound_tensors = {
                 tensor_name: traced_tensors_node._create_io_helper(
@@ -401,6 +411,8 @@ class ExportManager:
             flattened_static = {}
             if normalized_static_outputs is not None:
                 flattened_static = flatten_io_structure(normalized_static_outputs, "")
+
+            validate_reentry_variable_axes(metadata, traced_tensors_node.outputs)
             traced_tensors_node.reentry_validate_outputs(
                 flattened_tensors, flattened_static
             )
@@ -721,6 +733,17 @@ class ExportManager:
         self.nodes[node_name]._buffer_tracker = tracker
 
     def method(self, **params):
+        validation_inputs = params.get("validation_inputs")
+        if (
+            validation_inputs is not None
+            and validation_inputs is not False
+            and not callable(validation_inputs)
+        ):
+            _get_logger().fatal(
+                "validation_inputs must be callable, False, or None",
+                error_type=TypeError,
+            )
+
         def decorator(func):
 
             name = params.get("node_name", func.__name__)
@@ -730,7 +753,16 @@ class ExportManager:
             @functools.wraps(func)
             def wrapper(*args, **kwargs):
                 if not ExportManager._interpret_graph:
-                    return func(*args, **kwargs)
+                    # TensorSemantics only annotates a tensor; pass its value.
+                    def value(argument):
+                        if isinstance(argument, TensorSemantics):
+                            return argument.ref
+                        return argument
+
+                    return func(
+                        *(value(a) for a in args),
+                        **{key: value(v) for key, v in kwargs.items()},
+                    )
 
                 # ~~~~~~~~~~~~~~~~~~~ ensure node exists ~~~~~~~~~~~~~~~~~~~~~~~~ #
                 if name not in self.nodes:
@@ -742,6 +774,17 @@ class ExportManager:
                 bound_args = sig.bind(*args, **kwargs)
                 bound_args.apply_defaults()
 
+                argument_ports = {}
+
+                def annotate_argument(key, value):
+                    argument_ports[key] = (
+                        value.name if isinstance(value, TensorSemantics) else key
+                    )
+                    return self.input_tensors(
+                        name,
+                        value if isinstance(value, TensorSemantics) else {key: value},
+                    )
+
                 params_list = list(sig.parameters.items())
                 new_args = []
                 new_kwargs = {}
@@ -752,12 +795,12 @@ class ExportManager:
                         continue
                     if param.kind == inspect.Parameter.VAR_POSITIONAL:
                         for j, a in enumerate(args[i:]):
-                            new_args.append(self.input_tensors(name, {f"arg_{j}": a}))
+                            new_args.append(annotate_argument(f"arg_{j}", a))
                         break
-                    new_args.append(self.input_tensors(name, {param_name: arg}))
+                    new_args.append(annotate_argument(param_name, arg))
 
                 for key, value in kwargs.items():
-                    new_kwargs[key] = self.input_tensors(name, {key: value})
+                    new_kwargs[key] = annotate_argument(key, value)
 
                 # ~~~~~~~~~~~~~~~~~~~ register default kwargs as buffers ~~~~~~~~ #
                 for param_name, param_value in bound_args.arguments.items():
@@ -773,6 +816,23 @@ class ExportManager:
                         new_kwargs[param_name] = traced
 
                 # ~~~~~~~~~~~~~~~~~~~ run the function ~~~~~~~~~~~~~~~~~~~~~~~~~ #
+                node = self.nodes[name]
+                if (
+                    not node.captured
+                    and validation_inputs is not False
+                    and (validation_inputs is not None or has_variable_inputs(node))
+                ):
+                    ports = {
+                        alias: desc for desc in node.inputs for alias in desc.aliases
+                    }
+                    descriptions = {
+                        key: ports[port]
+                        for key, port in argument_ports.items()
+                        if port in ports
+                    }
+                    node.method_validation = MethodValidation(
+                        func, bound_args, validation_inputs, descriptions
+                    )
                 result = func(*new_args, **new_kwargs)
                 # ~~~~~~~~~~~~~~~~~~~ set up outputs ~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
                 return_names = extract_return_names(func)
@@ -970,10 +1030,14 @@ class ExportManager:
 
     def compile_models(self):
         _get_logger().section(f"Discovered {len(self.nodes)} nodes")
-        for node_context in self.nodes.values():
+
+        validate_variable_declarations(self.nodes.values())
+        for node_context in sorted(self.nodes.values(), key=lambda n: n.node_index):
             _get_logger().section(f"Compiling {node_context.name}")
+            prepare_shape_contracts(node_context)
             node_context.compile_model()
             _get_logger().info("Success\n")
+        validate_feedback_shape_contracts(self.nodes.values())
 
     def save_models(self):
         if self.SAVE_PATH is None:
@@ -1031,7 +1095,10 @@ class ExportManager:
         for node_name, node in self.nodes.items():
             _get_logger().info(f"Validating {node_name}...")
 
+            interpreting = ExportManager._interpret_graph
             try:
+                if node.method_validation is not None:
+                    ExportManager.set_interpret_graph(False)
                 passed, error_hint = node.validate_compiled_model(rtol=rtol, atol=atol)
                 results[node_name] = passed
                 if error_hint is not None:
@@ -1042,11 +1109,15 @@ class ExportManager:
                     f"{node_name}: Validation failed with exception: {e}"
                 )
                 results[node_name] = e
+                if node.method_validation is not None:
+                    error_hints.append(f"{node_name}: {e}")
 
             finally:
+                ExportManager.set_interpret_graph(interpreting)
                 # Free GPU memory after validating each model
                 # Delete the compiled model (validation is the last step)
                 node.delete_compiled_model()
+                node.method_validation = None
                 # Clear CUDA cache to ensure GPU memory is released
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()

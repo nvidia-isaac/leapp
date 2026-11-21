@@ -39,6 +39,7 @@ from leapp.utils.tensor_description import (
 from leapp.leapp_graph.custom_operator_registry import warp_operator
 import collections
 from dataclasses import replace
+from leapp.utils.shape_contracts import has_variable_inputs
 
 if TYPE_CHECKING:
     from leapp.leapp_graph.datatypes.warp import WarpSegment
@@ -53,6 +54,8 @@ class _LeappFXGraph(fx.Graph):
         super().__init__()
         self.recording = True
         self.requires_functionalization = False
+        # per user input, the dimensions functionalization fixed to one size
+        self.fixed_input_dimensions = []
 
     def create_node(self, *args, **kwargs):
         warp_backend = get_warp_backend()
@@ -692,6 +695,8 @@ class TracedTensorNode(LeappNode):
         for node in self.graph.nodes:
             node.meta.pop(STORAGE_LAYOUT_META_KEY, None)
         self.graph.recording = False
+        for desc in self.inputs:
+            desc.write_fixed_dimensions = set()
         if self.graph.requires_functionalization:
             self._validate_mutated_input_layouts()
             # A write through a view can affect an output without an explicit
@@ -702,11 +707,23 @@ class TracedTensorNode(LeappNode):
             self.graph.output(
                 output_nodes[0] if len(output_nodes) == 1 else tuple(output_nodes)
             )
+
+            dynamic_shapes = (
+                tuple(
+                    {i: torch.export.Dim.AUTO for i in range(len(desc.shape))}
+                    for desc in self.inputs
+                )
+                if has_variable_inputs(self)
+                else None
+            )
             self.tracer.root = functionalize_graph(
                 self.graph,
                 self.tracer.root,
                 [to_export_torch_tensor(desc.value) for desc in self.inputs],
+                dynamic_shapes=dynamic_shapes,
             )
+            for desc, fixed in zip(self.inputs, self.graph.fixed_input_dimensions):
+                desc.write_fixed_dimensions = fixed
             output_node = next(n for n in self.graph.nodes if n.op == "output")
             output_nodes = list(output_node.all_input_nodes)
 

@@ -30,8 +30,27 @@ from ..proxy import (
     conversion_proxy,
 )
 from ..traced_data import TracedData
-from ..primitives.traced_int import TracedInt
+from ..primitives.traced_int import (
+    TracedInt,
+    graph_sizes,
+    settled_value,
+)
+from leapp.utils.caller_identity import get_caller_location
+from leapp.utils.shape_contracts import has_variable_inputs
+from leapp.utils.shape_values import (
+    dimension,
+    enabled,
+    numel,
+    suppress_dynamic_shape_tracing,
+)
 
+
+_SIZE_READS = (
+    torch.numel,
+    torch._C.TensorBase.numel,
+    torch._C.TensorBase.nelement,
+    torch._C.TensorBase.size,
+)
 
 # torch dtype object -> common name string. Lives with the torch node library
 # so the backend's dtype knowledge is unified with its implementation; the
@@ -497,9 +516,14 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         ):
             return True
 
+        if has_variable_inputs(self._context):
+            site = get_caller_location()
+            if site not in self._context.assignment_sites:
+                self._context.assignment_sites.append(site)
+
         if isinstance(value, TracedInt):
             if not value.is_recording:
-                value = real_value = int(value)
+                value = real_value = settled_value(value)
             else:
                 # The assignment source must be a tensor in the graph, but a
                 # traced integer's proxy is a Python int there.
@@ -749,10 +773,38 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         """
         if kwargs is None:
             kwargs = {}
+        sizes = cls._variable_size_query(func, args, kwargs)
+        if sizes is not None:
+            return sizes
+        return cls._traced_torch_function(func, types, args, kwargs)
+
+    @classmethod
+    def _variable_size_query(cls, func, args, kwargs):
+        """Answer function-form size reads in a node with variable inputs.
+
+        ``x.shape``, ``x.size()`` and ``x.numel()`` are answered by the
+        overrides below. ``torch.numel(x)``, ``x.nelement()`` and unbound calls
+        such as ``torch.Tensor.size(x, 1)`` arrive here instead.
+        """
+        is_shape = getattr(func, "__self__", None) is torch._C.TensorBase.shape
+        if not is_shape and func not in _SIZE_READS:
+            return None
+        receiver = args[0] if args else None
+        if not isinstance(receiver, TracedTensor) or not enabled(receiver):
+            return None
+        if is_shape:
+            return receiver.shape
+        if func is torch._C.TensorBase.size:
+            return receiver.size(args[1] if len(args) > 1 else kwargs.get("dim"))
+        return receiver.numel()
+
+    @classmethod
+    @suppress_dynamic_shape_tracing
+    def _traced_torch_function(cls, func, types, args, kwargs):
         sizes = cls._traced_size_query(func, args, kwargs)
         if sizes is not None:
             return sizes
-        args, kwargs = _graph_sizes(args), _graph_sizes(kwargs)
+        args, kwargs = graph_sizes(args), graph_sizes(kwargs)
         result = cls._record_torch_function(func, types, args, kwargs)
         if cls._makes_data_dependent_shape(func, args, kwargs):
             cls._mark_data_dependent_shape(result)
@@ -881,17 +933,14 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
         # ================== SPECIAL CASES IN HANDLING ==================
 
-        # A result that is an identical-layout alias of the receiver is the same
-        # value, so it reuses the receiver's handle and records nothing; the node
-        # would be a no-op with no consumers. Only the receiver may donate, and
-        # only when nothing was mutated: an operation writing through an alias
-        # belongs to the mutated-receiver path below, and reusing the handle of
-        # an argument the result merely happens to alias -- an ``out=``
-        # destination -- would drop the operation in favor of that argument's
-        # pre-call proxy.
+        # Sample-layout equality proves identity only for static shapes.
+        # Only an unmodified receiver may donate its proxy; adopting an out=
+        # destination would discard the operation that wrote it.
+        variable = has_variable_inputs(traced_tensor.context_obj)
         if (
             receiver is not None
             and not receiver_requires_proxy_update
+            and not variable
             and is_same_value(receiver, tensor_out)
         ):
             return receiver._new_alias(tensor_out)
@@ -1113,6 +1162,20 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
     # =========================================================================
     # Special Methods: reshape and permute need custom handling
     # =========================================================================
+
+    @property
+    def shape(self):
+        if enabled(self):
+            return tuple(dimension(self, i) for i in range(self.tensor.ndim))
+        return torch.Tensor.shape.__get__(self)
+
+    def size(self, dim=None):
+        if enabled(self):
+            return self.shape if dim is None else dimension(self, dim)
+        return torch.Tensor.size(self) if dim is None else torch.Tensor.size(self, dim)
+
+    def numel(self):
+        return numel(self) if enabled(self) else torch.Tensor.numel(self)
 
     @staticmethod
     def _normalize_shape_args(args):
@@ -1423,6 +1486,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         operator.getitem so augmented assignment can write the result back.
         """
         self._close_warp_segment()
+
         # Check for boolean mask indexing with TracedTensor
         if isinstance(key, TracedTensor):
             result_tensor = self.tensor[key.tensor]
@@ -1478,7 +1542,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
             proxy_out = self._create_getitem_proxy(key)
             return self._new(result_tensor, proxy_out)
 
-        key = _graph_sizes(key)
+        key = graph_sizes(key)
         result_tensor = self.tensor[key]
 
         if not self.validate_status(args=(key,)):
@@ -1486,7 +1550,20 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 
         # A key covering the whole tensor, such as ``[:]``, selects nothing and
         # yields the same value. A narrowing key does not and keeps its node.
-        if is_same_value(self, result_tensor):
+
+        variable = has_variable_inputs(self.context_obj)
+        components = key if isinstance(key, tuple) else (key,)
+        identity = all(
+            k is Ellipsis
+            or (
+                isinstance(k, slice)
+                and k.start is None
+                and k.stop is None
+                and k.step in (None, 1)
+            )
+            for k in components
+        )
+        if (not variable or identity) and is_same_value(self, result_tensor):
             return self._new_alias(result_tensor)
 
         proxy_out = self._context.tracer.create_proxy(
@@ -1510,7 +1587,7 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
         if self._shed_replaced_graph():
             self[key] = value
             return
-        key = _graph_sizes(key)
+        key = graph_sizes(key)
         real_key = TracedData.unwrap_traced_data(key)
         real_value = TracedTensor.unwrap_traced_tensor(value)
         self.tensor[real_key] = real_value
@@ -1648,18 +1725,6 @@ class TracedTensor(TracedData, torch.Tensor, metaclass=_TracedTensorMeta):
 # =============================================================================
 
 
-def _contains_traced_int(obj) -> bool:
-    found = False
-
-    def visit(item):
-        nonlocal found
-        found = found or isinstance(item, TracedInt)
-        return item
-
-    TracedData._map_structure(obj, visit)
-    return found
-
-
 def _find_traced_array(obj):
     """First traced value in ``obj`` other than a :class:`TracedInt`, else None."""
     found = None
@@ -1676,29 +1741,3 @@ def _find_traced_array(obj):
 
     TracedData._map_structure(obj, visit)
     return found
-
-
-def _graph_sizes(obj):
-    """Prepare arguments holding traced integers for FX recording.
-
-    FX records a size as a proxy, which ``torch.Size`` cannot hold, so sizes
-    become tuples. A traced integer whose node stopped recording has no node in
-    the graph being built and becomes the plain integer it holds.
-    """
-    if not _contains_traced_int(obj):
-        return obj
-
-    def convert(item):
-        if isinstance(item, TracedInt):
-            return item if item.is_recording else int(item)
-        if isinstance(item, torch.Size):
-            return tuple(convert(size) for size in item)
-        if isinstance(item, slice):
-            return slice(convert(item.start), convert(item.stop), convert(item.step))
-        if isinstance(item, (list, tuple)) and not hasattr(item, "_fields"):
-            return type(item)(convert(value) for value in item)
-        if isinstance(item, dict):
-            return {name: convert(value) for name, value in item.items()}
-        return item
-
-    return convert(obj)
