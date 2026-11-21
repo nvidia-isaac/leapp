@@ -51,9 +51,11 @@ def sdk_path(name):
 
 
 def cmake_build(source, build, prefix, options, jobs):
+    # Cached library and CUDA discovery can outlive changes to SDK roots.
     subprocess.run(
         [
             "cmake",
+            "--fresh",
             "-S",
             str(source),
             "-B",

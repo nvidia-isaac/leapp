@@ -103,6 +103,76 @@ class BackendBuildTests(unittest.TestCase):
         self.assertTrue((self.prefix / "nativert/lib/libleapp_nativert.so").is_file())
         self.assertIn(f"Set LEAPP_NATIVE_BACKENDS to {self.prefix}", result.stdout)
 
+    @unittest.skipUnless(
+        sys.platform == "linux" and shutil.which("cmake") and shutil.which("c++"),
+        "requires Linux, CMake 3.24+, and a C++ compiler",
+    )
+    def test_reused_build_selects_libraries_from_changed_torch_and_cuda_sdks(self):
+        source = (
+            SCRIPT.parent.parent
+            / "packages/leapp-rt/src/engines/native/backends/torchscript"
+        )
+        libraries = ("torch", "torch_cpu", "torch_cuda", "c10", "c10_cuda")
+        torch_roots = [self.root / f"torch {name}" for name in ("A", "B")]
+        cuda_roots = [self.root / f"cuda {name}" for name in ("A", "B")]
+        for torch in torch_roots:
+            (torch / "include/torch/csrc/api/include").mkdir(parents=True)
+            (torch / "include/torch/script.h").touch()
+            (torch / "lib").mkdir()
+            for name in libraries:
+                (torch / f"lib/lib{name}.so").touch()
+        for cuda in cuda_roots:
+            (cuda / "include").mkdir(parents=True)
+            (cuda / "include/cuda_runtime.h").touch()
+            (cuda / "version.txt").write_text("CUDA Version 12.0.0\n")
+            (cuda / "bin").mkdir()
+            (cuda / "lib64").mkdir()
+            (cuda / "lib64/libcudart.so").touch()
+
+        run = subprocess.run
+
+        def configure_only(command, **kwargs):
+            # Configure the real TorchScript project and FindCUDAToolkit module.
+            # The stub SDKs support discovery, not compilation or installation.
+            if "--build" in command or "--install" in command:
+                return subprocess.CompletedProcess(command, 0)
+            return run(command, capture_output=True, text=True, **kwargs)
+
+        build = self.root / "reused build"
+        for torch, cuda in (
+            (torch_roots[0], cuda_roots[0]),
+            (torch_roots[1], cuda_roots[0]),
+            (torch_roots[1], cuda_roots[1]),
+            (torch_roots[0], cuda_roots[1]),
+        ):
+            with self.subTest(torch=torch.name, cuda=cuda.name):
+                with patch.object(
+                    builder.subprocess, "run", side_effect=configure_only
+                ):
+                    try:
+                        builder.cmake_build(
+                            source,
+                            build,
+                            self.prefix,
+                            [f"-DTORCH_ROOT={torch}", f"-DCUDAToolkit_ROOT={cuda}"],
+                            1,
+                        )
+                    except subprocess.CalledProcessError as error:
+                        self.fail(error.stdout + error.stderr)
+                cache = {}
+                for line in (build / "CMakeCache.txt").read_text().splitlines():
+                    if line and not line.startswith(("#", "//")):
+                        key, value = line.split("=", 1)
+                        cache[key.split(":", 1)[0]] = value
+                self.assertEqual(cache["TORCH_ROOT"], str(torch))
+                self.assertEqual(cache["CUDAToolkit_ROOT"], str(cuda))
+                for name in libraries:
+                    self.assertEqual(
+                        cache[f"LEAPP_{name}_LIBRARY"], str(torch / f"lib/lib{name}.so")
+                    )
+                for name in ("CUDA_CUDART", "CUDA_cudart_LIBRARY"):
+                    self.assertEqual(cache[name], str(cuda / "lib64/libcudart.so"))
+
     def test_missing_sdk_fails_before_invoking_cmake(self):
         os.environ.pop("TORCH_ROOT")
         with patch.object(builder.shutil, "which", return_value="cmake"):

@@ -39,8 +39,9 @@ elsewhere, pass ``--source-dir <leapp-checkout>/packages/leapp-rt`` from the sam
 revision as the deployed core. ``--build-dir`` selects the CMake build directory
 and ``--jobs`` controls parallelism. The default build directory is
 ``<runtime-source>/target/standalone-backends``, with plugins installed into its
-``backends/`` directory unless ``--install-prefix`` is supplied. Builds can
-reuse that directory; the command does not delete it or install SDK dependencies.
+``backends/`` directory unless ``--install-prefix`` is supplied. Build directories
+can be reused, but each invocation starts with a fresh CMake configuration so SDK
+paths are rediscovered. The command does not install SDK dependencies.
 
 ONNX needs no LEAPP plugin build. Point ``ORT_DYLIB_PATH`` at a compatible ONNX
 Runtime shared library, or place it under
