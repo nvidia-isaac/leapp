@@ -2,6 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Runtime engine selection and the internal execution contract.
+//!
+//! Both engines ship in one core build without requiring their SDKs at build
+//! time. Bundle inspection does not initialize them. Load the selected engine
+//! and required model runtimes at session construction, with no engine/device
+//! fallback and no Cargo feature rebuild when installing a supported backend.
+//! Native peers share models/weights but own workspace and bindings. Torch and
+//! optional custom operators need the shared execution guard; nodes within a
+//! pipeline execute sequentially. Triton owns a temporary model repository and
+//! embedded server, released when the last engine reference is dropped.
 pub(crate) mod error;
 pub(crate) mod memory;
 mod native;

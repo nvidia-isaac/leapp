@@ -38,6 +38,7 @@ jobs:
           filters: |
             runtime:
               - 'packages/leapp-rt/**'
+              - 'scripts/leapp-build-runtime-backends'
               - '.github/scripts/runtime-backends.sh'
               - '.github/scripts/install-runtime-tool.sh'
               - '.github/workflows/ci.yml'
@@ -109,8 +110,8 @@ jobs:
       - name: Check runtime release versions
         run: pixi run --locked python packaging/check_release.py
 
-      - name: Test packaging helpers
-        run: pixi run --locked python -m unittest discover -s tests/deployment -p test_packaging.py -v
+      - name: Test packaging and standalone build helpers
+        run: pixi run --locked python -m unittest discover -s tests/deployment -p 'test_*.py' -v
 
       - name: Build and verify Rust source package
         run: |

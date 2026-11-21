@@ -21,7 +21,11 @@
 namespace leapp::internal {
 namespace {
 
-// ModelRunner preserves archive placement. Check it before allocating weights.
+// ModelRunner consumes raw torch.export.save archives with tensor-only I/O in
+// exported-program order. It preserves archive placement: weights and graph
+// devices must match the model instance, while host constants in CUDA exports
+// stay on the host. Check placement before allocating weights. This dispatcher
+// path does not support AOTInductor or CUDA Triton delegates.
 Status CheckArchive(const NativeRtModel& model, c10::Device device) {
   caffe2::serialize::PyTorchStreamReader reader(model.artifact_path.string());
   const auto [data, size] = reader.getRecord("models/model.json");

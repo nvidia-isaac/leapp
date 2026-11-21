@@ -3,7 +3,17 @@
 
 //! Native backend registration and the per-workspace execution contract.
 //!
-//! See `backends/README.md` for the Rust/C++ contribution workflow.
+//! See the runtime package's AGENTS.md for plugin build and validation recipes.
+//! Rust backends implement BackendPlugin below; C++ plugins derive from the
+//! public lrt::native::BackendPlugin header, define a LoadBackend factory, and
+//! export it with LEAPP_NATIVE_BACKEND(name, Load). Register the same name in
+//! the bridge loader: adding a name requires rebuilding the registration table.
+//! Only new_session and run_dynamic are mandatory; the C++ header documents
+//! defaults, ownership, and threading. Build plugins from the matching runtime
+//! revision and with the model SDK's C++ ABI settings. Incompatible/incomplete
+//! plugins must fail loading with rebuild instructions, never silently fall back.
+//! TorchScript and NativeRT share torch/plugin.cc; adjacent executor files own
+//! their SDK execution resources.
 
 mod bridge;
 mod onnx;

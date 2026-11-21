@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="610" viewBox="0 0 1080 610" role="img" aria-labelledby="title description">
+  <title id="title">Writing to an existing application buffer</title>
+  <desc id="description">With run_into, the final node can write directly into the application's existing output region. With run, the runtime allocates a separate output and the application must copy its values into that same destination. Direct binding depends on backend support.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8" fill="#475569"/></marker>
+    <marker id="copy-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8" fill="#a84b0b"/></marker>
+    <pattern id="unused" width="10" height="10" patternUnits="userSpaceOnUse"><path d="M0 0 L10 10 M-2 8 L2 12 M8 -2 L12 2" stroke="#cbd5e1" stroke-width="1.5"/></pattern>
+    <style>
+      text { font-family: sans-serif; fill: #172033; font-size: 17px; }
+      .heading { font-size: 23px; font-weight: bold; }
+      .small { font-size: 15px; }
+      .flow { fill: none; stroke: #475569; stroke-width: 2; marker-end: url(#arrow); }
+      .memory { fill: #fff; stroke: #64748b; stroke-width: 1.5; }
+    </style>
+  </defs>
+  <rect width="1080" height="610" rx="12" fill="#fff"/>
+  <rect x="16" y="16" width="1048" height="246" rx="12" fill="#f1f5f9"/>
+  <text x="38" y="52" class="heading">run_into(): supply the final destination</text>
+  <text x="38" y="80" class="small">Direct output binding, when supported by the backend</text>
+  <path d="M50 158 H155" class="flow"/>
+  <text x="55" y="140" class="small">Pipeline</text>
+  <circle cx="200" cy="158" r="42" class="memory"/>
+  <text x="200" y="153" text-anchor="middle">Final</text>
+  <text x="200" y="175" text-anchor="middle">node</text>
+  <path d="M242 158 H800" class="flow"/>
+  <text x="520" y="140" text-anchor="middle">Write directly into the existing output region</text>
+  <rect x="805" y="96" width="220" height="140" class="memory"/>
+  <rect x="806" y="97" width="218" height="34" fill="url(#unused)"/>
+  <rect x="806" y="132" width="218" height="52" fill="#dbeafe"/>
+  <rect x="806" y="185" width="218" height="50" fill="url(#unused)"/>
+  <path d="M805 131 H1025 M805 185 H1025" stroke="#64748b"/>
+  <text x="915" y="164" text-anchor="middle">Output region</text>
+  <text x="38" y="235">No separate public output allocation or application-side copy into the destination.</text>
+  <rect x="16" y="278" width="1048" height="246" rx="12" fill="#f1f5f9"/>
+  <text x="38" y="314" class="heading">run(): allocate a result, then copy into the final destination</text>
+  <path d="M50 418 H155" class="flow"/>
+  <text x="55" y="400" class="small">Pipeline</text>
+  <circle cx="200" cy="418" r="42" class="memory"/>
+  <text x="200" y="413" text-anchor="middle">Final</text>
+  <text x="200" y="435" text-anchor="middle">node</text>
+  <path d="M242 418 H407" class="flow"/>
+  <text x="325" y="400" text-anchor="middle" class="small">Produce result</text>
+  <rect x="412" y="380" width="220" height="76" rx="8" fill="#e5f4cf" stroke="#64748b" stroke-width="1.5" stroke-dasharray="7 5"/>
+  <text x="522" y="411" text-anchor="middle">Separate output buffer</text>
+  <text x="522" y="436" text-anchor="middle" class="small">allocated by the runtime</text>
+  <path d="M632 418 H800" fill="none" stroke="#a84b0b" stroke-width="3" marker-end="url(#copy-arrow)"/>
+  <text x="716" y="393" text-anchor="middle" style="fill:#a84b0b;font-weight:bold">Extra copy</text>
+  <rect x="805" y="356" width="220" height="140" class="memory"/>
+  <rect x="806" y="357" width="218" height="34" fill="url(#unused)"/>
+  <rect x="806" y="392" width="218" height="52" fill="#dbeafe"/>
+  <rect x="806" y="445" width="218" height="50" fill="url(#unused)"/>
+  <path d="M805 391 H1025 M805 445 H1025" stroke="#64748b"/>
+  <text x="915" y="424" text-anchor="middle">Output region</text>
+  <text x="38" y="505">Both paths target the same predetermined region in an application-owned allocation.</text>
+  <text x="38" y="558" class="small">Python: run(..., outputs=...)    |    C++: Run(..., outputs)    |    Rust: run_into(...)</text>
+  <text x="38" y="587" class="small">Internal copies may still occur for backend requirements, feedback, or device transfers.</text>
+</svg>

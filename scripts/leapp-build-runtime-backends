@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Build LEAPP's TorchScript/PT2 plugins from a matching runtime checkout.
+
+Uses only the Python standard library and installed build tools/SDKs. SDKs are
+never downloaded or installed. CMake owns SDK version, ABI, and linkage checks.
+"""
+
+import argparse
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+
+LIBRARIES = {
+    "torchscript": "torchscript/libleapp_torchscript.so",
+    "nativert": "nativert/libleapp_nativert_backend.so",
+}
+
+
+def runtime_source(source_dir=None):
+    if source_dir is not None:
+        candidates = [Path(source_dir).expanduser().resolve()]
+    else:
+        candidates = [
+            Path(__file__).resolve().parent.parent / "packages/leapp-rt",
+            Path.cwd() / "packages/leapp-rt",
+            Path.cwd(),
+        ]
+    for candidate in candidates:
+        if (
+            candidate / "src/engines/native/backends/torchscript/CMakeLists.txt"
+        ).is_file():
+            return candidate
+    raise RuntimeError(
+        "Runtime sources not found. Set --source-dir to packages/leapp-rt "
+        "in a checkout matching the deployed runtime."
+    )
+
+
+def sdk_path(name):
+    value = os.environ.get(name)
+    if not value or not Path(value).expanduser().is_dir():
+        raise RuntimeError(f"Set {name} to an existing SDK directory.")
+    return Path(value).expanduser().resolve()
+
+
+def cmake_build(source, build, prefix, options, jobs):
+    # Cached library and CUDA discovery can outlive changes to SDK roots.
+    subprocess.run(
+        [
+            "cmake",
+            "--fresh",
+            "-S",
+            str(source),
+            "-B",
+            str(build),
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DBUILD_TESTING=OFF",
+            "-DLEAPP_NATIVE_BACKEND_TESTS=OFF",
+            "-DCMAKE_INSTALL_LIBDIR=lib",
+            f"-DCMAKE_INSTALL_PREFIX={prefix}",
+            *options,
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "cmake",
+            "--build",
+            str(build),
+            "--config",
+            "Release",
+            "--parallel",
+            str(jobs),
+        ],
+        check=True,
+    )
+    subprocess.run(
+        ["cmake", "--install", str(build), "--config", "Release"], check=True
+    )
+
+
+def build_backends(
+    backends, source_dir=None, build_dir=None, install_prefix=None, jobs=2
+):
+    if sys.platform != "linux":
+        raise RuntimeError("Runtime backend builds currently require Linux.")
+    selected = set(backends)
+    if not selected or selected - LIBRARIES.keys():
+        raise ValueError("Choose at least one backend: torchscript or nativert (PT2).")
+    if jobs < 1:
+        raise ValueError("--jobs must be positive.")
+    source = runtime_source(source_dir)
+    if shutil.which("cmake") is None:
+        raise RuntimeError("CMake 3.24+ is required but was not found.")
+    torch = sdk_path("TORCH_ROOT")
+    pytorch = sdk_path("PYTORCH_SOURCE") if "nativert" in selected else None
+    nativert = os.environ.get("NATIVERT_LIBRARY") if pytorch else None
+    if nativert:
+        nativert = Path(nativert).expanduser().resolve()
+        if not nativert.is_file():
+            raise RuntimeError(
+                "NATIVERT_LIBRARY must point to an existing shared library."
+            )
+
+    build = (
+        Path(build_dir).expanduser().resolve()
+        if build_dir is not None
+        else source / "target/standalone-backends"
+    )
+    prefix = (
+        Path(install_prefix).expanduser().resolve()
+        if install_prefix is not None
+        else build / "backends"
+    )
+    options = [f"-DTORCH_ROOT={torch}"]
+    cuda = os.environ.get("CUDAToolkit_ROOT") or os.environ.get("CUDA_ROOT")
+    if cuda:
+        options.append(f"-DCUDAToolkit_ROOT={Path(cuda).expanduser().resolve()}")
+
+    if pytorch:
+        options.append(f"-DPYTORCH_SOURCE={pytorch}")
+        if not nativert:
+            dependency_prefix = prefix / "nativert"
+            cmake_build(
+                source / "src/engines/triton/backends/torch/nativert",
+                build / "nativert-library",
+                dependency_prefix,
+                options,
+                jobs,
+            )
+            nativert = dependency_prefix / "lib/libleapp_nativert.so"
+            if not nativert.is_file():
+                raise RuntimeError(f"NativeRT build did not install {nativert}")
+        options.append(f"-DNATIVERT_LIBRARY={nativert}")
+
+    for backend in sorted(selected):
+        cmake_build(
+            source / "src/engines/native/backends" / backend,
+            build / backend,
+            prefix,
+            options,
+            jobs,
+        )
+    artifacts = {name: prefix / LIBRARIES[name] for name in sorted(selected)}
+    missing = [str(path) for path in artifacts.values() if not path.is_file()]
+    if missing:
+        raise RuntimeError("Backend build did not install: " + ", ".join(missing))
+    return prefix, artifacts
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--backends", nargs="+", required=True, choices=sorted(LIBRARIES)
+    )
+    parser.add_argument(
+        "--source-dir", type=Path, help="Matching packages/leapp-rt checkout."
+    )
+    parser.add_argument(
+        "--build-dir", type=Path, help="Default: <source>/target/standalone-backends."
+    )
+    parser.add_argument(
+        "--install-prefix", type=Path, help="Default: <build-dir>/backends."
+    )
+    parser.add_argument(
+        "--jobs", type=int, default=2, help="Parallel build jobs (default: 2)."
+    )
+    args = parser.parse_args()
+    try:
+        prefix, artifacts = build_backends(**vars(args))
+    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:
+        print(f"Failed to build LEAPP runtime backends: {error}", file=sys.stderr)
+        return 1
+    for name, path in artifacts.items():
+        print(f"{name}: {path}")
+    print(f"Set LEAPP_NATIVE_BACKENDS to {prefix} before opening a session.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

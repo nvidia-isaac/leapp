@@ -1,6 +1,17 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+// Shared Python/C++ session ownership and serialization, not another runtime.
+//
+// Adapters retain producer owners while forwarding borrowed input/output maps.
+// One handle serializes run, reset, peer creation, and close; peer handles keep
+// independent state and engine references. Close waits for an active operation,
+// recovers a poisoned lock to release resources, then reports the lock error.
+// Normal execution must not recover poison. Clearing it after cleanup makes
+// subsequent closes succeed without affecting other sessions or retained outputs.
+// The binding_lifecycle test target compiles this file against a small test
+// session API to check waiting, error-source preservation, and poisoned cleanup.
+
 use lrt::dlpack::{BorrowedTensor, OutputBuffer};
 use lrt::{Bundle, ErrorCode, RunResult, RuntimeError, Session, SessionOptions};
 use std::{collections::HashMap, fmt, sync::Mutex};
@@ -109,6 +120,8 @@ impl SessionHandle {
             .run_into(inputs, outputs)
             .map_err(Error::Runtime)
     }
+    /// Restore this session's captured feedback/defaults under the same run lock.
+    /// This must not reload files or reset mutable state inside a shared model.
     pub fn reset(&self) -> Result<(), Error> {
         self.session
             .lock()
