@@ -92,6 +92,11 @@ pub(super) trait BackendPlugin: Send {
         Err(crate::error::Unsupported("backend does not support fixed bindings".into()).into())
     }
 
+    /// Natural output placement, queried once before workspace allocation.
+    fn output_location(&self, _position: usize) -> Option<MemoryLocation> {
+        None
+    }
+
     /// Required output address alignment, stable across all invocations.
     fn output_alignment(&self) -> usize {
         1
@@ -121,7 +126,7 @@ pub(super) trait BackendPlugin: Send {
     /// prepared. Inputs and the copy helper are borrowed only for this call.
     /// Return one entry per output: None for supplied targets, Some for owned results.
     /// Return valid, contiguous, ready, independently owned outputs on the
-    /// workspace execution device, matching the declared output count, order,
+    /// backend storage device, matching the declared output count, order,
     /// dtype, rank and fixed dimensions. SDK metadata establishes these guarantees
     /// at initialization or the backend checks unresolved values before return. They
     /// must survive later runs/plugin destruction and must not alias inputs or

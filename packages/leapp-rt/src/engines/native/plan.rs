@@ -285,6 +285,12 @@ impl Slot {
         self.dynamic = None;
     }
 
+    pub fn location(&self) -> MemoryLocation {
+        self.dynamic
+            .as_ref()
+            .map_or(self.location, SharedTensor::location)
+    }
+
     pub fn snapshot(
         &self,
         target: MemoryLocation,
@@ -292,7 +298,7 @@ impl Slot {
     ) -> Result<SharedTensor> {
         if let Some(value) = &self.dynamic {
             // Independently owned backend results can be returned without another copy.
-            if target == self.location {
+            if target == value.location() {
                 return Ok(value.clone());
             }
             // SAFETY: private, completed backend storage remains alive through the copy.

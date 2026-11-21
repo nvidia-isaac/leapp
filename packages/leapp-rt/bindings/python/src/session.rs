@@ -59,18 +59,19 @@ impl PySession {
                 lrt::MemoryLocation::Cuda { device_id } => ExecutionDevice::Cuda { device_id },
                 _ => {
                     return Err(PyTypeError::new_err(
-                        "pinned is a buffer location, not an execution device",
+                        "execution device must be cpu or cuda:<device_id>",
                     ))
                 }
             };
-            let output_device: String = options.getattr("output_device")?.extract()?;
-            opts.output_placement.default_location = crate::location(&output_device)?;
-            let overrides: HashMap<String, String> =
+            let output_device: Option<String> = options.getattr("output_device")?.extract()?;
+            opts.output_placement.default_location =
+                output_device.as_deref().map(crate::location).transpose()?;
+            let overrides: HashMap<String, Option<String>> =
                 options.getattr("output_overrides")?.extract()?;
             for (name, device) in overrides {
                 opts.output_placement
                     .overrides
-                    .insert(name, crate::location(&device)?);
+                    .insert(name, device.as_deref().map(crate::location).transpose()?);
             }
         }
         if opts.engine == EngineKind::Native {

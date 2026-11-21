@@ -39,8 +39,8 @@ class SessionOptions:
     """
 
     device: str = "cpu"
-    output_device: str = "cpu"
-    output_overrides: dict[str, str] = field(default_factory=dict)
+    output_device: str | None = None
+    output_overrides: dict[str, str | None] = field(default_factory=dict)
     engine: str = _DEFAULT_ENGINE
     onnx_tensorrt: dict[str, dict[str, str]] = field(default_factory=dict)
     cuda_graph_replay: set[str] = field(default_factory=set)

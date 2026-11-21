@@ -20,7 +20,7 @@ use ort::{
 };
 use std::{
     collections::HashMap,
-    ffi::{c_char, CString},
+    ffi::{c_char, CStr, CString},
     path::PathBuf,
     ptr::{self, NonNull},
     sync::{Arc, Mutex},
@@ -82,6 +82,7 @@ struct Loaded {
     input_names: Vec<String>,
     output_names: Vec<String>,
     output_shapes: Vec<Vec<i64>>,
+    output_locations: Vec<MemoryLocation>,
     location: MemoryLocation,
     replay: bool,
 }
@@ -197,6 +198,7 @@ impl Model {
         let input_names = check_ports(&model.inputs, session.inputs()).context("ONNX inputs")?;
         let output_names =
             check_ports(&model.outputs, session.outputs()).context("ONNX outputs")?;
+        let output_locations = output_locations(&session, &output_names)?;
         Ok(Self {
             prepared: None,
             loaded: Arc::new(Loaded {
@@ -204,6 +206,7 @@ impl Model {
                 custom_ops,
                 input_names,
                 output_names,
+                output_locations,
                 output_shapes: model
                     .outputs
                     .iter()
@@ -254,6 +257,10 @@ impl BackendPlugin for Model {
         } else {
             1
         }
+    }
+
+    fn output_location(&self, position: usize) -> Option<MemoryLocation> {
+        Some(self.loaded.output_locations[position])
     }
 
     #[cfg(test)]
@@ -434,13 +441,15 @@ impl BackendPlugin for Model {
         for (name, value) in self.loaded.input_names.iter().zip(&values) {
             binding.bind_input(name.as_str(), value)?;
         }
-        let info = memory(self.loaded.location)?;
         for (position, name) in self.loaded.output_names.iter().enumerate() {
             if let Some(output) = bindings.iter().find(|output| output.0 == position) {
                 let value = unsafe { borrowed_value(&output.1) }?;
                 binding.bind_output(name.as_str(), value)?;
             } else {
-                binding.bind_output_to_device(name.as_str(), &info)?;
+                binding.bind_output_to_device(
+                    name.as_str(),
+                    &memory(self.loaded.output_locations[position])?,
+                )?;
             }
         }
         // SAFETY: each invocation owns its binding; shared ORT sessions support
@@ -505,14 +514,62 @@ impl BackendPlugin for Model {
                 };
                 // SAFETY: ORT owns the completed output until this copy finishes.
                 transfers
-                    .copy(
-                        unsafe { BorrowedTensor::new(&descriptor) },
-                        self.loaded.location,
-                    )
+                    .copy(unsafe { BorrowedTensor::new(&descriptor) }, location)
                     .map(Some)
             })
             .collect()
     }
+}
+
+/// Query producer devices once, then reorder to LEAPP port order.
+fn output_locations(session: &Session, names: &[String]) -> Result<Vec<MemoryLocation>> {
+    let api = ort::api();
+    let mut infos = vec![ptr::null(); session.outputs().len()];
+    // SAFETY: the initialized session owns these borrowed metadata pointers.
+    unsafe {
+        ort::Error::result_from_status((api.SessionGetMemoryInfoForOutputs)(
+            session.ptr(),
+            infos.as_mut_ptr(),
+            infos.len(),
+        ))?;
+    }
+    names
+        .iter()
+        .map(|name| {
+            let position = session
+                .outputs()
+                .iter()
+                .position(|port| port.name() == name)
+                .unwrap();
+            let info = infos[position];
+            ensure!(
+                !info.is_null(),
+                "ORT returned no memory info for output {name}"
+            );
+            let mut allocator = ptr::null();
+            let mut id = 0;
+            // SAFETY: info and its allocator name are owned by the loaded session.
+            unsafe {
+                ort::Error::result_from_status((api.MemoryInfoGetName)(info, &mut allocator))?;
+                ort::Error::result_from_status((api.MemoryInfoGetId)(info, &mut id))?;
+                ensure!(
+                    !allocator.is_null(),
+                    "ORT returned no output allocator name"
+                );
+                match CStr::from_ptr(allocator).to_bytes() {
+                    b"Cpu" => Ok(MemoryLocation::Cpu),
+                    b"CudaPinned" => Ok(MemoryLocation::PinnedCpu),
+                    b"Cuda" => Ok(MemoryLocation::Cuda {
+                        device_id: u32::try_from(id)?,
+                    }),
+                    _ => anyhow::bail!(
+                        "unsupported ORT output allocator {:?}",
+                        CStr::from_ptr(allocator)
+                    ),
+                }
+            }
+        })
+        .collect()
 }
 
 fn bound_outputs(session: &Session, binding: &IoBinding) -> Result<Vec<DynValue>> {

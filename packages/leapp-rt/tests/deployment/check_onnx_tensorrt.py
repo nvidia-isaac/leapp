@@ -41,7 +41,10 @@ def check(fixtures, cache, engine):
         if excluded is not None:
             parameters["trt_op_types_to_exclude"] = excluded
         options = lrt.SessionOptions(
-            engine=engine, device="cuda:0", onnx_tensorrt={"arithmetic": parameters}
+            engine=engine,
+            device="cuda:0",
+            output_device="cpu",
+            onnx_tensorrt={"arithmetic": parameters},
         )
         snapshot = None
         for _ in range(2):

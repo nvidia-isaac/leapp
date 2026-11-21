@@ -38,7 +38,7 @@ fn warp_plugins_execute_through_sessions() {
                         cuda_graph_replay: Default::default(),
                         device,
                         output_placement: OutputPlacement {
-                            default_location: location,
+                            default_location: Some(location),
                             ..Default::default()
                         },
                     },

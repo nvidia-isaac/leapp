@@ -209,10 +209,7 @@ impl BackendPlugin for Model {
     ) -> Result<Vec<Option<SharedTensor>>> {
         let inputs: Vec<_> = inputs.iter().map(|value| *value.descriptor()).collect();
         let targets = output_bindings(bindings);
-        let mut context = CopyContext {
-            transfers,
-            location: self.location,
-        };
+        let mut context = CopyContext { transfers };
         let host = ffi::Host {
             context: (&mut context as *mut CopyContext<'_>).cast(),
             copy,
@@ -302,7 +299,6 @@ impl Drop for Outputs<'_> {
 
 struct CopyContext<'a> {
     transfers: &'a mut crate::engines::native::Transfers,
-    location: MemoryLocation,
 }
 
 unsafe extern "C" fn destroy_tensor(value: *mut c_void) {
@@ -324,9 +320,10 @@ unsafe extern "C" fn copy(
     // and ready source storage retained by its C++ owner.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         let context = &mut *context.cast::<CopyContext<'_>>();
-        let value = context
-            .transfers
-            .copy(BorrowedTensor::new(&*source), context.location)?;
+        let value = context.transfers.copy(
+            BorrowedTensor::new(&*source),
+            dlpack::location((*source).device)?,
+        )?;
         let value = Box::new(value);
         output.write(ffi::TensorHandle {
             value: Box::into_raw(value).cast(),

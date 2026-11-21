@@ -14,8 +14,11 @@ pub(super) use triton_api::load;
 
 impl OutputPlacement {
     pub(super) fn validate(&self) -> Result<()> {
-        self.default_location.validate()?;
-        for location in self.overrides.values() {
+        for location in self
+            .default_location
+            .iter()
+            .chain(self.overrides.values().flatten())
+        {
             location.validate()?;
         }
         Ok(())

@@ -266,7 +266,7 @@ fn validation_failures_leave_session_usable() {
     options
         .output_placement
         .overrides
-        .insert("bad".into(), MemoryLocation::Cpu);
+        .insert("bad".into(), Some(MemoryLocation::Cpu));
     assert!(Session::open(session.bundle(), options).is_err());
     assert!(session
         .run(&std::collections::HashMap::from([(
@@ -355,7 +355,9 @@ fn feedback_advances_per_session_reset_and_failures_are_atomic() {
         data["models"]["reshape"] = reshape["models"]["reshape"].clone();
         data["pipeline"]["inputs"]["reshape"] = json!(["input"]);
         data["pipeline"]["outputs"]["reshape"] = json!(["output"]);
-        let runtime = Session::open(&bundle(&data, &directory), options(device)).unwrap();
+        let mut options = options(device);
+        options.output_placement.default_location = Some(MemoryLocation::Cpu);
+        let runtime = Session::open(&bundle(&data, &directory), options).unwrap();
         fs::remove_file(directory.path().join("initial.safetensors")).unwrap();
         let mut session = runtime.new_session().unwrap();
         let run = |session: &mut Session, reshape: &[f32]| {
@@ -370,7 +372,7 @@ fn feedback_advances_per_session_reset_and_failures_are_atomic() {
         assert_eq!(values(&first, "accumulator/next"), [11.; 4]);
         let lease = first.get("accumulator/next").unwrap().export(true);
         let descriptor = lease.descriptor().unwrap();
-        // SAFETY: default outputs are CPU float32, with no concurrent readers.
+        // SAFETY: outputs explicitly request CPU float32, with no concurrent readers.
         unsafe {
             std::slice::from_raw_parts_mut(descriptor.data.cast::<f32>(), 4).fill(99.);
         }
@@ -578,5 +580,63 @@ fn public_pt2_execution() {
             )]))
             .unwrap();
         assert_eq!(values(&result, "model/output_0"), [12., 26., 42., 60.]);
+    }
+}
+
+#[test]
+fn default_outputs_preserve_backend_placement() {
+    for device in devices() {
+        let execution = support::execution_location(device);
+        for name in ["mixed_outputs", "mixed_outputs_dynamic"] {
+            let bundle = Bundle::open(fixtures("triton").join(format!("{name}.yaml"))).unwrap();
+            let input = input(&[1_f32; 4], &[4], device);
+            let input_name = format!("{name}/input");
+            let output_name = format!("{name}/output");
+            let constant_name = format!("{name}/constant");
+            for (target, constant_target) in [
+                (None, None),
+                (Some(MemoryLocation::Cpu), Some(MemoryLocation::Cpu)),
+                (Some(execution), Some(execution)),
+                (Some(execution), None),
+            ] {
+                let mut options = options(ExecutionDevice::Cpu);
+                options.device = device; // Changing execution must not pin outputs to CPU.
+                options.output_placement.default_location = target;
+                options
+                    .output_placement
+                    .overrides
+                    .insert(constant_name.clone(), constant_target);
+                let mut session = Session::open(&bundle, options).unwrap();
+                let inputs = std::collections::HashMap::from([(input_name.as_str(), input.view())]);
+                let first = session.run(&inputs).unwrap();
+                let mut peer = session.new_session().unwrap();
+                let second = peer.run(&inputs).unwrap();
+                for result in [&first, &second] {
+                    for (name, natural, target) in [
+                        (&output_name, execution, target),
+                        (&constant_name, MemoryLocation::Cpu, constant_target),
+                    ] {
+                        let actual = result.get(name).unwrap().location();
+                        if target.is_none()
+                            && natural == MemoryLocation::Cpu
+                            && support::engine() == lrt::EngineKind::Triton
+                        {
+                            // Triton may return host outputs in its pinned pool.
+                            assert!(
+                                matches!(actual, MemoryLocation::Cpu | MemoryLocation::PinnedCpu)
+                                    || actual == execution
+                            );
+                        } else {
+                            assert_eq!(actual, target.unwrap_or(natural));
+                        }
+                    }
+                    assert_eq!(values(result, &output_name), [2.; 4]);
+                    assert_eq!(values(result, &constant_name), [2.]);
+                }
+                session.close();
+                peer.close();
+                assert_eq!(values(&first, &output_name), [2.; 4]);
+            }
+        }
     }
 }

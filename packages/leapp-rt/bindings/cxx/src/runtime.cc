@@ -83,7 +83,11 @@ Status Invalid(std::string message) {
 }
 
 wire::Location Location(MemoryLocation location) {
-  return {static_cast<wire::Memory>(location.type), location.device_id};
+  return {static_cast<wire::Memory>(location.type), location.device_id, true};
+}
+
+wire::Location Location(std::optional<MemoryLocation> location) {
+  return location ? Location(*location) : wire::Location{};
 }
 
 const Metadata& EmptyMetadata() {

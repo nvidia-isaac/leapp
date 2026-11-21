@@ -104,7 +104,7 @@ impl TestAllocation {
         result?;
         assert_eq!(
             (memory, device),
-            state.placement.location("output").native()
+            state.placement.location("output").unwrap().native()
         );
         Ok(Self {
             api: state.api,
@@ -151,7 +151,10 @@ fn test_state() -> Option<State<'static>> {
     > = std::sync::OnceLock::new();
     Some(State::new(
         crate::engines::triton::native::load().unwrap(),
-        PLACEMENT.get_or_init(Default::default),
+        PLACEMENT.get_or_init(|| OutputPlacement {
+            default_location: Some(crate::MemoryLocation::Cpu),
+            ..Default::default()
+        }),
         OUTPUTS.get_or_init(Default::default),
     ))
 }

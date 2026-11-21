@@ -21,14 +21,16 @@ use std::{
     sync::Arc,
 };
 
-/// Exact allocation locations keyed by logical output names.
+/// Output placement keyed by logical output names.
 #[derive(Debug, Clone, Default)]
 pub struct OutputPlacement {
-    pub default_location: MemoryLocation,
-    pub overrides: HashMap<String, MemoryLocation>,
+    /// None preserves backend placement; Some requests an explicit location.
+    pub default_location: Option<MemoryLocation>,
+    pub overrides: HashMap<String, Option<MemoryLocation>>,
 }
+
 impl OutputPlacement {
-    pub(crate) fn location(&self, name: &str) -> MemoryLocation {
+    pub(crate) fn location(&self, name: &str) -> Option<MemoryLocation> {
         self.overrides
             .get(name)
             .copied()
@@ -162,9 +164,13 @@ impl Session {
                 .insert(name.clone(), options.output_placement.location(name));
         }
         for source in &feedback_sources {
-            engine_placement
-                .overrides
-                .insert(source.clone(), state_location);
+            if !output_specs.contains_key(source)
+                || options.output_placement.location(source).is_some()
+            {
+                engine_placement
+                    .overrides
+                    .insert(source.clone(), Some(state_location));
+            }
         }
         Ok(Self {
             engine: Some(engine),
@@ -361,7 +367,12 @@ impl Session {
                 let value = output(name)?;
                 let value = if self.feedback_sources.contains(name) {
                     // SAFETY: completed output storage has not been published to a foreign writer.
-                    engine.copy(unsafe { value.borrow() }, self.placement.location(name))?
+                    engine.copy(
+                        unsafe { value.borrow() },
+                        self.placement
+                            .location(name)
+                            .unwrap_or_else(|| value.location()),
+                    )?
                 } else {
                     value
                 };
@@ -371,7 +382,16 @@ impl Session {
         let feedback = self
             .feedback
             .iter()
-            .map(|(input, source)| Ok((input.clone(), output(source)?)))
+            .map(|(input, source)| {
+                let value = output(source)?;
+                let value = if value.location() == self.state_location {
+                    value
+                } else {
+                    // Move private feedback only; the public output keeps its location.
+                    engine.copy(unsafe { value.borrow() }, self.state_location)?
+                };
+                Ok((input.clone(), value))
+            })
             .collect::<anyhow::Result<Vec<_>>>()?;
         self.inputs.extend(feedback);
         Ok(RunResult {

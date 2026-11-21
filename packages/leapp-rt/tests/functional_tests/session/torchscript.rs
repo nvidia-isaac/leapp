@@ -57,7 +57,7 @@ fn scripted_traced_and_mixed_match_pytorch_with_positional_ports() {
                     device,
                     ..Default::default()
                 };
-                options.output_placement.default_location = location;
+                options.output_placement.default_location = Some(location);
                 let input = if name == "mixed" {
                     "preprocess/values"
                 } else {
@@ -92,6 +92,58 @@ fn scripted_traced_and_mixed_match_pytorch_with_positional_ports() {
                     .unwrap(),
                 expected[0]
             );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires LEAPP TorchScript/ONNX backends and TorchScript fixtures"]
+fn cpu_outputs_are_forwarded_to_the_consumer_device() {
+    for device in devices() {
+        let location = support::execution_location(device);
+        for name in [
+            "constant_forward",
+            "constant_forward_dynamic",
+            "constant_forward_dynamic_consumer",
+        ] {
+            for public in [false, true] {
+                let name = format!("{name}{}", if public { "" } else { "_private" });
+                let mut session = open(&name, device);
+                let mut retained = Vec::new();
+                for offset in [0., 7., -2.] {
+                    let values = placed(&[offset; 4], &[4], location).unwrap();
+                    let inputs = HashMap::from([
+                        ("preprocess/values", values.view()),
+                        ("model/INPUT__9", values.view()),
+                    ]);
+                    let target = placed(&[0_f32; 4], &[4], location).unwrap();
+                    let descriptor = *target.view().descriptor();
+                    let mut buffers = HashMap::new();
+                    if public && offset == 7. {
+                        // SAFETY: target is exclusive, disjoint and retained through the call.
+                        buffers.insert("preprocess/constant", unsafe {
+                            OutputBuffer::new(&descriptor).unwrap()
+                        });
+                    }
+                    let result = session.run_into(&inputs, &mut buffers).unwrap();
+                    if public && buffers.is_empty() {
+                        let constant = result.get("preprocess/constant").unwrap();
+                        if support::engine() == lrt::EngineKind::Native {
+                            assert_eq!(constant.location(), MemoryLocation::Cpu);
+                        }
+                        assert_eq!(constant.to_cpu_vec::<f32>().unwrap(), [1., 2., 3., 4.]);
+                    }
+                    retained.push((offset, result));
+                }
+                session.close();
+                for (offset, result) in retained {
+                    let output = result.get("model/z_result").unwrap();
+                    assert_eq!(
+                        output.to_cpu_vec::<f32>().unwrap(),
+                        [2. + offset, 6. + offset, 12. + offset, 20. + offset]
+                    );
+                }
+            }
         }
     }
 }

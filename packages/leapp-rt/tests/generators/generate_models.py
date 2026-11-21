@@ -217,6 +217,33 @@ def generate(root):
             },
         )
 
+    # Mixed provider output placement: arithmetic on CUDA, initializer on CPU.
+    for name, shape in [("mixed_outputs", [4]), ("mixed_outputs_dynamic", [-1])]:
+        model = save_model(
+            root,
+            name,
+            [port("input", shape), port("state", [1])],
+            [port("output", shape), port("constant", [1])],
+            [helper.make_node("Add", ["input", "one"], ["output"])],
+            [
+                numpy_helper.from_array(np.array([1], dtype=np.float32), "one"),
+                numpy_helper.from_array(np.array([2], dtype=np.float32), "constant"),
+            ],
+        )
+        write(
+            name,
+            {
+                "models": {name: model},
+                "pipeline": {
+                    "data_flow": {},
+                    "feedback_flow": {f"{name}/constant": [f"{name}/state"]},
+                    "inputs": {name: ["input"]},
+                    "outputs": {name: ["output", "constant"]},
+                    "configs": {},
+                },
+            },
+        )
+
     # Exercise cuDNN in isolated CUDA deployments, beyond elementwise kernels.
     convolution = save_model(
         root,

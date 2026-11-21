@@ -8,9 +8,10 @@ import copy
 import json
 from pathlib import Path
 
+import numpy as np
 import torch
 from generate_models import port, save_model
-from onnx import helper
+from onnx import helper, numpy_helper
 
 
 class Weighted(torch.nn.Module):
@@ -169,6 +170,30 @@ def generate(root):
     mixed["pipeline"]["inputs"] = {"model": ["INPUT__9"], "preprocess": ["values"]}
     mixed["pipeline"]["data_flow"] = {"preprocess/features": ["model/z_values"]}
     write("mixed", mixed)
+
+    for name, shape, bias_shape in [
+        ("constant_forward", [4], [4]),
+        ("constant_forward_dynamic", [-1], [4]),
+        ("constant_forward_dynamic_consumer", [-1], [-1]),
+    ]:
+        forwarded = copy.deepcopy(mixed)
+        forwarded["models"]["preprocess"] = save_model(
+            root,
+            name,
+            [port("values", shape)],
+            [port("features", shape), port("constant", [4])],
+            [helper.make_node("Add", ["values", "one"], ["features"])],
+            [
+                numpy_helper.from_array(np.ones(1, dtype=np.float32), "one"),
+                numpy_helper.from_array(np.arange(1, 5, dtype=np.float32), "constant"),
+            ],
+        )
+        forwarded["models"]["model"]["inputs"][1]["shape"] = bias_shape
+        forwarded["pipeline"]["data_flow"] = {"preprocess/constant": ["model/z_values"]}
+        forwarded["pipeline"]["outputs"]["preprocess"] = ["features", "constant"]
+        write(name, forwarded)
+        forwarded["pipeline"]["outputs"]["preprocess"] = ["features"]
+        write(f"{name}_private", forwarded)
 
     mutating_accumulator = export(
         "mutating_accumulator",

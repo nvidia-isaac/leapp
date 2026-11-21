@@ -246,6 +246,14 @@ impl SharedTensor {
         })))
     }
 
+    /// Inspect placement without exposing storage to foreign writers.
+    pub(crate) fn location(&self) -> crate::MemoryLocation {
+        crate::engines::memory::dlpack::location(
+            self.0.owner.descriptor().expect("validated ABI").device,
+        )
+        .expect("validated storage location")
+    }
+
     /// Expose the descriptor, excluding subsequent safe CPU copies on every clone.
     pub fn descriptor(&self) -> &DLTensor {
         // Serialize the first exposure against safe CPU reads on every clone.

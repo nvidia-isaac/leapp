@@ -48,10 +48,11 @@ impl<'a> State<'a> {
         }
     }
 
-    fn location(&self, name: &str) -> crate::MemoryLocation {
-        self.targets
-            .get(name)
-            .map_or_else(|| self.placement.location(name), |target| target.location())
+    fn location(&self, name: &str) -> Option<crate::MemoryLocation> {
+        self.targets.get(name).map_or_else(
+            || self.placement.location(name),
+            |target| Some(target.location()),
+        )
     }
 
     fn lock(&self) -> MutexGuard<'_, Completion> {
@@ -133,7 +134,9 @@ pub(crate) unsafe extern "C" fn query(
                     .to_str()
                     .map_err(|_| internal("output name is not UTF-8"))?
             };
-            (*memory, *device) = state.location(name).native();
+            if let Some(location) = state.location(name) {
+                (*memory, *device) = location.native();
+            }
         }
         Ok(())
     })
@@ -143,8 +146,8 @@ pub(crate) unsafe extern "C" fn allocate(
     _: *mut sys::TRITONSERVER_ResponseAllocator,
     name: *const c_char,
     len: usize,
-    _: u32,
-    _: i64,
+    preferred_memory: u32,
+    preferred_device: i64,
     userp: *mut c_void,
     data: *mut *mut c_void,
     owner: *mut *mut c_void,
@@ -162,7 +165,10 @@ pub(crate) unsafe extern "C" fn allocate(
             let name = CStr::from_ptr(name)
                 .to_str()
                 .map_err(|_| internal("output name is not UTF-8"))?;
-            let location = state.location(name);
+            let location = match state.location(name) {
+                None => crate::MemoryLocation::from_native(preferred_memory, preferred_device)?,
+                Some(location) => location,
+            };
             (*memory, *device) = location.native();
             // Triton need not call release for null, zero-length allocations.
             if len != 0 {
@@ -318,9 +324,12 @@ pub(crate) fn outputs(
                 .map_err(|_| internal("output name is not UTF-8"))?
                 .to_owned();
             let target = targets.get(name.as_str());
-            let location =
-                target.map_or_else(|| placement.location(&name), |target| target.location());
-            if (memory, device) != location.native() {
+            let requested = target.map_or_else(
+                || placement.location(&name),
+                |target| Some(target.location()),
+            );
+            let location = crate::MemoryLocation::from_native(memory, device)?;
+            if requested.is_some_and(|requested| requested != location) {
                 return Err(internal("output memory does not match requested placement"));
             }
             let dtype = crate::engines::triton::memory::dlpack::dtype_from_native(dtype)?;

@@ -41,6 +41,7 @@ pub mod ffi {
     struct Location {
         memory: Memory,
         device: u32,
+        present: bool,
     }
 
     enum MetadataKind {

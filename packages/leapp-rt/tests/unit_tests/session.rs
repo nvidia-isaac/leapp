@@ -174,10 +174,10 @@ fn peers_inherit_placement_and_close_independently() {
     let graph = graph::Graph::new(&bundle).unwrap();
     let options = SessionOptions {
         output_placement: OutputPlacement {
-            default_location: MemoryLocation::PinnedCpu,
+            default_location: Some(MemoryLocation::PinnedCpu),
             overrides: HashMap::from([(
                 "a_policy/next_state".into(),
-                MemoryLocation::Cuda { device_id: 0 },
+                Some(MemoryLocation::Cuda { device_id: 0 }),
             )]),
         },
         ..Default::default()
@@ -190,15 +190,15 @@ fn peers_inherit_placement_and_close_independently() {
     for current in [&session, &peer] {
         assert_eq!(
             current.engine_placement.location("a_policy/next_state"),
-            MemoryLocation::Cpu
+            Some(MemoryLocation::Cpu)
         );
         assert_eq!(
             current.engine_placement.location("a_policy/actions"),
-            MemoryLocation::PinnedCpu
+            Some(MemoryLocation::PinnedCpu)
         );
         assert_eq!(
             current.placement.location("a_policy/next_state"),
-            MemoryLocation::Cuda { device_id: 0 }
+            Some(MemoryLocation::Cuda { device_id: 0 })
         );
     }
     session.close();

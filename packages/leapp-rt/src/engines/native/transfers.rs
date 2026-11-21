@@ -14,11 +14,15 @@ use std::{collections::HashMap, sync::Arc};
 #[derive(Default)]
 pub(super) struct Transfers {
     streams: HashMap<u32, HandoffStream>,
+    #[cfg(test)]
+    pub(super) copies: Vec<(MemoryLocation, MemoryLocation)>,
 }
 
 impl Transfers {
     pub fn new(location: MemoryLocation, options: &crate::SessionOptions) -> Result<Self> {
         let mut value = Self {
+            #[cfg(test)]
+            copies: Vec::new(),
             streams: options
                 .cuda_streams
                 .iter()
@@ -26,8 +30,15 @@ impl Transfers {
                 .collect(),
         };
         for location in std::iter::once(location)
-            .chain(std::iter::once(options.output_placement.default_location))
-            .chain(options.output_placement.overrides.values().copied())
+            .chain(options.output_placement.default_location)
+            .chain(
+                options
+                    .output_placement
+                    .overrides
+                    .values()
+                    .copied()
+                    .flatten(),
+            )
         {
             if let MemoryLocation::Cuda { device_id } = location {
                 if let std::collections::hash_map::Entry::Vacant(entry) =
@@ -83,6 +94,8 @@ impl Transfers {
         }
         let descriptor = input.descriptor();
         let source = dlpack::location(descriptor.device)?;
+        #[cfg(test)]
+        self.copies.push((source, buffer.location));
         let device = match (source, buffer.location) {
             (_, MemoryLocation::Cuda { device_id }) | (MemoryLocation::Cuda { device_id }, _) => {
                 Some(device_id)

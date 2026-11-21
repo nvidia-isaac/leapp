@@ -42,7 +42,7 @@ fn exercise_with_options(
             SessionOptions {
                 cuda_streams: HashMap::from([(0, stream)]),
                 output_placement: OutputPlacement {
-                    default_location: location,
+                    default_location: Some(location),
                     ..Default::default()
                 },
                 ..options.clone()
