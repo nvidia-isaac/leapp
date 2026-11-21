@@ -224,6 +224,27 @@ def extract_source_from_line_range(executed_lines, context_name, is_function=Fal
     return source_code, message
 
 
+def _iter_own_returns(tree):
+    """Yield the return statements of the function parsed into ``tree``.
+
+    Nested functions, lambdas and classes are not entered: their return
+    statements belong to them, not to the outputs of the function itself.
+    Nodes are visited breadth-first, in the same order as ``ast.walk``.
+    """
+    root = tree.body[0] if tree.body else tree
+    if not isinstance(root, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        yield from (node for node in ast.walk(tree) if isinstance(node, ast.Return))
+        return
+    nested_scopes = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+    todo = collections.deque(root.body)
+    while todo:
+        node = todo.popleft()
+        if isinstance(node, ast.Return):
+            yield node
+        if not isinstance(node, nested_scopes):
+            todo.extend(ast.iter_child_nodes(node))
+
+
 def extract_return_names(func):
     """Extract variable names from return statements in the function."""
     try:
@@ -237,9 +258,9 @@ def extract_return_names(func):
         # Collect all return statements with their names
         return_statements = []
 
-        # Find all return statements
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Return) and node.value:
+        # Find all return statements of this function
+        for node in _iter_own_returns(tree):
+            if node.value:
                 statement_names = []
 
                 if isinstance(node.value, ast.Tuple):

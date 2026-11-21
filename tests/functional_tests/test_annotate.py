@@ -166,6 +166,30 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
             [torch.tensor([1])], [outputA, outputB, outputC], funcA.__name__
         )
 
+    def test_annotate_method_ignores_returns_of_nested_functions(self):
+        """tests that return statements of nested helpers are not taken as outputs"""
+
+        @annotate.method(export_with="jit")
+        def funcA(input1: torch.Tensor):
+            def clamp(x):
+                return x.clamp(-1.0, 1.0)
+
+            action = clamp(input1 * 2.0)
+            value = input1.sum()
+            return action, value
+
+        leapp.start(name=self.TEST_GRAPH_NAME)
+        outputA, outputB = funcA(torch.tensor([0.25, 0.75]))
+        leapp.stop()
+        leapp.compile_graph(visualize=False)
+
+        self.assertEqual(len(annotate.nodes), 1)
+        outputs = annotate.nodes[funcA.__name__].outputs
+        self.assertEqual([output.name for output in outputs], ["action", "value"])
+        self.verify_single_torchscript_model_expected_value(
+            [torch.tensor([0.25, 0.75])], [outputA, outputB], funcA.__name__
+        )
+
     def test_annotate_method_with_torch_no_grad_wrapper(self):
         """Tests that annotate.method works with functions wrapped by multiple decorators.
 
