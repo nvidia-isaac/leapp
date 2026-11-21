@@ -158,6 +158,7 @@ impl NativeEngine {
             models,
             slots,
             plan,
+            location,
             input_positions,
             input_bytes,
             staged_inputs,
@@ -165,6 +166,7 @@ impl NativeEngine {
             replay_calls: Vec::new(),
             dynamic_slots,
             output_bindings: Vec::with_capacity(binding_capacity),
+            forwarded_bindings: HashMap::new(),
             transfers: Transfers::new(location, options)
                 .map_err(|e| backends::error("prepare", e))?,
         };
@@ -179,6 +181,7 @@ impl NativeEngine {
                     .map_err(|e| RuntimeError::new("prepare", e))?
                     .unwrap_or(false);
             let mut external_inputs = Vec::new();
+            let mut staged_inputs = Vec::new();
             for (position, &id) in call.inputs.iter().enumerate() {
                 if let Some(order) = workspace.input_positions[id] {
                     external_inputs.push(InputRoute {
@@ -194,8 +197,21 @@ impl NativeEngine {
                     .chain(&call.outputs)
                     .all(|&id| workspace.slots[id].fixed.is_some())
             {
-                let inputs = call
-                    .inputs
+                // Preserve producer storage for public outputs; consumers bind
+                // private execution-device slots only where a transfer is needed.
+                let mut input_slots = call.inputs.clone();
+                for id in &mut input_slots {
+                    if workspace.slots[*id].location() != location {
+                        let slot = workspace.slots.len();
+                        workspace.slots.push(
+                            plan::Slot::new(workspace.slots[*id].spec.clone(), false, location)
+                                .map_err(|e| backends::error("prepare", e))?,
+                        );
+                        staged_inputs.push((*id, slot));
+                        *id = slot;
+                    }
+                }
+                let inputs = input_slots
                     .iter()
                     .map(|&id| workspace.slots[id].view())
                     .collect::<anyhow::Result<Vec<_>>>()
@@ -262,6 +278,30 @@ impl NativeEngine {
                 workspace.replay_calls.push(workspace.calls.len());
             }
             workspace.calls.push(CallState {
+                execute: if replay {
+                    Workspace::run_replay_first
+                } else if !prepared {
+                    Workspace::run_dynamic
+                } else if staged_inputs.is_empty() {
+                    Workspace::run_prepared
+                } else {
+                    Workspace::run_prepared_staged
+                },
+                staged_inputs,
+                output_routes: call
+                    .outputs
+                    .iter()
+                    .map(|&id| {
+                        let slot = &workspace.slots[id];
+                        match &slot.fixed {
+                            _ if slot.terminal => OutputRoute::Terminal,
+                            Some(fixed) if fixed.buffer.location == location => {
+                                OutputRoute::Copy(id, fixed.buffer.len)
+                            }
+                            _ => OutputRoute::Forward(id),
+                        }
+                    })
+                    .collect(),
                 replay: replay.then(Vec::new),
                 replay_failed: false,
                 outputs: call
@@ -283,13 +323,6 @@ impl NativeEngine {
                                 < workspace.plan.public_outputs
                     })
                     .collect(),
-                execute: if replay {
-                    Workspace::run_replay_first
-                } else if prepared {
-                    Workspace::run_prepared
-                } else {
-                    Workspace::run_dynamic
-                },
                 external_inputs: if prepared {
                     external_inputs
                 } else {
@@ -412,6 +445,7 @@ struct Workspace {
     models: Vec<Box<dyn BackendPlugin>>,
     slots: Vec<plan::Slot>,
     plan: Arc<Plan>,
+    location: MemoryLocation,
     // Direct Session input positions; fixed feedback and node outputs use slots.
     input_positions: Vec<Option<usize>>,
     input_bytes: Vec<usize>,
@@ -422,6 +456,8 @@ struct Workspace {
     replay_calls: Vec<usize>,
     dynamic_slots: Vec<usize>,
     output_bindings: Vec<(usize, DLTensor)>,
+    // Completed output overrides borrowed only until this invocation finishes.
+    forwarded_bindings: HashMap<usize, DLTensor>,
     transfers: Transfers,
 }
 
@@ -433,8 +469,19 @@ unsafe impl Send for Workspace {}
 // Dispatch uses a preselected function, with no mode flag in the loop.
 type Execute = fn(&mut Workspace, usize, &[(&str, BorrowedTensor<'_>)]) -> anyhow::Result<()>;
 
+// Destination handling for completed overrides, resolved at session setup.
+enum OutputRoute {
+    Terminal,
+    Forward(usize),
+    // Original slot and fixed byte length for prepared consumer bindings.
+    Copy(usize, usize),
+}
+
 struct CallState {
     execute: Execute,
+    // Producer slot and the consumer's execution-device staging slot.
+    staged_inputs: Vec<(usize, usize)>,
+    output_routes: Vec<OutputRoute>,
     // Input position within this call and its boundary position in Plan.inputs.
     external_inputs: Vec<InputRoute>,
     outputs: Vec<(usize, usize, String)>,
@@ -499,6 +546,7 @@ impl Engine for NativeEngine {
         let result = workspace.run(inputs, placement, outputs);
         // Release invocation descriptors; replay retains only effective addresses.
         workspace.output_bindings.clear();
+        workspace.forwarded_bindings.clear();
 
         // No dynamic value from a failed/previous call can feed a later call.
         let workspace = &mut *workspace;
@@ -525,6 +573,18 @@ impl Engine for NativeEngine {
 }
 
 impl Workspace {
+    fn forwarded_input<'a>(
+        slots: &'a [plan::Slot],
+        bindings: &'a HashMap<usize, DLTensor>,
+        id: usize,
+    ) -> anyhow::Result<BorrowedTensor<'a>> {
+        match bindings.get(&id) {
+            // SAFETY: completed, validated overrides remain alive until run returns.
+            Some(tensor) => Ok(unsafe { BorrowedTensor::new(tensor) }),
+            None => slots[id].view(),
+        }
+    }
+
     /// Reject changed replay bindings before any node can change session state.
     fn validate_replay(
         &self,
@@ -567,7 +627,31 @@ impl Workspace {
             .iter()
             .map(|(_, tensor)| tensor.data as usize + tensor.byte_offset as usize);
         self.calls[index].replay = Some(self.calls[index].addresses(inputs, outputs).collect());
-        self.calls[index].execute = Self::run_prepared;
+        let execute: Execute = if self.calls[index].staged_inputs.is_empty() {
+            Self::run_prepared
+        } else {
+            Self::run_prepared_staged
+        };
+        self.calls[index].execute = execute;
+        execute(self, index, inputs)
+    }
+
+    /// Refresh private consumer slots only for calls selected during preparation.
+    fn run_prepared_staged(
+        &mut self,
+        index: usize,
+        inputs: &[(&str, BorrowedTensor<'_>)],
+    ) -> anyhow::Result<()> {
+        for &(source, slot) in &self.calls[index].staged_inputs {
+            let (sources, targets) = self.slots.split_at_mut(slot);
+            let len = targets[0].fixed.as_ref().unwrap().buffer.len;
+            let input = Self::forwarded_input(sources, &self.forwarded_bindings, source)?;
+            // SAFETY: connected ports have identical fixed dtype/shape, and the
+            // consumer's private staging slot is disjoint from the producer.
+            unsafe {
+                targets[0].assign_validated(input, len, &mut self.transfers)?;
+            }
+        }
         self.run_prepared(index, inputs)
     }
 
@@ -592,12 +676,32 @@ impl Workspace {
         inputs: &[(&str, BorrowedTensor<'_>)],
     ) -> anyhow::Result<()> {
         let call = &self.plan.calls[index];
+        let staged = call
+            .inputs
+            .iter()
+            .map(|&id| {
+                if self.input_positions[id].is_none() {
+                    let value = Self::forwarded_input(&self.slots, &self.forwarded_bindings, id)?;
+                    if crate::engines::memory::dlpack::location(value.descriptor().device)?
+                        != self.location
+                    {
+                        return self.transfers.copy(value, self.location).map(Some);
+                    }
+                }
+                Ok(None)
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
         let inputs = call
             .inputs
             .iter()
-            .map(|&id| match self.input_positions[id] {
-                Some(position) => Ok(inputs[position].1),
-                None => self.slots[id].view(),
+            .zip(&staged)
+            .map(|(&id, staged)| match staged {
+                // SAFETY: these private copies stay alive through backend completion.
+                Some(value) => Ok(unsafe { value.borrow() }),
+                None => match self.input_positions[id] {
+                    Some(position) => Ok(inputs[position].1),
+                    None => Self::forwarded_input(&self.slots, &self.forwarded_bindings, id),
+                },
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
         // SAFETY: Session inputs, forwarded values and writable outputs remain
@@ -680,17 +784,19 @@ impl Workspace {
                 }
                 format!("execute node {}", self.plan.calls[index].name)
             })?;
-            // Copy overridden outputs back for downstream consumers.
+            // Forward completed overrides or refresh fixed consumer bindings.
             for binding in &self.output_bindings {
-                let id = self.plan.calls[index].outputs[binding.0];
-                if !self.slots[id].terminal {
-                    // SAFETY: the completed backend initialized the validated target.
-                    let view = unsafe { BorrowedTensor::new(&binding.1) };
-                    let len = unsafe {
-                        crate::engines::memory::dlpack::layout_unchecked(*view.descriptor())
+                match self.calls[index].output_routes[binding.0] {
+                    OutputRoute::Terminal => {}
+                    OutputRoute::Forward(id) => {
+                        self.forwarded_bindings.insert(id, binding.1);
                     }
-                    .1;
-                    unsafe { self.slots[id].assign_validated(view, len, &mut self.transfers) }?;
+                    OutputRoute::Copy(id, len) => {
+                        // SAFETY: the completed backend initialized a validated
+                        // target matching this slot's fixed dtype, shape and length.
+                        let view = unsafe { BorrowedTensor::new(&binding.1) };
+                        unsafe { self.slots[id].assign_validated(view, len, &mut self.transfers) }?;
+                    }
                 }
             }
         }

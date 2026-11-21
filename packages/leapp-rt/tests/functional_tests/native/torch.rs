@@ -45,6 +45,53 @@ fn engine(bundle: &Bundle, device: ExecutionDevice) -> NativeEngine {
 }
 
 #[test]
+#[ignore = "requires native TorchScript/ONNX backends, fixtures and CUDA"]
+fn supplied_cuda_outputs_do_not_round_trip_through_cpu() {
+    let device = ExecutionDevice::Cuda { device_id: 0 };
+    let location = MemoryLocation::Cuda { device_id: 0 };
+    for name in [
+        "constant_forward",
+        "constant_forward_dynamic",
+        "constant_forward_dynamic_consumer",
+    ] {
+        let engine = engine(&bundle("jit", name, device), device);
+        let input = placed(&[0_f32; 4], &[4], location).unwrap();
+        for size in [4, 3, 4] {
+            let bias = placed(&vec![0_f32; size], &[size as i64], location).unwrap();
+            let target = placed(&[0_f32; 4], &[4], location).unwrap();
+            let descriptor = *target.view().descriptor();
+            let mut outputs = HashMap::from([(
+                "preprocess/constant",
+                // SAFETY: this exclusive target is disjoint and alive through execution.
+                unsafe { OutputBuffer::new(&descriptor).unwrap() },
+            )]);
+            engine.workspace.lock().unwrap().transfers.copies.clear();
+            let result = engine.run(
+                &[
+                    ("model/INPUT__9", bias.view()),
+                    ("preprocess/values", input.view()),
+                ],
+                &OutputPlacement::default(),
+                &mut outputs,
+            );
+            let workspace = engine.workspace.lock().unwrap();
+            assert!(workspace.forwarded_bindings.is_empty());
+            if size == 3 {
+                assert!(result.is_err());
+                continue;
+            }
+            result.unwrap();
+            let copies = &workspace.transfers.copies;
+            assert!(
+                copies.iter().all(|&pair| pair == (location, location)),
+                "forwarding a CUDA destination must not introduce host copies: {copies:?}"
+            );
+            assert_eq!(target.to_cpu_vec::<f32>().unwrap(), [1., 2., 3., 4.]);
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires native TorchScript/NativeRT backends and CPU/CUDA fixtures"]
 fn fixed_torch_buffers_and_bindings_survive_changed_inputs_and_placements() {
     for device in devices() {
