@@ -190,10 +190,24 @@ size when it is:
    reports this for a decorated function, but not for a manually annotated
    node.
 
-A traced size belongs to the node it was read in. Using it in a recorded
-operation while another node is recording raises an error; read the size again
-from a tensor of that node. The uses in the warning above are not detected
-across nodes either.
+Variable dimensions between nodes
+---------------------------------
+
+Declare a variable dimension once, on the input where the tensor enters the
+pipeline. A node input that is connected to another node's output inherits
+that output's variable dimensions, with their name, bounds and
+``multiple_of``, and needs no declaration. A size the producer derives, such
+as ``2 * length + 1``, is inherited as that expression.
+
+Nothing else passes between nodes. Code between two nodes is not exported and
+runs once, on the captured sample:
+
+* A tensor computed between nodes is a new pipeline input. Declare its variable
+  dimensions again on that input; otherwise they are fixed.
+* A size read between nodes, such as ``n = y.shape[1]``, is the captured size.
+  A later node that uses it may return wrong results at other sizes, and
+  validation cannot detect this. To avoid it, do not carry a size from one
+  node into another. Read it inside the node that uses it.
 
 What ``compile_graph()`` checks
 -------------------------------
