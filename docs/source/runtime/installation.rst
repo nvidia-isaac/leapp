@@ -32,22 +32,6 @@ checkout. Keep the core and backend packages on the same release and build.
       deployment OS. NumPy is a dependency; PyTorch and CuPy are optional
       DLPack producers and consumers.
 
-      .. rubric:: Pixi
-
-      Use Pixi 0.84+ to generate a locked application environment with the core
-      and the selected model libraries. This example selects CPU ONNX:
-
-      .. code-block:: bash
-
-         pixi run consumer --channel <backend-channel> --output <application-env> --backends onnx
-         pixi install --manifest-path <application-env>/pixi.toml
-         pixi run --manifest-path <application-env>/pixi.toml python -c 'import lrt'
-
-      The generator installs the PyPI core by default. For a local channel
-      containing development bindings, add ``--core-source channel`` to the
-      generator command. An inspection-only environment needs no backend
-      channel: use ``pixi run consumer --output <application-env>``.
-
       .. rubric:: pip
 
       Install the core for bundle inspection, or select the required backends
@@ -66,6 +50,22 @@ checkout. Keep the core and backend packages on the same release and build.
 
       Import the runtime with ``import lrt``. The core wheel contains no model
       runtimes or NVIDIA libraries; optional backend wheels supply those libraries.
+
+      .. rubric:: Pixi
+
+      Use Pixi 0.84+ to generate a locked application environment with the core
+      and the selected model libraries. This example selects CPU ONNX:
+
+      .. code-block:: bash
+
+         pixi run consumer --channel <backend-channel> --output <application-env> --backends onnx
+         pixi install --manifest-path <application-env>/pixi.toml
+         pixi run --manifest-path <application-env>/pixi.toml python -c 'import lrt'
+
+      The generator installs the PyPI core by default. For a local channel
+      containing development bindings, add ``--core-source channel`` to the
+      generator command. An inspection-only environment needs no backend
+      channel: use ``pixi run consumer --output <application-env>``.
 
    .. tab-item:: C++
       :sync: cpp
@@ -87,16 +87,6 @@ checkout. Keep the core and backend packages on the same release and build.
       Build the core from the source revision recorded in the channel's
       ``packages.json``. Run the application through ``pixi run --manifest-path
       <application-env>/pixi.toml`` to activate its libraries.
-
-      .. rubric:: Bazel
-
-      Registry and target names remain pending. No published Bazel integration
-      is available yet. Intended ``MODULE.bazel`` and target dependency:
-
-      .. code-block:: text
-
-         bazel_dep(name = "<runtime-bazel-module>", version = "<runtime-version>")
-         # Add "@<runtime-bazel-module>//:<runtime-cxx-target>" to deps.
 
       .. rubric:: CMake
 
@@ -172,6 +162,35 @@ a compatible NVIDIA driver, rather than the exporter environment or build tools.
 
 .. tab-set::
 
+   .. tab-item:: pip extras (Python)
+
+      These extras select companion backend wheels when available in your
+      package index or local wheelhouse:
+
+      .. code-block:: bash
+
+         python -m pip install 'leapp-rt[onnx]'
+         python -m pip install 'leapp-rt[onnx-cuda]'
+         python -m pip install 'leapp-rt[onnx,tensorrt]'
+         python -m pip install 'leapp-rt[torchscript,nativert]'
+
+      Choose the command for your bundle. ``onnx`` stays CPU-only even when GPU
+      wheels are available. The GPU and Torch extras default to CUDA 13. Use
+      ``onnx-cuda12``, ``tensorrt-cuda12``, ``torchscript-cuda12``, or
+      ``nativert-cuda12`` for CUDA 12; corresponding ``cuda13`` extras also exist.
+      Keep one CUDA family per environment.
+
+      Backend wheels include the required SDK libraries. Torch backends do not
+      require the Python ``torch`` package. Embedded Warp operators still need
+      Pixi or manual adapter installation. Installing TensorRT enables its
+      libraries; configure individual ONNX nodes using :doc:`session_options`.
+
+      Backend wheels are discovered when a session opens and need neither Pixi
+      activation nor ``LD_LIBRARY_PATH``. Explicit ``LEAPP_NATIVE_BACKENDS`` or
+      ``ORT_DYLIB_PATH`` settings select the manual or Pixi installation instead.
+      All SDK components must match the core version and come from one producer
+      build; do not mix wheelhouses from separate builds.
+
    .. tab-item:: Pixi packages
 
       The consumer generator selects the required packages from a matching local
@@ -212,35 +231,6 @@ a compatible NVIDIA driver, rather than the exporter environment or build tools.
 
          pixi add --manifest-path <application-env>/pixi.toml 'leapp-backend-torchscript ==0.1.0 <build-from-manifest>'
          pixi remove --manifest-path <application-env>/pixi.toml leapp-backend-torchscript
-
-   .. tab-item:: pip extras (Python)
-
-      These extras select companion backend wheels when available in your
-      package index or local wheelhouse:
-
-      .. code-block:: bash
-
-         python -m pip install 'leapp-rt[onnx]'
-         python -m pip install 'leapp-rt[onnx-cuda]'
-         python -m pip install 'leapp-rt[onnx,tensorrt]'
-         python -m pip install 'leapp-rt[torchscript,nativert]'
-
-      Choose the command for your bundle. ``onnx`` stays CPU-only even when GPU
-      wheels are available. The GPU and Torch extras default to CUDA 13. Use
-      ``onnx-cuda12``, ``tensorrt-cuda12``, ``torchscript-cuda12``, or
-      ``nativert-cuda12`` for CUDA 12; corresponding ``cuda13`` extras also exist.
-      Keep one CUDA family per environment.
-
-      Backend wheels include the required SDK libraries. Torch backends do not
-      require the Python ``torch`` package. Embedded Warp operators still need
-      Pixi or manual adapter installation. Installing TensorRT enables its
-      libraries; configure individual ONNX nodes using :doc:`session_options`.
-
-      Backend wheels are discovered when a session opens and need neither Pixi
-      activation nor ``LD_LIBRARY_PATH``. Explicit ``LEAPP_NATIVE_BACKENDS`` or
-      ``ORT_DYLIB_PATH`` settings select the manual or Pixi installation instead.
-      All SDK components must match the core version and come from one producer
-      build; do not mix wheelhouses from separate builds.
 
    .. tab-item:: SDKs and CMake
 
