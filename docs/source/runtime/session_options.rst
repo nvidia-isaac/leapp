@@ -4,8 +4,8 @@ Session Options
 Set options when opening the session. Peers created by ``new_session`` inherit
 those options; CUDA graph replay sessions require an independent session instead
 of a peer. Per-call output buffers are configured on the run operation.
-Defaults use CPU execution, CPU outputs, ordinary ONNX execution, and internally
-managed CUDA streams when CUDA work is needed.
+Defaults use CPU execution, preserve each output's backend storage location, and
+use ordinary ONNX execution with internally managed CUDA streams when needed.
 
 Placement and execution options
 -------------------------------
@@ -23,15 +23,17 @@ Placement and execution options
        supply inputs on that device. Weigh compute savings against transfer costs.
    * - Default output location
      - ``output_device`` / ``output_location`` / ``output_placement.default_location``
-     - CPU by default. CUDA placement can avoid returning data to the host;
-       pinned host placement can help subsequent transfers, with CUDA and
-       page-locked allocation costs.
+     - Unset by default, preserving backend storage without an output device
+       transfer. CUDA outputs stay on CUDA; CPU fallback and constant outputs
+       can remain on CPU. An explicit location requests a transfer. Pinned host
+       placement can help subsequent transfers, with CUDA and page-locked
+       allocation costs.
    * - Per-output location
      - ``output_overrides`` / ``output_overrides`` / ``output_placement.overrides``
-     - Empty by default. Keys are qualified public output names. Place only
-       host-consumed outputs on CPU and keep other outputs on the GPU.
-       Unknown names fail session construction. Caller-supplied buffers choose
-       their own locations.
+     - Empty by default. Keys are qualified public output names; each value
+       overrides the default location. An unset value preserves backend placement
+       for that output even when the default requests a transfer. Unknown names
+       fail session construction. Caller-supplied buffers choose their own locations.
    * - ONNX TensorRT acceleration
      - ``onnx_tensorrt`` in all languages
      - Empty by default. Maps ONNX node names to string-valued provider options.
@@ -48,6 +50,11 @@ Placement and execution options
      - Empty by default. Rust maps CUDA device IDs to borrowed stream handles.
        Use to integrate execution and transfers with application stream ordering.
        Missing device entries use internal streams.
+
+Use ``None`` in Python, ``std::nullopt`` in C++, or ``None`` in Rust to leave the
+default or a per-output location unset. Rust wraps explicit locations in
+``Some(...)``. Keeping backend placement avoids a device transfer; copies for
+independent ownership and feedback isolation can still be needed.
 
 This example runs ``control`` on GPU 0 and returns its six joint targets to the
 CPU. Inputs must be CUDA tensors on GPU 0; use CPU options for the NumPy and
@@ -74,8 +81,9 @@ CPU-buffer examples in :doc:`getting_started`.
          lrt::SessionOptions options;
          options.device = lrt::ExecutionDevice::kCuda;
          options.device_id = 0;
-         options.output_location = {lrt::MemoryType::kCuda, 0};
-         options.output_overrides["control/joint_targets"] = {lrt::MemoryType::kCpu, 0};
+         options.output_location = lrt::MemoryLocation{lrt::MemoryType::kCuda, 0};
+         options.output_overrides["control/joint_targets"] =
+             lrt::MemoryLocation{lrt::MemoryType::kCpu, 0};
 
    .. tab-item:: Rust
       :sync: rust
@@ -88,9 +96,9 @@ CPU-buffer examples in :doc:`getting_started`.
          let options = SessionOptions {
              device: ExecutionDevice::Cuda { device_id: 0 },
              output_placement: OutputPlacement {
-                 default_location: MemoryLocation::Cuda { device_id: 0 },
+                 default_location: Some(MemoryLocation::Cuda { device_id: 0 }),
                  overrides: HashMap::from([
-                     ("control/joint_targets".into(), MemoryLocation::Cpu),
+                     ("control/joint_targets".into(), Some(MemoryLocation::Cpu)),
                  ]),
              },
              ..Default::default()
@@ -208,7 +216,7 @@ TensorRT instead. An unknown node, a non-ONNX model, or CPU execution is rejecte
          lrt::SessionOptions options;
          options.device = lrt::ExecutionDevice::kCuda;
          options.device_id = 0;
-         options.output_location = {lrt::MemoryType::kCuda, 0};
+         options.output_location = lrt::MemoryLocation{lrt::MemoryType::kCuda, 0};
          options.cuda_graph_replay = {"control"};
 
    .. tab-item:: Rust
@@ -219,7 +227,7 @@ TensorRT instead. An unknown node, a non-ONNX model, or CPU execution is rejecte
          let options = lrt::SessionOptions {
              device: lrt::ExecutionDevice::Cuda { device_id: 0 },
              output_placement: lrt::OutputPlacement {
-                 default_location: lrt::MemoryLocation::Cuda { device_id: 0 },
+                 default_location: Some(lrt::MemoryLocation::Cuda { device_id: 0 }),
                  ..Default::default()
              },
              cuda_graph_replay: std::collections::HashSet::from(["control".into()]),

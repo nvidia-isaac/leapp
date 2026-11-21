@@ -93,9 +93,11 @@ order. Repeated declarations share one named entry.
   session. They survive later calls, reset, and closure.
 * **Shared storage:** Exporting a result multiple times can share its allocation.
   Keep each consumer owner alive until all uses finish, including CUDA work.
-* **Feedback isolation:** Outputs used as feedback are copied to the requested
-  public location before publication. Mutating a public output cannot change
-  private feedback or the reset snapshot.
+* **Placement:** Outputs keep their backend storage location by default. Request
+  transfers with the construction-time options in :doc:`session_options`.
+* **Feedback isolation:** Outputs used as feedback are copied to their selected
+  public location before publication; the default preserves backend placement.
+  Mutating a public output cannot change private feedback or the reset snapshot.
 
 These snippets use the bundle and input tensors from :doc:`getting_started`;
 see :doc:`memory` for allocating inputs and reading returned tensors.

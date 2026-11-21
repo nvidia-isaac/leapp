@@ -18,9 +18,10 @@ CPU memory is ordinary host storage. Pinned CPU memory is page-locked host
 storage, useful for CUDA transfers but requiring CUDA for allocation. CUDA memory
 belongs to a specific device and must not be dereferenced on the host.
 
-Execution device and public output location are independent. CPU outputs are
-convenient for host consumers; CUDA outputs avoid a device-to-host transfer when
-the next consumer also runs on the GPU. Pinned output placement can help a
+Execution device and public output location are independent. By default, outputs
+keep their backend storage location: CUDA outputs stay on CUDA, while CPU fallback
+and constant outputs can remain on CPU, even in a CUDA session. Request an explicit
+output location when the next consumer needs a transfer. Pinned placement can help a
 pipeline that transfers host results again, but still involves transfers and
 page-locked memory costs. Initial/default inputs and private feedback reside on
 the execution device. See :doc:`session_options` for placement configuration.
@@ -220,8 +221,10 @@ you supply. ``run_into()`` is the Rust name for this operation. Python uses
 Borrowing compatible input buffers avoids staging where the backend permits
 direct binding. Copies can still protect inputs from model mutation, isolate
 feedback, move outputs to a requested location, or detach returned results from
-reusable workspace. Supplying output buffers permits direct output binding and
-avoids allocating those public results. Retaining an allocated result does not
+reusable workspace. Preserving backend placement avoids a public output device
+transfer; ownership and feedback isolation can still require copies. Supplying
+output buffers permits direct output binding and avoids allocating those public
+results. Retaining an allocated result does not
 pin the session workspace or allow a later call to overwrite that result.
 
 Compare the two calls
