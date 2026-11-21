@@ -1,0 +1,4 @@
+bazel/consumer
+target
+.pixi
+.venv
