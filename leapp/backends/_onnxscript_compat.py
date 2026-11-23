@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-"""Temporary matcher workaround for the pinned ONNXScript 0.7.1 release.
+"""Temporary matcher workaround for ONNXScript 0.7.1 only.
 
-Remove this module and the dependency pin after qualifying an upstream release
+Other versions use the stock exporter through the caller's fallback.
+Remove this module after qualifying an upstream release
 with https://github.com/microsoft/onnxscript/pull/3215 or an equivalent fix.
 """
 
@@ -20,15 +21,15 @@ def patch_onnxscript_matcher():
     # Keep ONNXScript's exporter initialization out of ordinary LEAPP imports
     # and runtime-only use. Only the Dynamo export backend calls this helper.
     import onnxscript
-    from onnxscript import ir
-    from onnxscript.rewriter import _matcher
 
     if onnxscript.__version__ != "0.7.1":
         raise RuntimeError(
-            "LEAPP's ONNX matcher workaround requires onnxscript==0.7.1; "
-            f"loaded {onnxscript.__version__} from {onnxscript.__file__}. "
-            "Install LEAPP with its declared dependencies before ONNX export."
+            "LEAPP's ONNX matcher workaround applies only to onnxscript==0.7.1; "
+            f"loaded {onnxscript.__version__} from {onnxscript.__file__}."
         )
+
+    from onnxscript import ir
+    from onnxscript.rewriter import _matcher
 
     with _patch_lock:
         original = _matcher.SimplePatternMatcher.match

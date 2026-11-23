@@ -28,6 +28,7 @@ import torch
 import yaml
 import onnx
 import onnxruntime as ort
+import onnxscript
 from onnxscript.rewriter import _matcher
 import leapp
 from leapp.leapp import _MANAGER as annotate
@@ -444,7 +445,7 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
                             )
 
     def test_onnx_backend(self):
-        """Exercise real export and verify the matcher patch is active beforehand."""
+        """Exercise real export with the version-specific matcher or stock fallback."""
 
         @annotate.method(export_with="onnx")
         def funcA(inputA: torch.Tensor):
@@ -458,8 +459,11 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
         original_export = torch.onnx.export
 
         def export(*args, **kwargs):
-            self.assertTrue(matcher.match._leapp_root_guard)
-            self.assertIs(matcher.match.__wrapped__, stock)
+            if onnxscript.__version__ == "0.7.1":
+                self.assertTrue(matcher.match._leapp_root_guard)
+                self.assertIs(matcher.match.__wrapped__, stock)
+            else:
+                self.assertIs(matcher.match, stock)
             self.assertTrue(kwargs["optimize"])
             return original_export(*args, **kwargs)
 
