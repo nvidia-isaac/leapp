@@ -10,10 +10,130 @@ from unittest import mock
 import numpy as np
 import onnx
 import onnxruntime as ort
+import pytest
 import torch
 from onnx import TensorProto, helper, numpy_helper
+from onnxscript import ir
+from onnxscript.rewriter import _matcher, pattern
 
+from leapp.backends import _onnxscript_compat
 from leapp.backends.onnx_export_backend import ONNXDynamoExportBackend
+
+
+@pytest.fixture
+def stock_matcher(monkeypatch):
+    method = _matcher.SimplePatternMatcher.match
+    if getattr(method, "_leapp_root_guard", False):
+        method = method.__wrapped__
+    monkeypatch.setattr(_matcher.SimplePatternMatcher, "match", method)
+    monkeypatch.setattr(_onnxscript_compat, "_patch_disabled", False)
+    return method
+
+
+@pytest.fixture
+def multi_output_match():
+    def two_outputs(op, x):
+        return op.Cast(x, to=1), op.Neg(x)
+
+    model = ir.from_onnx_text(
+        """<ir_version: 9, opset_import: [ "" : 18]>
+        graph (float[2] x) => (float[2] cast, float[2] neg) {
+            neg = Neg(x)
+            cast = Cast<to=1>(x)
+        }"""
+    )
+    return pattern.Pattern(two_outputs), model
+
+
+@pytest.mark.parametrize(
+    "domain,op_type,to", [("", "Relu", 1), ("custom", "Cast", 1), ("", "Cast", 10)]
+)
+def test_matcher_rejects_impossible_roots_without_scanning(
+    stock_matcher, multi_output_match, domain, op_type, to
+):
+    matcher, model = multi_output_match
+    _onnxscript_compat.patch_onnxscript_matcher()
+    installed = _matcher.SimplePatternMatcher.match
+    _onnxscript_compat.patch_onnxscript_matcher()
+    assert _matcher.SimplePatternMatcher.match is installed
+    x = ir.Value(name="x")
+    root = ir.Node(domain, op_type, [x], {"to": ir.AttrInt64("to", to)})
+    other = ir.Node("", "Neg", [x])
+    graph = ir.Graph([x], [root.outputs[0], other.outputs[0]], nodes=[root, other])
+    with mock.patch.object(ir.Graph, "__iter__", side_effect=AssertionError("scan")):
+        assert not matcher.match(ir.Model(graph, ir_version=9), graph, root)
+    # A rejection must leave the same matcher usable, with output order intact.
+    result = matcher.match(model, model.graph, model.graph.node(1))
+    assert result
+    assert [value.name for value in result.outputs] == ["cast", "neg"]
+    assert not _onnxscript_compat._patch_disabled
+
+
+@pytest.mark.parametrize("failure", ["partial_match", "new_keyword"])
+def test_matcher_guard_failure_restores_stock_and_retries(
+    stock_matcher, multi_output_match, monkeypatch, failure
+):
+    matcher, model = multi_output_match
+    target = matcher._matcher.pattern.output_nodes[0]
+    original_matches = target.matches
+    failed = False
+
+    def fail_once(*args):
+        nonlocal failed
+        result = original_matches(*args)
+        if not failed:
+            failed = True
+            raise AttributeError("guard API changed after partial matching")
+        return result
+
+    def stock(self, *args, **kwargs):
+        # Simulate an upstream matcher accepting a newly added keyword.
+        kwargs.pop("future_keyword", None)
+        return stock_matcher(self, *args, **kwargs)
+
+    monkeypatch.setattr(_matcher.SimplePatternMatcher, "match", stock)
+    if failure == "partial_match":
+        monkeypatch.setattr(target, "matches", fail_once)
+    kwargs = {"future_keyword": True} if failure == "new_keyword" else {}
+    with mock.patch.object(_onnxscript_compat, "_get_logger") as logger:
+        _onnxscript_compat.patch_onnxscript_matcher()
+        cached = matcher._matcher.match
+        result = cached(model, model.graph, model.graph.node(1), **kwargs)
+        assert result
+        assert [value.name for value in result.outputs] == ["cast", "neg"]
+        assert _matcher.SimplePatternMatcher.match is stock
+        assert _onnxscript_compat._patch_disabled
+        # Later exports and cached bound methods must stay on the stock path.
+        _onnxscript_compat.patch_onnxscript_matcher()
+        assert _matcher.SimplePatternMatcher.match is stock
+        assert cached(model, model.graph, model.graph.node(1), **kwargs)
+        logger.return_value.info.assert_called_once()
+
+
+@pytest.mark.parametrize("guard_fails", [False, True])
+def test_matcher_does_not_retry_original_errors(
+    stock_matcher, multi_output_match, monkeypatch, guard_fails
+):
+    matcher, model = multi_output_match
+    error = ValueError("native matcher failed")
+    original = mock.Mock(side_effect=error)
+
+    def stock(self, *args, **kwargs):
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(_matcher.SimplePatternMatcher, "match", stock)
+    if guard_fails:
+        monkeypatch.setattr(
+            matcher._matcher.pattern.output_nodes[0],
+            "matches",
+            mock.Mock(side_effect=AttributeError("guard API changed")),
+        )
+    _onnxscript_compat.patch_onnxscript_matcher()
+    with pytest.raises(ValueError) as caught:
+        matcher.match(model, model.graph, model.graph.node(1))
+    assert caught.value is error
+    original.assert_called_once()
+    assert _onnxscript_compat._patch_disabled is guard_fails
 
 
 def test_compile_materializes_once_and_saves_repaired_model():
