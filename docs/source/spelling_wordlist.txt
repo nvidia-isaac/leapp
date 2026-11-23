@@ -273,6 +273,7 @@ namespaces
 functionalizes
 TopK
 Bazel
+Bzlmod
 booleans
 deleter
 dereferenced

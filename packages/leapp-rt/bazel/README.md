@@ -11,8 +11,8 @@ Rust toolchain, crates, and code generators; building the runtime requires no
 Triton, CUDA, LibTorch, ONNX Runtime, Python, Cargo installation, or CMake.
 The default Rust toolchain is pinned to 1.99.0. A consuming project's registered
 toolchains take precedence; its Rust toolchain must satisfy the Cargo manifests'
-minimum version. Bazel 8.4.2 is pinned for development and CI. Linux x86_64 is
-tested; Linux aarch64 dependencies are configured but require native validation.
+minimum version. Bazel 8.4.2 is pinned for development and CI. Linux x86_64 and
+Linux aarch64 are tested.
 
 ## Add the module to an application
 
@@ -77,7 +77,8 @@ outside Bazel must deploy `libleapp_rt.so` and configure their library search
 path. CXX bridge headers and Rust implementation targets are private.
 
 Backend libraries still load dynamically when opening sessions. Provision the
-selected model runtimes using the [runtime installation guide](../README.md#installation).
+selected model runtimes using the
+[runtime installation guide](../../../docs/source/runtime/installation.rst).
 Python packaging and optional Torch/NativeRT/Triton plugin builds retain their
 existing Maturin/CMake workflows.
 
@@ -103,7 +104,7 @@ native_backend_plugin(
 The helper builds a `cc_binary(linkshared = True)` and accepts its other
 attributes. It adds C++20 for this target only. Plugins export
 `LEAPP_NATIVE_BACKEND(example, loader)` as described in the
-[backend authoring guide](../src/engines/native/backends/README.md#adding-a-backend).
+[backend authoring guide](../AGENTS.md#adding-a-backend).
 Build systems with their own plugin rule can place
 `@leapp_rt//:native_backend_adapter` in that rule's `srcs` and depend on
 `@leapp_rt//:native_backend` directly. The headers target alone does not link
