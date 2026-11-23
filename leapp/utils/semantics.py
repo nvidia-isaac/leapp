@@ -17,6 +17,9 @@
 
 """Tensor semantics, axis descriptors, and experimental quantity helpers."""
 
+from leapp.utils.shape_contracts import Variable
+from leapp.leapp_graph.datatypes import TracedData
+
 import math
 import warnings
 from dataclasses import dataclass, field, fields
@@ -56,10 +59,23 @@ class Axis:
     """Experimental meaning and labels for one tensor dimension."""
 
     kind: AxisKind | str | None = None
+    variable: Variable | bool | None = field(default=None, kw_only=True)
     names: list[str] | None = None
     period_ms: float | None = None
 
     def __post_init__(self):
+        if (
+            self.variable is not None
+            and type(self.variable) is not bool
+            and not isinstance(self.variable, Variable)
+        ):
+            raise TypeError("Axis.variable must be Variable, bool, or None")
+        if (
+            self.variable is not None
+            and self.variable is not False
+            and self.names is not None
+        ):
+            raise ValueError("A variable axis cannot have fixed exhaustive names")
         if self.kind is not None and (not isinstance(self.kind, str) or not self.kind):
             raise TypeError("Axis.kind must be an AxisKind, non-empty string, or None")
         if self.names is not None and (
@@ -90,6 +106,12 @@ class Axis:
             result["names"] = list(self.names)
         if self.period_ms is not None:
             result["period_ms"] = self.period_ms
+        if self.variable is not None:
+            result["variable"] = (
+                self.variable.to_dict()
+                if isinstance(self.variable, Variable)
+                else self.variable
+            )
         return result
 
 
@@ -211,7 +233,9 @@ class TensorSemantics:
         if self.axes is not None:
             if not isinstance(self.axes, list):
                 raise TypeError("axes must be a list or None")
-            _, shape = value_to_name_and_shape(self.ref)
+            _, shape = value_to_name_and_shape(
+                self.ref.tensor if isinstance(self.ref, TracedData) else self.ref
+            )
             if len(self.axes) != len(shape):
                 raise ValueError("axes must have one entry per tensor dimension")
             for size, axis in zip(shape, self.axes):
@@ -219,6 +243,20 @@ class TensorSemantics:
                     continue
                 if not isinstance(axis, Axis):
                     raise TypeError("axes entries must be Axis or None")
+                if (
+                    isinstance(axis.variable, Variable)
+                    and not axis.variable.min <= size <= axis.variable.max
+                ):
+                    raise ValueError(
+                        f"Example size {size} is outside {axis.variable.name} bounds"
+                    )
+                if (
+                    isinstance(axis.variable, Variable)
+                    and size % axis.variable.multiple_of
+                ):
+                    raise ValueError(
+                        f"Example size {size} must be a multiple of {axis.variable.multiple_of}"
+                    )
                 if axis.names is not None and len(axis.names) != size:
                     raise ValueError("Axis label count must match its tensor dimension")
             if sum(a is not None and a.kind == AxisKind.TIME for a in self.axes) > 1:

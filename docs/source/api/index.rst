@@ -309,7 +309,7 @@ Output YAML structure
      torch version: "2.7.0+cu126"
      warp version: null
      leapp version: "0.8.1"
-     leapp config version: "1.4"
+     leapp config version: "1.5"
      cuda version: "12.6"
      os: Linux
 
@@ -349,7 +349,8 @@ Semantic metadata
   custom strings, or ``None``. The legacy input/output enums are deprecated
   and emit ``FutureWarning`` when used in an annotation.
 * ``axes`` accepts ``None`` or a list of ``Axis`` / ``None`` entries, one per
-  tensor dimension. Names must match the dimension size.
+  tensor dimension. Names must match the dimension size. An ``Axis`` can also
+  declare a variable dimension; see :ref:`variable-dimensions`.
 * ``is_setpoint`` accepts ``True``, ``False``, or ``None`` (the default).
   ``True`` marks an incoming desired value. Outputs accept ``False`` or ``None``
   but reject ``True``. Explicit boolean values are written to YAML; ``None``
@@ -379,7 +380,8 @@ a dict or mixed with raw tensors. See :doc:`/semantics/usage` for examples.
 
 .. code-block:: python
 
-   Axis(kind=None, names=None, period_ms=None)
+   Axis(kind=None, names=None, period_ms=None, *, variable=None)
+   Variable(name, min=1, max=2**31 - 1, multiple_of=1)
    joint_position(name, ref, *, axes=None, is_setpoint=None)
    joint_acceleration(name, ref, *, axes=None, is_setpoint=None)
    point_cloud(name, ref, *, reference=None, axes=None, is_setpoint=None)
@@ -391,6 +393,14 @@ a dict or mixed with raw tensors. See :doc:`/semantics/usage` for examples.
 ``AxisKind`` defines ``SYSTEM``, ``ELEMENT``, ``COMPONENT``, and ``TIME``.
 Axis kinds also accept custom strings. Time axes require a finite, positive
 ``period_ms``; other axis kinds cannot supply a period.
+
+``variable`` accepts a ``Variable``, ``True``, ``False``, or ``None`` (the
+default, which leaves the dimension fixed unless a producer makes it
+variable). ``Variable`` gives the dimension a name, inclusive ``min`` and
+``max`` bounds, and an optional ``multiple_of``; axes that share a name must
+have the same size. ``True`` declares an independent dimension with the default
+bounds and ``False`` asserts a fixed dimension. A variable axis cannot supply
+``names``. See :ref:`variable-dimensions`.
 
 See :doc:`/semantics/kind_element_names` for the ``Kind`` catalog,
 :doc:`/semantics/spatial` for spatial fields,
@@ -513,6 +523,13 @@ Parameters
 * ``export_with`` (str | None, optional): Export backend. Common values
   ``"jit"``, ``"onnx"``, and ``"exported-program"`` (alias ``"pt2"``).
 * ``backend_params`` (dict, optional): Backend-specific parameters.
+* ``validation_inputs`` (callable | False | None, optional): Generate additional
+  inputs for shape validation. Called as ``factory(samples, shapes, seed)``;
+  return a dict of all explicit tensor parameters, keyed by function parameter
+  name (``arg_0``, ``arg_1``, ... for ``*args``). Preserve each sample's dtype
+  and device and use the requested shape. Defaults to ``None`` (automatic
+  generation for variable axes). ``False`` disables generated validation for
+  this function. See :ref:`generated-shape-validation`.
 
 Behavior
 ~~~~~~~~
@@ -523,6 +540,11 @@ Behavior
 * Creates a ``TracedTensorNode`` internally.
 * If interpretation is disabled, the function runs normally without
   tracing.
+* An argument may be a ``TensorSemantics``. Its name becomes the port name, its
+  metadata (including variable axes) is recorded, and the function receives
+  the tensor. See :ref:`variable-dimensions`.
+* With variable axes, ``compile_graph(validate=True)`` runs the original
+  function again on generated inputs. See :ref:`generated-shape-validation`.
 * Tensor-valued default arguments that are not explicitly passed are
   captured as node-local constants.
 

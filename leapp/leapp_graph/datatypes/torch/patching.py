@@ -7,10 +7,14 @@
 
 import functools
 
+from ..primitives.traced_int import find_recording_int, graph_sizes
+
 import torch
 
 from .._attribute_patching import AttributePatchRegistry
 from ..proxy import conversion_proxy
+from leapp.utils.shape_contracts import has_variable_inputs
+from leapp.utils.shape_values import suppress_dynamic_shape_tracing, trace_factory
 
 
 class TorchPatchBackend:
@@ -21,6 +25,20 @@ class TorchPatchBackend:
         (torch, "as_tensor"),
         (torch, "tensor"),
     ]
+
+    # Called without a traced tensor, so ``__torch_function__`` never sees
+    # their size arguments. Random and uninitialized factories are excluded:
+    # recording them would replace the captured values.
+    _SHAPE_FUNCTIONS = (
+        "zeros",
+        "ones",
+        "full",
+        "arange",
+        "eye",
+    )
+    # torch.export cannot take a traced step count. A variable node records it
+    # so that the export fails; a static node keeps the captured count.
+    _VARIABLE_NODE_SHAPE_FUNCTIONS = ("linspace", "logspace")
 
     def __init__(self) -> None:
         self._patches = AttributePatchRegistry()
@@ -38,6 +56,12 @@ class TorchPatchBackend:
                 original = getattr(module, name)
                 patched = self._create_patch(original)
                 self._patches.install(module, name, original, patched)
+            for name in self._SHAPE_FUNCTIONS + self._VARIABLE_NODE_SHAPE_FUNCTIONS:
+                original = getattr(torch, name)
+                patched = self._shape_patch(
+                    original, name in self._VARIABLE_NODE_SHAPE_FUNCTIONS
+                )
+                self._patches.install(torch, name, original, patched)
             torch.jit._state.disable()
         except Exception:
             self._patches.restore()
@@ -56,10 +80,10 @@ class TorchPatchBackend:
         """Create a patched version of a torch function that preserves tracing."""
 
         @functools.wraps(original_func)
+        @suppress_dynamic_shape_tracing
         def patched(data, *args, **kwargs):
             from leapp.leapp_graph.datatypes import (
                 TracedData,
-                TracedInt,
                 TracedTensor,
                 as_traced,
                 is_traced_type,
@@ -81,9 +105,9 @@ class TorchPatchBackend:
                 )
                 traced._data_dependent_shape = True
                 return traced
-            if isinstance(data, TracedInt):
-                # An integer that no longer records is a plain value.
-                data = int(data)
+            # An integer that no longer records is a plain value, unless it is
+            # a size of a finished variable node, which is rejected.
+            data = graph_sizes(data)
 
             is_traced = is_traced_type(data)
 
@@ -110,6 +134,21 @@ class TorchPatchBackend:
                     return data.preserve_port(result)
 
             return result
+
+        return patched
+
+    @staticmethod
+    def _shape_patch(original, variable_node_only=False):
+        @functools.wraps(original)
+        def patched(*args, **kwargs):
+            shape = find_recording_int((args, kwargs))
+            if shape is not None and (
+                not variable_node_only or has_variable_inputs(shape.context_obj)
+            ):
+                return trace_factory(original, args, kwargs, shape=shape)
+            # Rejects a size of a finished variable node.
+            args, kwargs = graph_sizes((args, kwargs))
+            return original(*args, **kwargs)
 
         return patched
 

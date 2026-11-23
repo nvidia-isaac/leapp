@@ -23,6 +23,8 @@ import yaml
 from torch.fx.proxy import Proxy
 
 from ..traced_data import TracedData
+from leapp.utils.logging import _get_logger
+from leapp.utils.shape_contracts import has_variable_inputs
 
 
 class TracedInt(int, TracedData):
@@ -31,7 +33,9 @@ class TracedInt(int, TracedData):
     It behaves like the integer it holds. While its node is tracing, integer
     arithmetic with other integers is recorded, so derived sizes stay symbolic
     too. Once the node stops tracing, or its graph has been replaced,
-    arithmetic returns plain ``int`` results and records nothing.
+    arithmetic returns plain ``int`` results and records nothing. A size read
+    in a node with variable dimensions keeps its origin instead, so that
+    recording it while another node is recording is rejected.
     """
 
     def __new__(cls, value: int, name: str, context, proxy: Proxy):
@@ -76,7 +80,10 @@ class TracedInt(int, TracedData):
         value = op(int(lhs), int(rhs))
         anchor = find_recording_int((lhs, rhs))
         if anchor is None:
-            return value
+            # Keep the origin of a variable size, so that a node recording
+            # the result later rejects it.
+            origin = next((v for v in (lhs, rhs) if _is_variable_size(v)), None)
+            return value if origin is None else origin._new(value, origin.proxy)
         # Fails when operands belong to different tracing nodes.
         anchor.validate_status((lhs, rhs))
         proxy = anchor._context.tracer.create_proxy(
@@ -137,6 +144,11 @@ class TracedInt(int, TracedData):
     def __array__(self, dtype=None, copy=None):
         return np.asarray(int(self), dtype=dtype)
 
+    def __fx_create_arg__(self, tracer):
+        # FX calls this for every recorded argument. Without it FX stores an
+        # ``int`` subclass as the constant it holds.
+        return tracer.create_arg(graph_value(self))
+
     def __repr__(self) -> str:
         return f"TracedInt({int(self)})"
 
@@ -174,5 +186,73 @@ def graph_value(value):
     the graph being built and is used as the plain integer it holds.
     """
     if isinstance(value, TracedInt):
-        return value.proxy if value.is_recording else int(value)
+        return value.proxy if value.is_recording else settled_value(value)
     return value
+
+
+def _is_variable_size(value) -> bool:
+    return (
+        isinstance(value, TracedInt)
+        and value.context_obj is not None
+        and has_variable_inputs(value.context_obj)
+    )
+
+
+def settled_value(value: TracedInt) -> int:
+    """Return the integer held by a traced integer that stopped recording.
+
+    A size read in a node with variable dimensions changes at run time. While
+    a node is recording, that node would store the captured value, so the use
+    is rejected. With no node recording, nothing is exported.
+    """
+    if _is_variable_size(value):
+        from leapp.export_manager import ExportManager
+
+        for node in ExportManager().nodes.values():
+            if node.is_tracing:
+                _get_logger().fatal(
+                    f"A size read in node '{value.context}' is used while node "
+                    f"'{node.name}' is recording, which would store it there "
+                    f"as the constant {int(value)}. Read the size from a tensor "
+                    f"of node '{node.name}'",
+                    error_type=ValueError,
+                )
+    return int(value)
+
+
+def _contains_traced_int(obj) -> bool:
+    found = False
+
+    def visit(item):
+        nonlocal found
+        found = found or isinstance(item, TracedInt)
+        return item
+
+    TracedData._map_structure(obj, visit)
+    return found
+
+
+def graph_sizes(obj):
+    """Prepare arguments holding traced integers for FX recording.
+
+    FX records a size as a proxy, which ``torch.Size`` cannot hold, so sizes
+    become tuples. A traced integer whose node stopped recording has no node in
+    the graph being built and becomes the plain integer it holds.
+    """
+    if not _contains_traced_int(obj):
+        return obj
+
+    def convert(item):
+        if isinstance(item, TracedInt):
+            return item if item.is_recording else settled_value(item)
+        if isinstance(item, torch.Size):
+            return tuple(convert(size) for size in item)
+        if isinstance(item, slice):
+            return slice(convert(item.start), convert(item.stop), convert(item.step))
+        if isinstance(item, (list, tuple)) and not hasattr(item, "_fields"):
+            return type(item)(convert(value) for value in item)
+        if isinstance(item, dict):
+            return {name: convert(value) for name, value in item.items()}
+        return item
+
+    return convert(obj)

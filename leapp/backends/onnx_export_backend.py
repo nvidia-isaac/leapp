@@ -11,6 +11,11 @@ from leapp.backends.export_backend import (
     SimplifiedONNXProgram,
 )
 from leapp.utils.logging import _get_logger
+from leapp.utils.shape_contracts import (
+    build_onnx_dynamic_axes,
+    export_shape_program,
+    get_shape_contract,
+)
 from leapp.backends._onnxscript_compat import patch_onnxscript_matcher
 import os
 import onnx
@@ -260,6 +265,52 @@ class ONNXExportBackend(ExportBackend):
 
         return embedded
 
+    def _validate_shape_contracts(self, model):
+        initializers = {value.name for value in model.graph.initializer}
+        inputs = [
+            value for value in model.graph.input if value.name not in initializers
+        ]
+        for descriptions, values in (
+            (self.node_context.inputs, inputs),
+            (self.node_context.outputs, model.graph.output),
+        ):
+            expected_names = [desc.name for desc in descriptions]
+            if [value.name for value in values] != expected_names:
+                _get_logger().fatal(
+                    f"{self.node_context.name}: ONNX artifact ports do not match {expected_names}",
+                    error_type=ValueError,
+                )
+            for desc, value in zip(descriptions, values):
+                tensor_type = value.type.tensor_type
+                if not tensor_type.HasField("shape"):
+                    continue
+                contract = get_shape_contract(desc)
+                dimensions = tensor_type.shape.dim
+                name = f"{self.node_context.name}/{desc.name}"
+                if len(dimensions) != len(contract["shape"]):
+                    _get_logger().fatal(
+                        f"{name}: ONNX artifact rank contradicts shape contract",
+                        error_type=ValueError,
+                    )
+                for axis, (expected, actual) in enumerate(
+                    zip(contract["shape"], dimensions)
+                ):
+                    # ONNX symbols are opaque names, not executable shape expressions.
+                    if expected is None or not actual.HasField("dim_value"):
+                        continue
+                    size = actual.dim_value
+                    if isinstance(expected, str):
+                        bounds = contract["dimension_ranges"][expected]
+                        compatible = bounds["min"] == bounds["max"] == size
+                    else:
+                        compatible = expected == size
+                    if not compatible:
+                        _get_logger().fatal(
+                            f"{name}: ONNX artifact dimension {axis} is fixed at {size}, "
+                            f"contradicting shape contract {expected}",
+                            error_type=ValueError,
+                        )
+
     def save(self, save_path: str) -> Tuple[str, str, str]:
         onnx_path = os.path.join(save_path, f"{self.node_context.name}.onnx")
 
@@ -269,6 +320,11 @@ class ONNXExportBackend(ExportBackend):
             include_initializers=True,
             keep_initializers_as_inputs=False,
         )
+
+        if hasattr(self.node_context, "shape_program"):
+            self._validate_shape_contracts(
+                onnx.load(onnx_path, load_external_data=False)
+            )
 
         # Validate model (skip for large models as it can fail with protobuf limits)
         skip_validation = self.backend_params.get("skip_validation", False)
@@ -323,6 +379,7 @@ class ONNXTorchScriptExportBackend(ONNXExportBackend):
             input_values,
             save_path,
             dynamo=False,
+            dynamic_axes=build_onnx_dynamic_axes(self.node_context),
             input_names=[tensor_desc.name for tensor_desc in self.node_context.inputs],
             output_names=[
                 tensor_desc.name for tensor_desc in self.node_context.outputs
@@ -493,15 +550,19 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
         return num_fixed
 
     @staticmethod
-    def _clone_aliased_outputs(module):
+    def _clone_aliased_outputs(module) -> bool:
+        """Give each output its own value; return whether the graph changed."""
         # Dynamo names shared ONNX values in place, losing input or output names.
         if not isinstance(module, torch.fx.GraphModule):
-            return
+            return False
         output = next(node for node in module.graph.nodes if node.op == "output")
         seen = set()
+        cloned = False
 
         def separate(node):
+            nonlocal cloned
             if node.op == "placeholder" or node in seen:
+                cloned = True
                 return module.graph.call_function(torch.clone, (node,))
             seen.add(node)
             return node
@@ -509,12 +570,13 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
         with module.graph.inserting_before(output):
             output.args = torch.fx.node.map_arg(output.args, separate)
         module.recompile()
+        return cloned
 
     def compile(self, m: torch.nn.Module = None):
         if m is None:
             m = self.module_builder()
         m = m.eval()
-        self._clone_aliased_outputs(m)
+        aliased_outputs = self._clone_aliased_outputs(m)
         try:
             patch_onnxscript_matcher()
         except Exception as error:
@@ -529,8 +591,20 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
         self.opset_version = self.backend_params.get(
             "opset_version", _constants.ONNX_DEFAULT_OPSET
         )
+        program = getattr(self.node_context, "shape_program", None)
+        if program is not None and all(
+            n.op in {"placeholder", "output"} for n in program.graph.nodes
+        ):
+            _get_logger().fatal(
+                f"{self.node_context.name}: onnx-dynamo cannot export a variable "
+                "node that returns its inputs unchanged; use another backend",
+                error_type=ValueError,
+            )
+        if program is not None and aliased_outputs:
+            # The shape program predates the clones that separate the outputs.
+            program = export_shape_program(self.node_context, m)
         onnx_program = torch.onnx.export(
-            m,
+            program if program is not None else m,
             input_values,
             None,  # no need to save the model
             dynamo=True,

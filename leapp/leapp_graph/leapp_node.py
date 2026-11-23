@@ -33,6 +33,11 @@ from leapp.leapp_graph.custom_operator_registry.warp_operator.bundle import (
     iter_warp_segments_from_graph,
 )
 from leapp.utils.logging import _get_logger
+from leapp.utils.shape_contracts import (
+    build_declared_shape_contract,
+    has_variable_inputs,
+    validate_shape_contract,
+)
 
 
 class LeappNode:
@@ -100,6 +105,9 @@ class LeappNode:
 
         # storage for the fx graph or compiled module
         self.m = None
+        self.method_validation = None
+        # call sites of indexed writes, named when a variable-shape export fails
+        self.assignment_sites = []
 
     @property
     def node_index(self):
@@ -436,6 +444,28 @@ class LeappNode:
             current_io_description_dict = io_description.dict()
             current_io_description_dict["name"] = existing_io_description.name
 
+            dynamic_reentry = has_variable_inputs(self)
+            if dynamic_reentry:
+                # Output and inherited-input contracts are inferred at compile time;
+                # cached samples are checked against those final contracts there.
+                if (
+                    current_io_list is self.inputs
+                    and not existing_io_description.has_source
+                ):
+                    validate_shape_contract(
+                        build_declared_shape_contract(
+                            existing_io_description, self.name
+                        ),
+                        io_description.shape,
+                        name=f"{self.name}/{existing_io_description.name}",
+                    )
+                if len(existing_io_description.shape) != len(io_description.shape):
+                    _get_logger().fatal(
+                        "Variable axes retain a fixed tensor rank",
+                        error_type=ValueError,
+                    )
+                existing_io_description_dict.pop("shape", None)
+                current_io_description_dict.pop("shape", None)
             common_keys = (
                 existing_io_description_dict.keys() & current_io_description_dict.keys()
             )
@@ -505,6 +535,14 @@ class LeappNode:
                 _get_logger().error(
                     f"{self.name}/{output_name} {label}: Shape mismatch - "
                     f"got {tuple(exported.shape)}, expected {tuple(source.shape)}"
+                )
+                continue
+
+            if exported.dtype != source.dtype:
+                mismatches.add("dtype")
+                _get_logger().error(
+                    f"{self.name}/{output_name} {label}: Dtype mismatch - "
+                    f"got {exported.dtype}, expected {source.dtype}"
                 )
                 continue
 
@@ -614,7 +652,7 @@ class LeappNode:
         # Replay the first sample with declared buffers restored. A different
         # result usually means the export kept undeclared state from the earlier calls.
         if sample_passed[0]:
-            with torch.no_grad():
+            with torch.inference_mode():
                 for name, buffer in buffers.items():
                     buffer.copy_(initial_buffers[name])
             # An ExecuTorch program keeps its buffers inside, so it starts over by
@@ -634,6 +672,9 @@ class LeappNode:
             mismatches=set().union(*sample_mismatches.values()),
             backend=self.backend,
         )
+        if self.method_validation is not None:
+            all_match = self.method_validation.validate(self, rtol, atol) and all_match
+
         if error_hint is not None:
             _get_logger().info(f"  {self.name}: {error_hint}")
 

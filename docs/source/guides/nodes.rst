@@ -89,6 +89,248 @@ Prefer ``input_tensors()`` / ``output_tensors()`` when:
 * you want explicit tensor names
 * you need semantic metadata on tensors
 
+.. _variable-dimensions:
+
+Variable dimensions
+===================
+
+By default an exported node accepts only the tensor shapes seen during
+capture. To accept a range of sizes along a dimension, declare that dimension
+with ``Axis(variable=Variable(...))`` on the node input:
+
+.. code-block:: python
+
+   import torch
+
+   import leapp
+   from leapp import Axis, TensorSemantics, Variable, annotate
+
+   length = Variable("length", min=4, max=32, multiple_of=2)
+
+   leapp.start("tokens")
+   tokens = annotate.input_tensors(
+       "pairs",
+       TensorSemantics(
+           "tokens", torch.zeros(2, 8), axes=[None, Axis(variable=length)]
+       ),
+   )
+   pairs = tokens.reshape(tokens.shape[0], tokens.shape[1] // 2, 2).sum(dim=-1)
+   annotate.output_tensors("pairs", {"pairs": pairs}, export_with="pt2")
+   leapp.stop()
+   leapp.compile_graph()
+
+The exported ``pairs`` node accepts any even ``length`` from 4 to 32. The first
+dimension has no declaration and stays fixed at 2.
+
+Declaring a variable axis
+-------------------------
+
+* ``Variable(name, min=1, max=2**31 - 1, multiple_of=1)`` names a dimension and
+  its inclusive bounds. The range must admit at least two sizes.
+* Axes that use the same ``Variable`` name must have the same size at run time,
+  including across tensors and nodes. Reusing a name with different bounds is an
+  error.
+* ``Axis(variable=True)`` declares an independent dimension with the default
+  bounds. ``Axis(variable=False)`` asserts that the dimension is fixed; export
+  fails if the producer or the inferred output makes it variable.
+* A variable axis cannot carry ``names``, because a fixed list of labels cannot
+  describe a changing size.
+* The tensor rank stays fixed. Dimensions without a declaration keep their
+  captured size.
+
+For a decorated function, pass the ``TensorSemantics`` as the argument. The
+port takes the ``TensorSemantics`` name, and the function receives the tensor:
+
+.. code-block:: python
+
+   @annotate.method(export_with="pt2")
+   def encode(image):
+       features = image.mean(dim=-1)
+       return features
+
+   height = Variable("height", min=4, max=16)
+   encode(
+       TensorSemantics(
+           "image", image, axes=[None, None, Axis(variable=height), None]
+       )
+   )
+
+What stays variable during capture
+----------------------------------
+
+Inside a node with a variable input, ``tensor.shape[i]``, ``tensor.size(i)``,
+and ``tensor.numel()`` return traced sizes. The exported graph records a traced
+size when it is:
+
+* combined with another integer by ``+``, ``-``, ``*``, ``//`` or ``%``;
+* passed to an operation that also takes a traced tensor, such as
+  ``x.reshape(...)``, ``x[:, :n]`` or ``torch.split(x, n)``;
+* passed to ``torch.tensor``, ``torch.zeros``, ``torch.ones``, ``torch.full``,
+  ``torch.arange`` or ``torch.eye``.
+
+.. warning::
+
+   Everywhere else a traced size is used as the size of the captured sample:
+
+   * Python conversions and control flow: ``int(...)``, ``len(tensor)``,
+     comparisons such as ``if tensor.shape[1] == 8``, and
+     ``range(tensor.shape[1])``. The exported graph follows the captured branch
+     or loop count for every input.
+   * Other arithmetic on a size, such as ``/``, ``**``, ``abs()`` and
+     ``round()``, and arithmetic between a size and a constant tensor.
+   * Indexing a constant tensor, such as ``table[:, :n]``. Register the constant
+     first with ``annotate.register_buffer()`` and index the returned tensor.
+   * Other factories that take no traced tensor, such as ``torch.rand`` and
+     ``torch.empty``.
+   * NumPy operations inside the node.
+
+   LEAPP does not detect these uses. The export fails when the captured size
+   conflicts with a variable dimension. Otherwise the node is exported and
+   returns wrong results at other sizes. :ref:`generated-shape-validation`
+   reports this for a decorated function, but not for a manually annotated
+   node.
+
+Variable dimensions between nodes
+---------------------------------
+
+Declare a variable dimension once, on the input where the tensor enters the
+pipeline. A node input that is connected to another node's output inherits
+that output's variable dimensions, with their name, bounds and
+``multiple_of``, and needs no declaration. A size the producer derives, such
+as ``2 * length + 1``, is inherited as that expression.
+
+Nothing else passes between nodes. Code between two nodes is not exported and
+runs once, on the captured sample:
+
+* A tensor computed between nodes is a new pipeline input. Declare its variable
+  dimensions again on that input; otherwise they are fixed.
+* A size read between nodes, such as ``n = y.shape[1]``, is the captured size.
+  A later node that uses it may return wrong results at other sizes, and
+  validation cannot detect this. To avoid it, do not carry a size from one
+  node into another. Read it inside the node that uses it.
+
+What ``compile_graph()`` checks
+-------------------------------
+
+LEAPP exports each node with the declared ranges and reports an error when the
+exporter fixes a declared dimension to one size or reports a narrower range.
+Output dimensions are inferred from the graph and written to YAML, with
+derived sizes such as ``length // 2`` expressed in terms of the declared
+variables. Downstream nodes inherit the dimensions of the outputs they
+consume. See :ref:`config-variable-dimensions` for the YAML fields.
+
+``InferenceManager`` checks every input against the contract and raises
+``ValueError`` for a wrong rank, a changed fixed dimension, a size outside the
+bounds or not a multiple of ``multiple_of``, or tensors that disagree on a
+shared ``Variable``.
+
+Limits
+------
+
+``compile_graph()`` rejects a node with variable dimensions that has:
+
+* no export backend (``export_with``), or ``executorch``, which exports the
+  captured shapes only;
+* a NumPy or Warp input or output;
+* an indexed assignment (``y[:, 0] = value``, ``y[mask] = value``) or
+  ``copy_()`` into a tensor with a variable dimension, even when no output uses
+  the assigned tensor. The error names the assignment. Build the result with
+  ``torch.where`` instead; assignment into a tensor whose dimensions are all
+  fixed is unaffected;
+* ``torch.linspace`` or ``torch.logspace`` with a variable count. Build the
+  range from ``torch.arange`` instead;
+* a tensor with a variable dimension fed back to an earlier node. A
+  fixed-shape tensor can be fed back;
+* an input whose dimension its producer computes with ``//`` or ``%``, or from
+  more than one variable. Such a dimension can still be a graph output. A node
+  input accepts a declared dimension or a linear size such as
+  ``2 * length + 1``.
+
+.. _generated-shape-validation:
+
+Generated shape validation
+==========================
+
+For a decorated function with variable axes, ``compile_graph(validate=True)``
+generates additional input samples. It runs the original function on them with
+tracing disabled and compares the results with the saved, reloaded artifact,
+using the ``rtol`` and ``atol`` of ``compile_graph()``.
+
+LEAPP changes one variable at a time, to its bounds, to sizes near the captured
+one and to sizes in between, and keeps shared variables equal and
+``multiple_of`` satisfied. It generates at most five additional samples, each
+with at most 64 MiB of input tensors. Memory used by the model itself is not
+limited. Duplicate shapes are removed and omitted candidates are logged. If no
+additional shape fits the limit, validation fails. Passing these samples does
+not prove every size in the range.
+
+The default generator preserves dtype and device. It uses reproducible
+uniform values in [0, 1) for floating-point inputs (real and imaginary parts for
+complex inputs), and 0/1 values for integer and Boolean inputs. Inputs whose shapes
+are unchanged retain copies of their captured values.
+
+Pass a ``validation_inputs`` callback when the inputs need specific values or
+relationships, such as valid token IDs and matching attention masks:
+
+.. code-block:: python
+
+   def make_inputs(samples, shapes, seed):
+       image = samples["image"]
+       generator = torch.Generator(device=image.device).manual_seed(seed)
+       return {"image": torch.rand(
+           shapes["image"], dtype=image.dtype, device=image.device,
+           generator=generator,
+       )}
+
+   @annotate.method(export_with="pt2", validation_inputs=make_inputs)
+   def encode(image):
+       features = image.mean(dim=-1)
+       return features
+
+The callback receives copies of the explicit tensor arguments, the requested
+shapes and a reproducible seed, and returns the generated tensors. Tensors and
+shapes are keyed by function parameter name, not port name. Tensors passed
+through ``*args`` use the keys ``arg_0``, ``arg_1``, and so on; tensors passed
+through ``**kwargs`` use their keyword.
+
+Validation fails on a mismatch or an invalid generated input; ``strict=True``
+raises. It also fails when generating inputs or running the original function
+raises. The message then says that validation could not complete and suggests
+a callback, since the export itself may be correct.
+
+Generated validation has these requirements:
+
+* Tensor arguments are top-level Torch tensors, including those passed through
+  ``*args`` and ``**kwargs``. Other arguments may be scalars, or lists, tuples
+  and dicts that contain only scalars; each replay receives its own copy.
+  Tensor defaults remain constants.
+* Outputs are a tensor or a tuple, list or dict of tensors.
+* The function runs again during ``compile_graph()``, so it must return the
+  same result for the same inputs and have no side effects. LEAPP does not copy
+  model weights or other objects. Pass ``validation_inputs=False`` to turn
+  generated validation off for a function that must not run again.
+
+A call cannot be replayed when an argument holds a tensor inside a container
+or is any other object, or when the function creates additional node inputs.
+Automatic generation then logs a warning and compares only the captured
+samples; with a ``validation_inputs`` callback, validation fails.
+
+Inputs are copied for each replay, and the Python, NumPy and Torch random
+states on the input devices are restored afterwards. LEAPP keeps the function
+and the copies in memory until validation or a node reset, and writes neither
+to the bundle.
+
+Static annotated functions and manually annotated nodes keep cached-sample
+validation. ``validate=False`` disables both cached and generated validation.
+
+.. note::
+
+   A node built with ``annotate.input_tensors()`` and
+   ``annotate.output_tensors()`` has no function to run again, so its saved
+   model is compared at the captured sizes only. A backend can still convert an
+   operation in a way that fails or returns different values at other sizes.
+   Run the saved model at the sizes you need, or use ``annotate.method``.
+
 Nested data connections
 =======================
 
