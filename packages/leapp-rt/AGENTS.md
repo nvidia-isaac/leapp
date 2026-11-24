@@ -82,9 +82,19 @@ The standalone Bazel module also builds without model SDKs. After changing
 runtime build files, run `bazel test //... --test_output=errors` here and
 `bash .github/scripts/runtime-bazel.sh` from the repository root (requires
 Bazel and Buildifier). The latter runs the `tests/bazel` downstream smoke tests
-against a source archive, including a plugin built with its own STL ABI. See
-`bazel/README.md` for opt-in ONNX/CUDA tests and lockfile regeneration.
+against a source archive, including a plugin built with its own STL ABI.
 Keep the `cxx.rs` Bazel module version aligned with the Cargo `cxx` pin.
+
+After changing Cargo dependencies, regenerate and review the Bazel lockfiles:
+
+```sh
+CARGO_BAZEL_REPIN=1 bazel build //:lrt //bindings/cxx:libleapp_rt.so
+bazel mod deps
+```
+
+`Cargo.lock` remains the source of truth and is not overwritten. Optional
+ONNX/CUDA targets are `//:native_onnx_test` and `//:memory_test`; pass fixture,
+library, and CUDA settings using `--test_env` with the environment below.
 
 Build source archives with `packaging/build_sdist.py` (Python 3.12+) so their
 lockfile matches Maturin's reduced workspace.
