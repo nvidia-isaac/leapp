@@ -179,6 +179,8 @@ See :doc:`installation` for installing each interface and its dependencies.
    .. tab-item:: C++
       :sync: cpp
 
+      .. rubric:: CMake
+
       Save this build definition as ``CMakeLists.txt``:
 
       .. code-block:: cmake
@@ -197,6 +199,33 @@ See :doc:`installation` for installing each interface and its dependencies.
          cmake -S . -B build -DCMAKE_PREFIX_PATH=<runtime-sdk-prefix>
          cmake --build build
          ./build/deploy
+
+      .. rubric:: Bazel
+
+      Add the ``MODULE.bazel`` dependency from :doc:`installation`, then save
+      this definition as ``BUILD.bazel`` beside ``deploy.cc``:
+
+      .. code-block:: python
+
+         load("@rules_cc//cc:defs.bzl", "cc_binary")
+
+         cc_binary(
+             name="deploy",
+             srcs=["deploy.cc"],
+             copts=["-std=c++20"],
+             deps=["@leapp_rt//:runtime"],
+         )
+
+      Build and run with the exported bundle in the current directory:
+
+      .. code-block:: bash
+
+         bazel build //:deploy
+         bazel run //:deploy --run_under="cd $PWD &&"
+
+      ``--run_under`` preserves the application directory so the example can
+      find ``sample_pipeline/``. Activate the model libraries described in
+      :doc:`installation` before running the application.
 
    .. tab-item:: Rust
       :sync: rust

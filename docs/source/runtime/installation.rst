@@ -70,9 +70,10 @@ checkout. Keep the core and backend packages on the same release and build.
    .. tab-item:: C++
       :sync: cpp
 
-      Applications require C++20. Building the core requires Rust 1.88+,
-      CMake 3.22+, and a C++20 compiler. An installed runtime library needs
-      neither Rust nor model SDK headers at deployment.
+      Applications require C++20. Building the core with CMake requires Rust
+      1.88+, CMake 3.22+, and a C++20 compiler. Bazel supplies its own Rust
+      toolchain. An installed runtime library needs neither Rust nor model
+      SDK headers at deployment.
 
       .. rubric:: Pixi
 
@@ -119,6 +120,43 @@ checkout. Keep the core and backend packages on the same release and build.
       use ``LEAPP_BUILD_TESTING=ON`` to enable them. Debug builds use Rust's ``dev``
       profile; other configurations use its release profile. Build on the target
       Linux architecture; cross-compilation is not configured.
+
+      .. rubric:: Bazel
+
+      The runtime is a standalone Bzlmod module named ``leapp_rt``. Build on
+      Linux with a C++20 compiler; Bazel downloads the declared Rust toolchain,
+      dependencies, and code generators. Building the core needs no Cargo,
+      CMake, Pixi, Python, or model SDK installation.
+
+      Until registry publication, add a pinned source dependency to your
+      application's ``MODULE.bazel``. Choose a full commit containing Bazel
+      support and retain ``strip_prefix`` to select the runtime module:
+
+      .. code-block:: python
+
+         bazel_dep(name="leapp_rt", version="0.1.0")
+         bazel_dep(name="rules_cc", version="0.2.17")
+         git_override(
+             module_name="leapp_rt",
+             remote="https://github.com/nvidia-isaac/leapp.git",
+             commit="<full-commit-sha>",
+             strip_prefix="packages/leapp-rt",
+         )
+
+      For a local checkout, replace ``git_override`` with
+      ``local_path_override(module_name="leapp_rt",
+      path="<leapp-checkout>/packages/leapp-rt")`` using an absolute path.
+      No dependency setup macros or application toolchain registration are
+      required. Link ``@leapp_rt//:runtime`` and include ``<leapp/runtime.h>``;
+      :doc:`getting_started` provides a complete application build definition.
+      Rust applications can depend on ``@leapp_rt//:lrt`` using ``rules_rust``.
+
+      Bazel supplies ``libleapp_rt.so`` when running with ``bazel run``. For
+      deployment outside Bazel, ship that shared library and make it available
+      to the dynamic loader. Model libraries remain separate: use the
+      **Model libraries** instructions below, including Pixi or manual SDK
+      installation. Optional backend plugin builds use the existing workflows
+      in :doc:`dependencies`.
 
    .. tab-item:: Rust
       :sync: rust
