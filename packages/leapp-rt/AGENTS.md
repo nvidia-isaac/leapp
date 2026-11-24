@@ -81,8 +81,8 @@ RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --no-deps
 The standalone Bazel module also builds without model SDKs. After changing
 runtime build files, run `bazel test //... --test_output=errors` here and
 `bash .github/scripts/runtime-bazel.sh` from the repository root (requires
-Bazel and Buildifier). The latter checks an independent Rust/C++ consumer of
-a source archive, including a plugin built with its own STL ABI. See
+Bazel and Buildifier). The latter runs the `tests/bazel` downstream smoke tests
+against a source archive, including a plugin built with its own STL ABI. See
 `bazel/README.md` for opt-in ONNX/CUDA tests and lockfile regeneration.
 Keep the `cxx.rs` Bazel module version aligned with the Cargo `cxx` pin.
 

@@ -18,7 +18,7 @@ trap cleanup EXIT
 
 cd "$runtime_root"
 buildifier -mode=check MODULE.bazel BUILD.bazel bazel/{BUILD.bazel,defs.bzl} \
-  bindings/{common,cxx}/BUILD.bazel bazel/consumer/{MODULE,BUILD}.bazel
+  bindings/{common,cxx}/BUILD.bazel tests/bazel/{MODULE,BUILD}.bazel
 bazel --output_user_root="$task_dir/cache" test //... \
   --symlink_prefix=/ --test_output=errors
 
@@ -27,7 +27,7 @@ bazel --output_user_root="$task_dir/cache" test //... \
 # parent directories, ignored build outputs, or pre-existing environments.
 git -C "$runtime_root" ls-files --cached --others --exclude-standard -z |
   tar -C "$runtime_root" --null -T - -czf "$task_dir/runtime.tar.gz"
-cp -R bazel/consumer "$task_dir/consumer"
+cp -R tests/bazel "$task_dir/consumer"
 printf '\narchive_override(module_name = "leapp_rt", urls = ["file://%s/runtime.tar.gz"])\n' \
   "$task_dir" >> "$task_dir/consumer/MODULE.bazel"
 cd "$task_dir/consumer"

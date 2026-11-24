@@ -123,14 +123,14 @@ The default tests cover bundle parsing, DLPack ownership and ABI, CPU memory,
 shared binding lifecycle, the C++ facade, and backend SDK types. The DLPack ABI
 test invokes the host `cc` compiler to compare the pinned C header's layout.
 
-The independent project in `bazel/consumer` verifies public Rust/C++ targets,
-backend plugin generation with a different STL ABI, and loading the shared
-library. CI copies it outside the repository and consumes a source archive
-containing only this module, without a LEAPP bazelrc or consumer-side toolchain
-registration. For a local consumer check:
+The smoke tests in `tests/bazel` verify downstream Rust/C++ linking and loading
+a backend plugin built with a different STL ABI. CI copies the project outside
+the repository and consumes a source archive containing only this module,
+without a LEAPP bazelrc or consumer-side toolchain registration. For a local
+consumer check:
 
 ```sh
-# From a separate copy of bazel/consumer:
+# From a separate copy of tests/bazel:
 bazel test //... --override_module=leapp_rt=/path/to/leapp/packages/leapp-rt
 ```
 
