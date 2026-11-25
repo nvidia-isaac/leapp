@@ -227,7 +227,7 @@ NON_DENSE_LAYOUTS = ("column_slice", "stepped", "expanded", "overlapping")
 
 
 @pytest.mark.parametrize("layout", INPUT_LAYOUTS)
-@pytest.mark.parametrize("input_name", ["x", "joint_pos"])
+@pytest.mark.parametrize("input_name", ["x", "joint.pos"])
 def test_declared_input_layout_mutation_diagnostic(layout, input_name):
     make_input = INPUT_LAYOUTS[layout]
     original = make_input()

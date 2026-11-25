@@ -17,11 +17,87 @@
 import os
 import sys
 import unittest
+import pytest
 import torch
 import leapp
 from leapp.leapp import _MANAGER as annotate
 from .base import LEAPPFunctionalTestBase
 from leapp.leapp_graph.datatypes import TracedTensor
+
+
+@pytest.mark.parametrize("backend", ["jit", "pt2", "onnx"])
+def test_dotted_ports_export_and_reload(tmp_path, backend):
+    """Preserve public keys across cached capture, pruning, wiring, and reload.
+
+    JIT/PT2 exercise generated Python signatures; ONNX also binds original port
+    names to model I/O. Two nodes ensure internal identifiers span the session.
+    """
+    leapp.start(name="dotted", save_path=str(tmp_path), max_cached_io=2)
+    try:
+        for offset in (0.0, 5.0):
+            left, right, _ = annotate.input_tensors(
+                "first",
+                {
+                    "out.state": torch.arange(3.0) + offset,
+                    "out_state": torch.arange(3.0) - offset,
+                    "unused.state": torch.zeros(3),
+                },
+            )
+            result = 2 * left + 3 * right
+            annotate.output_tensors(
+                "first", {"result.state": result}, export_with=backend
+            )
+            downstream, extra = annotate.input_tensors(
+                "second",
+                {"out.state": result, "state": torch.full((3,), offset)},
+            )
+            annotate.output_tensors(
+                "second", {"final.state": downstream - extra}, export_with=backend
+            )
+    finally:
+        leapp.stop()
+
+    descriptions = [td for node in annotate.nodes.values() for td in node.inputs]
+    fx_names = [td.fx_name for td in descriptions]
+    assert len(set(fx_names)) == len(fx_names)
+    assert all(name.isidentifier() for name in fx_names)
+    assert all("fx_name" not in td.dict() for td in descriptions)
+    assert [td.name for td in annotate.nodes["first"].inputs] == [
+        "out.state",
+        "out_state",
+    ]
+    leapp.compile_graph(visualize=False, validate=True, strict=True)
+    manager = leapp.InferenceManager(str(tmp_path / "dotted" / "dotted.yaml"))
+    assert set(manager.inputs) == {
+        "first/out.state",
+        "first/out_state",
+        "second/state",
+    }
+    assert set(manager.outputs) == {"second/final.state"}
+    for offset in (-4.0, 12.0):
+        left = torch.arange(3.0) + offset
+        right = torch.arange(3.0) * offset
+        extra = torch.full((3,), offset + 1)
+        actual = manager.run_policy(
+            {
+                "first/out.state": left,
+                "first/out_state": right,
+                "second/state": extra,
+            }
+        )
+        torch.testing.assert_close(
+            actual["second/final.state"], 2 * left + 3 * right - extra
+        )
+
+    # A new session resets allocation without modifying the saved artifact.
+    first_fx_name = fx_names[0]
+    leapp.start(name="next", save_path=str(tmp_path))
+    try:
+        annotate.input_tensors("new", {"other.state": torch.zeros(3)})
+        assert annotate.nodes["new"].inputs[0].fx_name == first_fx_name
+    finally:
+        leapp.stop()
+        annotate.reset_nodes()
 
 
 class TestAnnotateMethod(LEAPPFunctionalTestBase):
