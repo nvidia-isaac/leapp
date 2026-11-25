@@ -22,7 +22,7 @@ tensor-derived slice bounds.
 
 .. note::
 
-   Autocast with runtime tensor slice bounds requires PyTorch 2.10+, including
+   ``torch.autocast`` with runtime tensor slice bounds requires PyTorch 2.10+, including
    TorchScript export. On PyTorch 2.7–2.9, this can raise
    ``GuardOnDataDependentSymNode`` during capture.
 
