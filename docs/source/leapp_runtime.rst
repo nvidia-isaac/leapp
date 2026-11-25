@@ -40,22 +40,6 @@ Use ``InferenceManager`` to:
    The ``.pte`` file decides what runs, not the YAML, so load ExecuTorch bundles
    only from a source you trust.
 
-.. _external-tensorrt-engines:
-
-TensorRT engines
-================
-
-``InferenceManager`` runs TensorRT ``.engine``, ``.plan``, and ``.trt`` files
-with ``backend: trt``. Install a TensorRT Python package compatible with the
-engine and CUDA environment. LEAPP imports ``tensorrt`` only when loading an engine.
-
-For cached-output validation, reference the engine using ``export_with=None``
-and ``backend_params["model_path"]`` as described in :doc:`guides/export`.
-
-Engines must use fixed, nonempty shapes with linear device storage. Declare
-LEAPP ports in engine I/O order. Register required external plugins before
-loading, and do not call one runner concurrently.
-
 Running With Your Own Values
 ============================
 

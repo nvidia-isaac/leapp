@@ -392,4 +392,4 @@ Important behavior:
 * The model path written into the YAML is made relative to the YAML
   directory when possible.
 * ``InferenceManager`` currently runs referenced ``.pt``, ``.pt2``, and
-  ``.onnx`` artifacts, and :ref:`TensorRT engines <external-tensorrt-engines>`.
+  ``.onnx`` artifacts, and TensorRT engines.
