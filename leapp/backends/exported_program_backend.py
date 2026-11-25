@@ -7,6 +7,7 @@ import os
 from typing import Tuple
 
 import torch
+from torch.export.passes import move_to_device_pass
 
 from leapp.backends.export_backend import ExportBackend, prepare_tensors_for_export
 from leapp.utils.logging import _get_logger
@@ -89,8 +90,19 @@ class ExportedProgramExportBackend(ExportBackend):
 
         self.exported_program = torch.export.load(model_path)
         self._load_warp_runtime(self.exported_program)
-        # PT2 records device transfers in the graph. Moving every buffer can
-        # put CPU constants on CUDA while their consumers still execute on CPU.
-        self.compiled_model = self.exported_program.module()
         self.runtime_device = self._select_runtime_device()
+        # Relocate graph transfers and factories along with parameters/constants.
+        # Module.to() alone leaves captured CPU operations behind.
+        # Torch 2.7 misses positional devices; newer passes assume this form.
+        for node in self.exported_program.graph.nodes:
+            if node.op == "call_function" and node.target is torch.ops.aten.to.device:
+                args, kwargs = list(node.args), dict(node.kwargs)
+                for name in ("self", "device", "dtype")[len(args) :]:
+                    args.append(kwargs.pop(name))
+                args[1] = self.runtime_device
+                node.args, node.kwargs = tuple(args), kwargs
+        self.exported_program = move_to_device_pass(
+            self.exported_program, self.runtime_device
+        )
+        self.compiled_model = self.exported_program.module()
         self.compiled_module = None

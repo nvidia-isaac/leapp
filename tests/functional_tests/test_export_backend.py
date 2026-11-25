@@ -1644,15 +1644,18 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
             yaml_data["models"][funcA.__name__]["parameters"]["backend"], "pt2"
         )
 
-    def test_pt2_reload_preserves_captured_placement(self):
-        """Exercise saved-bundle reload with device transfers and CPU clipping.
+    def test_pt2_reload_uses_runtime_device(self):
+        """Relocate saved transfers, factories and constants as one program.
 
-        Cached validation alone misses loader-induced relocation of constants.
-        CUDA adds mixed input/buffer devices to the CPU round-trip control.
+        Exercise CPU export to CUDA and mixed-device export to either target;
+        cached validation alone cannot cover runtime relocation. The combined
+        device/dtype conversion must retain its dtype on changed-input replay.
         """
-        devices = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
-        for device in devices:
-            with self.subTest(device=device):
+        cases = [("cpu", "cpu")]
+        if torch.cuda.is_available():
+            cases += [("cpu", "cuda"), ("cuda", "cuda"), ("cuda", "cpu")]
+        for device, runtime_device in cases:
+            with self.subTest(device=device, runtime_device=runtime_device):
                 gain = torch.tensor([2.0, 0.5], device=device)
                 lower = torch.tensor([-1.0, 0.0])
                 upper = torch.tensor([1.0, 2.0])
@@ -1666,25 +1669,78 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
                                 "offset": torch.tensor([0.1, -0.2]) + shift,
                             },
                         )
-                        result = (x * gain).cpu().clamp(lower, upper) + offset
+                        result = (x * gain).to(device="cpu", dtype=torch.float64)
+                        result = result.clamp(lower, upper) + offset
+                        result = result + torch.arange(2, device="cpu")
                         leapp.annotate.output_tensors(
                             "policy", {"result": result}, export_with="pt2"
                         )
                 finally:
                     leapp.stop()
                 leapp.compile_graph(visualize=False, validate=True, strict=True)
-                manager = leapp.InferenceManager(
-                    os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
-                )
+                with mock.patch(
+                    "leapp.backends.export_backend.ExportBackend._select_runtime_device",
+                    return_value=runtime_device,
+                ):
+                    manager = leapp.InferenceManager(
+                        os.path.join(
+                            self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml"
+                        )
+                    )
                 for values in ([-2.0, 1.0], [0.2, 5.0]):
                     fresh = torch.tensor(values, device=device)
                     offset = torch.tensor([0.3, 0.4])
                     actual = manager.run_policy(
-                        {"policy/x": fresh, "policy/offset": offset}
+                        {
+                            "policy/x": fresh.to(runtime_device),
+                            "policy/offset": offset.to(runtime_device),
+                        }
                     )["policy/result"]
-                    expected = (fresh * gain).cpu().clamp(lower, upper) + offset
-                    self.assertEqual(actual.device.type, "cpu")
-                    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+                    expected = (fresh * gain).to(device="cpu", dtype=torch.float64)
+                    expected = expected.clamp(lower, upper) + offset + torch.arange(2)
+                    self.assertEqual(actual.device.type, runtime_device)
+                    torch.testing.assert_close(actual.cpu(), expected, rtol=0, atol=0)
+
+    def test_pt2_reload_retargets_device_arguments(self):
+        """Cover positional and keyword device arguments without requiring CUDA.
+
+        A meta transfer has no stored tensor data to migrate; after relocation,
+        its operation must compute real values on the requested CPU device.
+        """
+
+        class Convert(torch.nn.Module):
+            def forward(self, x):
+                return x.to(device="meta", dtype=torch.float64) + 1
+
+        node = LeappNode("relocate")
+        node.setup_backend("pt2", {})
+        backend = node.export_backend
+        program = torch.export.export(Convert(), (torch.ones(2),))
+        with tempfile.TemporaryDirectory() as directory:
+            for keyword_device in (False, True):
+                with self.subTest(keyword_device=keyword_device):
+                    if keyword_device:
+                        for fx_node in program.graph.nodes:
+                            if fx_node.target is torch.ops.aten.to.device:
+                                fx_node.kwargs = {
+                                    "device": fx_node.args[1],
+                                    "dtype": fx_node.args[2],
+                                }
+                                fx_node.args = fx_node.args[:1]
+                        program.graph_module.recompile()
+                        program.validate()
+                    backend.exported_program = program
+                    path, _, sha256 = backend.save(directory)
+                    with mock.patch.object(
+                        backend, "_select_runtime_device", return_value="cpu"
+                    ):
+                        backend.load(path, sha256)
+                    for values in ([2.0, 3.0], [-4.0, 0.25]):
+                        fresh = torch.tensor(values)
+                        actual = backend.compiled_model(fresh)
+                        torch.testing.assert_close(
+                            actual, fresh.double() + 1, rtol=0, atol=0
+                        )
 
     @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     def test_executorch_backend(self):

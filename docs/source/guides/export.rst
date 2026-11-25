@@ -85,6 +85,15 @@ representation rather than TorchScript or ONNX. It is a good fit for
 feedforward PyTorch graphs that already compile cleanly through LEAPP's
 FX capture path.
 
+``InferenceManager`` relocates a loaded PT2 program to CUDA when available,
+otherwise CPU. Parameters, constants, tensor factories, and captured device
+transfers move together; dtype conversions are retained. Supply inputs on that
+runtime device, as returned by ``get_mock_input()``. Outputs also use that
+device. The target must support the program's operations; moving a program
+does not provide missing device kernels or guarantee identical CPU/CUDA
+floating-point results. Loading directly with ``torch.export.load`` retains
+the artifact's original placement.
+
 .. code-block:: python
 
    import torch
