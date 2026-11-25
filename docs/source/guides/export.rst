@@ -392,20 +392,4 @@ Important behavior:
 * The model path written into the YAML is made relative to the YAML
   directory when possible.
 * ``InferenceManager`` currently runs referenced ``.pt``, ``.pt2``, and
-  ``.onnx`` artifacts, and TensorRT engines as described below.
-
-.. _external-tensorrt-engines:
-
-External TensorRT engines
--------------------------
-
-Use ``export_with=None`` and ``backend_params["model_path"]`` to validate external
-TensorRT ``.engine``, ``.plan``, or ``.trt`` files. The generated YAML uses
-``backend: trt``, which :class:`~leapp.InferenceManager` also supports.
-
-Install a TensorRT Python package compatible with the engine and CUDA
-environment. LEAPP imports ``tensorrt`` only when loading an engine.
-
-Engines must use fixed, nonempty shapes with linear device storage. Declare
-LEAPP ports in engine I/O order. Register required external plugins before
-loading, and do not call one runner concurrently.
+  ``.onnx`` artifacts, and :ref:`TensorRT engines <external-tensorrt-engines>`.
