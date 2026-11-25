@@ -58,7 +58,17 @@ class _LeappFXGraph(fx.Graph):
         warp_backend = get_warp_backend()
         if warp_backend is not None:
             warp_backend.close_warp_segment()
-        return super().create_node(*args, **kwargs)
+        node = super().create_node(*args, **kwargs)
+        if self.recording and node.op in ("call_function", "call_method"):
+            autocast = {
+                device: torch.get_autocast_dtype(device)
+                for device in ("cpu", "cuda")
+                if torch.is_autocast_enabled(device)
+            }
+            if autocast:
+                node.meta["leapp_autocast"] = autocast
+                self.requires_functionalization = True
+        return node
 
 
 class TracedTensorNode(LeappNode):

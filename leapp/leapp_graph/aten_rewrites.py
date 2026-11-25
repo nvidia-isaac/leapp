@@ -5,6 +5,7 @@
 
 """Functionalization and ATen graph rewrites shared by LEAPP export backends."""
 
+from contextlib import ExitStack
 from typing import Optional
 
 import torch
@@ -24,6 +25,31 @@ def scriptable_sym_ite(condition: bool, if_true: int, if_false: int) -> int:
     return torch.sym_ite(condition, if_true, if_false)
 
 
+class _AutocastInterpreter(fx.Interpreter):
+    def run_node(self, node):
+        # Restore each operation's capture scope, including disabled regions.
+        # torch.export lowers these scopes into explicit ATen casts, so replay
+        # does not require autocast or this interpreter.
+        autocast = node.meta.get("leapp_autocast", {})
+        with ExitStack() as stack:
+            for device in ("cpu", "cuda"):
+                stack.enter_context(
+                    torch.autocast(
+                        device, dtype=autocast.get(device), enabled=device in autocast
+                    )
+                )
+            return super().run_node(node)
+
+
+class _AutocastModule(torch.nn.Module):
+    def __init__(self, module):
+        super().__init__()
+        self.module = module
+
+    def forward(self, *args):
+        return _AutocastInterpreter(self.module).run(*args)
+
+
 def functionalize_graph(graph, root, inputs):
     """Import the functional user-output graph, retaining the recording graph ID.
 
@@ -37,11 +63,18 @@ def functionalize_graph(graph, root, inputs):
     """
     original_inputs = [node.target for node in graph.nodes if node.op == "placeholder"]
     raw = fx.GraphModule(root, graph)
+    has_autocast = any(node.meta.get("leapp_autocast") for node in graph.nodes)
+    capture = _AutocastModule(raw) if has_autocast else raw
     with torch.inference_mode(False):
         samples = tuple(value.detach().clone() for value in inputs)
     try:
-        program = torch.export.export(raw, samples, strict=False).run_decompositions({})
+        program = torch.export.export(
+            capture, samples, strict=False
+        ).run_decompositions({})
     except GuardOnDataDependentSymNode:
+        if has_autocast:
+            # The native-mutation fallback below cannot retain autocast scopes.
+            raise
         # Older exporters cannot normalize tensor-valued slice bounds. Retain
         # ordered native mutations for FX/TorchScript, cloning inputs/constants
         # per call to keep LEAPP's functional external contract. Never replace

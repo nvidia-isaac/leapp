@@ -31,6 +31,55 @@ warnings.filterwarnings("ignore", message=".*on empty non-base types in `__init_
 warnings.filterwarnings("ignore", message=".*feature will be removed.*")
 
 
+@pytest.mark.parametrize(
+    "device,weight_dtype",
+    [("cpu", torch.float32), ("cpu", torch.bfloat16), ("cuda", torch.bfloat16)],
+)
+def test_autocast_changed_input_replay(tmp_path, device, weight_dtype):
+    """Lower mixed-precision scopes without changing native weights or buffers."""
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    torch.manual_seed(42)
+    model = (
+        torch.nn.Sequential(
+            torch.nn.Linear(16, 32), torch.nn.GELU(), torch.nn.Linear(32, 16)
+        )
+        .to(device=device, dtype=weight_dtype)
+        .eval()
+    )
+    model.register_buffer(
+        "scale", torch.linspace(0.7, 1.3, 256, device=device).reshape(16, 16)
+    )
+    original = {name: value.clone() for name, value in model.state_dict().items()}
+
+    def compute(x):
+        with torch.autocast(device, dtype=torch.bfloat16):
+            low = model(x)
+            with torch.autocast(device, enabled=False):
+                full = (low.float() + x) @ model.scale
+            return low, full
+
+    raw = torch.randn(1, 4, 16, device=device)
+    node = TracedTensorNode("autocast")
+    with torch.no_grad():
+        low, full = compute(node.create_input(raw.clone(), "x"))
+        node.compile_trace({"low": low, "full": full})
+        program = torch.export.export(node.m, (raw,))
+        path = tmp_path / "autocast.pt2"
+        torch.export.save(program, path)
+        reloaded = torch.export.load(path).module()
+        for fresh in (raw, raw * -1.7 + 0.3, raw + 2):
+            expected = compute(fresh)
+            for replay in (node.m, reloaded):
+                actual = replay(fresh)
+                for result, reference in zip(actual, expected):
+                    torch.testing.assert_close(result, reference, rtol=0, atol=0)
+                assert actual[0].dtype == torch.bfloat16
+                assert actual[1].dtype == torch.float32
+    for name, value in model.state_dict().items():
+        torch.testing.assert_close(value, original[name], rtol=0, atol=0)
+
+
 class TensorArithmeticFunctions:
     """Tensor arithmetic functions for testing."""
 
