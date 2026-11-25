@@ -20,13 +20,11 @@ state; callers must consume those values rather than expect their input
 storage to change. Backend restrictions still apply, including restrictions on
 tensor-derived slice bounds.
 
-Autocast and runtime slice bounds
-=================================
+.. note::
 
-Capturing ``torch.autocast`` together with tensor-valued runtime slice bounds
-in one node requires PyTorch 2.10 or newer. On PyTorch 2.7 through 2.9, graph
-construction can raise ``GuardOnDataDependentSymNode`` for this combination.
-This restriction also applies when exporting to TorchScript.
+   Autocast with runtime tensor slice bounds requires PyTorch 2.10+, including
+   TorchScript export. On PyTorch 2.7–2.9, this can raise
+   ``GuardOnDataDependentSymNode`` during capture.
 
 Data-dependent control flow
 ===========================
