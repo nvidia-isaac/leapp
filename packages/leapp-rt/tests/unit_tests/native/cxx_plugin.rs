@@ -12,13 +12,14 @@ fn plugins() -> Option<PathBuf> {
 }
 
 fn load(directory: &std::path::Path, mode: &str, outputs: usize) -> Result<Model> {
-    let spec = serde_json::from_value(json!({
+    let mut spec = serde_json::from_value(json!({
         "inputs": [{"name":"input", "dtype":"float32", "shape":[-1]}],
         "outputs": (0..outputs).map(|i| json!({
             "name":format!("output{i}"), "dtype":"float32", "shape":[-1]
         })).collect::<Vec<_>>(),
         "parameters": {"backend":"test", "model_path":mode}
     }))?;
+    crate::bundle::shapes::compile_node(&mut spec)?;
     Model::load_library(
         &spec,
         MemoryLocation::Cpu,

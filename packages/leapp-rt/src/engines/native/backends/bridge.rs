@@ -7,7 +7,7 @@ mod ffi;
 
 use super::{BackendPlugin, InputRoute};
 use crate::{
-    bundle::schema::NodeSpec,
+    bundle::{schema::NodeSpec, shapes::ExecutionShape},
     dlpack::{BorrowedTensor, DLTensor, SharedTensor},
     engines::memory::dlpack,
     MemoryLocation, PortSpec,
@@ -63,8 +63,9 @@ impl Model {
             MemoryLocation::PinnedCpu => unreachable!("workspace execution uses CPU or CUDA"),
         };
         let path = spec.parameters.model_path.as_os_str().as_encoded_bytes();
-        let inputs: Vec<_> = spec.inputs.iter().map(port).collect();
-        let outputs: Vec<_> = spec.outputs.iter().map(port).collect();
+        // Plugins see execution dimensions; bounded capture axes are dynamic.
+        let inputs: Vec<_> = spec.input_ports().map(port).collect();
+        let outputs: Vec<_> = spec.output_ports().map(port).collect();
         let args = ffi::LoadArgs {
             path: path.as_ptr().cast(),
             path_size: path.len(),
@@ -355,13 +356,13 @@ unsafe extern "C" fn copy(
     }
 }
 
-fn port(spec: &PortSpec) -> ffi::Port {
+fn port((spec, shape): (&PortSpec, &ExecutionShape)) -> ffi::Port {
     ffi::Port {
         name: spec.name.as_ptr().cast(),
         name_size: spec.name.len(),
         dtype: dlpack::dl_type(spec.dtype),
-        shape: spec.shape.as_ptr(),
-        rank: spec.shape.len(),
+        shape: shape.dims.as_ptr(),
+        rank: shape.dims.len(),
     }
 }
 

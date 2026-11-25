@@ -141,8 +141,8 @@ pub(super) trait BackendPlugin: Send {
     /// at initialization or the backend checks unresolved values before return. They
     /// must survive later runs/plugin destruction and must not alias inputs or
     /// mutable backend state. Use workspace transfers to isolate SDK-owned data.
-    /// Inputs have already passed layout, device and port validation. Bundle
-    /// validation requires identical declarations across connected ports.
+    /// Inputs have already passed layout, device and consumer port validation.
+    /// Bounded output dimensions and shared symbols are checked before downstream use.
     /// # Safety
     /// Supplied outputs satisfy the same contract as run and are not retained.
     unsafe fn run_dynamic(

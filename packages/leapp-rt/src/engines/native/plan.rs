@@ -4,6 +4,7 @@
 //! Indexed routing and stable workspace storage. Feedback stays in Session.
 
 use crate::{
+    bundle::shapes::{ExecutionShape, Symbols},
     dlpack::{BorrowedTensor, DLDevice, DLTensor, SharedTensor},
     engines::memory::{dlpack, Buffer},
     session::graph::{port_ref, Graph, InputSource},
@@ -19,16 +20,16 @@ use std::{
 pub(super) struct TensorSpec {
     pub name: String,
     pub dtype: DataType,
-    pub shape: Vec<i64>,
+    pub shape: ExecutionShape,
 }
 
-impl From<&PortSpec> for TensorSpec {
-    fn from(port: &PortSpec) -> Self {
-        Self {
+impl TensorSpec {
+    fn new(port: &PortSpec, shape: &ExecutionShape) -> Arc<Self> {
+        Arc::new(Self {
             name: port.name.clone(),
             dtype: port.dtype,
-            shape: port.shape.clone(),
-        }
+            shape: shape.clone(),
+        })
     }
 }
 
@@ -36,6 +37,9 @@ pub(super) struct Call {
     pub name: String,
     pub model: usize,
     pub inputs: Vec<usize>,
+    /// (position, consumer spec) for inputs whose contract neither the boundary
+    /// nor the producer already enforces. Usually empty.
+    pub checked_inputs: Vec<(usize, Arc<TensorSpec>)>,
     pub outputs: Vec<usize>,
 }
 
@@ -48,6 +52,7 @@ pub(super) struct Plan {
     pub outputs: IndexMap<String, usize>,
     pub slots: Vec<Arc<TensorSpec>>,
     pub terminal_outputs: BTreeSet<usize>,
+    pub symbols: Symbols,
 }
 
 impl Plan {
@@ -104,32 +109,46 @@ impl Plan {
             outputs: IndexMap::new(),
             slots: Vec::new(),
             terminal_outputs: BTreeSet::new(),
+            symbols: bundle.0.description.symbols.clone(),
         };
         let mut outputs = HashMap::new();
         for (name, model) in models {
-            for spec in &model.outputs {
-                let id = plan.slots.len();
-                plan.slots.push(Arc::new(spec.into()));
-                outputs.insert(port_ref(name, spec), id);
+            for (spec, shape) in model.output_ports() {
+                outputs.insert(port_ref(name, spec), plan.slots.len());
+                plan.slots.push(TensorSpec::new(spec, shape));
             }
         }
 
         for model_id in order {
             let (name, model) = models.get_index(model_id).unwrap();
             let mut inputs = Vec::new();
-            for spec in &model.inputs {
+            let mut checked_inputs = Vec::new();
+            for (position, (spec, shape)) in model.input_ports().enumerate() {
                 let port = port_ref(name, spec);
-                let id = match graph.sources.get(&port) {
-                    Some(InputSource::Forward(source)) => outputs[source],
+                let source = graph.sources.get(&port);
+                let (id, checked) = match source {
+                    Some(InputSource::Forward(source)) => {
+                        let producer = &plan.slots[outputs[source]].shape;
+                        // Bundle validation proved fixed producers against unbounded
+                        // consumers; an identical contract was checked when produced.
+                        let checked = producer != shape
+                            && (producer.dims.contains(&-1) || shape.is_bounded());
+                        (outputs[source], checked)
+                    }
                     // Both private defaults and feedback are supplied by Session.
+                    // NativeEngine::validate checks public inputs; feedback is never
+                    // bounded, and private defaults are checked where they are used.
                     _ => {
                         let id = plan.slots.len();
-                        plan.slots.push(Arc::new(spec.into()));
+                        plan.slots.push(TensorSpec::new(spec, shape));
                         plan.inputs.insert(port.name(), id);
-                        id
+                        (id, source.is_none() && shape.is_bounded())
                     }
                 };
-                if matches!(graph.sources.get(&port), Some(InputSource::Feedback(_))) {
+                if checked {
+                    checked_inputs.push((position, TensorSpec::new(spec, shape)));
+                }
+                if matches!(source, Some(InputSource::Feedback(_))) {
                     plan.feedback_inputs.insert(id);
                 }
                 inputs.push(id);
@@ -139,6 +158,7 @@ impl Plan {
                 name: name.clone(),
                 model: model_id,
                 inputs,
+                checked_inputs,
                 outputs: model
                     .outputs
                     .iter()
@@ -191,22 +211,24 @@ impl Plan {
     }
 }
 
-pub(super) fn matches(
+/// Checks layout, dtype and shape contract, binding the port's shared symbols
+/// in this invocation's `values`. Returns the byte length.
+pub(super) fn check(
     spec: &TensorSpec,
     value: BorrowedTensor<'_>,
     device: DLDevice,
+    symbols: &Symbols,
+    values: &mut [Option<i64>],
 ) -> Result<usize> {
     let (shape, len) = dlpack::layout_on(value, device)?;
     ensure!(
-        dlpack::data_type(value.descriptor().dtype)? == spec.dtype
-            && shape.len() == spec.shape.len()
-            && shape
-                .iter()
-                .zip(&spec.shape)
-                .all(|(&actual, &expected)| expected == -1 || expected == actual),
+        dlpack::data_type(value.descriptor().dtype)? == spec.dtype && spec.shape.matches(shape),
         "port {} does not match declared dtype/shape",
         spec.name
     );
+    spec.shape
+        .bind(shape, symbols, values)
+        .with_context(|| format!("port {} shape contract", spec.name))?;
     Ok(len)
 }
 
@@ -220,7 +242,7 @@ pub(super) struct Slot {
 
 impl Slot {
     pub fn new(spec: Arc<TensorSpec>, terminal: bool, location: MemoryLocation) -> Result<Self> {
-        let fixed = if spec.shape.contains(&-1) {
+        let fixed = if spec.shape.dims.contains(&-1) {
             None
         } else {
             Some(FixedTensor::new(&spec, location)?)
@@ -331,8 +353,8 @@ unsafe impl Send for FixedTensor {}
 impl FixedTensor {
     fn new(spec: &TensorSpec, location: MemoryLocation) -> Result<Self> {
         let dtype = dlpack::dl_type(spec.dtype);
-        let buffer = Buffer::allocate(dlpack::byte_size(dtype, &spec.shape)?, location)?;
-        let mut shape = spec.shape.clone();
+        let buffer = Buffer::allocate(dlpack::byte_size(dtype, &spec.shape.dims)?, location)?;
+        let mut shape = spec.shape.dims.clone();
         let descriptor = DLTensor {
             data: buffer.ptr.as_ptr().cast(),
             device: dlpack::device(buffer.location)?,

@@ -5,7 +5,7 @@
 
 use super::{BackendPlugin, InputRoute};
 use crate::{
-    bundle::schema::NodeSpec,
+    bundle::{schema::NodeSpec, shapes::ExecutionShape},
     dlpack::{BorrowedTensor, DLTensor, SharedTensor},
     engines::memory::{cuda, dlpack},
     DataType, MemoryLocation, PortSpec,
@@ -81,7 +81,7 @@ struct Loaded {
     // Workspace arguments/results follow bundle order, not ONNX graph order.
     input_names: Vec<String>,
     output_names: Vec<String>,
-    output_shapes: Vec<Vec<i64>>,
+    output_shapes: Vec<ExecutionShape>,
     output_locations: Vec<MemoryLocation>,
     location: MemoryLocation,
     replay: bool,
@@ -107,10 +107,9 @@ impl Model {
             );
             ensure!(
                 model
-                    .inputs
-                    .iter()
-                    .chain(&model.outputs)
-                    .all(|port| port.shape.iter().all(|&d| d > 0)),
+                    .input_ports()
+                    .chain(model.output_ports())
+                    .all(|(_, shape)| shape.dims.iter().all(|&d| d > 0)),
                 "ONNX replay requires fixed, nonempty input and output shapes"
             );
         }
@@ -195,9 +194,10 @@ impl Model {
                 );
             }
         }
-        let input_names = check_ports(&model.inputs, session.inputs()).context("ONNX inputs")?;
+        let input_names =
+            check_ports(model.input_ports(), session.inputs()).context("ONNX inputs")?;
         let output_names =
-            check_ports(&model.outputs, session.outputs()).context("ONNX outputs")?;
+            check_ports(model.output_ports(), session.outputs()).context("ONNX outputs")?;
         let output_locations = output_locations(&session, &output_names)?;
         Ok(Self {
             prepared: None,
@@ -207,11 +207,7 @@ impl Model {
                 input_names,
                 output_names,
                 output_locations,
-                output_shapes: model
-                    .outputs
-                    .iter()
-                    .map(|port| port.shape.clone())
-                    .collect(),
+                output_shapes: model.output_ports().map(|(_, s)| s.clone()).collect(),
                 location,
                 replay,
             }),
@@ -478,11 +474,7 @@ impl BackendPlugin for Model {
                 // differ from the declared shape. Establish the producer
                 // guarantee once here before publication.
                 ensure!(
-                    shape.len() == expected.len()
-                        && shape
-                            .iter()
-                            .zip(expected)
-                            .all(|(&actual, &expected)| expected == -1 || actual == expected),
+                    expected.matches(shape),
                     "ONNX output {name} does not match declared shape"
                 );
                 if bindings.iter().any(|output| output.0 == position) {
@@ -602,11 +594,14 @@ fn bound_outputs(session: &Session, binding: &IoBinding) -> Result<Vec<DynValue>
     }
 }
 
-fn check_ports(specs: &[PortSpec], outlets: &[Outlet]) -> Result<Vec<String>> {
-    ensure!(specs.len() == outlets.len(), "model tensor count mismatch");
+fn check_ports<'a>(
+    ports: impl ExactSizeIterator<Item = (&'a PortSpec, &'a ExecutionShape)>,
+    outlets: &[Outlet],
+) -> Result<Vec<String>> {
+    ensure!(ports.len() == outlets.len(), "model tensor count mismatch");
     let mut remaining: HashMap<_, _> = outlets.iter().map(|port| (port.name(), port)).collect();
-    let mut names = Vec::with_capacity(specs.len());
-    for spec in specs {
+    let mut names = Vec::with_capacity(outlets.len());
+    for (spec, expected) in ports {
         let outlet = remaining
             .remove(spec.name.as_str())
             .with_context(|| format!("unknown or duplicate model tensor {}", spec.name))?;
@@ -614,12 +609,7 @@ fn check_ports(specs: &[PortSpec], outlets: &[Outlet]) -> Result<Vec<String>> {
             anyhow::bail!("only tensor ports are supported");
         };
         ensure!(
-            *ty == ort_type(spec.dtype)
-                && shape.len() == spec.shape.len()
-                && shape
-                    .iter()
-                    .zip(&spec.shape)
-                    .all(|(&a, &b)| a < 0 || b == -1 || a == b),
+            *ty == ort_type(spec.dtype) && expected.compatible(shape),
             "ONNX port {} has incompatible dtype or shape",
             outlet.name()
         );

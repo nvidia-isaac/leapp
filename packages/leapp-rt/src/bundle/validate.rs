@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use super::schema::{BundleDescription, InitialValueSpec, NodeSpec, PortRef};
+use super::schema::{BundleDescription, InitialValueSpec, NodeSpec, PortRef, PortSpec};
 use anyhow::{ensure, Context, Result};
 use indexmap::IndexMap;
 use safetensors::SafeTensors;
@@ -11,42 +11,44 @@ pub(crate) fn validate_structure(description: &BundleDescription) -> Result<()> 
     let mut inputs = IndexMap::new();
     let mut outputs = IndexMap::new();
     for (name, node) in &description.models {
+        let port = |spec: &PortSpec| PortRef {
+            node: name.clone(),
+            port: spec.name.clone(),
+        };
         // Python input buffers keep the last duplicate; edge sources use the first.
-        for spec in &node.inputs {
-            inputs.insert(
-                PortRef {
-                    node: name.clone(),
-                    port: spec.name.clone(),
-                },
-                spec,
-            );
+        for (spec, shape) in node.input_ports() {
+            inputs.insert(port(spec), (spec, shape));
         }
-        for spec in &node.outputs {
-            outputs
-                .entry(PortRef {
-                    node: name.clone(),
-                    port: spec.name.clone(),
-                })
-                .or_insert(spec);
+        for (spec, shape) in node.output_ports() {
+            outputs.entry(port(spec)).or_insert((spec, shape));
         }
     }
 
-    for flow in [
-        &description.pipeline.data_flow,
-        &description.pipeline.feedback_flow,
+    for (flow, feedback) in [
+        (&description.pipeline.data_flow, false),
+        (&description.pipeline.feedback_flow, true),
     ] {
         for (source, targets) in flow {
-            let source_spec = outputs
+            let (source_spec, source_shape) = outputs
                 .get(source)
                 .with_context(|| format!("unknown output port {source}"))?;
             for target in targets {
-                let target_spec = inputs
+                let (target_spec, target_shape) = inputs
                     .get(target)
                     .with_context(|| format!("unknown input port {target}"))?;
+                // A fixed producer must also satisfy the consumer's bounds.
+                let compatible = if source_shape.dims.contains(&-1) {
+                    target_shape.compatible(&source_shape.dims)
+                } else {
+                    target_shape.matches(&source_shape.dims)
+                };
                 ensure!(
-                    source_spec.shape == target_spec.shape
-                        && source_spec.dtype == target_spec.dtype,
+                    compatible && source_spec.dtype == target_spec.dtype,
                     "incompatible tensors: {source} -> {target}"
+                );
+                ensure!(
+                    !feedback || !(source_shape.is_bounded() || target_shape.is_bounded()),
+                    "variable-axis feedback is not supported: {source} -> {target}"
                 );
             }
         }

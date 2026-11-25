@@ -144,6 +144,7 @@ fn onnx_peers_share_models_and_run_with_independent_workspaces() {
         // size overflow exercises the allocation failure path without an OOM.
         let workspace = engine.workspace.lock().unwrap();
         let invalid = Plan {
+            symbols: Default::default(),
             calls: vec![],
             inputs: IndexMap::new(),
             public_inputs: 0,
@@ -154,7 +155,7 @@ fn onnx_peers_share_models_and_run_with_independent_workspaces() {
             slots: vec![Arc::new(plan::TensorSpec {
                 name: "invalid".into(),
                 dtype: crate::DataType::Float32,
-                shape: vec![i64::MAX, i64::MAX],
+                shape: vec![i64::MAX, i64::MAX].into(),
             })],
         };
         let models = workspace
@@ -648,6 +649,52 @@ fn dynamic_outputs_feed_fixed_and_dynamic_nodes_and_recover_after_shape_errors()
 
 #[path = "native/torch.rs"]
 mod torch;
+
+#[test]
+fn bounded_outputs_validate_downstream_shapes_before_execution() {
+    for device in devices() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut data = fixture("dynamic");
+        data["system information"]["shape contract version"] = json!(2);
+        let model = &mut data["models"]["dynamic"];
+        for ports in ["inputs", "outputs"] {
+            model[ports][0]["shape"] = json!([4]);
+            model[ports][0]["axes"] =
+                json!([{"variable":{"symbol":"n","min":2,"max":8,"multiple_of":2}}]);
+        }
+        let mut consumer = model.clone();
+        // Same rank and dtype, but a narrower consumer bound and different capture.
+        for ports in ["inputs", "outputs"] {
+            consumer[ports][0]["shape"] = json!([2]);
+            consumer[ports][0]["axes"][0]["variable"]["max"] = json!(4);
+            consumer[ports][0]["axes"][0]["variable"]["symbol"] = json!("consumer_n");
+        }
+        data["models"]["consumer"] = consumer;
+        data["pipeline"]["data_flow"] = json!({"dynamic/output":["consumer/input"]});
+        data["pipeline"]["outputs"] = json!({"consumer":["output"]});
+        let bundle = write_bundle(&data, directory.path());
+        let mut session = Session::open(
+            &bundle,
+            SessionOptions {
+                device,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let location = crate::engines::tests::support::execution_location(device);
+        for size in [2, 4, 6, 3, 10, 4, 2] {
+            let values = vec![size as f32; size];
+            let input = placed(&values, &[size as i64], location).unwrap();
+            let result = session.run(&HashMap::from([("dynamic/input", input.view())]));
+            if size == 2 || size == 4 {
+                let value = result.unwrap().get("consumer/output").unwrap().clone();
+                assert_eq!(value.to_cpu_vec::<f32>().unwrap(), values);
+            } else {
+                assert!(result.is_err(), "size {size}");
+            }
+        }
+    }
+}
 
 #[path = "native/streams.rs"]
 mod streams;

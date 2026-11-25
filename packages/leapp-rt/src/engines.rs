@@ -87,6 +87,13 @@ pub(crate) fn open(
 ) -> Result<Arc<dyn Engine>, RuntimeError> {
     crate::session::onnx_tensorrt::validate(bundle, options)
         .map_err(|error| RuntimeError::new("configure", error))?;
+    // Symbols exist only when some port declares variable-axis bounds.
+    if options.engine == EngineKind::Triton && !bundle.0.description.symbols.is_empty() {
+        return Err(RuntimeError::new(
+            "configure",
+            anyhow::anyhow!("variable-axis bounds are unsupported by Triton ensembles"),
+        ));
+    }
     match options.engine {
         EngineKind::Triton => triton::open(bundle, graph, options),
         EngineKind::Native => native::open(bundle, graph, options),

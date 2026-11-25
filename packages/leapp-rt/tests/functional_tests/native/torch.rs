@@ -259,36 +259,97 @@ fn nativert_peers_preserve_shared_persistent_state() {
 }
 
 #[test]
-#[ignore = "requires native NativeRT backend and CPU/CUDA fixtures"]
-fn nativert_dynamic_shapes_recover_after_execution_errors() {
+#[ignore = "requires native TorchScript/NativeRT backends and CPU/CUDA fixtures"]
+fn torch_bounded_shapes_and_supplied_outputs_recover_after_errors() {
     for device in devices() {
-        let bundle = bundle("pt2", "reshape", device);
-        let engine = engine(&bundle, device);
-        assert!(!engine.workspace.lock().unwrap().models[0].is_prepared());
-        let mut retained = Vec::new();
-        for size in [4, 3, 0, 8, 2] {
-            let values = vec![size as f32; size];
-            let shape = [size as i64];
-            let input = placed(&values, &shape, execution_location(&engine)).unwrap();
-            let result = engine.run(
-                &[("model/values", input.view())],
-                &OutputPlacement::default(),
-                &mut HashMap::new(),
-            );
-            if size == 3 {
-                assert_eq!(result.err().unwrap().phase(), "execute");
-            } else {
-                let result = result.unwrap();
-                assert_eq!(result["model/output_0"].shape(), [size as i64 / 2, 2]);
-                retained.push((values, result));
+        for (backend, name, output) in [
+            ("jit", "dynamic", "model/result"),
+            ("pt2", "reshape", "model/output_0"),
+        ] {
+            let mut bundle = bundle(backend, name, device);
+            let description = &mut Arc::get_mut(&mut bundle.0).unwrap().description;
+            description
+                .system_information
+                .insert("shape contract version".into(), 1.into());
+            let model = &mut description.models["model"];
+            for (port, shape, max) in [
+                (&mut model.inputs[0], vec![4], 8),
+                (&mut model.outputs[0], vec![2, 2], 3),
+            ] {
+                let mut axes = vec![json!({}); shape.len()];
+                axes[0] = json!({"variable":{"symbol":port.name,"min":0,"max":max}});
+                port.shape = shape;
+                port.metadata
+                    .insert("axes".into(), yaml_serde::to_value(axes).unwrap());
             }
-        }
-        drop(engine);
-        for (expected, result) in retained {
-            assert_eq!(
-                result["model/output_0"].to_cpu_vec::<f32>().unwrap(),
-                expected
-            );
+            // Recompile the edited contracts, as loading does.
+            crate::bundle::shapes::compile(description).unwrap();
+            let original = Session::open(
+                &bundle,
+                SessionOptions {
+                    device,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let mut session = original.new_session().unwrap();
+            drop(original);
+            let location = crate::engines::tests::support::execution_location(device);
+            let mut retained = Vec::new();
+            for (frame, size) in [4, 3, 0, 6, 8, 10, 2, 4].into_iter().enumerate() {
+                let values = vec![frame as f32; size];
+                let input = placed(&values, &[size as i64], location).unwrap();
+                let inputs = HashMap::from([("model/values", input.view())]);
+                let result = session.run(&inputs);
+                if matches!(size, 3 | 8 | 10) {
+                    // Invalid reshape, producer output bound, and public input bound.
+                    let error = result.err().expect("invalid shape must fail");
+                    if size == 3 {
+                        assert_eq!(error.phase(), "execute");
+                    } else {
+                        assert!(error.to_string().contains("declared dtype/shape"));
+                    }
+                    continue;
+                }
+                let result = result.unwrap().get(output).unwrap().clone();
+                assert_eq!(result.shape(), [size as i64 / 2, 2]);
+                retained.push((values.clone(), result));
+                // The wrong shape satisfies the bounds but differs from the model result.
+                let wrong_rows = if size == 2 { 2 } else { 1 };
+                let wrong = placed(
+                    &vec![0_f32; wrong_rows * 2],
+                    &[wrong_rows as i64, 2],
+                    location,
+                )
+                .unwrap();
+                let descriptor = *wrong.view().descriptor();
+                assert!(session
+                    .run_into(
+                        &inputs,
+                        &mut HashMap::from([(output, unsafe {
+                            // SAFETY: disjoint destination stays alive through synchronous execution.
+                            OutputBuffer::new(&descriptor).unwrap()
+                        })])
+                    )
+                    .is_err());
+                let target =
+                    placed(&vec![-999_f32; size], &[size as i64 / 2, 2], location).unwrap();
+                let descriptor = *target.view().descriptor();
+                let mut buffers = HashMap::from([(output, unsafe {
+                    // SAFETY: target is exclusively writable and alive through completion.
+                    OutputBuffer::new(&descriptor).unwrap()
+                })]);
+                let result = session.run_into(&inputs, &mut buffers).unwrap();
+                assert!(result.get(output).is_none());
+                assert_eq!(buffers[output].descriptor().data, descriptor.data);
+                drop(buffers);
+                assert_eq!(target.to_cpu_vec::<f32>().unwrap(), values);
+                assert_eq!(input.to_cpu_vec::<f32>().unwrap(), values);
+            }
+            drop(session);
+            for (expected, result) in retained {
+                assert_eq!(result.to_cpu_vec::<f32>().unwrap(), expected);
+            }
         }
     }
 }
@@ -371,6 +432,7 @@ fn torch_scalars_empty_tensors_and_dynamic_dtype_transport() {
                 let description = &mut std::sync::Arc::get_mut(&mut bundle.0).unwrap().description;
                 description.models["model"].inputs[0].shape = vec![-1];
                 description.models["model"].outputs[0].shape = vec![-1];
+                crate::bundle::shapes::compile(description).unwrap();
                 let engine = engine(&bundle, device);
                 assert!(!engine.workspace.lock().unwrap().models[0].is_prepared());
                 if name == "double" {

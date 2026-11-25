@@ -155,6 +155,7 @@ impl NativeEngine {
         let device = crate::engines::memory::dlpack::device(location)
             .map_err(|e| RuntimeError::new("prepare", e.into()))?;
         let mut workspace = Workspace {
+            shape_values: vec![None; plan.symbols.len()],
             models,
             slots,
             plan,
@@ -353,8 +354,12 @@ impl NativeEngine {
         &self,
         inputs: &[(&str, BorrowedTensor<'_>)],
         outputs: &HashMap<&str, OutputBuffer<'_>>,
-        lengths: &mut [usize],
+        workspace: &mut Workspace,
     ) -> anyhow::Result<()> {
+        let symbols = &workspace.plan.symbols;
+        let (lengths, values) = (&mut workspace.input_bytes, &mut workspace.shape_values);
+        // Bind public dimensions before any model or feedback staging runs.
+        values.fill(None);
         // Names/order are established by Session. Private state cannot alias caller
         // storage and was validated when loaded. Only public metadata can change.
         for (((spec, alignment), (_, value)), bytes) in
@@ -369,7 +374,7 @@ impl NativeEngine {
                     spec.name
                 );
             }
-            *bytes = plan::matches(spec, *value, self.device)?;
+            *bytes = plan::check(spec, *value, self.device, symbols, values)?;
             let address = tensor.data as usize + tensor.byte_offset as usize;
             if *alignment > 1 {
                 ensure!(
@@ -445,6 +450,7 @@ struct Workspace {
     models: Vec<Box<dyn BackendPlugin>>,
     slots: Vec<plan::Slot>,
     plan: Arc<Plan>,
+    shape_values: Vec<Option<i64>>,
     location: MemoryLocation,
     // Direct Session input positions; fixed feedback and node outputs use slots.
     input_positions: Vec<Option<usize>>,
@@ -525,7 +531,7 @@ impl Engine for NativeEngine {
             )
         })?;
 
-        self.validate(inputs, outputs, &mut workspace.input_bytes)
+        self.validate(inputs, outputs, &mut workspace)
             .map_err(|error| backends::error("execute", error))?;
 
         // Check every replay node before staging or advancing any backend.
@@ -704,6 +710,26 @@ impl Workspace {
                 },
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
+        let symbols = &self.plan.symbols;
+        for (position, spec) in &call.checked_inputs {
+            let input = inputs[*position];
+            plan::check(
+                spec,
+                input,
+                input.descriptor().device,
+                symbols,
+                &mut self.shape_values,
+            )?;
+        }
+        // Session checked supplied destinations; bind their bounded dimensions.
+        for &(position, tensor) in &self.output_bindings {
+            let spec = &self.slots[call.outputs[position]].spec;
+            if spec.shape.is_bounded() {
+                // SAFETY: caller destinations have passed layout and ownership checks.
+                let value = unsafe { BorrowedTensor::new(&tensor) };
+                plan::check(spec, value, tensor.device, symbols, &mut self.shape_values)?;
+            }
+        }
         // SAFETY: Session inputs, forwarded values and writable outputs remain
         // alive through backend completion, including errors.
         let outputs = unsafe {
@@ -711,6 +737,15 @@ impl Workspace {
         }?;
         for (&id, value) in call.outputs.iter().zip(outputs) {
             if let Some(value) = value {
+                // Backends guarantee rank and fixed sizes; check bounds and bind
+                // symbols before any consumer runs.
+                let spec = &self.slots[id].spec;
+                if spec.shape.is_bounded() {
+                    // SAFETY: the view ends before value moves into its slot.
+                    let view = unsafe { value.borrow() };
+                    let device = view.descriptor().device;
+                    plan::check(spec, view, device, symbols, &mut self.shape_values)?;
+                }
                 self.slots[id].assign_owned(value, &mut self.transfers)?;
             }
         }
@@ -728,10 +763,12 @@ impl Workspace {
         // restored from those values before the next attempt, including reset.
         for &(slot, order) in &self.staged_inputs {
             if order >= self.plan.public_inputs {
-                self.input_bytes[order] = plan::matches(
+                self.input_bytes[order] = plan::check(
                     &self.slots[slot].spec,
                     inputs[order].1,
                     self.slots[slot].view()?.descriptor().device,
+                    &self.plan.symbols,
+                    &mut self.shape_values,
                 )?;
             }
             // SAFETY: NativeEngine::validate checked public inputs; private
@@ -812,7 +849,7 @@ impl Workspace {
                     unsafe {
                         crate::engines::memory::dlpack::from_buffer(
                             crate::engines::memory::dlpack::dl_type(self.slots[id].spec.dtype),
-                            self.slots[id].spec.shape.clone(),
+                            self.slots[id].spec.shape.dims.clone(),
                             buffer,
                         )
                     }?
