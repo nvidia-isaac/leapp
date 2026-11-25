@@ -346,7 +346,7 @@ Bringing your own model
 Set ``export_with=None`` when you want a node to appear in the graph
 without asking LEAPP to compile it. This is useful for:
 
-* prebuilt ``.pt``, ``.pt2``, or ``.onnx`` artifacts
+* prebuilt ``.pt``, ``.pt2``, ``.onnx``, or TensorRT engine artifacts
 * placeholder nodes that will be filled in later
 * flows where LEAPP should capture I/O and graph edges but not produce a
   model
@@ -392,4 +392,35 @@ Important behavior:
 * The model path written into the YAML is made relative to the YAML
   directory when possible.
 * ``InferenceManager`` currently runs referenced ``.pt``, ``.pt2``, and
-  ``.onnx`` artifacts.
+  ``.onnx`` artifacts, and TensorRT engines as described below.
+
+.. _external-tensorrt-engines:
+
+External TensorRT engines
+-------------------------
+
+LEAPP can validate externally built TensorRT ``.engine``, ``.plan``, and
+``.trt`` files against cached reference outputs. Supply the engine through
+``export_with=None`` and ``backend_params["model_path"]``. The generated YAML
+uses ``backend: trt``, which :class:`~leapp.InferenceManager` also supports.
+
+Install the TensorRT Python package separately, choosing the version, CUDA
+variant, and GPU required by the engine. LEAPP imports ``tensorrt`` only when
+loading a TensorRT artifact and reports an installation error if it is missing.
+No LEAPP extra is required. An existing TensorRT installation can be used
+alongside either Warp extra when their CUDA requirements are compatible.
+See NVIDIA's `TensorRT installation guide
+<https://docs.nvidia.com/deeplearning/tensorrt/latest/installing-tensorrt/install-pip.html>`_.
+
+The runner uses TensorRT's named tensor API (``execute_async_v3``). It accepts
+fixed, nonempty tensor shapes with linear device storage. Inputs and outputs
+follow their respective order in the engine, so declare the LEAPP ports in that
+same order. The runner checks input shapes and dtypes and makes contiguous
+input copies when needed. CPU inputs are accepted; outputs return on the
+device of the inputs, using the first CUDA input's device when present. A node
+with no inputs returns CUDA outputs.
+
+Execution uses the current CUDA device at model loading and synchronizes its
+current stream before returning. Calls to one runner must not overlap. LEAPP
+does not build engines, select optimization profiles, or load external plugin
+libraries. Register any required external plugins before loading the engine.

@@ -35,6 +35,12 @@ Use ``InferenceManager`` to:
 
 .. note::
 
+   TensorRT ``.engine``, ``.plan``, and ``.trt`` artifacts use ``backend: trt``.
+   Install a compatible TensorRT Python package separately. See
+   :ref:`external-tensorrt-engines` for requirements and validation support.
+
+.. note::
+
    An ExecuTorch program can hold compiled native code that runs when
    ``InferenceManager`` loads it, as a program built for the CUDA delegate does.
    The ``.pte`` file decides what runs, not the YAML, so load ExecuTorch bundles
@@ -100,8 +106,8 @@ feedback inputs from ``pipeline.initial_values``:
    manager.set_input_value("policy", "hidden", hidden_override)
 
 ``value_dict`` exposes values at LEAPP node boundaries; it does not expose
-intermediate operations inside a compiled TorchScript, ONNX, ``pt2``, or
-ExecuTorch model.
+intermediate operations inside a compiled TorchScript, ONNX, ``pt2``,
+ExecuTorch, or TensorRT model.
 
 Feedback State
 ==============

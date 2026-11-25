@@ -58,7 +58,7 @@ def _execution_plan(program_path):
 
 
 class TestBackendImports(unittest.TestCase):
-    """Only nodes that use the ExecuTorch backend fail on a torch older than 2.15."""
+    """Optional runtime requirements do not prevent using other backends."""
 
     def _run(self, torch_version, code):
         script = (
@@ -147,6 +147,123 @@ class TestBackendImports(unittest.TestCase):
         )
         result = self._run(torch.__version__, code)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_tensorrt_is_optional(self):
+        code = (
+            "import sys\n"
+            "sys.modules['tensorrt'] = None\n"
+            "import leapp\n"
+            "from leapp.inference_manager import NodeManager\n"
+            "from leapp.backends.export_backend import NoneExportBackend\n"
+            "assert 'leapp.backends.tensorrt_backend' not in sys.modules\n"
+            "for name in ('jit', 'onnx', 'pt2', 'trt'):\n"
+            "    NodeManager._create_backend(None, name, {})\n"
+        )
+        result = self._run(torch.__version__, code)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class TestTensorRTBackend(LEAPPFunctionalTestBase):
+    @unittest.skipUnless(torch.cuda.is_available(), "TensorRT execution requires CUDA")
+    def test_external_engine_validation_and_relocated_pipeline(self):
+        """Exercise real TRT execution, strict cached validation, artifact copying,
+        and relocated YAML reload in a mixed TRT/TorchScript pipeline. Unit tests
+        cannot establish CUDA stream ordering or numerical execution correctness.
+        """
+        trt = pytest.importorskip("tensorrt")
+        logger = trt.Logger(trt.Logger.WARNING)
+        builder = trt.Builder(logger)
+        network = builder.create_network(0)
+        x = network.add_input("x", trt.float32, (2, 3))
+        y = network.add_input("y", trt.float32, (2, 3))
+        difference = network.add_elementwise(
+            x, y, trt.ElementWiseOperation.SUB
+        ).get_output(0)
+        total = network.add_elementwise(x, y, trt.ElementWiseOperation.SUM).get_output(
+            0
+        )
+        difference.name, total.name = "difference", "total"
+        network.mark_output(difference)
+        network.mark_output(total)
+        serialized = builder.build_serialized_network(
+            network, builder.create_builder_config()
+        )
+        self.assertIsNotNone(serialized)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            engine_path = os.path.join(tmp, "external.trt")
+            with open(engine_path, "wb") as f:
+                f.write(bytes(serialized))
+            leapp.start(name=self.TEST_GRAPH_NAME, max_cached_io=2)
+            try:
+                for offset in (0.0, 4.0):
+                    x, y = annotate.input_tensors(
+                        "engine",
+                        {
+                            "x": torch.arange(6, dtype=torch.float32).reshape(2, 3)
+                            + offset,
+                            "y": torch.full((2, 3), 2.0),
+                        },
+                    )
+                    difference, total = x - y, x + y
+                    annotate.output_tensors(
+                        "engine",
+                        {"difference": difference, "total": total},
+                        export_with=None,
+                        backend_params={
+                            "model_path": engine_path,
+                            "copy_original_model": True,
+                        },
+                    )
+                    difference, total = annotate.input_tensors(
+                        "post", {"difference": difference, "total": total}
+                    )
+                    annotate.output_tensors(
+                        "post",
+                        {"result": difference * 2 + total},
+                        export_with="jit-trace",
+                    )
+            finally:
+                leapp.stop()
+            leapp.compile_graph(visualize=False, validate=True, strict=True)
+            yaml_path = os.path.join(
+                self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml"
+            )
+            with open(yaml_path) as f:
+                self.assertEqual(
+                    yaml.safe_load(f)["models"]["engine"]["parameters"]["backend"],
+                    "trt",
+                )
+
+            relocated = shutil.copytree(
+                self.TEST_GRAPH_NAME, os.path.join(tmp, "relocated")
+            )
+            os.remove(engine_path)
+            shutil.rmtree(self.TEST_GRAPH_NAME)
+            manager = leapp.InferenceManager(
+                os.path.join(relocated, f"{self.TEST_GRAPH_NAME}.yaml")
+            )
+            for device in ("cpu", "cuda"):
+                # Use a nondefault stream, noncontiguous inputs, and changing
+                # values to catch stale bindings and stream/buffer lifetime errors.
+                stream = torch.cuda.Stream()
+                with torch.cuda.stream(stream):
+                    x = (
+                        torch.arange(6, dtype=torch.float32, device=device)
+                        .reshape(3, 2)
+                        .T
+                    )
+                    y = torch.full((2, 3), 3.0, device=device)
+                    result = manager.run_policy({"engine/x": x, "engine/y": y})[
+                        "post/result"
+                    ]
+                    torch.testing.assert_close(result, 3 * x - y)
+                    saved = result.clone()
+                    changed = manager.run_policy(
+                        {"engine/x": x + 7, "engine/y": y - 2}
+                    )["post/result"]
+                    torch.testing.assert_close(changed, 3 * (x + 7) - (y - 2))
+                    torch.testing.assert_close(result, saved)
 
 
 class TestOnnxProviderSelection(unittest.TestCase):
