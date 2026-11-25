@@ -89,7 +89,8 @@ class ExportedProgramExportBackend(ExportBackend):
 
         self.exported_program = torch.export.load(model_path)
         self._load_warp_runtime(self.exported_program)
-        device = self._select_runtime_device()
-        self.compiled_model = self.exported_program.module().to(device)
-        self.runtime_device = device
+        # PT2 records device transfers in the graph. Moving every buffer can
+        # put CPU constants on CUDA while their consumers still execute on CPU.
+        self.compiled_model = self.exported_program.module()
+        self.runtime_device = self._select_runtime_device()
         self.compiled_module = None

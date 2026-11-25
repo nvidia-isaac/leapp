@@ -1605,6 +1605,48 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
             yaml_data["models"][funcA.__name__]["parameters"]["backend"], "pt2"
         )
 
+    def test_pt2_reload_preserves_captured_placement(self):
+        """Exercise saved-bundle reload with device transfers and CPU clipping.
+
+        Cached validation alone misses loader-induced relocation of constants.
+        CUDA adds mixed input/buffer devices to the CPU round-trip control.
+        """
+        devices = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
+        for device in devices:
+            with self.subTest(device=device):
+                gain = torch.tensor([2.0, 0.5], device=device)
+                lower = torch.tensor([-1.0, 0.0])
+                upper = torch.tensor([1.0, 2.0])
+                leapp.start(name=self.TEST_GRAPH_NAME, max_cached_io=2)
+                try:
+                    for shift in (0.0, 0.5):
+                        x, offset = leapp.annotate.input_tensors(
+                            "policy",
+                            {
+                                "x": torch.tensor([0.5, 3.0], device=device) + shift,
+                                "offset": torch.tensor([0.1, -0.2]) + shift,
+                            },
+                        )
+                        result = (x * gain).cpu().clamp(lower, upper) + offset
+                        leapp.annotate.output_tensors(
+                            "policy", {"result": result}, export_with="pt2"
+                        )
+                finally:
+                    leapp.stop()
+                leapp.compile_graph(visualize=False, validate=True, strict=True)
+                manager = leapp.InferenceManager(
+                    os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+                )
+                for values in ([-2.0, 1.0], [0.2, 5.0]):
+                    fresh = torch.tensor(values, device=device)
+                    offset = torch.tensor([0.3, 0.4])
+                    actual = manager.run_policy(
+                        {"policy/x": fresh, "policy/offset": offset}
+                    )["policy/result"]
+                    expected = (fresh * gain).cpu().clamp(lower, upper) + offset
+                    self.assertEqual(actual.device.type, "cpu")
+                    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
     @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     def test_executorch_backend(self):
         """Covers the ExecuTorch delegates, which lower and run the graph outside
