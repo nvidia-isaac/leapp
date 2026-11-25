@@ -399,28 +399,13 @@ Important behavior:
 External TensorRT engines
 -------------------------
 
-LEAPP can validate externally built TensorRT ``.engine``, ``.plan``, and
-``.trt`` files against cached reference outputs. Supply the engine through
-``export_with=None`` and ``backend_params["model_path"]``. The generated YAML
-uses ``backend: trt``, which :class:`~leapp.InferenceManager` also supports.
+Use ``export_with=None`` and ``backend_params["model_path"]`` to validate external
+TensorRT ``.engine``, ``.plan``, or ``.trt`` files. The generated YAML uses
+``backend: trt``, which :class:`~leapp.InferenceManager` also supports.
 
-Install the TensorRT Python package separately, choosing the version, CUDA
-variant, and GPU required by the engine. LEAPP imports ``tensorrt`` only when
-loading a TensorRT artifact and reports an installation error if it is missing.
-No LEAPP extra is required. An existing TensorRT installation can be used
-alongside either Warp extra when their CUDA requirements are compatible.
-See NVIDIA's `TensorRT installation guide
-<https://docs.nvidia.com/deeplearning/tensorrt/latest/installing-tensorrt/install-pip.html>`_.
+Install a TensorRT Python package compatible with the engine and CUDA
+environment. LEAPP imports ``tensorrt`` only when loading an engine.
 
-The runner uses TensorRT's named tensor API (``execute_async_v3``). It accepts
-fixed, nonempty tensor shapes with linear device storage. Inputs and outputs
-follow their respective order in the engine, so declare the LEAPP ports in that
-same order. The runner checks input shapes and dtypes and makes contiguous
-input copies when needed. CPU inputs are accepted; outputs return on the
-device of the inputs, using the first CUDA input's device when present. A node
-with no inputs returns CUDA outputs.
-
-Execution uses the current CUDA device at model loading and synchronizes its
-current stream before returning. Calls to one runner must not overlap. LEAPP
-does not build engines, select optimization profiles, or load external plugin
-libraries. Register any required external plugins before loading the engine.
+Engines must use fixed, nonempty shapes with linear device storage. Declare
+LEAPP ports in engine I/O order. Register required external plugins before
+loading, and do not call one runner concurrently.
