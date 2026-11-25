@@ -107,6 +107,9 @@ class TensorDescription:
         dtype, shape = TensorDescription.get_shape_and_dtype(value)
 
         self._aliases = [name]
+        # Capture-only Python identifier, assigned once when registered as an
+        # FX input. Public names and aliases remain unchanged.
+        self.fx_name = None
         # Capture-only layout facts must precede safe_deepcopy's dense snapshot.
         tensor = to_export_torch_tensor(value)
         self.strides = None

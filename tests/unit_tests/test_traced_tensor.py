@@ -513,6 +513,28 @@ class TensorArithmeticFunctions:
 class TestTracedTensor(unittest.TestCase):
     """Test TracedTensor operations."""
 
+    def test_dotted_input_binding_survives_alias_and_graph_reset(self):
+        ctx = TracedTensorNode("dotted")
+        identifiers = None
+        for capture in range(2):
+            if capture:
+                ctx.reset_trace_state()
+            raw = torch.arange(3.0)
+            left = ctx.create_input(raw, "out.state")
+            alias = ctx.create_input(raw.tensor, "alias.state")
+            self.assertIs(alias.proxy.node, left.proxy.node)
+            right = ctx.create_input(torch.ones(3), "out_state")
+            current = [td.fx_name for td in ctx.inputs]
+            if identifiers is None:
+                identifiers = current
+            self.assertEqual(current, identifiers)
+            self.assertEqual(len(ctx.inputs), 2)
+            ctx.compile_trace({"result.state": left * 2 + right})
+            fresh_left, fresh_right = torch.arange(3.0) + 7, torch.full((3,), -3.0)
+            torch.testing.assert_close(
+                ctx.m(fresh_left, fresh_right), fresh_left * 2 + fresh_right
+            )
+
     def test_parameter_constants_preserve_sharing_and_views(self):
         storage = torch.arange(8, dtype=torch.float32)
         data = storage[:4].reshape(2, 2)
@@ -2728,11 +2750,7 @@ class TestTracedTensor(unittest.TestCase):
                 buf.add_(5)
                 ctx.compile_trace({"out": torch.stack((x, parent, buf))})
                 fresh = {"x": torch.tensor([10.0, 20.0, 30.0]), "y": torch.arange(3.0)}
-                inputs = tuple(
-                    fresh[node.target]
-                    for node in ctx.m.graph.nodes
-                    if node.op == "placeholder"
-                )
+                inputs = tuple(fresh[description.name] for description in ctx.inputs)
                 self.validate_export(
                     ctx.m,
                     inputs,

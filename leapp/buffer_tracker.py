@@ -221,8 +221,15 @@ class BufferTracker:
                 setattr(traced_node.tracer.root, const_attr, info.original_buffer)
 
                 # Replace placeholder node with get_attr (constant) in FX graph
+                description = traced_node.get_io_description_by_name(
+                    clean_name, traced_node.inputs
+                )
                 for node in list(traced_node.graph.nodes):
-                    if node.op == "placeholder" and node.name == clean_name:
+                    if (
+                        description is not None
+                        and node.op == "placeholder"
+                        and node.target == description.fx_name
+                    ):
                         with traced_node.graph.inserting_before(node):
                             const_node = traced_node.graph.get_attr(const_attr)
                         node.replace_all_uses_with(const_node)

@@ -137,6 +137,7 @@ class ExportManager:
         self.nodes = {}
         self.release_buffer_trackers()
         self._next_completed_node_index = 0
+        TracedTensorNode._next_input_index = 0
 
     def get_nodes(self):
         return self.nodes
