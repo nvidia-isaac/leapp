@@ -9,7 +9,7 @@ Installation
 
    pip install leapp
 
-LEAPP requires Python 3.10+ and PyTorch 2.6.0+. Graph visualization requires
+LEAPP requires Python 3.10+ and PyTorch 2.7.0+. Graph visualization requires
 Python 3.11+; on Python 3.10, LEAPP warns and skips PNG generation while
 completing the rest of the export. The full dependency list is in
 `pyproject.toml <https://github.com/nvidia-isaac/leapp/blob/develop/pyproject.toml>`_.
@@ -190,8 +190,8 @@ artifacts and the metadata needed to wire them together.
       :class-card: sd-rounded-3
 
       ``control.onnx`` contains preprocessing, policy weights and inference,
-      and action processing. Other export formats include TorchScript and
-      ExportedProgram (``.pt2``).
+      and action processing. Other export formats include TorchScript,
+      ExportedProgram (``.pt2``) and ExecuTorch (``.pte``).
 
    .. grid-item-card:: Pipeline specification
       :class-card: sd-rounded-3

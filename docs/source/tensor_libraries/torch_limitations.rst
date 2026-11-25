@@ -6,6 +6,20 @@ Torch tracing records the operations that dispatch through ``TracedTensor``.
 The cases below are where the recorded graph cannot follow what the Python code
 does.
 
+View and mutation support
+=========================
+
+View updates rely on PyTorch's functionalization support for the recorded
+operations. Unsupported mutation or view combinations fail during graph
+construction. Aliases must be represented in the captured graph: a slice
+created before tracing does not automatically acquire a relationship to a
+separately declared base tensor.
+
+Exported artifacts expose value updates through declared outputs or feedback
+state; callers must consume those values rather than expect their input
+storage to change. Backend restrictions still apply, including restrictions on
+tensor-derived slice bounds.
+
 Data-dependent control flow
 ===========================
 

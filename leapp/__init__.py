@@ -32,11 +32,36 @@ from .inference_manager import InferenceManager
 from .leapp_graph.custom_operator_registry import warp_operator  # noqa: F401
 from .leapp_graph.datatypes.patching import FunctionPatch
 from .leapp import annotate, start, stop, compile_graph
-from .utils.enums import InputKindEnum, OutputKindEnum
-from .utils.tensor_description import GraphConfigs, TensorSemantics, TemporalAxis
+from .utils.enums import InputKindEnum, OutputKindEnum, Kind, AxisKind, ExpressionFrame
+from .utils.tensor_description import GraphConfigs
+from .utils.semantics import (
+    Axis,
+    TemporalAxis,
+    TensorSemantics,
+    joint_position,
+    joint_velocity,
+    joint_acceleration,
+    joint_effort,
+    vector3d,
+    kp,
+    kd,
+    image,
+    point_cloud,
+    frame_pose,
+    frame_position,
+    frame_orientation,
+    frame_twist,
+    frame_linear_velocity,
+    frame_angular_velocity,
+    frame_acceleration,
+    frame_linear_acceleration,
+    frame_angular_acceleration,
+    frame_wrench,
+    force_application_position,
+)
 
-__version__ = "0.7.2"
-__config_version__ = "1.3"
+__version__ = "0.8.1"
+__config_version__ = "1.4"
 __author__ = "Frank Lai"
 __email__ = "frlai@nvidia.com"
 
@@ -54,4 +79,28 @@ __all__ = [
     "TensorSemantics",
     "TemporalAxis",
     "GraphConfigs",
+    "Kind",
+    "AxisKind",
+    "ExpressionFrame",
+    "Axis",
+    "joint_position",
+    "joint_velocity",
+    "joint_acceleration",
+    "joint_effort",
+    "vector3d",
+    "kp",
+    "kd",
+    "image",
+    "point_cloud",
+    "frame_pose",
+    "frame_position",
+    "frame_orientation",
+    "frame_twist",
+    "frame_linear_velocity",
+    "frame_angular_velocity",
+    "frame_acceleration",
+    "frame_linear_acceleration",
+    "frame_angular_acceleration",
+    "frame_wrench",
+    "force_application_position",
 ]

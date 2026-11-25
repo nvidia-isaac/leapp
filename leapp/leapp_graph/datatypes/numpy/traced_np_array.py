@@ -20,7 +20,7 @@ from torch.fx.proxy import Proxy
 
 from leapp.utils.logging import _get_logger
 from leapp.utils.dtype import DtypeCodec, dtype_to_name, register_dtype_codec
-from ..proxy_view import bind_new_view, may_adopt_view, share_view
+from ..proxy import bind_proxy
 from ..traced_data import TracedData
 from .aten_adapter import capture_numpy_call
 
@@ -100,7 +100,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         """
         # Create a view of the input array as our subclass
         obj = np.asarray(array).view(cls)
-        bind_new_view(obj, name, context, proxy)
+        bind_proxy(obj, name, context, proxy)
         return obj
 
     def __array_finalize__(self, obj):
@@ -113,18 +113,9 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
         if obj is None:
             # Called from __new__, attributes already set
             return
-        # A view covering exactly the source's bytes is a second handle on one
-        # value, so it shares that cell and a mutation through either is visible
-        # through both. A slice covers fewer bytes and a freshly allocated ufunc
-        # result covers different bytes, so both fail the comparison and keep a
-        # root of their own. The view guard covers a source still
-        # mid-construction, which has no cell to share yet.
-        if getattr(obj, "_proxy_view", None) is not None and may_adopt_view(obj, self):
-            share_view(self, obj)
-            return
         # Copy tracing state from the source array. ``getattr`` covers a plain
         # ndarray source and a source still mid-construction.
-        bind_new_view(
+        bind_proxy(
             self,
             getattr(obj, "_name", "derived"),
             getattr(obj, "_context", None),
@@ -311,54 +302,38 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
     # In-place Arithmetic Operators
     # =========================================================================
 
-    def __iadd__(self, other):
-        result = np.add(self, other)
-        if isinstance(result, TracedNpArray):
-            # Copy data in-place since self IS the array
+    def _apply_inplace(self, ufunc, other):
+        active = self.validate_status(args=(other,))
+        if active:
+            result = ufunc(self, other)
             np.copyto(self.view(np.ndarray), result.view(np.ndarray))
-            self._proxy_view.proxy = result.proxy
-            return self
-        return result
+            self.proxy = result.proxy
+        else:
+            ufunc(
+                self.view(np.ndarray),
+                TracedData.unwrap_traced_data(other),
+                out=self.view(np.ndarray),
+            )
+        self._output_port = None
+        return self
+
+    def __iadd__(self, other):
+        return self._apply_inplace(np.add, other)
 
     def __isub__(self, other):
-        result = np.subtract(self, other)
-        if isinstance(result, TracedNpArray):
-            np.copyto(self.view(np.ndarray), result.view(np.ndarray))
-            self._proxy_view.proxy = result.proxy
-            return self
-        return result
+        return self._apply_inplace(np.subtract, other)
 
     def __imul__(self, other):
-        result = np.multiply(self, other)
-        if isinstance(result, TracedNpArray):
-            np.copyto(self.view(np.ndarray), result.view(np.ndarray))
-            self._proxy_view.proxy = result.proxy
-            return self
-        return result
+        return self._apply_inplace(np.multiply, other)
 
     def __itruediv__(self, other):
-        result = np.divide(self, other)
-        if isinstance(result, TracedNpArray):
-            np.copyto(self.view(np.ndarray), result.view(np.ndarray))
-            self._proxy_view.proxy = result.proxy
-            return self
-        return result
+        return self._apply_inplace(np.divide, other)
 
     def __ifloordiv__(self, other):
-        result = np.floor_divide(self, other)
-        if isinstance(result, TracedNpArray):
-            np.copyto(self.view(np.ndarray), result.view(np.ndarray))
-            self._proxy_view.proxy = result.proxy
-            return self
-        return result
+        return self._apply_inplace(np.floor_divide, other)
 
     def __ipow__(self, other):
-        result = np.power(self, other)
-        if isinstance(result, TracedNpArray):
-            np.copyto(self.view(np.ndarray), result.view(np.ndarray))
-            self._proxy_view.proxy = result.proxy
-            return self
-        return result
+        return self._apply_inplace(np.power, other)
 
     # =========================================================================
     # Comparison Operators
@@ -480,7 +455,7 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
 
         if not self._record_assignment(key, value, real_value):
             value_proxy = value.proxy if isinstance(value, TracedData) else value
-            self._proxy_view.proxy = self._context.tracer.create_proxy(
+            self.proxy = self._context.tracer.create_proxy(
                 "call_method", "__setitem__", (self.proxy, key, value_proxy), {}
             )
 
@@ -566,9 +541,22 @@ class TracedNpArray(TracedData, np.ndarray, metaclass=_TracedNpArrayMeta):
                 f"the exported graph will keep {self.dtype}"
             )
             return self._new(result, self.proxy)
-        proxy_out = self._context.tracer.create_proxy(
-            "call_method", "to", (self.proxy, torch_dtype), {}
-        )
+        # NumPy copies even when dtype is unchanged. An explicit clone also
+        # avoids older exporters treating a same-dtype ``to(copy=True)`` as
+        # frozen input storage during functionalization.
+        if np.dtype(dtype) == self.dtype:
+            # Keep the explicit cast even when the native sample already has
+            # this dtype: an imported lowering can have different metadata.
+            cast = self._context.tracer.create_proxy(
+                "call_method", "to", (self.proxy, torch_dtype), {}
+            )
+            proxy_out = self._context.tracer.create_proxy(
+                "call_function", torch.clone, (cast,), {}
+            )
+        else:
+            proxy_out = self._context.tracer.create_proxy(
+                "call_method", "to", (self.proxy, torch_dtype), {}
+            )
         return self._new(result, proxy_out)
 
     def copy(self):

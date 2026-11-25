@@ -684,6 +684,22 @@ class TestCompiledGraphExecution(unittest.TestCase):
                     else (x + 2, corner, -x),
                 )
 
+    def test_quantile_precision_replay(self):
+        """Quantile keeps NumPy dtypes and interpolation precision across exporters."""
+        for dtype in (np.float32, np.float64):
+            x = np.array([[100000000, 100000008], [-100000008, 100000000]], dtype=dtype)
+            for q in (0.37, [0.37, 0.5, 0.75], np.array([0.37, 0.5, 0.75])):
+                with self.subTest(dtype=dtype, q=q):
+                    fn = lambda x: np.quantile(x, q, axis=1)
+                    self._test_operation(
+                        "quantile_precision",
+                        fn,
+                        x,
+                        fn(x),
+                        backends=("fx", "jit", "jit-trace", "pt2"),
+                        replay_inputs=(-x,),
+                    )
+
     def test_integer_mean(self):
         x = np.arange(6, dtype=np.int32).reshape(2, 3)
         for fn in (np.mean, np.nanmean):
@@ -1345,6 +1361,24 @@ class TestCompiledGraphExecution(unittest.TestCase):
         )
 
 
+@pytest.mark.parametrize("width", [1, 4])
+def test_setitem_broadcast_traced_source(width):
+    """Broadcast traced NumPy values before flattening the assignment."""
+
+    def assign(x, q):
+        out = x.copy()
+        out[0, 1:3] = q[0, 0]
+        return out
+
+    x = np.zeros((1, 3, 4), dtype=np.float32)
+    q = np.arange(width, dtype=np.float32).reshape(1, 1, width)
+    model = _capture_numpy(assign, x, q)
+    for a, b in ((x, q), (x + 10, q + 5)):
+        _assert_numpy_output(
+            model(torch.from_numpy(a), torch.from_numpy(b)), assign(a, b)
+        )
+
+
 @pytest.mark.parametrize("equal_nan", [False, True])
 def test_isclose_special_values_and_broadcasting(equal_nan):
     fn = lambda x, y: np.isclose(x, y, rtol=1e-4, atol=1e-6, equal_nan=equal_nan)
@@ -1386,6 +1420,25 @@ def test_nanmean_nan_slices_and_explicit_dtype(axis):
         )
 
 
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"keepdims": True},
+        {"axis": -1, "keepdims": True},
+        {"axis": (0,), "method": "midpoint"},
+        {"axis": 1, "method": "lower"},
+        {"axis": 1, "method": "higher"},
+        {"axis": 1, "method": "nearest"},
+    ],
+)
+def test_quantile_options(kwargs):
+    sample = np.array([[3.0, np.nan, 1.0], [4.0, 2.0, 6.0]], dtype=np.float32)
+    fn = lambda x: np.quantile(x, [0, 0.25, 0.5, 0.75, 1], **kwargs)
+    model = _capture_numpy(fn, sample)
+    for changed in (sample, -sample):
+        _assert_numpy_output(model(torch.from_numpy(changed)), fn(changed))
+
+
 def test_structured_outputs_and_constant_snapshot():
     constant = np.array([1.0, 2.0, 3.0], dtype=np.float32)
     fn = lambda x: (np.cross(x, constant), *np.gradient(x))
@@ -1397,20 +1450,52 @@ def test_structured_outputs_and_constant_snapshot():
         torch.testing.assert_close(actual, torch.from_numpy(reference))
 
 
-@pytest.mark.parametrize("backend", ["fx", "jit", "pt2"])
+@pytest.mark.parametrize("mutate_input", [False, True])
 @pytest.mark.parametrize(
-    "fn, message",
+    "fn, message, backend",
     [
-        (np.spacing, "no torch._numpy lowering"),
-        (lambda x: np.allclose(x, x), "ATen capture failed"),
-        (lambda x: np.sort(x, stable=True), "sorting"),
-        (lambda x: np.argsort(x, kind="mergesort"), "sorting"),
-        (lambda x: np.pad(x, 1, mode="reflect"), "pad"),
-        (lambda x: np.pad(x, 1, constant_values=(1, 2)), "pad"),
-        (lambda x: np.cbrt(x, order="C"), "unsupported signature"),
+        pytest.param(
+            np.spacing, "no torch._numpy lowering", "fx", id="missing_lowering"
+        ),
+        pytest.param(
+            lambda x: np.allclose(x, x),
+            "ATen capture failed",
+            "fx",
+            id="capture_failure",
+        ),
+        pytest.param(
+            lambda x: np.sort(x, kind="stable"), "sorting", "fx", id="stable_sort"
+        ),
+        pytest.param(
+            lambda x: np.argsort(x, kind="mergesort"),
+            "sorting",
+            "fx",
+            id="stable_argsort",
+        ),
+        pytest.param(
+            lambda x: np.pad(x, 1, mode="reflect"), "pad", "fx", id="reflect_pad"
+        ),
+        pytest.param(
+            lambda x: np.pad(x, 1, constant_values=(1, 2)),
+            "pad",
+            "fx",
+            id="asymmetric_pad",
+        ),
+        pytest.param(
+            lambda x: np.cbrt(x, order="C"),
+            "unsupported signature",
+            "fx",
+            id="unsupported_signature",
+        ),
+        # Every failed branch is pruned before export. Exercise the surviving
+        # graph through each backend once per mutation state.
+        pytest.param(np.spacing, "no torch._numpy lowering", "jit", id="jit_replay"),
+        pytest.param(np.spacing, "no torch._numpy lowering", "pt2", id="pt2_replay"),
     ],
 )
-def test_failed_capture_on_unused_branch(fn, message, backend, monkeypatch):
+def test_failed_capture_on_unused_branch(
+    fn, message, backend, mutate_input, monkeypatch
+):
     errors = []
     monkeypatch.setattr(_get_logger(), "error", errors.append)
     ctx = TracedTensorNode(name="unused_failure", node_index=0)
@@ -1421,6 +1506,8 @@ def test_failed_capture_on_unused_branch(fn, message, backend, monkeypatch):
     # Consumers of a failed branch can also be discarded with that branch.
     unused + 1
     assert any(message in error and "unused_failure" in error for error in errors)
+    if mutate_input:
+        x += 1
     ctx.compile_trace({"y": np.sin(x)})
     assert not any("leapp_capture_error" in node.meta for node in ctx.graph.nodes)
     model = ctx.m
@@ -1431,16 +1518,22 @@ def test_failed_capture_on_unused_branch(fn, message, backend, monkeypatch):
             model, (torch.from_numpy(sample),), strict=False
         ).module()
     for changed in (sample, sample + 2, -sample):
-        _assert_numpy_output(model(torch.from_numpy(changed)), np.sin(changed))
+        expected = np.sin(changed + 1 if mutate_input else changed)
+        _assert_numpy_output(model(torch.from_numpy(changed)), expected)
 
 
+@pytest.mark.parametrize("mutate_input", [False, True])
 @pytest.mark.parametrize("dependent", [False, True])
 @pytest.mark.parametrize("fn", [np.spacing, lambda x: np.pad(x, 1, mode="reflect")])
-def test_failed_capture_in_output_tree_is_rejected(fn, dependent, monkeypatch):
+def test_failed_capture_in_output_tree_is_rejected(
+    fn, dependent, mutate_input, monkeypatch
+):
     errors = []
     monkeypatch.setattr(_get_logger(), "error", errors.append)
     ctx = TracedTensorNode(name="required_failure", node_index=0)
     x = ctx.create_input(np.array([3.0, 1.0, 2.0], dtype=np.float32), name="x")
+    if mutate_input:
+        x += 1
     failed = fn(x)
     output = np.sin(failed) if dependent else failed
     assert errors

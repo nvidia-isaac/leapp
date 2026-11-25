@@ -105,9 +105,7 @@ Patch scope and requirements
   captured with ``from cv2 import cvtColor`` before tracing are not updated.
 * Replacements must use operations LEAPP can trace and return the expected
   structure, shape, and dtype.
-* Replacements must be pure. Mutation, destination arguments such as
-  ``dst=``, input/output aliasing, and calling the patched function from
-  its own replacement are unsupported.
+* A replacement must not call the patched function.
 * Patches affect the whole Python process during the session, including other
   threads. Stop tracing before starting a session with a different patch list.
 

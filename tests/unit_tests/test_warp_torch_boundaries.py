@@ -32,9 +32,7 @@ def pending_output():
     wp.init()
     node = TracedTensorNode("boundary")
     tensor = node.create_input(torch.arange(6.0).reshape(2, 3), "values")
-    array = as_traced(
-        wp.from_torch(tensor.tensor), "values", node, view=tensor.proxy_view
-    )
+    array = as_traced(wp.from_torch(tensor.tensor), "values", node, proxy=tensor.proxy)
     backend = WarpPatchBackend()
     session = backend._session = WarpTraceSession()
     with mock.patch.object(ExportManager().patcher, "warp", backend):
@@ -82,10 +80,10 @@ def test_torch_consumer_uses_finalized_warp_output(pending_output, consume):
 
     assert session.active_segment is None
     assert segment.marker_proxy is not None
-    # A no-op alias shares the finalized proxy; other consumers depend on it.
-    # Eager values alone cannot detect a stale graph reference.
-    assert tensor.proxy.node in [result.proxy.node, *result.proxy.node.all_input_nodes]
-    assert segment.marker_proxy.node in tensor.proxy.node.all_input_nodes
+    # Stable native handles carry an ordered mutation before normalization.
+    # The compiled output must retain its dependency on the runner.
+    node.compile_trace({"out": result})
+    assert any("warp_runner" in str(n.target) for n in node.m.graph.nodes)
     node.graph.lint()
 
 

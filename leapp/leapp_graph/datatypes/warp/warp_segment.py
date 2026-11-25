@@ -119,6 +119,7 @@ class WarpSegment:
         ref = self._coerce_ref(
             value,
             name=self._default_ref_name("input", len(self.input_refs)),
+            refs=self.input_refs,
         )
         self.input_refs[ref.name] = ref
         return ref
@@ -130,6 +131,7 @@ class WarpSegment:
         ref = self._coerce_ref(
             value,
             name=self._default_ref_name("output", len(self.output_refs)),
+            refs=self.output_refs,
         )
         self.output_refs[ref.name] = ref
         return ref
@@ -155,12 +157,23 @@ class WarpSegment:
         value: Any,
         *,
         name: str,
+        refs: dict[str, WarpTensorRef],
     ) -> WarpTensorRef:
         if isinstance(value, WarpTensorRef):
             ref = value
             ref.name = name
             return ref
 
+        # Lazy to avoid the patching -> WarpSegment import cycle.
+        from ..patching import get_warp_backend
+
+        backend = get_warp_backend()
+        if backend is not None:
+            value = backend.resolve_storage_array(value)
+        pointer = getattr(value, "ptr", None)
+        for existing in refs.values():
+            if pointer and getattr(existing.array, "ptr", None) == pointer:
+                return existing
         return WarpTensorRef.from_value(name, value)
 
     @staticmethod

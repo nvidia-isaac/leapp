@@ -7,7 +7,7 @@ A default ``pip install leapp`` does not install
 
 * Linux
 * a CUDA-capable GPU
-* ``warp-lang>=1.16.0``
+* ``warp-lang>=1.18.0``
 * ``nvcc`` from the CUDA Toolkit, matching the installed CUDA version
 
 Building the native runners additionally requires a C++17 compiler, CMake
