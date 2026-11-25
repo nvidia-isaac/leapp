@@ -19,6 +19,7 @@ pub(crate) mod onnx_tensorrt;
 mod tests;
 
 use crate::{
+    bundle::shapes::ExecutionShape,
     dlpack::{BorrowedTensor, OutputBuffer, SharedTensor},
     engines::{self, Engine},
     Bundle, EngineKind, ExecutionDevice, MemoryLocation, RuntimeError,
@@ -98,7 +99,7 @@ impl RunResult {
 pub struct Session {
     engine: Option<Arc<dyn Engine>>,
     bundle: Bundle,
-    output_specs: IndexMap<String, (crate::dlpack::DLDataType, Vec<i64>)>,
+    output_specs: IndexMap<String, (crate::dlpack::DLDataType, ExecutionShape)>,
     state_location: MemoryLocation,
     public_inputs: IndexSet<String>,
     initial_inputs: IndexMap<String, SharedTensor>,
@@ -155,14 +156,13 @@ impl Session {
             .pipeline_outputs()
             .iter()
             .map(|port| {
-                let spec = graph.outputs[port];
-                (
-                    port.name(),
-                    (
-                        engines::memory::dlpack::dl_type(spec.dtype),
-                        spec.shape.clone(),
-                    ),
-                )
+                let model = &bundle.0.description.models[&port.node];
+                let (spec, shape) = model
+                    .output_ports()
+                    .find(|(spec, _)| spec.name == port.port)
+                    .expect("graph validated public outputs");
+                let dtype = engines::memory::dlpack::dl_type(spec.dtype);
+                (port.name(), (dtype, shape.clone()))
             })
             .collect();
         // SessionOptions and graph routing are immutable after initialization.
@@ -307,8 +307,7 @@ impl Session {
                     descriptor.dtype.bits,
                     descriptor.dtype.lanes
                 ) == (dtype.code, dtype.bits, dtype.lanes)
-                    && shape.len() == expected.len()
-                    && shape.iter().zip(expected).all(|(&a, &b)| b == -1 || a == b),
+                    && expected.matches(shape),
                 "output buffer {name} does not match declared dtype/shape"
             );
             let address = buffer.address();

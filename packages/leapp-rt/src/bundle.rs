@@ -5,6 +5,7 @@
 
 mod load;
 pub(crate) mod schema;
+pub(crate) mod shapes;
 mod validate;
 
 use crate::BundleError;

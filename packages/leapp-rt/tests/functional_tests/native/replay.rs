@@ -10,7 +10,7 @@ fn slot(transfers: &mut Transfers, value: f32) -> plan::Slot {
         Arc::new(plan::TensorSpec {
             name: "test".into(),
             dtype: crate::DataType::Float32,
-            shape: vec![4],
+            shape: vec![4].into(),
         }),
         false,
         CUDA,

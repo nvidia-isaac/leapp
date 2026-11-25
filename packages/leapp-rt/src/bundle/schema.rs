@@ -6,6 +6,7 @@ use indexmap::IndexMap;
 use serde::{de::DeserializeOwned, Deserialize, Deserializer};
 use std::{fmt, path::PathBuf};
 
+use super::shapes::ExecutionShape;
 use safetensors::Dtype as InitialValueDtype;
 pub use yaml_serde::Value as MetadataValue;
 
@@ -27,6 +28,9 @@ pub(crate) struct BundleDescription {
     pub system_information: Metadata,
     #[serde(flatten)]
     pub metadata: Metadata,
+    /// Compiled at load by `shapes::compile`.
+    #[serde(skip)]
+    pub symbols: super::shapes::Symbols,
 }
 
 #[derive(Debug, Deserialize)]
@@ -57,6 +61,33 @@ pub(crate) struct NodeSpec {
     pub original_parameters: Metadata,
     #[serde(flatten)]
     pub metadata: Metadata,
+    /// Execution shapes parallel to `inputs` and `outputs`, compiled at load.
+    #[serde(skip)]
+    pub input_shapes: Vec<ExecutionShape>,
+    #[serde(skip)]
+    pub output_shapes: Vec<ExecutionShape>,
+}
+
+impl NodeSpec {
+    pub fn input_ports(&self) -> impl ExactSizeIterator<Item = (&PortSpec, &ExecutionShape)> {
+        compiled(&self.inputs, &self.input_shapes)
+    }
+
+    pub fn output_ports(&self) -> impl ExactSizeIterator<Item = (&PortSpec, &ExecutionShape)> {
+        compiled(&self.outputs, &self.output_shapes)
+    }
+}
+
+fn compiled<'a>(
+    ports: &'a [PortSpec],
+    shapes: &'a [ExecutionShape],
+) -> impl ExactSizeIterator<Item = (&'a PortSpec, &'a ExecutionShape)> {
+    assert_eq!(
+        ports.len(),
+        shapes.len(),
+        "port shapes are compiled at load"
+    );
+    ports.iter().zip(shapes)
 }
 
 #[derive(Debug, Deserialize)]

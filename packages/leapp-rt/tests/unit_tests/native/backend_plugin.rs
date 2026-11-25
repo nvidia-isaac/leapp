@@ -52,11 +52,13 @@ fn plan(nodes: usize) -> Arc<Plan> {
     let spec = || plan::TensorSpec {
         name: "value".into(),
         dtype: DataType::Float32,
-        shape: vec![1],
+        shape: vec![1].into(),
     };
     Arc::new(Plan {
+        symbols: Default::default(),
         calls: (0..nodes)
             .map(|i| plan::Call {
+                checked_inputs: Vec::new(),
                 name: format!("node{i}"),
                 model: i,
                 inputs: vec![i],

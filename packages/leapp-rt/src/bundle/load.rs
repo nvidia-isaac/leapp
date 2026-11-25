@@ -34,6 +34,7 @@ pub(crate) fn read_bundle(path: &Path) -> Result<BundleData, BundleError> {
         Ok(description)
     })?;
     in_phase(path, "validate", || {
+        super::shapes::compile(&mut description)?;
         validate::validate_structure(&description)
     })?;
     for (name, node) in &mut description.models {

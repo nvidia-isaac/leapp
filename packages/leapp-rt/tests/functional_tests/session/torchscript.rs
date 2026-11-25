@@ -183,10 +183,8 @@ fn dynamic_shapes_integer_tensors_and_recoverable_execution_errors() {
         for size in [4, 6, 3, 4] {
             let values: Vec<f32> = (0..size).map(|i| i as f32).collect();
             let shape = [size];
-            let inputs = HashMap::from([(
-                "model/values",
-                BorrowedTensor::cpu(&values, &shape).unwrap(),
-            )]);
+            let input = placed(&values, &shape, support::execution_location(device)).unwrap();
+            let inputs = HashMap::from([("model/values", input.view())]);
             let target = placed(
                 &vec![0_f32; (size / 2 * 2) as usize],
                 &[size / 2, 2],
