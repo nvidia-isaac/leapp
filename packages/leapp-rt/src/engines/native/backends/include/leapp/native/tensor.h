@@ -33,9 +33,9 @@ DataType data_type(DLDataType dtype);
 
 /// Read-only, ready, contiguous storage and metadata borrowed for an operation.
 /// Copying this wrapper copies the descriptor, not its shape or storage. Inputs
-/// may alias. Do not mutate them, retain invocation pointers, or leave SDK work
-/// accessing them after return or unwinding. CUDA addresses are not host
-/// pointers.
+/// may alias. Do not mutate them or leave SDK work accessing them after return
+/// or unwinding. Only BackendPlugin::forwarded_output() may retain completed
+/// views until release_outputs(). CUDA addresses are not host pointers.
 class BorrowedTensor {
  public:
   explicit BorrowedTensor(const DLTensor& descriptor)
@@ -63,7 +63,8 @@ class BorrowedTensor {
 
 /// Writable contiguous destination, disjoint from inputs and other outputs.
 /// Metadata is borrowed. Prepared storage lives until plugin destruction;
-/// invocation output bindings live only through their synchronous call.
+/// invocation output bindings live through graph completion and
+/// release_outputs().
 class WritableTensor {
  public:
   explicit WritableTensor(const DLTensor& descriptor)
@@ -87,14 +88,13 @@ class WritableTensor {
   DLTensor descriptor_;
 };
 
-/// Boundary input in the Session's input order, matching Rust's named
-/// arguments.
+/// Invocation input, including forwarded producer outputs.
 struct NamedTensor {
   std::string_view name;
   BorrowedTensor tensor;
 };
 
-/// Replace prepared argument position with Session boundary input index.
+/// Replace prepared argument position with an invocation input index.
 using InputRoute = detail::InputRoute;
 
 /// Override one declared output position for this invocation only.

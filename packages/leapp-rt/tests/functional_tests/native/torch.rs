@@ -569,3 +569,79 @@ fn nativert_places_archive_weights_on_the_selected_device() {
         );
     }
 }
+
+#[test]
+#[ignore = "requires native TorchScript/NativeRT backends and CPU/CUDA fixtures"]
+fn torch_results_are_lent_without_copies() {
+    for device in devices() {
+        for (dynamic, fail) in [(false, false), (false, true), (true, false), (true, true)] {
+            // A NativeRT node feeds a TorchScript node.
+            let mut pipeline = bundle("jit", "mixed_pt2", device);
+            let description = &mut Arc::get_mut(&mut pipeline.0).unwrap().description;
+            if dynamic {
+                let preprocess = &mut description.models["preprocess"];
+                preprocess.inputs[0].shape = vec![-1];
+                preprocess.outputs[0].shape = vec![-1];
+                description.models["model"].inputs[0].shape = vec![-1];
+            }
+            if fail {
+                // The model's result no longer matches its declared shape.
+                description.models["model"].outputs[0].shape = vec![3];
+            }
+            crate::bundle::shapes::compile(description).unwrap();
+            let engine = engine(&pipeline, device);
+            let location = execution_location(&engine);
+            let input = placed(&[2_f32; 4], &[4], location).unwrap();
+            let canary = placed(&[-999_f32; 4], &[4], location).unwrap();
+            let id = {
+                let mut guard = engine.workspace.lock().unwrap();
+                let workspace = &mut *guard;
+                let id = workspace.plan.calls[0].outputs[0];
+                if !dynamic {
+                    // SAFETY: the prepared destination is idle and matches the canary.
+                    unsafe {
+                        workspace.slots[id]
+                            .assign_validated(canary.view(), 16, &mut workspace.transfers)
+                            .unwrap();
+                    }
+                }
+                workspace.transfers.copies.clear();
+                id
+            };
+            let result = engine.run(
+                &[
+                    ("model/INPUT__9", input.view()),
+                    ("preprocess/values", input.view()),
+                ],
+                &OutputPlacement::default(),
+                &mut HashMap::new(),
+            );
+            let mut workspace = engine.workspace.lock().unwrap();
+            // Lent results are released after the graph, also on failure.
+            assert!(workspace
+                .models
+                .iter()
+                .all(|model| model.forwarded_output(0).is_none()));
+            if fail {
+                let error = result.err().unwrap().to_string();
+                assert!(error.contains("execute node model"), "{error}");
+                continue;
+            }
+            assert!(workspace.transfers.copies.is_empty());
+            assert_eq!(
+                result.unwrap()["model/z_result"]
+                    .to_cpu_vec::<f32>()
+                    .unwrap(),
+                [2., 3., 4., 5.].map(|scale| 3. * scale + 2.)
+            );
+            if !dynamic {
+                // The producer's result was lent, not written into its fixed slot.
+                let workspace = &mut *workspace;
+                let slot = workspace.slots[id]
+                    .snapshot(MemoryLocation::Cpu, &mut workspace.transfers)
+                    .unwrap();
+                assert_eq!(slot.to_cpu_vec::<f32>().unwrap(), [-999.; 4]);
+            }
+        }
+    }
+}

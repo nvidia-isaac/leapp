@@ -696,6 +696,76 @@ fn bounded_outputs_validate_downstream_shapes_before_execution() {
     }
 }
 
+#[test]
+fn onnx_outputs_are_forwarded_or_lent_without_copies() {
+    let (policy_dir, chain_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let mut policy = fixture("policy");
+    policy["pipeline"]["outputs"]["preprocess"] = json!(["features"]);
+    let policy = write_bundle(&policy, policy_dir.path());
+    let mut chain = fixture("dynamic");
+    chain["models"]["consumer"] = chain["models"]["dynamic"].clone();
+    chain["pipeline"]["data_flow"] = json!({"dynamic/output":["consumer/input"]});
+    chain["pipeline"]["outputs"] = json!({"consumer":["output"]});
+    let chain = write_bundle(&chain, chain_dir.path());
+    for device in devices() {
+        let load = |bundle: &Bundle| {
+            let options = SessionOptions {
+                engine: crate::EngineKind::Native,
+                device,
+                ..Default::default()
+            };
+            NativeEngine::load(bundle, &Graph::new(bundle).unwrap(), &options).unwrap()
+        };
+        // Prepared: a published intermediate reaches its consumer without a copy back.
+        let engine = load(&policy);
+        let location = execution_location(&engine);
+        let input = placed(&[1_f32; 4], &[4], location).unwrap();
+        let bias = placed(&[0_f32; 4], &[4], location).unwrap();
+        engine.workspace.lock().unwrap().transfers.copies.clear();
+        let result = engine
+            .run(
+                &[
+                    ("policy/bias", bias.view()),
+                    ("preprocess/observation", input.view()),
+                ],
+                &OutputPlacement::default(),
+                &mut HashMap::new(),
+            )
+            .unwrap();
+        assert!(engine.workspace.lock().unwrap().transfers.copies.is_empty());
+        assert_eq!(
+            result["policy/action"].to_cpu_vec::<f32>().unwrap(),
+            [4., 6., 8., 10.]
+        );
+
+        // Dynamic: the intermediate is lent; only the published result is copied.
+        let engine = load(&chain);
+        for size in [4, 2] {
+            let values: Vec<f32> = (0..size).map(|i| i as f32).collect();
+            let input = placed(&values, &[size as i64], location).unwrap();
+            engine.workspace.lock().unwrap().transfers.copies.clear();
+            let result = engine
+                .run(
+                    &[("dynamic/input", input.view())],
+                    &OutputPlacement::default(),
+                    &mut HashMap::new(),
+                )
+                .unwrap();
+            let workspace = engine.workspace.lock().unwrap();
+            assert_eq!(workspace.transfers.copies.len(), 1);
+            assert!(workspace
+                .models
+                .iter()
+                .all(|model| model.forwarded_output(0).is_none()));
+            drop(workspace);
+            assert_eq!(
+                result["consumer/output"].to_cpu_vec::<f32>().unwrap(),
+                values
+            );
+        }
+    }
+}
+
 #[path = "native/streams.rs"]
 mod streams;
 

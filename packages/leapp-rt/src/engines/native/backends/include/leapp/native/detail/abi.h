@@ -90,6 +90,8 @@ struct Api {
   size_t (*output_count)(const void*) noexcept;
   TensorHandle (*take_output)(void*, size_t) noexcept;
   void (*destroy_outputs)(void* outputs) noexcept;
+  bool (*forwarded_output)(const void*, size_t, DLTensor*) noexcept;
+  void (*release_outputs)(void* instance) noexcept;
 };
 
 }  // namespace lrt::native::detail

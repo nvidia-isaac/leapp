@@ -179,6 +179,8 @@ api! {
     output_count: unsafe extern "C" fn(*const c_void) -> usize,
     take_output: unsafe extern "C" fn(*mut c_void, usize) -> TensorHandle,
     destroy_outputs: unsafe extern "C" fn(*mut c_void),
+    forwarded_output: unsafe extern "C" fn(*const c_void, usize, *mut DLTensor) -> bool,
+    release_outputs: unsafe extern "C" fn(*mut c_void),
 }
 
 pub(super) struct Library {

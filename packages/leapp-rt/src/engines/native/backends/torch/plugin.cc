@@ -2,7 +2,6 @@
 // All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <memory>
 #include <span>
 #include <string>
@@ -55,38 +54,40 @@ class Plugin final : public lrt::native::BackendPlugin {
                   std::span<const plugin::OutputBinding> outputs) override {
     adapter::FixedViews::Invocation borrowed(inputs_, inputs, routes);
     const auto targets = adapter::bindings(outputs);
-    executor_->run(inputs_.values, routes, targets);
+    completed_.reset();
+    completed_ = executor_->run(inputs_.values, routes, targets);
     return {};
   }
 
+  std::optional<plugin::BorrowedTensor> forwarded_output(
+      size_t position) const noexcept override {
+    if (!completed_ || position >= completed_->views.size()) {
+      return std::nullopt;
+    }
+    return plugin::BorrowedTensor(
+        adapter::descriptor(completed_->views[position]));
+  }
+
+  void release_outputs() noexcept override { completed_.reset(); }
+
+  // Lend Torch's results through forwarded_output() instead of copying them;
+  // the engine copies only what it publishes.
   lrt::Status run_dynamic(std::span<const plugin::BorrowedTensor> inputs,
                           std::span<const plugin::OutputBinding> outputs,
-                          plugin::Transfers& transfers,
+                          plugin::Transfers&,
                           plugin::DynamicOutputs* result) override {
     const auto values = adapter::views(inputs);
     const auto targets = adapter::bindings(outputs);
-    auto sdk = executor_->run_dynamic(values, targets);
-    plugin::DynamicOutputs candidate(sdk->views.size());
-    for (size_t i = 0; i < candidate.size(); ++i) {
-      if (std::none_of(outputs.begin(), outputs.end(), [i](const auto& output) {
-            return output.position == i;
-          })) {
-        plugin::OwnedTensor value;
-        auto status = transfers.copy(
-            plugin::BorrowedTensor(adapter::descriptor(sdk->views[i])), &value);
-        if (!status.ok()) {
-          return status;
-        }
-        candidate[i] = std::move(value);
-      }
-    }
-    *result = std::move(candidate);
+    completed_.reset();
+    completed_ = executor_->run_dynamic(values, targets);
+    *result = plugin::DynamicOutputs(completed_->views.size());
     return {};
   }
 
  private:
   adapter::FixedViews inputs_;
   std::unique_ptr<Executor> executor_;
+  std::unique_ptr<adapter::Outputs> completed_;
 };
 
 lrt::Status load(const plugin::LoadContext& context,

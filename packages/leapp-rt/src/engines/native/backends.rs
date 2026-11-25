@@ -26,7 +26,7 @@ use crate::{
 };
 use anyhow::Result;
 
-/// A prepared argument replaced by an invocation-scoped Session input.
+/// A prepared argument replaced by an invocation-scoped input or producer output.
 /// Keep this layout paired with the private C++ adapter ABI.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -112,17 +112,19 @@ pub(super) trait BackendPlugin: Send {
         1
     }
 
-    /// Execute once with prepared bindings and selected boundary inputs.
-    /// Each route maps an argument position to its index in Session's inputs.
+    /// Execute once with prepared bindings and selected invocation inputs.
+    /// Each route maps an argument position to its index in the supplied inputs.
     /// Unrouted arguments retain their prepared workspace bindings. The engine
     /// has already established input compatibility, placement and alignment.
     /// Complete all work and restore bindings before returning, including errors.
-    /// Never access caller pointers after completion. Opt-in replay may retain
+    /// Only forwarded_output may retain completed views until release_outputs.
+    /// Opt-in replay may retain
     /// addresses, checked by the engine before each run. Errors propagate without retry.
     /// Empty routes reuse all prepared inputs. There is one prepared execution
     /// entry point, with no borrowing/staging selection during dispatch.
     /// # Safety
-    /// Output bindings are writable, disjoint, compatible, and alive through completion.
+    /// Output bindings are writable, disjoint, compatible, and alive through graph
+    /// completion and release_outputs.
     unsafe fn run(
         &mut self,
         _inputs: &[(&str, BorrowedTensor<'_>)],
@@ -132,15 +134,29 @@ pub(super) trait BackendPlugin: Send {
         Err(crate::error::Unsupported("backend has no prepared execution path".into()).into())
     }
 
+    /// Completed result lent for an unsupplied output of run or run_dynamic.
+    /// Storage and shape metadata remain valid until release_outputs, even if the
+    /// result aliases invocation inputs. Views must be contiguous and match the
+    /// declared dtype, shape and device. The engine consumes them read-only and
+    /// snapshots public results before release. For run, None means the prepared
+    /// buffer was written.
+    fn forwarded_output(&self, _position: usize) -> Option<DLTensor> {
+        None
+    }
+
+    /// Release completed views after the whole graph, also on downstream failure.
+    fn release_outputs(&mut self) {}
+
     /// Execute without fixed bindings, including concrete models that cannot be
     /// prepared. Inputs and the copy helper are borrowed only for this call.
-    /// Return one entry per output: None for supplied targets, Some for owned results.
-    /// Return valid, contiguous, ready, independently owned outputs on the
-    /// backend storage device, matching the declared output count, order,
-    /// dtype, rank and fixed dimensions. SDK metadata establishes these guarantees
-    /// at initialization or the backend checks unresolved values before return. They
-    /// must survive later runs/plugin destruction and must not alias inputs or
-    /// mutable backend state. Use workspace transfers to isolate SDK-owned data.
+    /// Return one entry per output: None for supplied targets or results lent
+    /// through forwarded_output, Some for owned results.
+    /// Owned results are valid, contiguous, ready and on the backend storage
+    /// device, matching the declared output count, order, dtype, rank and fixed
+    /// dimensions. SDK metadata establishes these guarantees at initialization or
+    /// the backend checks unresolved values before return. Owned results must
+    /// survive later runs/plugin destruction and must not alias inputs or mutable
+    /// backend state. Use workspace transfers to isolate SDK-owned data.
     /// Inputs have already passed layout, device and consumer port validation.
     /// Bounded output dimensions and shared symbols are checked before downstream use.
     /// # Safety

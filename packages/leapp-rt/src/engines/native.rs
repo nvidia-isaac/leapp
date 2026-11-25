@@ -168,6 +168,7 @@ impl NativeEngine {
             dynamic_slots,
             output_bindings: Vec::with_capacity(binding_capacity),
             forwarded_bindings: HashMap::new(),
+            allocated_outputs: HashMap::new(),
             transfers: Transfers::new(location, options)
                 .map_err(|e| backends::error("prepare", e))?,
         };
@@ -182,6 +183,7 @@ impl NativeEngine {
                     .map_err(|e| RuntimeError::new("prepare", e))?
                     .unwrap_or(false);
             let mut external_inputs = Vec::new();
+            let mut forwarded_inputs = Vec::new();
             let mut staged_inputs = Vec::new();
             for (position, &id) in call.inputs.iter().enumerate() {
                 if let Some(order) = workspace.input_positions[id] {
@@ -265,6 +267,19 @@ impl NativeEngine {
                 );
                 external_inputs.clear();
             }
+            if prepared {
+                for (position, &id) in call.inputs.iter().enumerate() {
+                    if workspace.input_positions[id].is_none() {
+                        if input_alignment != 0 && !replay {
+                            forwarded_inputs.push((position, id));
+                        } else if workspace.slots[id].location() == location {
+                            // These consumers require their original prepared
+                            // address (replay or backend input isolation).
+                            staged_inputs.push((id, id));
+                        }
+                    }
+                }
+            }
             for &id in &call.outputs {
                 if let Some((name, _)) =
                     workspace.plan.outputs.iter().find(|(_, slot)| **slot == id)
@@ -289,17 +304,16 @@ impl NativeEngine {
                     Workspace::run_prepared_staged
                 },
                 staged_inputs,
+                forwarded_inputs,
+                input_alignment,
                 output_routes: call
                     .outputs
                     .iter()
                     .map(|&id| {
-                        let slot = &workspace.slots[id];
-                        match &slot.fixed {
-                            _ if slot.terminal => OutputRoute::Terminal,
-                            Some(fixed) if fixed.buffer.location == location => {
-                                OutputRoute::Copy(id, fixed.buffer.len)
-                            }
-                            _ => OutputRoute::Forward(id),
+                        if workspace.slots[id].terminal {
+                            OutputRoute::Terminal
+                        } else {
+                            OutputRoute::Forward(id)
                         }
                     })
                     .collect(),
@@ -464,6 +478,9 @@ struct Workspace {
     output_bindings: Vec<(usize, DLTensor)>,
     // Completed output overrides borrowed only until this invocation finishes.
     forwarded_bindings: HashMap<usize, DLTensor>,
+    // Keep invocation allocations alive until forwarded backend views are released,
+    // including downstream failures and partially collected public results.
+    allocated_outputs: HashMap<usize, Arc<Buffer>>,
     transfers: Transfers,
 }
 
@@ -479,8 +496,6 @@ type Execute = fn(&mut Workspace, usize, &[(&str, BorrowedTensor<'_>)]) -> anyho
 enum OutputRoute {
     Terminal,
     Forward(usize),
-    // Original slot and fixed byte length for prepared consumer bindings.
-    Copy(usize, usize),
 }
 
 struct CallState {
@@ -488,6 +503,9 @@ struct CallState {
     // Producer slot and the consumer's execution-device staging slot.
     staged_inputs: Vec<(usize, usize)>,
     output_routes: Vec<OutputRoute>,
+    // Prepared argument positions that can borrow completed internal outputs.
+    forwarded_inputs: Vec<(usize, usize)>,
+    input_alignment: usize,
     // Input position within this call and its boundary position in Plan.inputs.
     external_inputs: Vec<InputRoute>,
     outputs: Vec<(usize, usize, String)>,
@@ -553,6 +571,10 @@ impl Engine for NativeEngine {
         // Release invocation descriptors; replay retains only effective addresses.
         workspace.output_bindings.clear();
         workspace.forwarded_bindings.clear();
+        for model in &mut workspace.models {
+            model.release_outputs();
+        }
+        workspace.allocated_outputs.clear();
 
         // No dynamic value from a failed/previous call can feed a later call.
         let workspace = &mut *workspace;
@@ -649,13 +671,29 @@ impl Workspace {
         inputs: &[(&str, BorrowedTensor<'_>)],
     ) -> anyhow::Result<()> {
         for &(source, slot) in &self.calls[index].staged_inputs {
-            let (sources, targets) = self.slots.split_at_mut(slot);
-            let len = targets[0].fixed.as_ref().unwrap().buffer.len;
-            let input = Self::forwarded_input(sources, &self.forwarded_bindings, source)?;
-            // SAFETY: connected ports have identical fixed dtype/shape, and the
-            // consumer's private staging slot is disjoint from the producer.
+            if source == slot && !self.forwarded_bindings.contains_key(&source) {
+                continue;
+            }
+            let tensor =
+                *Self::forwarded_input(&self.slots, &self.forwarded_bindings, source)?.descriptor();
+            if self.calls[index].input_alignment != 0
+                && self.calls[index].replay.is_none()
+                && crate::engines::memory::dlpack::location(tensor.device)? == self.location
+            {
+                // A supplied output can already be on the consumer's device,
+                // even when its producer's normal output location differs.
+                continue;
+            }
+            let target = &mut self.slots[slot];
+            let fixed = target.fixed.as_ref().unwrap();
+            if tensor.data == fixed.view().descriptor().data && tensor.byte_offset == 0 {
+                continue;
+            }
+            let len = fixed.buffer.len;
+            // SAFETY: completed producer storage lives through the graph. Ports
+            // match, and the staging destination is separate from this view.
             unsafe {
-                targets[0].assign_validated(input, len, &mut self.transfers)?;
+                target.assign_validated(BorrowedTensor::new(&tensor), len, &mut self.transfers)?;
             }
         }
         self.run_prepared(index, inputs)
@@ -666,14 +704,79 @@ impl Workspace {
         index: usize,
         inputs: &[(&str, BorrowedTensor<'_>)],
     ) -> anyhow::Result<()> {
-        // SAFETY: run retains every supplied output and validates it before dispatch.
-        unsafe {
-            self.models[self.plan.calls[index].model].run(
-                inputs,
-                &self.calls[index].external_inputs,
-                &self.output_bindings,
-            )
+        let call = &self.calls[index];
+        // Most fixed calls retain their existing wrappers. Extend invocation
+        // routes only when a producer actually supplied a different address.
+        let mut forwarded = call
+            .forwarded_inputs
+            .iter()
+            .filter_map(|&(position, id)| {
+                self.forwarded_bindings
+                    .get(&id)
+                    .filter(|tensor| {
+                        crate::engines::memory::dlpack::location(tensor.device).ok()
+                            == Some(self.location)
+                    })
+                    .map(|tensor| (position, tensor))
+            })
+            .peekable();
+        let model = &mut self.models[self.plan.calls[index].model];
+        if forwarded.peek().is_none() {
+            // SAFETY: invocation owners and validated destinations remain alive.
+            unsafe {
+                model.run(inputs, &call.external_inputs, &self.output_bindings)?;
+            }
+        } else {
+            let mut values = inputs.to_vec();
+            let mut routes = call.external_inputs.clone();
+            for (position, tensor) in forwarded {
+                ensure!(
+                    (tensor.data as usize + tensor.byte_offset as usize)
+                        .is_multiple_of(call.input_alignment),
+                    "forwarded input requires a {}-byte aligned address",
+                    call.input_alignment
+                );
+                routes.push(InputRoute {
+                    position,
+                    boundary: values.len(),
+                });
+                // SAFETY: producer owners and metadata live through this graph.
+                values.push(("", unsafe { BorrowedTensor::new(tensor) }));
+            }
+            // SAFETY: completed forwarded views have the prepared port layouts.
+            unsafe {
+                model.run(&values, &routes, &self.output_bindings)?;
+            }
         }
+        // None means run wrote the prepared destination.
+        for position in 0..self.plan.calls[index].outputs.len() {
+            if !self.output_bindings.iter().any(|(p, _)| *p == position) {
+                let call = &self.plan.calls[index];
+                let id = call.outputs[position];
+                if let Some(tensor) = self.models[call.model].forwarded_output(position) {
+                    self.bind_lent(id, tensor)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate a result a backend lent instead of copying, and route it to
+    /// consumers and publication. It stays valid until release_outputs.
+    fn bind_lent(&mut self, id: usize, tensor: DLTensor) -> anyhow::Result<()> {
+        // SAFETY: the backend retains storage and metadata until release_outputs,
+        // after all downstream calls and public snapshots.
+        let view = unsafe { BorrowedTensor::new(&tensor) };
+        let spec = &self.slots[id].spec;
+        plan::check(
+            spec,
+            view,
+            tensor.device,
+            &self.plan.symbols,
+            &mut self.shape_values,
+        )?;
+        self.forwarded_bindings.insert(id, tensor);
+        Ok(())
     }
 
     fn run_dynamic(
@@ -732,21 +835,36 @@ impl Workspace {
         }
         // SAFETY: Session inputs, forwarded values and writable outputs remain
         // alive through backend completion, including errors.
+        let model = call.model;
         let outputs = unsafe {
-            self.models[call.model].run_dynamic(&inputs, &self.output_bindings, &mut self.transfers)
+            self.models[model].run_dynamic(&inputs, &self.output_bindings, &mut self.transfers)
         }?;
-        for (&id, value) in call.outputs.iter().zip(outputs) {
-            if let Some(value) = value {
-                // Backends guarantee rank and fixed sizes; check bounds and bind
-                // symbols before any consumer runs.
-                let spec = &self.slots[id].spec;
-                if spec.shape.is_bounded() {
-                    // SAFETY: the view ends before value moves into its slot.
-                    let view = unsafe { value.borrow() };
-                    let device = view.descriptor().device;
-                    plan::check(spec, view, device, symbols, &mut self.shape_values)?;
+        for (position, value) in outputs.into_iter().enumerate() {
+            let id = self.plan.calls[index].outputs[position];
+            match value {
+                Some(value) => {
+                    // Backends guarantee rank and fixed sizes; check bounds and
+                    // bind symbols before any consumer runs.
+                    let spec = &self.slots[id].spec;
+                    if spec.shape.is_bounded() {
+                        // SAFETY: the view ends before value moves into its slot.
+                        let view = unsafe { value.borrow() };
+                        let device = view.descriptor().device;
+                        let symbols = &self.plan.symbols;
+                        plan::check(spec, view, device, symbols, &mut self.shape_values)?;
+                    }
+                    self.slots[id].assign_owned(value, &mut self.transfers)?;
                 }
-                self.slots[id].assign_owned(value, &mut self.transfers)?;
+                None if self.output_bindings.iter().any(|(p, _)| *p == position) => {}
+                None => {
+                    let tensor =
+                        self.models[model]
+                            .forwarded_output(position)
+                            .with_context(|| {
+                                format!("backend returned no result for output {position}")
+                            })?;
+                    self.bind_lent(id, tensor)?;
+                }
             }
         }
         Ok(())
@@ -784,8 +902,7 @@ impl Workspace {
 
         // Caller-provided buffers set output destinations; placement selects
         // locations for outputs returned in newly owned storage.
-        // Own fresh result buffers by slot ID until publication.
-        let mut allocated = HashMap::new();
+        // Own fresh result buffers by slot ID through forwarding cleanup.
         for index in 0..self.calls.len() {
             // Rebuild destination overrides, keeping other prepared bindings intact.
             // TODO: Investigate reusing output bindings to reduce per-run rebuilding.
@@ -810,7 +927,7 @@ impl Workspace {
                         let mut tensor = *fixed.view().descriptor();
                         tensor.data = buffer.ptr.as_ptr().cast();
                         self.output_bindings.push((position, tensor));
-                        allocated.insert(id, buffer);
+                        self.allocated_outputs.insert(id, buffer);
                     }
                 }
             }
@@ -821,18 +938,12 @@ impl Workspace {
                 }
                 format!("execute node {}", self.plan.calls[index].name)
             })?;
-            // Forward completed overrides or refresh fixed consumer bindings.
+            // Forward completed overrides to downstream consumers.
             for binding in &self.output_bindings {
                 match self.calls[index].output_routes[binding.0] {
                     OutputRoute::Terminal => {}
                     OutputRoute::Forward(id) => {
                         self.forwarded_bindings.insert(id, binding.1);
-                    }
-                    OutputRoute::Copy(id, len) => {
-                        // SAFETY: the completed backend initialized a validated
-                        // target matching this slot's fixed dtype, shape and length.
-                        let view = unsafe { BorrowedTensor::new(&binding.1) };
-                        unsafe { self.slots[id].assign_validated(view, len, &mut self.transfers) }?;
                     }
                 }
             }
@@ -844,15 +955,25 @@ impl Workspace {
             .iter()
             .filter(|(name, _)| !buffers.contains_key(name.as_str()))
             .map(|(name, &id)| {
-                let value = if let Some(buffer) = allocated.remove(&id) {
+                let value = if let Some(buffer) = self.allocated_outputs.get(&id) {
                     // SAFETY: successful execution initialized this complete allocation.
                     unsafe {
                         crate::engines::memory::dlpack::from_buffer(
                             crate::engines::memory::dlpack::dl_type(self.slots[id].spec.dtype),
                             self.slots[id].spec.shape.dims.clone(),
-                            buffer,
+                            buffer.clone(),
                         )
                     }?
+                } else if let Some(tensor) = self.forwarded_bindings.get(&id) {
+                    // SAFETY: retain backend owners until this independent public
+                    // result is complete; forwarded results may alias inputs/state.
+                    let view = unsafe { BorrowedTensor::new(tensor) };
+                    self.transfers.copy(
+                        view,
+                        placement
+                            .location(name)
+                            .unwrap_or(self.slots[id].location()),
+                    )?
                 } else {
                     self.slots[id].snapshot(
                         placement

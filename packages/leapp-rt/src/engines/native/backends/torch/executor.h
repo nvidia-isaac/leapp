@@ -31,9 +31,10 @@ class Executor {
   void prepare(std::span<const leapp_native::tensors::View> inputs,
                std::span<const leapp_native::tensors::View> outputs);
 
-  void run(std::span<const leapp_native::tensors::View> inputs,
-           std::span<const leapp_native::tensors::InputRoute> routes,
-           std::span<const leapp_native::tensors::OutputBinding> outputs);
+  std::unique_ptr<leapp_native::tensors::Outputs> run(
+      std::span<const leapp_native::tensors::View> inputs,
+      std::span<const leapp_native::tensors::InputRoute> routes,
+      std::span<const leapp_native::tensors::OutputBinding> outputs);
 
   std::unique_ptr<leapp_native::tensors::Outputs> run_dynamic(
       std::span<const leapp_native::tensors::View> inputs,

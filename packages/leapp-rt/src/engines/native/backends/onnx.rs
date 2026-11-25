@@ -73,6 +73,8 @@ fn initialize(directory: &std::path::Path) -> Result<()> {
 pub(in crate::engines::native) struct Model {
     prepared: Option<Prepared>,
     loaded: Arc<Loaded>,
+    // Dynamic results lent to the engine until release_outputs, by position.
+    lent: Vec<Option<DynValue>>,
 }
 
 struct Loaded {
@@ -201,6 +203,7 @@ impl Model {
         let output_locations = output_locations(&session, &output_names)?;
         Ok(Self {
             prepared: None,
+            lent: Vec::new(),
             loaded: Arc::new(Loaded {
                 session,
                 custom_ops,
@@ -227,8 +230,20 @@ impl BackendPlugin for Model {
         );
         Ok(Box::new(Self {
             prepared: None,
+            lent: Vec::new(),
             loaded: self.loaded.clone(),
         }))
+    }
+
+    fn forwarded_output(&self, position: usize) -> Option<DLTensor> {
+        self.lent
+            .get(position)?
+            .as_ref()
+            .and_then(|value| describe(value).ok())
+    }
+
+    fn release_outputs(&mut self) {
+        self.lent.clear();
     }
 
     fn can_prepare(&self) -> bool {
@@ -419,7 +434,7 @@ impl BackendPlugin for Model {
         &mut self,
         inputs: &[BorrowedTensor<'_>],
         bindings: &[(usize, DLTensor)],
-        transfers: &mut crate::engines::native::Transfers,
+        _transfers: &mut crate::engines::native::Transfers,
     ) -> Result<Vec<Option<SharedTensor>>> {
         let session = &self.loaded.session;
         // The executor owns these already-routed inputs through completion.
@@ -459,58 +474,61 @@ impl BackendPlugin for Model {
         };
         completion.finish(result)?;
         let outputs = bound_outputs(session, &binding)?;
-        self.loaded
-            .output_names
-            .iter()
-            .zip(&outputs)
-            .zip(&self.loaded.output_shapes)
-            .enumerate()
-            .map(|(position, ((name, value), expected))| {
-                let tensor = value.downcast_ref::<DynTensorValueType>()?;
-                let ValueType::Tensor { ty, shape, .. } = tensor.dtype() else {
-                    unreachable!()
-                };
-                // ORT can return newly allocated tensors whose dimensions
-                // differ from the declared shape. Establish the producer
-                // guarantee once here before publication.
-                ensure!(
-                    expected.matches(shape),
-                    "ONNX output {name} does not match declared shape"
-                );
-                if bindings.iter().any(|output| output.0 == position) {
-                    return Ok(None);
-                }
-                let info = tensor.memory_info();
-                let location = if info.is_cpu_accessible() {
-                    MemoryLocation::Cpu
-                } else {
-                    ensure!(
-                        info.allocation_device() == AllocationDevice::CUDA,
-                        "unsupported ORT output allocation"
-                    );
-                    MemoryLocation::Cuda {
-                        device_id: u32::try_from(info.device_id())?,
-                    }
-                };
-
-                // SAFETY: ORT owns this ready value until the independent native
-                // copy completes; subsequent runs cannot mutate the returned owner.
-                let descriptor = DLTensor {
-                    data: tensor.data_ptr().cast_mut(),
-                    device: dlpack::device(location)?,
-                    ndim: i32::try_from(shape.len())?,
-                    dtype: dlpack::dl_type(native_type(*ty)?),
-                    shape: shape.as_ptr().cast_mut(),
-                    strides: ptr::null_mut(),
-                    byte_offset: 0,
-                };
-                // SAFETY: ORT owns the completed output until this copy finishes.
-                transfers
-                    .copy(unsafe { BorrowedTensor::new(&descriptor) }, location)
-                    .map(Some)
-            })
-            .collect()
+        self.lent.clear();
+        let mut results = Vec::with_capacity(outputs.len());
+        for (position, value) in outputs.into_iter().enumerate() {
+            let name = &self.loaded.output_names[position];
+            let tensor = value.downcast_ref::<DynTensorValueType>()?;
+            let ValueType::Tensor { shape, .. } = tensor.dtype() else {
+                unreachable!()
+            };
+            // ORT can return newly allocated tensors whose dimensions differ
+            // from the declared shape. Establish the producer guarantee here.
+            ensure!(
+                self.loaded.output_shapes[position].matches(shape),
+                "ONNX output {name} does not match declared shape"
+            );
+            results.push(None);
+            // Lend ORT's completed result instead of copying it. The engine
+            // copies only what it publishes, before release_outputs.
+            let lend = !bindings.iter().any(|output| output.0 == position);
+            if lend {
+                describe(&value)?;
+            }
+            self.lent.push(lend.then_some(value));
+        }
+        Ok(results)
     }
+}
+
+/// Describe a completed ORT tensor in place. The value owns its storage and
+/// shape metadata, so the descriptor stays valid while the value is retained.
+fn describe(value: &DynValue) -> Result<DLTensor> {
+    let tensor = value.downcast_ref::<DynTensorValueType>()?;
+    let ValueType::Tensor { ty, shape, .. } = tensor.dtype() else {
+        unreachable!()
+    };
+    let info = tensor.memory_info();
+    let location = if info.is_cpu_accessible() {
+        MemoryLocation::Cpu
+    } else {
+        ensure!(
+            info.allocation_device() == AllocationDevice::CUDA,
+            "unsupported ORT output allocation"
+        );
+        MemoryLocation::Cuda {
+            device_id: u32::try_from(info.device_id())?,
+        }
+    };
+    Ok(DLTensor {
+        data: tensor.data_ptr().cast_mut(),
+        device: dlpack::device(location)?,
+        ndim: i32::try_from(shape.len())?,
+        dtype: dlpack::dl_type(native_type(*ty)?),
+        shape: shape.as_ptr().cast_mut(),
+        strides: ptr::null_mut(),
+        byte_offset: 0,
+    })
 }
 
 /// Query producer devices once, then reorder to LEAPP port order.
