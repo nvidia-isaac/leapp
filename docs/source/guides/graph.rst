@@ -142,6 +142,16 @@ compiles the node, LEAPP determines which registered buffers changed.
 * Plain attributes such as ``self.hidden = torch.zeros(...)`` are not tracked;
   state must be an explicit registered buffer for ``annotate.module()`` to
   capture it.
+* When the session ends (``leapp.stop()``, or ``leapp.start()`` resetting a
+  session that was not stopped), tracked buffers become plain tensors again,
+  so the model can be exported on its own. A buffer that requires grad stays
+  tied to the capture. If a node uses one state name for two different
+  tensors, for example two models with the same buffer name, every buffer
+  stays tied for the rest of the Python process and a warning says so.
+* LEAPP does not check model code that runs when a buffer is assigned, such
+  as a custom ``__setattr__`` or ``register_buffer()``, a property named like
+  a buffer, or a buffer registration hook. If such code writes another
+  model's buffer, the buffers made plain can hold values LEAPP did not see.
 
 .. warning::
 

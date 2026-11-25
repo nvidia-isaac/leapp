@@ -21,7 +21,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "leapp"
-version = "0.7.2"
+version = "0.8.1"
 description = "LEAPP - Lightweight Export Annotations for Policy Pipelines: A Python package for tracing and exporting computational graphs from PyTorch code"
 readme = "README.md"
 license = "Apache-2.0"
@@ -49,12 +49,12 @@ classifiers = [
 # onnx>=1.19.0 requires python>=3.10
 requires-python = ">=3.10"
 dependencies = [
-    "torch>=2.6.0",
+    "torch>=2.7.0",
     "PyYAML>=6.0",
     "onnx>=1.19.0",
     "onnxruntime>=1.20.0,<1.24; python_version < '3.11'",
     "onnxruntime>=1.20.0; python_version >= '3.11'",
-    "onnxscript>=0.1.0",
+    "onnxscript>=0.7.1",
     "safetensors>=0.5.0",
     # Visualization layout/render deps (Python 3.11+ only; skipped on 3.10).
     "fast-sugiyama>=0.5.3; python_version >= '3.11'",
@@ -68,18 +68,22 @@ dev = [
     "flake8",
     "mypy",
 ]
+# ExecuTorch 1.6 ships wheels for Python 3.11 and newer only.
+executorch = [
+    "executorch>=1.6.0; python_version >= '3.11'",
+]
 test = [
-    "warp-lang>=1.16",
+    "warp-lang>=1.18",
     "opencv-python-headless>=4.8",
 ]
 warp-cu12 = [
-    "warp-lang>=1.16",
+    "warp-lang>=1.18",
     "cupti-python>=12.8,<13; sys_platform == 'linux'",
     "onnxruntime-gpu[cuda,cudnn]>=1.20.0,<1.24; python_version < '3.11'",
     "onnxruntime-gpu[cuda,cudnn]>=1.20.0,<1.27; python_version >= '3.11'",
 ]
 warp-cu13 = [
-    "warp-lang>=1.16",
+    "warp-lang>=1.18",
     "cupti-python>=13,<14; sys_platform == 'linux'",
     "onnxruntime-gpu[cuda,cudnn]>=1.27.0; python_version >= '3.11'",
 ]
@@ -105,6 +109,11 @@ conflicts = [
     [
         { extra = "warp-cu12" },
         { extra = "warp-cu13" },
+    ],
+    # ExecuTorch needs torch 2.15, whose CUDA 13 bindings rule out cupti-python 12.
+    [
+        { extra = "executorch" },
+        { extra = "warp-cu12" },
     ],
 ]
 

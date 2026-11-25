@@ -64,7 +64,14 @@ class TestExportInferenceMode(unittest.TestCase):
                             if chain:
                                 error = RuntimeError("export wrapper failed")
                                 setattr(error, chain, original)
-                            with mock.patch(target, side_effect=error) as export:
+                            # An unavailable workaround must not hide export errors.
+                            with (
+                                mock.patch(target, side_effect=error) as export,
+                                mock.patch(
+                                    "leapp.backends.onnx_export_backend.patch_onnxscript_matcher",
+                                    side_effect=ImportError("matcher API unavailable"),
+                                ),
+                            ):
                                 with self.assertLogs("leapp", level="ERROR") as logs:
                                     with self.assertRaises(RuntimeError) as caught:
                                         node.compile_model()
@@ -87,3 +94,24 @@ class TestExportInferenceMode(unittest.TestCase):
                                 self.assertNotIn(
                                     "torch.inference_mode()", logs.output[0]
                                 )
+
+    def test_compile_reports_errors_that_need_more_than_a_message(self):
+        class TwoArgumentError(Exception):
+            def __init__(self, message, kind):
+                super().__init__(message)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _get_logger().configure(tmpdir, verbose=False)
+            node = LeappNode("two_argument_test")
+            node.setup_backend("pt2", {})
+            node.m = torch.nn.Identity()
+            error = TwoArgumentError("nvcc not found", None)
+            expected = f"Error compiling model {node.name}: nvcc not found"
+            with mock.patch("torch.export.export", side_effect=error) as export:
+                with self.assertLogs("leapp", level="ERROR") as logs:
+                    with self.assertRaises(RuntimeError) as caught:
+                        node.compile_model()
+            export.assert_called_once()
+            self.assertIn(expected, logs.output[-1])
+            self.assertIs(caught.exception.__cause__, error)
+            self.assertEqual(str(caught.exception), expected)

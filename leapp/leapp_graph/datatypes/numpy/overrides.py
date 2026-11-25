@@ -48,6 +48,86 @@ def _nanmean(a, axis=None, dtype=None, out=None, keepdims=False):
     return torch.nanmean(a, dim=axis, keepdim=keepdims)
 
 
+def _quantile(
+    a,
+    q,
+    axis=None,
+    out=None,
+    overwrite_input=False,
+    method="linear",
+    keepdims=False,
+    *,
+    interpolation=None,
+):
+    if interpolation is not None:
+        raise NotImplementedError("use quantile's method argument")
+    a = tnp.asarray(a).tensor
+    scalar_q = isinstance(q, (int, float))
+    q = tnp.asarray(q).tensor
+    shape, all_axes = a.shape, axis is None
+    numpy2 = np.lib.NumpyVersion(np.__version__) >= "2.0.0"
+    # NumPy 2 preserves floating input precision for Python scalar q.
+    if numpy2 and scalar_q and a.is_floating_point():
+        q = q.to(a.dtype)
+    if axis is None:
+        a, axis = a.flatten(), 0
+    else:
+        if isinstance(axis, tuple):
+            if len(axis) != 1:
+                raise NotImplementedError("quantile requires a single axis")
+            axis = axis[0]
+        if axis < 0:
+            axis += a.ndim
+    values = torch.sort(a, dim=axis).values.movedim(axis, 0)
+    position = q * (values.shape[0] - 1)
+    previous = position.floor() if position.is_floating_point() else position
+    lower = previous.to(torch.int64)
+    upper = (lower + 1).clamp(max=values.shape[0] - 1)
+
+    def take(index):
+        return torch.index_select(values, 0, index.flatten()).reshape(
+            q.shape + values.shape[1:]
+        )
+
+    if method == "lower" or (method == "linear" and not q.is_floating_point()):
+        result = take(lower)
+    elif method == "higher":
+        result = take(position.ceil().to(torch.int64))
+    elif method == "nearest":
+        result = take(position.round().to(torch.int64))
+    elif method in ("linear", "midpoint"):
+        # NumPy subtracts adjacent samples in the input dtype, then promotes
+        # interpolation. Upcasting only the final result loses precision;
+        # upcasting before subtraction changes NumPy's rounding/overflow.
+        weight_dtype = q.dtype if numpy2 and q.is_floating_point() else torch.float64
+        weight = position.to(weight_dtype) - lower.to(weight_dtype)
+        if method == "midpoint":
+            weight = (weight != 0).to(weight_dtype) * 0.5
+        weight = weight.reshape(q.shape + (1,) * (values.ndim - 1))
+        left, right = take(lower), take(upper)
+        difference = right - left
+        dtype = torch.promote_types(a.dtype, weight.dtype)
+        left, right, difference = (x.to(dtype) for x in (left, right, difference))
+        result = torch.where(
+            weight >= 0.5,
+            right - difference * (1 - weight),
+            left + difference * weight,
+        )
+    else:
+        raise NotImplementedError(f"unsupported quantile method: {method}")
+    if a.is_floating_point():
+        last = values[-1].to(result.dtype)
+        result = torch.where(torch.isnan(last), last, result)
+    if keepdims:
+        kept_shape = (
+            (1,) * len(shape)
+            if all_axes
+            else tuple(1 if i == axis else size for i, size in enumerate(shape))
+        )
+        result = result.reshape(q.shape + kept_shape)
+    return result
+
+
 def _sorted(a, axis, kind, order, stable):
     # Preserve LEAPP's static-K ONNX lowering. Stable/structured sorting needs
     # a separate implementation; do not silently ignore those NumPy options.
@@ -71,6 +151,7 @@ NUMPY_OVERRIDES = {
     np.cbrt: _cbrt,
     np.pad: _pad,
     np.nanmean: _nanmean,
+    np.quantile: _quantile,
     np.sort: _sort,
     np.argsort: _argsort,
 }

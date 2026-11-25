@@ -11,6 +11,7 @@ from leapp.backends.export_backend import (
     SimplifiedONNXProgram,
 )
 from leapp.utils.logging import _get_logger
+from leapp.backends._onnxscript_compat import patch_onnxscript_matcher
 import os
 import onnx
 from onnx import AttributeProto, TensorProto, helper
@@ -34,9 +35,10 @@ class ONNXExportBackend(ExportBackend):
 
     def _get_onnx_model(self, onnx_program):
         """Get the ONNX model proto from an ONNX program."""
-        if hasattr(onnx_program, "model_proto"):
+        model_proto = getattr(onnx_program, "model_proto", None)
+        if model_proto is not None:
             # dynamo export returns ONNXProgram with model_proto
-            return onnx_program.model_proto
+            return model_proto
         else:
             # SimplifiedONNXProgram - load from file
             model_path = os.path.join(
@@ -83,7 +85,7 @@ class ONNXExportBackend(ExportBackend):
             used_names.add(new_input_name)
             used_names.add(new_output_name)
 
-    def _sync_inputs_with_onnx(self, onnx_program):
+    def _sync_inputs_with_onnx(self, onnx_program, *, model_proto=None):
         """Sync inputs with what ONNX actually exported.
 
         ONNX export can remove unused inputs (constant folding, dead code elimination).
@@ -92,7 +94,9 @@ class ONNXExportBackend(ExportBackend):
         However, if ONNX renames inputs (which happens with identity/passthrough functions
         when using onnx-dynamo), we raise an error and suggest using onnx-torchscript instead.
         """
-        onnx_model = self._get_onnx_model(onnx_program)
+        onnx_model = (
+            self._get_onnx_model(onnx_program) if model_proto is None else model_proto
+        )
 
         expected_input_names = set(td.name for td in self.node_context.inputs)
         actual_input_names = self._get_actual_onnx_inputs(onnx_model)
@@ -342,6 +346,103 @@ class ONNXTorchScriptExportBackend(ONNXExportBackend):
 
 class ONNXDynamoExportBackend(ONNXExportBackend):
     @staticmethod
+    def _fix_integer_sort_ties(model: onnx.ModelProto) -> None:
+        """Restore ONNX's lower-index-first tie rule for full int64 sorts.
+
+        ORT CUDA TopK can permute equal keys. For ascending full sorts on a
+        statically sized last axis, sort unique (equal-key group, input index)
+        pairs instead. Group IDs avoid overflow from packing the original keys,
+        which may span the entire int64 range. This adds one extra TopK.
+        """
+        graph = model.graph
+        types = {
+            value.name: value.type.tensor_type
+            for value in (*graph.input, *graph.value_info)
+        }
+        initializers = {value.name: value for value in graph.initializer}
+        used_names = set(initializers) | set(types)
+        for node in graph.node:
+            used_names.update(node.input)
+            used_names.update(node.output)
+
+        nodes = []
+        for node_index, node in enumerate(graph.node):
+            nodes.append(node)
+            if node.op_type != "TopK" or node.domain not in ("", "ai.onnx"):
+                continue
+            attrs = {
+                attr.name: helper.get_attribute_value(attr) for attr in node.attribute
+            }
+            tensor_type = types.get(node.input[0])
+            k = initializers.get(node.input[1])
+            if (
+                tensor_type is None
+                or tensor_type.elem_type != TensorProto.INT64
+                or not tensor_type.shape.dim
+                or attrs.get("axis", -1) not in (-1, len(tensor_type.shape.dim) - 1)
+                or attrs.get("largest", 1) != 0
+                or attrs.get("sorted", 1) != 1
+                or k is None
+                or list(k.dims) != [1]
+            ):
+                continue
+            size = tensor_type.shape.dim[-1].dim_value
+            if size < 2 or size * size - 1 > 2**63 - 1:
+                continue
+            if numpy_helper.to_array(k).item() != size:
+                continue
+
+            prefix = f"leapp_sort_{node_index}_"
+            while any(name.startswith(prefix) for name in used_names):
+                prefix += "_"
+
+            def constant(suffix, dims, values):
+                name = prefix + suffix
+                graph.initializer.append(
+                    helper.make_tensor(name, TensorProto.INT64, dims, values)
+                )
+                return name
+
+            def emit(op, inputs, suffix, **attributes):
+                output = prefix + suffix
+                nodes.append(helper.make_node(op, inputs, [output], **attributes))
+                return output
+
+            values, indices = node.output
+            raw_indices = prefix + "raw_indices"
+            node.output[1] = raw_indices
+            previous = emit(
+                "Gather",
+                [values, constant("previous_positions", [size], [0, *range(size - 1)])],
+                "previous_values",
+                axis=-1,
+            )
+            equal = emit("Equal", [values, previous], "equal")
+            boundaries = emit("Not", [equal], "boundaries")
+            flags = emit("Cast", [boundaries], "flags", to=TensorProto.INT64)
+            groups = emit("CumSum", [flags, constant("axis", [], [-1])], "groups")
+            offsets = emit("Mul", [groups, constant("size", [], [size])], "offsets")
+            packed = emit("Add", [offsets, raw_indices], "packed")
+            permutation = prefix + "permutation"
+            nodes.append(
+                helper.make_node(
+                    "TopK",
+                    [packed, node.input[1]],
+                    [prefix + "sorted_packed", permutation],
+                    axis=-1,
+                    largest=0,
+                    sorted=1,
+                )
+            )
+            nodes.append(
+                helper.make_node(
+                    "GatherElements", [raw_indices, permutation], [indices], axis=-1
+                )
+            )
+        del graph.node[:]
+        graph.node.extend(nodes)
+
+    @staticmethod
     def _fix_gathernd_int32_indices(model: onnx.ModelProto) -> int:
         """Replace constant INT32 GatherND indices with per-node INT64 copies.
 
@@ -391,10 +492,33 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
 
         return num_fixed
 
+    @staticmethod
+    def _clone_aliased_outputs(module):
+        # Dynamo names shared ONNX values in place, losing input or output names.
+        if not isinstance(module, torch.fx.GraphModule):
+            return
+        output = next(node for node in module.graph.nodes if node.op == "output")
+        seen = set()
+
+        def separate(node):
+            if node.op == "placeholder" or node in seen:
+                return module.graph.call_function(torch.clone, (node,))
+            seen.add(node)
+            return node
+
+        with module.graph.inserting_before(output):
+            output.args = torch.fx.node.map_arg(output.args, separate)
+        module.recompile()
+
     def compile(self, m: torch.nn.Module = None):
         if m is None:
             m = self.module_builder()
         m = m.eval()
+        self._clone_aliased_outputs(m)
+        try:
+            patch_onnxscript_matcher()
+        except Exception as error:
+            _get_logger().info(f"Skipping ONNXScript matcher workaround: {error}")
         self._handle_duplicate_io_names()
         # Get flat tensor values directly from inputs (not input_formats which preserves nested structure)
         input_values = tuple(
@@ -421,18 +545,16 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
             opset_version=self.opset_version,
         )
 
-        # Sync inputs with what ONNX actually exported
-        # (ONNX can remove unused inputs during optimization)
-        self._sync_inputs_with_onnx(onnx_program)
-
         # Capture proto once — model_proto may be a property that rebuilds on
-        # each access, so we must fix and save from the same object.
+        # each access, so sync, fix and save from the same object.
         model_proto = onnx_program.model_proto
+        self._sync_inputs_with_onnx(onnx_program, model_proto=model_proto)
 
         # Fix scalar Slice initializers on the in-memory proto before saving
         # (ONNX exporter bug: shared scalar initializers between Gather and Slice nodes).
         self._fix_scalar_slice_inputs(model_proto)
         self._fix_gathernd_int32_indices(model_proto)
+        self._fix_integer_sort_ties(model_proto)
         self._embed_warp_bundles(model_proto)
 
         # Wrap in SimplifiedONNXProgram so validation uses controlled
