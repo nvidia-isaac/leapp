@@ -185,6 +185,35 @@ replay for a TensorRT-configured node; it has the same buffer and lifecycle
 requirements as ``cuda_graph_replay``. ``0`` and ``false`` disable that provider
 option; other values are rejected. Replay is off unless explicitly requested.
 
+Optimization profiles
+~~~~~~~~~~~~~~~~~~~~~
+
+TensorRT builds each engine for an optimization profile: MIN, OPT and MAX values
+for every dynamic dimension and every shape input, an integer input whose values
+set other tensors' shapes. Set it with ``trt_profile_min_shapes``,
+``trt_profile_opt_shapes`` and ``trt_profile_max_shapes``, using public input
+names: dimensions for ordinary inputs and values for shape inputs, for example
+``data:12,grid:1x2x6``.
+
+Without these options, ONNX Runtime infers the profile from the inputs it
+receives:
+
+* It builds the engine on the first run and rebuilds it during a later run when
+  a dimension or shape value falls outside the range seen so far.
+* It widens each dimension and value separately, so the profile can combine
+  values that never occurred together. The rebuild fails with
+  ``kOPT values for profile 0 violate shape constraints`` when that combination
+  isn't a valid input. For example, grids ``1x2x6`` (12 data elements),
+  ``1x3x8`` (24) and ``1x4x4`` (16) widen the grid's MAX to ``1x4x8`` while the
+  data's MAX stays 24.
+
+Set an explicit profile when inputs can change in different directions, or when
+rebuilding during inference is too slow:
+
+* Make MIN and MAX valid inputs for the model, and keep inputs within them.
+* Use the same OPT and MAX values for int64 shape inputs. ONNX Runtime applies
+  the two in the wrong order.
+
 .. _runtime-cuda-graph-replay:
 
 ONNX CUDA graph replay
