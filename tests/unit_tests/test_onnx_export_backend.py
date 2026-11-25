@@ -20,6 +20,68 @@ from leapp.backends import _onnxscript_compat
 from leapp.backends.onnx_export_backend import ONNXDynamoExportBackend
 
 
+@pytest.mark.parametrize(
+    "form,source_device,target_device,dtype",
+    [
+        ("method", "cpu", "cpu", torch.float32),
+        (torch.Tensor.type_as, "cpu", "cpu", torch.float32),
+        (torch.ops.aten.type_as, "cpu", "cpu", torch.float32),
+        (torch.ops.aten.type_as.default, "cpu", "cpu", torch.float32),
+        (torch.ops.aten.type_as.default, "cpu", "cpu", torch.bfloat16),
+        (torch.ops.aten.type_as.default, "cuda", "cuda", torch.float32),
+        (torch.ops.aten.type_as.default, "cuda", "cuda", torch.bfloat16),
+        (torch.ops.aten.type_as.default, "cpu", "cuda", torch.bfloat16),
+        (torch.ops.aten.type_as.default, "cuda", "cpu", torch.float32),
+    ],
+)
+def test_type_as_canonicalization_preserves_alias_and_conversion(
+    form, source_device, target_device, dtype
+):
+    """Cover FX spellings separately from dtype/device conversion semantics."""
+    if "cuda" in (source_device, target_device) and not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    root = torch.nn.Module()
+    root.register_buffer(
+        "constant", torch.arange(12.0, device=source_device).reshape(3, 4)
+    )
+    graph = torch.fx.Graph()
+    other = graph.placeholder("other")
+    source = graph.get_attr("constant")
+    if form == "method":
+        converted = graph.call_method("type_as", (source, other))
+    elif form is torch.Tensor.type_as:
+        converted = graph.call_function(form, (source, other))
+    else:
+        converted = graph.call_function(form, (), {"self": source, "other": other})
+    graph.output(converted)
+    module = torch.fx.GraphModule(root, graph)
+    original_code = module.code
+    prepared = ONNXDynamoExportBackend._canonicalize_type_as(module)
+    # The reference shape must not change the converted constant's shape.
+    reference = torch.zeros(2, 3, 4, dtype=dtype, device=target_device)
+    expected, actual = module(reference), prepared(reference)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    assert actual.device == expected.device
+    assert actual.shape == (3, 4)
+    assert (
+        actual.device == root.constant.device
+        and actual.data_ptr() == root.constant.data_ptr()
+    ) == (
+        expected.device == root.constant.device
+        and expected.data_ptr() == root.constant.data_ptr()
+    )
+    assert module.code == original_code
+
+
+def test_type_as_canonicalization_leaves_dynamic_sources_unchanged():
+    graph = torch.fx.Graph()
+    source = graph.placeholder("source")
+    other = graph.placeholder("other")
+    graph.output(graph.call_method("type_as", (source, other)))
+    module = torch.fx.GraphModule(torch.nn.Module(), graph)
+    assert ONNXDynamoExportBackend._canonicalize_type_as(module) is module
+
+
 @pytest.fixture
 def stock_matcher(monkeypatch):
     method = _matcher.SimplePatternMatcher.match

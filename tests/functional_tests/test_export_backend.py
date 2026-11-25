@@ -297,6 +297,45 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
 
     """
 
+    def test_constant_type_as_export_and_replay(self):
+        """Check initializer naming through real Dynamo export and ORT reload.
+
+        FX conversion equivalence alone cannot detect aliased initializer
+        renaming, especially when the constant is also a graph output.
+        """
+        constant = torch.linspace(-0.7, 1.3, 12).reshape(3, 4)
+        double = constant.double()
+
+        def compute(x):
+            converted = constant.type_as(x)
+            return {
+                "noop": x + converted,
+                "cast": x + double.type_as(x),
+                "constant": converted,
+                "reused": x + converted + constant.type_as(x),
+            }
+
+        leapp.start(self.TEST_GRAPH_NAME, max_cached_io=2)
+        try:
+            for shift in (0.0, 0.5):
+                x = leapp.annotate.input_tensors(
+                    "policy", {"x": torch.zeros(2, 3, 4) + shift}
+                )
+                leapp.annotate.output_tensors("policy", compute(x), export_with="onnx")
+        finally:
+            leapp.stop()
+        leapp.compile_graph(visualize=False, validate=True, strict=True)
+        manager = leapp.InferenceManager(
+            os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+        )
+        for shift in (-2.0, 3.0):
+            fresh = torch.arange(24.0).reshape(2, 3, 4) + shift
+            actual = manager.run_policy({"policy/x": fresh})
+            for name, expected in compute(fresh).items():
+                torch.testing.assert_close(
+                    actual[f"policy/{name}"], expected, rtol=0, atol=0
+                )
+
     def test_integer_sort_ties_and_mismatch_diagnostics(self):
         """Cover real CUDA ONNX sorting and integer failure reporting in one test.
 
