@@ -142,6 +142,7 @@ class ExportManager:
         self._max_cached_io = max_cached_io - 1
 
     def reset_nodes(self):
+        self.close_string_regions()
         self.nodes = {}
         self.release_buffer_trackers()
         self._next_completed_node_index = 0
@@ -289,6 +290,14 @@ class ExportManager:
     #########################################################
     def input_tensors(self, node_name: str, tensors):
         """Input layout is not preserved; inputs are treated as logically dense."""
+        if isinstance(tensors, dict) and any(
+            isinstance(value, str) for value in tensors.values()
+        ):
+            if not ExportManager._interpret_graph:
+                return self._passthrough_dict_values(tensors)
+            return self._passthrough_dict_values(
+                self._string_node(node_name).open(tensors)
+            )
         if TracingLock().is_active:
             _get_logger().fatal(
                 "Cannot call input_tensors() while a _method()-traced function "
@@ -306,6 +315,12 @@ class ExportManager:
         # create the node if it doesn't exist
         if node_name in self.nodes:
             traced_tensors_node = self.nodes[node_name]
+            from .backends.string.node import StringNode
+
+            if isinstance(traced_tensors_node, StringNode):
+                raise ValueError(
+                    f"Node name {node_name!r} belongs to a String annotation"
+                )
         else:
             traced_tensors_node = self._setup_new_node(node_name, TracedTensorNode)
 
@@ -391,6 +406,27 @@ class ExportManager:
                 "Call annotate.input_tensors() before annotate.output_tensors() for the same node name.",
                 error_type=Exception,
             )
+
+        from .backends.string.node import StringNode
+
+        if isinstance(traced_tensors_node, StringNode):
+            if static_outputs is not None or kwargs.keys() - {
+                "export_with",
+                "backend_params",
+            }:
+                traced_tensors_node.close()
+                raise ValueError(
+                    "String outputs accept only export_with and backend_params"
+                )
+            published = traced_tensors_node.finish(
+                tensors,
+                metadata,
+                kwargs.get("export_with"),
+                kwargs.get("backend_params"),
+                dry_run=self.is_dry_run(node_name),
+            )
+            self._assign_completion_index(traced_tensors_node)
+            return self._passthrough_dict_values(published)
 
         # force the warp segment to close if any.
         if self.patcher.warp is not None:
@@ -594,6 +630,50 @@ class ExportManager:
             )
             _get_logger().fatal(msg, error_type=Exception)
 
+    def _string_node(self, node_name):
+        from .backends.string import StringCaptureError
+        from .backends.string.node import StringNode
+
+        node = self.nodes.get(node_name)
+        if node is None:
+            node = self._setup_new_node(node_name, StringNode)
+        elif not isinstance(node, StringNode):
+            raise StringCaptureError(
+                f"Node {node_name!r} belongs to another annotation"
+            )
+        return node
+
+    def close_string_regions(self):
+        """Restore string patches left open by an interrupted region."""
+        for node in getattr(self, "nodes", {}).values():
+            if getattr(node, "region_open", False):
+                node.close()
+
+    def _string_method(self, name, func, bound, params):
+        """Capture a call with string arguments as one region of a StringNode."""
+        from .backends.string import StringCaptureError
+
+        if set(params) - {"node_name", "export_with", "backend_params"}:
+            raise StringCaptureError("Unsupported String method options")
+        bound.apply_defaults()
+        payload = {k: v for k, v in bound.arguments.items() if k not in ("self", "cls")}
+        node = self._string_node(name)
+        bound.arguments.update(node.open(payload))
+        try:
+            result = func(*bound.args, **bound.kwargs)
+        except BaseException:
+            node.close()
+            raise
+        outputs = (
+            dict(result.items()) if hasattr(result, "items") else {"result": result}
+        )
+        return self.output_tensors(
+            name,
+            outputs,
+            export_with=params.get("export_with"),
+            backend_params=params.get("backend_params"),
+        )
+
     def state_tensors(
         self, node_name: str, tensors: dict[str, torch.Tensor]
     ) -> TracedTensor | tuple[TracedTensor, ...]:
@@ -764,15 +844,21 @@ class ExportManager:
                         **{key: value(v) for key, v in kwargs.items()},
                     )
 
+                sig = inspect.signature(func)
+                bound_args = sig.bind(*args, **kwargs)
+                if any(
+                    isinstance(value, str)
+                    for key, value in bound_args.arguments.items()
+                    if key not in ("self", "cls")
+                ):
+                    return self._string_method(name, func, bound_args, params)
+                bound_args.apply_defaults()
+
                 # ~~~~~~~~~~~~~~~~~~~ ensure node exists ~~~~~~~~~~~~~~~~~~~~~~~~ #
                 if name not in self.nodes:
                     self._setup_new_node(name, TracedTensorNode)
 
                 # ~~~~~~~~~~~~~~~~~~~ set up inputs ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
-
-                sig = inspect.signature(func)
-                bound_args = sig.bind(*args, **kwargs)
-                bound_args.apply_defaults()
 
                 argument_ports = {}
 
@@ -1029,12 +1115,17 @@ class ExportManager:
         return models
 
     def compile_models(self):
+        from .backends.string.node import StringNode
+
         _get_logger().section(f"Discovered {len(self.nodes)} nodes")
 
         validate_variable_declarations(self.nodes.values())
         for node_context in sorted(self.nodes.values(), key=lambda n: n.node_index):
             _get_logger().section(f"Compiling {node_context.name}")
-            prepare_shape_contracts(node_context)
+            # Native tokenizer sizes depend on text data, so their declared
+            # output contracts are checked by StringNode rather than torch.export.
+            if not isinstance(node_context, StringNode):
+                prepare_shape_contracts(node_context)
             node_context.compile_model()
             _get_logger().info("Success\n")
         validate_feedback_shape_contracts(self.nodes.values())

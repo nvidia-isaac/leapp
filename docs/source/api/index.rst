@@ -97,11 +97,20 @@ replacement:
        ],
    )
 
-During the tracing session, calls containing active traced data use the
+During tracing, calls containing active traced data (including strings) use the
 replacement. Calls containing only ordinary values, or traced values from a
 finished node, use the original function. Positional arguments, keyword
 arguments, and nested lists, tuples, and dictionaries are searched. User
 patches require ``global_patching=True``.
+
+For module functions, ``string_lowering=callback`` exports calls on captured
+strings. ``replacement`` computes the capture-time value; ``callback`` receives
+the captured strings as ``leapp.Utf8Text`` and returns a ``Utf8Text`` built from
+tensor operations. A ``torch.nn.Module`` callback can hold buffers.
+
+``Utf8Text`` holds ``uint8[batch, capacity]`` bytes and ``int64[batch]`` byte
+lengths. ``codepoints()`` returns character codes and a mask of valid
+positions; ``filter(keep)`` keeps the selected characters.
 
 The replacement receives traced arguments directly and must build its result
 from operations LEAPP already traces. It must accept a compatible signature
@@ -148,6 +157,19 @@ Notes
   ``annotate.input_tensors()`` begins tracing.
 * All traced nodes and outputs are saved under
   ``{save_path}/{name}/``.
+
+.. _api-regex-sub-patch:
+
+``leapp.regex_sub_patch()``
+---------------------------
+
+``leapp.regex_sub_patch({pattern: callback, ...})`` returns one
+``FunctionPatch`` for ``re.sub`` calls with those constant patterns. LEAPP has no
+regex engine: ``callback(text, *, replacement, count, flags)`` implements the
+call with tensor operations on ``Utf8Text`` and is exported. Compiled patterns
+and callable replacements are unsupported. A call with an unregistered pattern
+rejects export only when an output depends on it. See :doc:`../guides/patching`
+for an example.
 
 ``leapp.stop()``
 ----------------
@@ -426,10 +448,10 @@ Parameters
 ~~~~~~~~~~
 
 * ``node_name`` (str, required): Unique node identifier.
-* ``tensors`` (required): Either a dict of named raw tensors or a
-  ``TensorSemantics`` / list of ``TensorSemantics``. Bare tensors and
-  other unnamed top-level collections are not supported. See
-  :doc:`/semantics/usage`.
+* ``tensors`` (required): Either a dict of named raw tensors (which may include
+  strings, see :ref:`string-capture`) or a ``TensorSemantics`` / list of
+  ``TensorSemantics``. Bare tensors and other unnamed top-level collections are
+  not supported. See :doc:`/semantics/usage`.
 
 Returns
 ~~~~~~~

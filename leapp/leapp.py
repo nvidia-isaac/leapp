@@ -124,6 +124,7 @@ def stop():
         )
 
     ExportManager.set_interpret_graph(False)
+    manager.close_string_regions()
     manager.release_buffer_trackers()
 
     # Remove patches to restore original function behavior.
@@ -161,12 +162,17 @@ def compile_graph(
     if verbose is not None:
         _get_logger().set_verbose(verbose)
 
+    has_string = any(
+        hasattr(node, "utf8_layout") for node in manager.get_nodes().values()
+    )
     manager.validate_nodes_ready_for_compile()
 
     if not manager.is_dry_run():
         manager.compile_models()
 
     graph = LeappGraph(manager.get_nodes(), manager.get_graph_name())
+    if has_string and graph.feedback_connections:
+        raise ValueError("String hybrid feedback is not supported")
     pipeline = graph.get_full_pipeline_description()
 
     if graph_configs is not None:
@@ -204,7 +210,11 @@ def compile_graph(
     _get_logger().info(f"- Total edges: {total_edges}")
 
     system_info = get_system_info()
-    if any(hasattr(n, "shape_program") for n in manager.get_nodes().values()):
+    # String nodes declare data-dependent token widths without a shape program.
+    if any(
+        hasattr(n, "shape_program") or hasattr(n, "utf8_layout")
+        for n in manager.get_nodes().values()
+    ):
         specs = [
             get_shape_contract(d)
             for n in manager.get_nodes().values()

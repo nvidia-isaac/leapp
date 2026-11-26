@@ -124,6 +124,7 @@ class TestUserFunctionPatching(unittest.TestCase):
             [valid, FunctionPatch(module, "", _replacement)],
             [valid, FunctionPatch(module, "missing", _replacement)],
             [valid, FunctionPatch(module, "target", None)],
+            [valid, FunctionPatch(module, "target", _replacement, string_lowering=42)],
             [valid, valid],
         ]
 

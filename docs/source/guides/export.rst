@@ -49,6 +49,67 @@ LEAPP supports these public backend names:
      - No compilation
 
 
+.. _string-capture:
+
+Experimental string capture
+===========================
+
+When an ``input_tensors`` dictionary contains Python strings, the node captures
+string preprocessing, Hugging Face fast tokenization, and tensor computation.
+Export with ``"onnx"`` (the default) or ``"pt2"``. Capture needs
+``tokenizers>=0.22,<0.23`` and ``transformers>=4.57,<5``.
+
+.. code-block:: python
+
+   leapp.start("text_bundle")
+   text = leapp.annotate.input_tensors("tokenizer", {"text": " HELLO "})
+   encoded = tokenizer(text.strip().lower(), padding=True, return_tensors="pt")
+   leapp.annotate.output_tensors(
+       "tokenizer", {"input_ids": encoded["input_ids"]},
+       backend_params={"utf8_capacity": 64},
+   )
+   leapp.stop()
+   leapp.compile_graph()
+
+* Supported string operations: ``lower``, ``upper``, ``strip``, ``lstrip``,
+  ``rstrip``, literal ``replace``, ``join`` of a fixed list, and ``+``, with
+  constant arguments. ``re.sub`` needs a :ref:`regex implementation
+  <api-regex-sub-patch>`.
+* Tokenizers are found on first use. They must be fast tokenizers without Python
+  overrides of encoding, called with constant options and ``return_tensors``
+  ``"pt"`` or ``"np"``. Text pairs, offsets, and overflow outputs are unsupported.
+* Unsupported operations are dropped when no output uses them. Outputs that
+  depend on them, or on Python control flow over captured strings, reject export.
+* ``utf8_capacity`` (default 4096) limits each input's UTF-8 length in bytes.
+* Only the first call is traced. Later calls run normally and are checked by
+  validation, so the exported model keeps the first call's code path and
+  tokenizer configuration.
+* Capture patches ``str`` methods process-wide; call ``stop()`` after an error.
+  Feedback is unsupported.
+
+Tokenizer models need a native runtime for validation and replay. Build it with
+Rust 1.88+ and a C++20 compiler, or set ``LEAPP_TEXT_RUNTIME_LIBRARY`` (ONNX) and
+``LEAPP_TEXT_PT2_RUNTIME_LIBRARY`` (PT2) to prebuilt libraries. ONNX needs ONNX
+Runtime 1.23+.
+
+.. code-block:: bash
+
+   python -m leapp.text_runtime --build
+
+String models run on CPU; connect a separate tensor node to use the GPU. See
+:ref:`runtime-string-inputs` for replay.
+
+.. _string-tensor-dimensions:
+
+Token dimensions
+----------------
+
+Declare variable token widths with ``TensorSemantics`` on tokenizer outputs, for
+example ``axes=[None, leapp.Axis(variable=leapp.Variable("tokens", min=2,
+max=512))]``. Connected nodes inherit them, and replay rejects lengths outside
+the range.
+
+
 TorchScript export
 ==================
 

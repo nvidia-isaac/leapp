@@ -52,12 +52,16 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
         self.assertEqual(annotate.nodes[funcC.__name__].inputs[0].name, "inputB")
 
     def test_annotate_method_with_kwargs_and_default_value(self):
-        """tests the situation where the function has and default values"""
+        """Tensor defaults are buffers; omitted string/integer defaults stay constants."""
 
         @annotate.method(export_with="jit")
         def funcA(
             inputA: torch.Tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32),
+            mode="identity",
+            axis=0,
         ):
+            if mode == "sum":
+                return inputA.sum(dim=axis)
             return inputA
 
         leapp.start(name=self.TEST_GRAPH_NAME)
@@ -78,12 +82,16 @@ class TestAnnotateMethod(LEAPPFunctionalTestBase):
         self.assertEqual(len(model_info["outputs"]), 1)
 
     def test_annotate_method_ignoring_default_values(self):
-        """tests the situation where we pass in a value overriding the default"""
+        """A supplied tensor stays a tensor input when scalar defaults are omitted."""
 
         @annotate.method(export_with="jit")
         def funcA(
             inputA: torch.Tensor = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32),
+            mode="identity",
+            axis=0,
         ):
+            if mode == "sum":
+                return inputA.sum(dim=axis)
             return inputA
 
         leapp.start(name=self.TEST_GRAPH_NAME)

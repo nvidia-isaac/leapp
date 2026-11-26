@@ -4,6 +4,7 @@
 #
 
 import os
+import json
 from typing import Tuple
 
 import torch
@@ -41,6 +42,17 @@ class ExportedProgramExportBackend(ExportBackend):
                 cause=exc,
             )
 
+    @staticmethod
+    def _load_text_runtime(exported_program):
+        from .string.tokenizer import load_runtime, register_operator
+
+        operation = register_operator()
+        if any(
+            node.op == "call_function" and node.target == operation
+            for node in exported_program.graph.nodes
+        ):
+            load_runtime()
+
     def get_backend_metadata(self):
         return {"torch_version": str(torch.__version__)}
 
@@ -59,12 +71,23 @@ class ExportedProgramExportBackend(ExportBackend):
         export_kwargs = {}
         if "strict" in self.backend_params:
             export_kwargs["strict"] = self.backend_params["strict"]
+        if hasattr(self.node_context, "utf8_layout"):
+            from leapp.utils.shape_contracts import build_torch_dynamic_shapes
+
+            export_kwargs.setdefault("strict", False)
+            export_kwargs["dynamic_shapes"] = build_torch_dynamic_shapes(
+                self.node_context
+            )
 
         self.exported_program = getattr(self.node_context, "shape_program", None)
         if self.exported_program is None:
             self.exported_program = torch.export.export(m, export_args, **export_kwargs)
         self._load_warp_runtime(self.exported_program)
+        self._load_text_runtime(self.exported_program)
         self.compiled_model = self.exported_program.module()
+        self.compiled_model.text_definition = getattr(
+            self.node_context, "text_definition", None
+        )
         self.compiled_module = m
         return self.exported_program
 
@@ -76,7 +99,9 @@ class ExportedProgramExportBackend(ExportBackend):
             )
 
         path = os.path.join(save_path, f"{self.node_context.name}.pt2")
-        torch.export.save(self.exported_program, path)
+        definition = self.compiled_model.text_definition
+        extra_files = {"leapp.string": json.dumps(definition)} if definition else None
+        torch.export.save(self.exported_program, path, extra_files=extra_files)
         md5sum, sha256sum = self._verify_model_location_and_get_hash(path)
         return path, md5sum, sha256sum
 
@@ -89,9 +114,21 @@ class ExportedProgramExportBackend(ExportBackend):
                 error_type=ValueError,
             )
 
-        self.exported_program = torch.export.load(model_path)
+        from .string.tokenizer import register_operator
+
+        register_operator()
+        extra_files = {"leapp.string": ""}
+        self.exported_program = torch.export.load(model_path, extra_files=extra_files)
+        definition = json.loads(extra_files["leapp.string"] or "null")
+        if definition is not None:
+            from .string import FORMAT
+
+            if definition.get("format") != FORMAT:
+                raise ValueError("Unsupported native tokenizer PT2 description")
         self._load_warp_runtime(self.exported_program)
-        device = self._select_runtime_device()
+        self._load_text_runtime(self.exported_program)
+        device = "cpu" if definition is not None else self._select_runtime_device()
         self.compiled_model = self.exported_program.module().to(device)
+        self.compiled_model.text_definition = definition
         self.runtime_device = device
         self.compiled_module = None

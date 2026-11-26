@@ -103,6 +103,21 @@ feedback inputs from ``pipeline.initial_values``:
 intermediate operations inside a compiled TorchScript, ONNX, ``pt2``, or
 ExecuTorch model.
 
+.. _runtime-string-inputs:
+
+String Inputs
+=============
+
+Pass Python strings for the string inputs of a :ref:`string model
+<string-capture>`; the manager packs them into their ``uint8`` ports, and inputs
+longer than ``utf8_capacity`` are rejected. Outputs are tensors.
+``set_input_value`` also accepts strings, while ``get_mock_input()`` and
+``reset()`` use empty strings.
+
+.. code-block:: python
+
+   outputs = manager.run_policy({"tokenizer/text": "hello world"})
+
 Feedback State
 ==============
 

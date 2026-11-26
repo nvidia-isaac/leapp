@@ -37,6 +37,22 @@ class NodeManager:
         self.model = backend.compiled_model
 
         self.device = backend.runtime_device
+        # String models list the packed UTF-8 ports that accept Python strings.
+        definition = getattr(self.model, "text_definition", None)
+        self.text_inputs = (
+            None if definition is None else set(definition["text_inputs"])
+        )
+
+    def prepare_input(self, name, value):
+        """Pack a Python string for a text port; other values pass through."""
+        if not isinstance(value, str):
+            return value
+        if name not in (self.text_inputs or ()):
+            raise ValueError(f"{self.name}/{name} does not accept strings")
+        from leapp.backends.string.utf8 import pack
+
+        desc = next(d for d in self.input_descriptions if d["name"] == name)
+        return torch.from_numpy(pack(value, get_capture_shape(desc)[1] - 8))
 
     @property
     def input_names(self):
@@ -147,6 +163,8 @@ class InferenceManager:
         self.models = None
         self.pipeline = None
         self.system_info = None
+        self._closed = False
+        self.nodes = {}
 
         # runtime variables
 
@@ -165,12 +183,13 @@ class InferenceManager:
         self.model_path = model_path
 
         self._load_description()
-
-        self.nodes = self._create_nodes()
-
-        self._validate_and_create_inference_graph()
-
-        self._prepopulate_feedback_inputs()
+        try:
+            self.nodes = self._create_nodes()
+            self._validate_and_create_inference_graph()
+            self._prepopulate_feedback_inputs()
+        except BaseException:
+            self.close()
+            raise
 
     def _load_description(self):
         with open(self.model_path, "r") as f:
@@ -221,7 +240,7 @@ class InferenceManager:
             )
 
     def _create_nodes(self):
-        nodes = {}
+        nodes = self.nodes
         for name, description in self.models.items():
             # load the model
             parameters = description["parameters"]
@@ -466,8 +485,9 @@ class InferenceManager:
                     error_type=ValueError,
                 )
 
-    def run_policy(self, inputs: dict[str, torch.Tensor]):
-        shape_bindings = {}
+    def run_policy(self, inputs: dict[str, object]):
+        if self._closed:
+            raise RuntimeError("InferenceManager is closed")
         dynamic = self.system_info.get("shape contract version") in (1, 2)
         provided = {}
         for key, input_value in inputs.items():
@@ -479,7 +499,9 @@ class InferenceManager:
                     error_type=ValueError,
                     cause=e,
                 )
-            provided[node_name, input_name] = input_value
+            provided[node_name, input_name] = self.nodes[node_name].prepare_input(
+                input_name, input_value
+            )
         if dynamic:
             # A rejected call must not change the stored inputs, so the provided
             # tensors are checked together with the stored ones they join.
@@ -496,6 +518,7 @@ class InferenceManager:
         for (node_name, input_name), input_value in provided.items():
             self.value_dict[node_name][input_name] = input_value
 
+        shape_bindings = {}
         for node_name, node in self.nodes.items():
             # Run inference via node's __call__
             # Use node.input_names to ensure inputs are passed in the correct order
@@ -531,6 +554,17 @@ class InferenceManager:
                         )
 
         return dict(self.value_dict["==out=="])
+
+    def close(self):
+        """Release owned model resources. Idempotent."""
+        if self._closed:
+            return
+        from leapp.backends.export_backend import SimplifiedONNXProgram
+
+        for node in self.nodes.values():
+            if isinstance(node.model, SimplifiedONNXProgram):
+                node.model.close()
+        self._closed = True
 
     @property
     def inputs(self) -> list:
@@ -578,6 +612,7 @@ class InferenceManager:
         )
 
     def set_input_value(self, node_name: str, input_name: str, value: torch.Tensor):
+        value = self.nodes[node_name].prepare_input(input_name, value)
         if self.system_info.get("shape contract version") in (1, 2):
             desc = next(
                 (
@@ -614,6 +649,11 @@ class InferenceManager:
 
             for input_name in input_names:
                 desc = input_descs[input_name]
+                if input_name in (node.text_inputs or ()):
+                    mock_inputs[f"{node_name}/{input_name}"] = node.prepare_input(
+                        input_name, ""
+                    )
+                    continue
                 shape = get_capture_shape(desc)
                 dtype = map_to_torch_dtype(desc["dtype"])
                 device = node.device
@@ -635,6 +675,7 @@ class InferenceManager:
         This method does not reset the internal state of the nodes, only the input and output buffers.
         It uses default initial values for feedback inputs.
         """
+        # A zeroed packed UTF-8 buffer is an empty string.
         with torch.no_grad():
             for buffer_group in self.value_dict.values():
                 for tensor in buffer_group.values():
@@ -642,5 +683,5 @@ class InferenceManager:
 
         self._prepopulate_feedback_inputs()
 
-    def __call__(self, inputs: dict[str, torch.Tensor]):
+    def __call__(self, inputs: dict[str, object]):
         return self.run_policy(inputs)

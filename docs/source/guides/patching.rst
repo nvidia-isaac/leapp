@@ -110,3 +110,22 @@ Patch scope and requirements
   threads. Stop tracing before starting a session with a different patch list.
 
 See :doc:`../api/index` for the full ``leapp.start(patching=...)`` contract.
+
+
+Provide a regex implementation
+==============================
+
+``re.sub`` on captured strings needs a tensor implementation for each pattern:
+
+.. code-block:: python
+
+   def remove_digits(text: leapp.Utf8Text, *, replacement, count, flags):
+       if replacement or count != 0:
+           raise ValueError("only unlimited deletion is supported")
+       codes, valid = text.codepoints()
+       return text.filter(valid & ((codes < ord("0")) | (codes > ord("9"))))
+
+   patch = leapp.regex_sub_patch({r"[0-9]+": remove_digits})
+   leapp.start("pipeline", patching=[patch])
+
+See ``examples/string_function_patch.py`` for export and replay.

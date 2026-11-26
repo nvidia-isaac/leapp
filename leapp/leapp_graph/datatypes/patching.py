@@ -36,9 +36,10 @@ class FunctionPatch:
     module: ModuleType
     function_name: str
     replacement: Callable[..., Any]
+    string_lowering: Callable[..., Any] | None = None
 
 
-def _create_user_patch(original, replacement):
+def _create_user_patch(original, replacement, *, string_lowering=None, target=None):
     @functools.wraps(original)
     def patched(*args, **kwargs):
         active = False
@@ -50,10 +51,33 @@ def _create_user_patch(original, replacement):
             return item
 
         TracedData._map_structure((args, kwargs), find_active)
+        from leapp.backends.string.capture import ACTIVE, capture_call, observes
+
+        node = ACTIVE.get()
+        if node is not None and observes(node, (args, kwargs)):
+            if string_lowering is not None:
+                from leapp.backends.string.utf8 import StringLowering
+                from leapp.backends.string.capture import BUSY
+
+                token = BUSY.set(True)
+                try:
+                    return capture_call(
+                        node,
+                        target,
+                        replacement,
+                        args,
+                        kwargs,
+                        factory=(StringLowering, (string_lowering,)),
+                    )
+                finally:
+                    BUSY.reset(token)
         if active:
             return replacement(*args, **kwargs)
         return original(*args, **kwargs)
 
+    # Automatic string interception must allow user replacements to see the
+    # traced arguments, before converting them to ordinary Python values.
+    patched._leapp_function_patch = True
     return patched
 
 
@@ -87,6 +111,9 @@ def _validate_user_patches(
             )
         if not callable(definition.replacement):
             raise TypeError("FunctionPatch.replacement must be callable")
+        if definition.string_lowering is not None:
+            if not callable(definition.string_lowering):
+                raise TypeError("FunctionPatch.string_lowering must be callable")
 
         key = (id(definition.module), definition.function_name)
         if key in targets:
@@ -165,6 +192,8 @@ class TracingPatcher:
                 patched = _create_user_patch(
                     original,
                     definition.replacement,
+                    string_lowering=definition.string_lowering,
+                    target=f"{definition.module.__name__}.{definition.function_name}",
                 )
                 self._user_patches.install(
                     definition.module,

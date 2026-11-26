@@ -4,6 +4,7 @@
 #
 
 import torch
+import json
 from typing import Tuple
 from leapp.backends.export_backend import (
     ExportBackend,
@@ -70,6 +71,10 @@ class ONNXExportBackend(ExportBackend):
         overlaps = sorted(set(input_names) & set(output_names))
         if not overlaps:
             return
+        if hasattr(self.node_context, "utf8_layout"):
+            raise ValueError(
+                f"{self.node_context.name}: String tensor input/output names must be distinct: {overlaps}"
+            )
 
         _get_logger().info(
             f"[{self.node_context.name}] Renaming overlapping ONNX input/output names: {overlaps}"
@@ -591,7 +596,21 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
         self.opset_version = self.backend_params.get(
             "opset_version", _constants.ONNX_DEFAULT_OPSET
         )
+        text_node = hasattr(self.node_context, "utf8_layout")
+        translations = {}
         program = getattr(self.node_context, "shape_program", None)
+        if text_node:
+            from leapp.utils.shape_contracts import build_torch_dynamic_shapes
+            from .string.tokenizer import onnx_translation, register_operator
+
+            self.opset_version = 20
+            program = torch.export.export(
+                m,
+                input_values,
+                strict=False,
+                dynamic_shapes=build_torch_dynamic_shapes(self.node_context),
+            )
+            translations[register_operator()] = onnx_translation
         if program is not None and all(
             n.op in {"placeholder", "output"} for n in program.graph.nodes
         ):
@@ -612,6 +631,7 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
             output_names=[
                 tensor_desc.name for tensor_desc in self.node_context.outputs
             ],
+            custom_translation_table=translations,
             verify=self.backend_params.get("verify", False),
             optimize=self.backend_params.get("optimize", True),
             verbose=_get_logger().is_verbose(),
@@ -630,6 +650,11 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
         self._fix_gathernd_int32_indices(model_proto)
         self._fix_integer_sort_ties(model_proto)
         self._embed_warp_bundles(model_proto)
+
+        if text_node:
+            properties = {item.key: item.value for item in model_proto.metadata_props}
+            properties["leapp.string"] = json.dumps(self.node_context.text_definition)
+            onnx.helper.set_model_props(model_proto, properties)
 
         # Wrap in SimplifiedONNXProgram so validation uses controlled
         # ORT session options (ORT_ENABLE_BASIC avoids graph-opt corruption).

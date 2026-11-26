@@ -143,6 +143,13 @@ exclude = ["tests*"]
     "runtime/torch/*.cc",
 ]
 
+"leapp.leapp_graph.custom_operator_registry" = [
+    "tokenizer_operator/Cargo.toml",
+    "tokenizer_operator/Cargo.lock",
+    "tokenizer_operator/src/*.rs",
+    "tokenizer_operator/*.cc",
+]
+
 [tool.setuptools.exclude-package-data]
 "leapp.leapp_graph.custom_operator_registry.warp_operator" = [
     "runtime/build/*",

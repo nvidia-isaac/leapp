@@ -64,6 +64,25 @@ class _LeappFXGraph(fx.Graph):
         return super().create_node(*args, **kwargs)
 
 
+def required_nodes(graph, output_nodes, *, preserve_mutations=False):
+    """Find live FX dependencies, retaining mutations until functionalization."""
+    pending = list(output_nodes)
+    if preserve_mutations:
+        pending.extend(
+            node
+            for node in graph.nodes
+            if node.meta.get("leapp_mutation", False)
+            or (node.op.startswith("call_") and node.is_impure())
+        )
+    used_nodes = set()
+    while pending:
+        node = pending.pop()
+        if node not in used_nodes:
+            used_nodes.add(node)
+            pending.extend(node.all_input_nodes)
+    return used_nodes
+
+
 class TracedTensorNode(LeappNode):
     def __init__(self, name, *args, **kwargs):
         if args or kwargs:
@@ -780,22 +799,9 @@ class TracedTensorNode(LeappNode):
         self, output_nodes: list[fx.Node], *, preserve_mutations: bool = False
     ) -> None:
         """Prune unused computation, validate capture, and update the node inputs."""
-        pending = list(output_nodes)
-        if preserve_mutations:
-            for node in self.graph.nodes:
-                if node.meta.get("leapp_mutation", False) or (
-                    node.op.startswith("call_") and node.is_impure()
-                ):
-                    pending.append(node)
-
-        # Walk dependencies without consuming one Python frame per graph level.
-        used_nodes = set()
-        while pending:
-            node = pending.pop()
-            if node in used_nodes:
-                continue
-            used_nodes.add(node)
-            pending.extend(node.all_input_nodes)
+        used_nodes = required_nodes(
+            self.graph, output_nodes, preserve_mutations=preserve_mutations
+        )
 
         # Capture can fail in work unrelated to the declared outputs. Only a
         # failure that survives the output dependency traversal blocks export.

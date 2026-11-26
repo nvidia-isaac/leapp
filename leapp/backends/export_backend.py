@@ -16,6 +16,7 @@
 #
 import abc
 import hashlib
+import json
 import os
 import shutil
 from typing import Callable, Tuple, Any
@@ -70,17 +71,42 @@ class SimplifiedONNXProgram:
         self._input_names = None
         self._output_metas = None
         self._active_provider = None
+        self._text_definition = None
+        self._metadata_loaded = False
+        self._model_proto = None
+        self._closed = False
+
+    @property
+    def text_definition(self):
+        if not self._metadata_loaded:
+            from .string import FORMAT
+
+            path = os.path.join(self._source_dir, self._source_filename)
+            self._model_proto = onnx.load(path, load_external_data=False)
+            properties = {
+                item.key: item.value for item in self._model_proto.metadata_props
+            }
+            definition = json.loads(properties.get("leapp.string", "null"))
+            if definition is not None and definition.get("format") != FORMAT:
+                raise ValueError("Unsupported native tokenizer ONNX description")
+            self._text_definition = definition
+            self._metadata_loaded = True
+        return self._text_definition
+
+    @property
+    def session(self):
+        self._ensure_session()
+        return self._session
 
     @staticmethod
     def _load_warp_runtime(
         session_options: ort.SessionOptions,
-        model_path: str,
+        model: onnx.ModelProto,
     ) -> None:
         from leapp.leapp_graph.custom_operator_registry.warp_operator import (
             onnx_model_contains_warp_runner,
         )
 
-        model = onnx.load(model_path, load_external_data=False)
         if not onnx_model_contains_warp_runner(model):
             return
 
@@ -213,17 +239,28 @@ class SimplifiedONNXProgram:
         self._session.run_with_iobinding(binding)
         return tuple(outputs)
 
+    def close(self):
+        """Release the session and remove owned temporary model files."""
+        self._session = None
+        self._model_proto = None
+        self._closed = True
+        if self._temp_dir is not None:
+            shutil.rmtree(self._temp_dir, ignore_errors=True)
+            self._temp_dir = None
+
     def __del__(self):
-        """Clean up temp directory if we own it."""
-        if getattr(self, "_temp_dir", None) is not None:
-            try:
-                if os.path.exists(self._temp_dir):
-                    shutil.rmtree(self._temp_dir)
-            except Exception:
-                pass  # Silently ignore cleanup errors
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def _get_providers(self):
         """Get execution providers, always preferring CUDA when available."""
+        if self._text_definition is not None:
+            # ONNX Runtime 1.23's CUDA provider rejects initializers shared with
+            # the CPU-only tokenizer and integer kernels, and cannot reduce
+            # empty token dimensions. String models therefore run on CPU.
+            return ["CPUExecutionProvider"]
         available_providers = ort.get_available_providers()
 
         if "CUDAExecutionProvider" in available_providers:
@@ -314,12 +351,24 @@ class SimplifiedONNXProgram:
                         shutil.copy2(src_file, dst_file)
 
     def _ensure_session(self):
-        """Create the inference session if not already created."""
-        if self._session is None:
+        """Create the shared ONNX session and register any native operators."""
+        if self._closed:
+            raise RuntimeError("ONNX program is closed")
+        if self._session is not None:
+            return
+        try:
+            self.text_definition  # Loads the model proto inspected below.
             model_path = os.path.join(self._source_dir, self._source_filename)
             providers = self._get_providers()
             sess_options = ort.SessionOptions()
-            self._load_warp_runtime(sess_options, model_path)
+            self._load_warp_runtime(sess_options, self._model_proto)
+            if any(
+                node.domain == "com.leapp.text" and node.op_type == "HfTokenizerUtf8"
+                for node in self._model_proto.graph.node
+            ):
+                from leapp.text_runtime import resolve_library
+
+                sess_options.register_custom_ops_library(str(resolve_library("onnx")))
             # ORT_ENABLE_ALL can silently corrupt results for certain graph
             # patterns (e.g. Gemm chains produced by FX make_fx decomposition).
             # ORT_ENABLE_BASIC is safe and still applies constant folding.
@@ -336,6 +385,10 @@ class SimplifiedONNXProgram:
                 if self._session.get_providers()
                 else "CPUExecutionProvider"
             )
+            self._model_proto = None
+        except BaseException:
+            self.close()
+            raise
 
     def __call__(self, *args):
         """Run inference on the ONNX model.
@@ -494,7 +547,11 @@ class ExportBackend(abc.ABC):
         self.compiled_model = model
         has_ort_cuda = "CUDAExecutionProvider" in ort.get_available_providers()
         self.runtime_device = (
-            "cuda" if (torch.cuda.is_available() and has_ort_cuda) else "cpu"
+            "cuda"
+            if model.text_definition is None
+            and torch.cuda.is_available()
+            and has_ort_cuda
+            else "cpu"
         )
         self.compiled_module = (
             None  # ONNX models cannot be represented as a module for reexport.

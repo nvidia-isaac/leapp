@@ -200,16 +200,19 @@ class TracedData(ABC):
         return found
 
     @staticmethod
-    def _map_structure(obj, leaf_fn):
+    def _map_structure(obj, leaf_fn, *, map_keys=False):
         """Recursively apply leaf_fn while preserving common containers."""
         if isinstance(obj, slice):
             return slice(
-                TracedData._map_structure(obj.start, leaf_fn),
-                TracedData._map_structure(obj.stop, leaf_fn),
-                TracedData._map_structure(obj.step, leaf_fn),
+                TracedData._map_structure(obj.start, leaf_fn, map_keys=map_keys),
+                TracedData._map_structure(obj.stop, leaf_fn, map_keys=map_keys),
+                TracedData._map_structure(obj.step, leaf_fn, map_keys=map_keys),
             )
         if isinstance(obj, (list, tuple)):
-            mapped = tuple(TracedData._map_structure(item, leaf_fn) for item in obj)
+            mapped = tuple(
+                TracedData._map_structure(item, leaf_fn, map_keys=map_keys)
+                for item in obj
+            )
             if hasattr(obj, "_fields"):
                 # namedtuples take their fields positionally. Plain sequences and
                 # torch's structseq return types instead take a single sequence.
@@ -217,13 +220,17 @@ class TracedData(ABC):
             return type(obj)(mapped)
         if isinstance(obj, dict):
             return {
-                key: TracedData._map_structure(value, leaf_fn)
+                (
+                    TracedData._map_structure(key, leaf_fn, map_keys=True)
+                    if map_keys
+                    else key
+                ): TracedData._map_structure(value, leaf_fn, map_keys=map_keys)
                 for key, value in obj.items()
             }
         return leaf_fn(obj)
 
     @staticmethod
-    def unwrap_traced_data(obj):
+    def unwrap_traced_data(obj, *, map_keys=False):
         """Recursively unwrap TracedData to get raw values.
 
         Args:
@@ -235,6 +242,7 @@ class TracedData(ABC):
         return TracedData._map_structure(
             obj,
             lambda item: item.data if isinstance(item, TracedData) else item,
+            map_keys=map_keys,
         )
 
     @staticmethod
@@ -260,7 +268,7 @@ class TracedData(ABC):
         return contexts
 
     @staticmethod
-    def extract_proxy(obj):
+    def extract_proxy(obj, *, map_keys=False):
         """Recursively extract proxies from TracedData objects.
 
         Args:
@@ -272,6 +280,7 @@ class TracedData(ABC):
         return TracedData._map_structure(
             obj,
             lambda item: item.proxy if isinstance(item, TracedData) else item,
+            map_keys=map_keys,
         )
 
     # =========================================================================

@@ -1,0 +1,14 @@
+[package]
+name = "leapp-text-runtime"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "alternative-backend", "api-23"] }
+ort-sys = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "disable-linking", "api-23"] }
+tokenizers = { version = "=0.22.2", default-features = false, features = ["onig"] }

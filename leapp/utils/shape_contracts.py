@@ -120,13 +120,25 @@ def has_variable_axis_declaration(desc):
 
 def has_variable_inputs(node, seen=None):
     """Whether an input of the node, or of any producer, declares a variable axis."""
+    # Value-dependent native operators also require symbolic size queries.
+    if getattr(node, "_has_data_dependent_shapes", False):
+        return True
     seen = set() if seen is None else seen
     if id(node) in seen:
         return False
     seen.add(id(node))
     return any(
         has_variable_axis_declaration(d)
-        or (d.has_source and has_variable_inputs(d.source_node, seen))
+        or (
+            d.has_source
+            and (
+                any(
+                    p.port == d.port and has_variable_axis_declaration(p)
+                    for p in d.source_node.outputs
+                )
+                or has_variable_inputs(d.source_node, seen)
+            )
+        )
         for d in node.inputs
     )
 

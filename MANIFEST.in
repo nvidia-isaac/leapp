@@ -5,3 +5,6 @@ recursive-include leapp *.py
 recursive-include leapp/leapp_graph/custom_operator_registry/warp_operator/runtime CMakeLists.txt README.md *.cc *.h
 prune leapp/leapp_graph/custom_operator_registry/warp_operator/runtime/build
 recursive-include packages/leapp-visualization/src/leapp_visualization *.py
+
+recursive-include leapp/leapp_graph/custom_operator_registry/tokenizer_operator Cargo.toml Cargo.lock *.rs *.cc
+prune leapp/leapp_graph/custom_operator_registry/tokenizer_operator/target

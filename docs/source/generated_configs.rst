@@ -35,6 +35,10 @@ The PNG is only present when visualization is enabled and supported. The
 ``*_initial_values.safetensors`` file is only present when the graph has
 feedback state.
 
+String models use ordinary ``onnx`` or ``pt2`` entries. A string input keeps its
+name and is a ``uint8[1, capacity + 8]`` port: an eight-byte little-endian byte
+length followed by the UTF-8 bytes. See :ref:`string-capture`.
+
 YAML structure
 ==============
 

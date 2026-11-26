@@ -72,6 +72,7 @@ class LeappNode:
             cls.compile_trace = wrapped_compile_trace
 
     UNSET_NODE_INDEX = -1
+    _validation_exact_discrete = False
 
     def __init__(self, name):
         self.name = name
@@ -548,6 +549,16 @@ class LeappNode:
 
             if exported.device != source.device:
                 exported = exported.to(source.device)
+
+            if self._validation_exact_discrete and not (
+                source.is_floating_point() or source.is_complex()
+            ):
+                if not torch.equal(exported, source):
+                    mismatches.add("integer")
+                    _get_logger().error(
+                        f"{self.name}/{output_name} {label}: discrete output mismatch"
+                    )
+                continue
 
             exported_nan = torch.isnan(exported).sum().item()
             exported_inf = torch.isinf(exported).sum().item()

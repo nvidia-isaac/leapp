@@ -15,6 +15,9 @@ _MISSING = object()
 class AttributePatchRegistry:
     """Track installed attribute wrappers and restore them safely."""
 
+    # Subclasses can replace attributes that setattr cannot assign.
+    _set = staticmethod(setattr)
+
     def __init__(self) -> None:
         self._patches: list[tuple[Any, str, Any, Any]] = []
 
@@ -36,11 +39,11 @@ class AttributePatchRegistry:
     ) -> None:
         self._patches.append((owner, attr_name, original, wrapper))
         try:
-            setattr(owner, attr_name, wrapper)
+            self._set(owner, attr_name, wrapper)
         except Exception:
             current = inspect.getattr_static(owner, attr_name, _MISSING)
             if current is wrapper:
-                setattr(owner, attr_name, original)
+                self._set(owner, attr_name, original)
             self._patches.pop()
             raise
 
@@ -57,7 +60,7 @@ class AttributePatchRegistry:
                 except Exception:
                     current = getattr(owner, attr_name)
                 if current is wrapper:
-                    setattr(owner, attr_name, original)
+                    self._set(owner, attr_name, original)
             except Exception:
                 if not suppress_errors:
                     raise

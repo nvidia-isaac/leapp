@@ -4,6 +4,7 @@
 """Description validation rejects invalid inputs before loading model artifacts."""
 
 import pytest
+import torch
 import yaml
 
 from leapp import InferenceManager
@@ -65,3 +66,25 @@ def test_description_requires_model_parameters(tmp_path, description, missing_ke
         match="Model description must contain model_path, md5sum, sha256sum, and backend",
     ):
         InferenceManager(str(path))
+
+
+@pytest.mark.parametrize(
+    "source, actual, expected",
+    [
+        pytest.param([100000], [100001], False, id="token-id-exact"),
+        pytest.param([100000], [100000], True, id="token-id-equal"),
+        pytest.param([True], [False], False, id="boolean-exact"),
+        pytest.param([1.0], [1.0001], True, id="float-tolerance"),
+    ],
+)
+def test_shared_validation_preserves_text_output_comparisons(source, actual, expected):
+    """Text nodes compare token IDs exactly; float outputs keep the tolerance."""
+    from leapp.leapp_graph.leapp_node import LeappNode
+
+    node = LeappNode("text")
+    node._validation_exact_discrete = True
+    node.export_backend.compiled_model = lambda: torch.tensor(actual)
+    mismatches = node._sample_mismatches(
+        "sample", (), (torch.tensor(source),), rtol=1e-3, atol=1e-5
+    )
+    assert (not mismatches) is expected
