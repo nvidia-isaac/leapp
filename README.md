@@ -68,3 +68,17 @@ LEAPP captures the executed tensor path. Data-dependent Python branches are not 
 ## License
 
 Copyright (c) 2026, NVIDIA Corporation & affiliates. Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) and [thirdparty.txt](thirdparty.txt).
+
+Runtime distributions include copies of the Apache-2.0 license so each package
+contains the full license text:
+
+- The Rust runtime under `packages/leapp-rt/` includes
+  [LICENSE](packages/leapp-rt/LICENSE) in its crates.io source package.
+- The Python binding under `packages/leapp-rt/bindings/python/` includes
+  [LICENSE-LEAPP](packages/leapp-rt/bindings/python/LICENSE-LEAPP) in its source
+  distribution and wheels.
+
+These package copies reproduce the root license. Runtime third-party licenses
+and attributions are collected in
+[THIRD-PARTY-NOTICES.txt](packages/leapp-rt/bindings/python/THIRD-PARTY-NOTICES.txt).
+Vendored code retains its original license terms and notices.

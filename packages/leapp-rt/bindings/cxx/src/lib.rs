@@ -1,0 +1,47 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+//! Private cxx transport for the public C++ facade.
+//!
+//! Public headers expose standard C++ types and Status returns; generated cxx
+//! headers are build artifacts and must not be installed. The Rust core owns
+//! parsing, validation, execution, feedback, and tensor storage. Keep this layer
+//! to descriptor/status translation and retained C++ inspection values, with
+//! session locking and closure shared through bindings/common.
+//! The separate native-backend SDK does not depend on this consumer facade.
+#![deny(unsafe_op_in_unsafe_fn)]
+
+mod bridge;
+mod bundle;
+mod dtype;
+mod session;
+
+use bridge::ffi;
+use lrt::ErrorCode;
+
+fn success() -> ffi::StatusData {
+    ffi::StatusData {
+        code: 0,
+        phase: String::new(),
+        message: String::new(),
+    }
+}
+
+fn error(code: ErrorCode, phase: &str, message: impl ToString) -> ffi::StatusData {
+    ffi::StatusData {
+        code: code as i32,
+        phase: phase.into(),
+        message: message.to_string(),
+    }
+}
+
+fn invalid(message: &str) -> ffi::StatusData {
+    error(ErrorCode::InvalidArgument, "binding", message)
+}
+
+fn binding_status(result: Result<(), leapp_rt_bindings::Error>) -> ffi::StatusData {
+    match result {
+        Ok(()) => success(),
+        Err(e) => error(e.code(), e.phase(), &e),
+    }
+}

@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+@PACKAGE_INIT@
+include("${CMAKE_CURRENT_LIST_DIR}/leapp_native_backendTargets.cmake")
+check_required_components(leapp_native_backend)

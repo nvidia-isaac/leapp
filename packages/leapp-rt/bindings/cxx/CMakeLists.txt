@@ -1,0 +1,113 @@
+cmake_minimum_required(VERSION 3.22)
+project(leapp-rt VERSION 0.1.0 LANGUAGES CXX)
+
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  message(FATAL_ERROR "LEAPP runtime currently supports Linux")
+endif()
+if(CMAKE_CROSSCOMPILING)
+  message(FATAL_ERROR "Build LEAPP runtime natively on the deployment architecture")
+endif()
+
+set(LEAPP_TEST_DEFAULT ${PROJECT_IS_TOP_LEVEL})
+if(DEFINED BUILD_TESTING AND NOT BUILD_TESTING)
+  set(LEAPP_TEST_DEFAULT OFF)
+endif()
+option(LEAPP_BUILD_TESTING "Build LEAPP runtime tests" ${LEAPP_TEST_DEFAULT})
+
+find_package(Threads REQUIRED)
+find_program(CARGO_EXECUTABLE cargo REQUIRED)
+set(LEAPP_NATIVE_INCLUDE_DIR
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/engines/native/backends/include")
+set(RUST_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/cargo/$<CONFIG>")
+set(RUST_PROFILE "$<IF:$<CONFIG:Debug>,debug,release>")
+set(RUST_LIBRARY "${RUST_TARGET_DIR}/${RUST_PROFILE}/libleapp_rt_cxx.a")
+
+# Cargo tracks Rust sources and dependencies; this also refreshes generated headers.
+add_custom_target(leapp_rt_rust
+  COMMAND "${CMAKE_COMMAND}" -E env --unset=MAKEFLAGS --unset=MFLAGS
+          --unset=CARGO_BUILD_TARGET
+          "${CARGO_EXECUTABLE}" build --locked
+          --profile "$<IF:$<CONFIG:Debug>,dev,release>"
+          --manifest-path "${CMAKE_CURRENT_SOURCE_DIR}/Cargo.toml"
+          --target-dir "${RUST_TARGET_DIR}"
+  BYPRODUCTS "${RUST_LIBRARY}"
+    "${RUST_TARGET_DIR}/cxxbridge/leapp-rt-cxx/src/bridge.rs.h"
+  VERBATIM)
+add_library(leapp_rt SHARED src/runtime.cc)
+add_library(lrt::runtime ALIAS leapp_rt)
+add_dependencies(leapp_rt leapp_rt_rust)
+set(LEAPP_SOVERSION ${PROJECT_VERSION_MAJOR})
+if(PROJECT_VERSION_MAJOR EQUAL 0)
+  set(LEAPP_SOVERSION "0.${PROJECT_VERSION_MINOR}")
+endif()
+set_target_properties(leapp_rt PROPERTIES EXPORT_NAME runtime
+  VERSION ${PROJECT_VERSION} SOVERSION ${LEAPP_SOVERSION})
+target_compile_features(leapp_rt PUBLIC cxx_std_20)
+target_include_directories(leapp_rt
+  PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+         "$<BUILD_INTERFACE:${LEAPP_NATIVE_INCLUDE_DIR}>"
+         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../src/dlpack/include>"
+         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
+  PRIVATE "${RUST_TARGET_DIR}/cxxbridge")
+target_link_libraries(leapp_rt PRIVATE "${RUST_LIBRARY}"
+  Threads::Threads ${CMAKE_DL_LIBS} m rt util)
+target_link_options(leapp_rt PRIVATE "-Wl,--exclude-libs,ALL" "-Wl,--no-undefined")
+target_compile_options(leapp_rt PRIVATE -Wall -Wextra -Wpedantic -Werror -fno-exceptions)
+
+install(TARGETS leapp_rt EXPORT leapp_rtTargets
+  LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
+install(DIRECTORY include/leapp DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+install(FILES "${LEAPP_NATIVE_INCLUDE_DIR}/leapp/data_type.h"
+              "${LEAPP_NATIVE_INCLUDE_DIR}/leapp/status.h"
+  DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/leapp")
+install(DIRECTORY ../../src/dlpack/include/dlpack DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+install(FILES ../../LICENSE DESTINATION "${CMAKE_INSTALL_DATADIR}/licenses/leapp-rt")
+install(EXPORT leapp_rtTargets NAMESPACE lrt::
+  DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/leapp-rt")
+
+configure_package_config_file(cmake/leapp-rtConfig.cmake.in
+  "${CMAKE_CURRENT_BINARY_DIR}/leapp-rtConfig.cmake"
+  INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/leapp-rt")
+if(PROJECT_VERSION_MAJOR EQUAL 0)
+  set(LEAPP_VERSION_COMPATIBILITY SameMinorVersion)
+else()
+  set(LEAPP_VERSION_COMPATIBILITY SameMajorVersion)
+endif()
+write_basic_package_version_file(
+  "${CMAKE_CURRENT_BINARY_DIR}/leapp-rtConfigVersion.cmake"
+  VERSION ${PROJECT_VERSION} COMPATIBILITY ${LEAPP_VERSION_COMPATIBILITY})
+
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/leapp-rtConfig.cmake"
+              "${CMAKE_CURRENT_BINARY_DIR}/leapp-rtConfigVersion.cmake"
+  DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/leapp-rt")
+
+if(LEAPP_BUILD_TESTING)
+  enable_testing()
+  option(LEAPP_TEST_CUDA "Run integration tests on CUDA device 0" OFF)
+  include("${CMAKE_CURRENT_SOURCE_DIR}/../../src/engines/cxx.cmake")
+  add_executable(leapp_bundle_test tests/bundle_test.cc)
+  target_link_libraries(leapp_bundle_test PRIVATE lrt::runtime Threads::Threads)
+  target_compile_options(leapp_bundle_test PRIVATE
+    -Wall -Wextra -Wpedantic -Werror -fno-exceptions)
+  add_test(NAME leapp_bundle COMMAND leapp_bundle_test
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../tests/fixtures/pipeline.yaml")
+  add_executable(leapp_cxx_test tests/runtime_test.cc)
+  target_link_libraries(leapp_cxx_test PRIVATE lrt::runtime Threads::Threads)
+  target_compile_options(leapp_cxx_test PRIVATE -Wall -Wextra -Wpedantic -Werror -fno-exceptions)
+  if(LEAPP_TEST_CUDA)
+    if(CUDA_ROOT)
+      set(CUDAToolkit_ROOT "${CUDA_ROOT}")
+    endif()
+    find_package(CUDAToolkit REQUIRED)
+    target_compile_definitions(leapp_cxx_test PRIVATE LEAPP_TEST_CUDA)
+    target_link_libraries(leapp_cxx_test PRIVATE CUDA::cudart)
+  endif()
+  set(LEAPP_FIXTURES "${CMAKE_CURRENT_SOURCE_DIR}/../../target/triton-fixtures"
+      CACHE PATH "Generated ONNX fixture directory")
+  add_test(NAME leapp_cxx COMMAND leapp_cxx_test
+    "${LEAPP_FIXTURES}" "${LEAPP_TEST_CUDA}")
+  set_tests_properties(leapp_cxx PROPERTIES ENVIRONMENT "${LEAPP_ENGINE_TEST_ENV}")
+endif()

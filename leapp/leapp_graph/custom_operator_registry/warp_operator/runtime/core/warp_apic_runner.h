@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 #pragma once
 
 #include "runtime_metadata.h"
@@ -9,6 +12,8 @@
 #include <memory>
 #include <mutex>
 #include <string>
+
+#include <cuda_runtime_api.h>
 
 #include "apic.h"
 
@@ -29,6 +34,7 @@ class WarpApicRunner {
 
  private:
     void EnsureCudaInitialized();
+    void ValidateTensor(const TensorView& tensor) const;
     void ValidateInput(const TensorView& tensor, const InputSpec& spec) const;
     void ValidateOutput(const TensorView& tensor, const OutputSpec& spec) const;
 
@@ -38,6 +44,7 @@ class WarpApicRunner {
     std::mutex run_mutex_;
     void* cuda_context_ = nullptr;
     APICGraph* graph_ = nullptr;
+    cudaEvent_t completed_ = nullptr;
 };
 
 }  // namespace leapp::warp_runtime

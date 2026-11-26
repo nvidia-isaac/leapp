@@ -1,0 +1,147 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+//! Triton conversion, native execution, storage, and model repository ownership.
+mod convert;
+mod memory;
+mod native;
+
+use crate::dlpack::{BorrowedTensor, SharedTensor};
+use crate::OutputPlacement;
+use native::error::{Error, ErrorKind, Result};
+use std::path::PathBuf;
+
+/// Installation settings specific to Triton.
+#[derive(Debug, Clone)]
+struct Options {
+    backend_directory: PathBuf,
+}
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            backend_directory: std::env::var_os("LEAPP_TRITON_BACKENDS")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    std::env::var_os("TRITON_ROOT")
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|| "/opt/tritonserver".into())
+                        .join("backends")
+                }),
+        }
+    }
+}
+
+struct TritonEngine {
+    // Shutdown must precede removal of the generated repository.
+    native: native::Server,
+    _repository: convert::repository::ModelRepository,
+    model: String,
+    inputs: std::collections::HashMap<String, String>,
+}
+
+pub(super) fn open(
+    bundle: &crate::Bundle,
+    graph: &crate::session::graph::Graph<'_>,
+    options: &crate::SessionOptions,
+) -> std::result::Result<std::sync::Arc<dyn crate::engines::Engine>, crate::RuntimeError> {
+    native::load()?;
+    options.output_placement.validate()?;
+    let installation = Options::default();
+    let mut pipeline = convert::convert(bundle, options.device, graph)
+        .map_err(|e| crate::RuntimeError::new("convert", e))?;
+    convert::configure_tensorrt(&mut pipeline, bundle, &options.onnx_tensorrt);
+    convert::configure_plugins(&mut pipeline, &installation.backend_directory)
+        .map_err(|e| crate::RuntimeError::new("load", e))?;
+    let repository = convert::repository::ModelRepository::create(&pipeline)?;
+    let engine = TritonEngine::load(&pipeline, repository, &installation).map_err(|error| {
+        // Triton reports generated model names. Include their bundle names and
+        // configured libraries without probing or loading unrelated backends.
+        let nodes = bundle
+            .model_names()
+            .into_iter()
+            .zip(&pipeline.models)
+            .map(|(node, model)| {
+                let backend = &model.config.backend;
+                let library = installation
+                    .backend_directory
+                    .join(backend)
+                    .join(format!("libtriton_{backend}.so"));
+                format!(
+                    "node {node} ({}): backend {backend}, library {}",
+                    model.config.name,
+                    library.display()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        crate::RuntimeError::classified(
+            error.code(),
+            error.phase(),
+            anyhow::Error::new(error).context(format!(
+                "load Triton models [{nodes}]; check the required backends and their runtime dependencies"
+            )),
+        )
+    })?;
+    Ok(std::sync::Arc::new(engine))
+}
+
+impl TritonEngine {
+    fn load(
+        pipeline: &convert::TritonPipeline,
+        repository: convert::repository::ModelRepository,
+        options: &Options,
+    ) -> std::result::Result<Self, crate::RuntimeError> {
+        let inputs = pipeline
+            .inputs
+            .iter()
+            .map(|p| (p.port.name(), p.tensor_name.clone()))
+            .collect();
+        let native = native::Server::open(repository.path(), &options.backend_directory)?;
+        Ok(Self {
+            native,
+            _repository: repository,
+            model: pipeline.ensemble.name.clone(),
+            inputs,
+        })
+    }
+}
+
+impl crate::engines::Engine for TritonEngine {
+    fn new_session(
+        self: std::sync::Arc<Self>,
+    ) -> std::result::Result<std::sync::Arc<dyn crate::engines::Engine>, crate::RuntimeError> {
+        Ok(self)
+    }
+
+    fn run(
+        &self,
+        inputs: &[(&str, BorrowedTensor<'_>)],
+        placement: &OutputPlacement,
+        outputs: &mut std::collections::HashMap<&str, crate::dlpack::OutputBuffer<'_>>,
+    ) -> std::result::Result<indexmap::IndexMap<String, SharedTensor>, crate::RuntimeError> {
+        let inputs = inputs
+            .iter()
+            .map(|(name, value)| {
+                self.inputs
+                    .get(*name)
+                    .map(|native| (native.as_str(), *value))
+                    .ok_or_else(|| {
+                        crate::RuntimeError::new(
+                            "execute",
+                            crate::error::Internal(format!("unbound input {name}")).into(),
+                        )
+                    })
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        // Ensemble output names already use logical LEAPP names, including private terminals.
+        Ok(self
+            .native
+            .infer(&self.model, &inputs, placement, outputs)?
+            .into_iter()
+            .collect())
+    }
+}
+
+#[cfg(test)]
+#[path = "../../tests/functional_tests/triton.rs"]
+pub(crate) mod tests;

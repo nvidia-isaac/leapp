@@ -6,7 +6,6 @@
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -22,35 +21,6 @@ _BUILD_SCRIPT_SPEC = spec_from_loader(_BUILD_SCRIPT_LOADER.name, _BUILD_SCRIPT_L
 assert _BUILD_SCRIPT_SPEC is not None
 _BUILD_SCRIPT = module_from_spec(_BUILD_SCRIPT_SPEC)
 _BUILD_SCRIPT_LOADER.exec_module(_BUILD_SCRIPT)
-
-
-def _create_build_resources(tmp_path, windows=False):
-    warp_dir = tmp_path / "warp"
-    (warp_dir / "bin").mkdir(parents=True)
-    (warp_dir / "native").mkdir()
-    (warp_dir / "bin" / ("warp.dll" if windows else "warp.so")).touch()
-    (warp_dir / "native" / "apic.h").touch()
-
-    ort_dir = tmp_path / "onnxruntime"
-    (ort_dir / "capi").mkdir(parents=True)
-    ort_library = "onnxruntime.dll" if windows else "libonnxruntime.so.1.2.3"
-    (ort_dir / "capi" / ort_library).touch()
-
-    torch_dir = tmp_path / "torch"
-    (torch_dir / "share" / "cmake" / "Torch").mkdir(parents=True)
-    (torch_dir / "share" / "cmake" / "Torch" / "TorchConfig.cmake").touch()
-
-    modules = {
-        "warp": SimpleNamespace(__file__=str(warp_dir / "__init__.py")),
-        "onnxruntime": SimpleNamespace(
-            __file__=str(ort_dir / "__init__.py"),
-            __version__="1.2.3",
-        ),
-        "torch": SimpleNamespace(
-            utils=SimpleNamespace(cmake_prefix_path=str(torch_dir / "share" / "cmake"))
-        ),
-    }
-    return modules
 
 
 def test_cache_directory_respects_xdg_cache_home(tmp_path, monkeypatch):
@@ -106,83 +76,19 @@ def test_missing_environment_override_does_not_fall_back(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("missing_resource", "message"),
+    "cmake_args",
     [
-        ("warp/bin/warp.so", "native library was not found"),
-        (
-            "onnxruntime/capi/libonnxruntime.so.1.2.3",
-            "shared library was not found",
-        ),
-        (
-            "torch/share/cmake/Torch/TorchConfig.cmake",
-            "CMake resources were not found",
-        ),
+        [],
+        [
+            "-DWARP_ROOT=/sdk/warp with spaces",
+            "-DTorch_DIR=/sdk/torch/share/cmake/Torch",
+            "-DCUDAToolkit_ROOT=/sdk/cuda",
+            "-DORT_INCLUDE_DIR=/sdk/onnxruntime/include",
+            "-DCMAKE_BUILD_TYPE=Debug",
+        ],
     ],
 )
-def test_build_preflight_reports_missing_native_resources(
-    tmp_path, monkeypatch, missing_resource, message
-):
-    modules = _create_build_resources(tmp_path)
-    (tmp_path / missing_resource).unlink()
-    monkeypatch.setattr(
-        _BUILD_SCRIPT.importlib,
-        "import_module",
-        lambda name: modules[name],
-    )
-    monkeypatch.setattr(
-        _BUILD_SCRIPT.shutil,
-        "which",
-        lambda name: f"/usr/bin/{name}",
-    )
-    monkeypatch.setattr(
-        _BUILD_SCRIPT,
-        "_find_nvcc",
-        lambda: Path("/usr/local/cuda/bin/nvcc"),
-    )
-
-    with pytest.raises(RuntimeError, match=message):
-        _BUILD_SCRIPT._validate_build_resources()
-
-
-def test_missing_warp_dependency_recommends_cuda_extra(monkeypatch):
-    def missing_module(name):
-        raise ImportError(name)
-
-    monkeypatch.setattr(_BUILD_SCRIPT.importlib, "import_module", missing_module)
-    monkeypatch.setattr(
-        _BUILD_SCRIPT.shutil,
-        "which",
-        lambda name: "/usr/bin/cmake" if name == "cmake" else None,
-    )
-
-    with pytest.raises(RuntimeError, match="never installs dependencies") as exc_info:
-        _BUILD_SCRIPT._validate_build_resources()
-
-    message = str(exc_info.value)
-    assert "leapp[warp-cu12]" in message
-    assert "leapp[warp-cu13]" in message
-
-
-def test_windows_preflight_reports_missing_warp_import_library(tmp_path, monkeypatch):
-    modules = _create_build_resources(tmp_path, windows=True)
-    monkeypatch.setattr(_BUILD_SCRIPT.sys, "platform", "win32")
-    monkeypatch.delenv("LEAPP_WARP_IMPORT_LIBRARY", raising=False)
-    monkeypatch.setattr(
-        _BUILD_SCRIPT.importlib,
-        "import_module",
-        lambda name: modules[name],
-    )
-    monkeypatch.setattr(
-        _BUILD_SCRIPT.shutil,
-        "which",
-        lambda name: f"C:/{name}.exe",
-    )
-
-    with pytest.raises(RuntimeError, match="LEAPP_WARP_IMPORT_LIBRARY"):
-        _BUILD_SCRIPT._validate_build_resources()
-
-
-def test_build_configures_both_adapters(tmp_path, monkeypatch):
+def test_build_configures_both_adapters(tmp_path, monkeypatch, cmake_args):
     source_dir = tmp_path / "source"
     source_dir.mkdir()
     (source_dir / "CMakeLists.txt").touch()
@@ -200,18 +106,30 @@ def test_build_configures_both_adapters(tmp_path, monkeypatch):
 
     monkeypatch.setattr(_BUILD_SCRIPT, "_runtime_source_dir", lambda: source_dir)
     monkeypatch.setattr(
-        _BUILD_SCRIPT,
-        "_validate_build_resources",
-        lambda: (Path("/usr/local/cuda/bin/nvcc"), None),
+        _BUILD_SCRIPT.shutil,
+        "which",
+        lambda name: "/usr/bin/cmake",
     )
     monkeypatch.setattr(_BUILD_SCRIPT.subprocess, "run", run)
 
-    artifacts = _BUILD_SCRIPT.build_warp_runtime(build_dir)
+    monkeypatch.setattr(
+        _BUILD_SCRIPT.sys,
+        "argv",
+        ["leapp-build-warp-runtime", "--build-dir", str(build_dir), "--", *cmake_args],
+    )
 
-    assert len(commands) == 2
+    assert _BUILD_SCRIPT.main() == 0
+
+    assert len(commands) == 3
     assert "-DLEAPP_WARP_BUILD_ONNX=ON" in commands[0]
     assert "-DLEAPP_WARP_BUILD_TORCH=ON" in commands[0]
-    assert set(artifacts) == {"onnx", "pt2"}
+    if cmake_args:
+        assert commands[0][-len(cmake_args) - 2 : -2] == cmake_args
+    assert "--" not in commands[0]
+    assert all(
+        path.is_file()
+        for path in warp_runtime.warp_runtime_artifact_paths(build_dir).values()
+    )
     assert not stale_file.exists()
 
 

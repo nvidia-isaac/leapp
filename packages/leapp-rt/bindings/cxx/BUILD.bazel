@@ -1,0 +1,106 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@bazel_skylib//rules:run_binary.bzl", "run_binary")
+load("@leapp_crates//:defs.bzl", "all_crate_deps")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_import", "cc_library", "cc_test")
+load("@rules_rust//rust:defs.bzl", "rust_static_library")
+
+package(default_visibility = ["//:__pkg__"])
+
+run_binary(
+    name = "generate_bridge",
+    srcs = ["src/bridge.rs"],
+    outs = [
+        "generated/bridge.cc",
+        "generated/leapp-rt-cxx/src/bridge.rs.h",
+    ],
+    args = [
+        "$(location src/bridge.rs)",
+        "-o",
+        "$(location generated/leapp-rt-cxx/src/bridge.rs.h)",
+        "-o",
+        "$(location generated/bridge.cc)",
+    ],
+    tool = "@cxx.rs//:codegen",
+)
+
+cc_library(
+    name = "bridge",
+    srcs = ["generated/bridge.cc"],
+    hdrs = ["generated/leapp-rt-cxx/src/bridge.rs.h"],
+    copts = ["-std=c++20"],
+    strip_include_prefix = "generated",
+)
+
+rust_static_library(
+    name = "rust",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "leapp_rt_cxx",
+    edition = "2021",
+    deps = [
+        "//:lrt",
+        "//bindings/common",
+    ] + all_crate_deps(normal = True),
+)
+
+cc_library(
+    name = "headers",
+    hdrs = glob(["include/leapp/*.h"]),
+    strip_include_prefix = "include",
+    deps = ["//:runtime_types"],
+)
+
+cc_binary(
+    name = "libleapp_rt.so",
+    srcs = ["src/runtime.cc"],
+    copts = [
+        "-std=c++20",
+        "-fno-exceptions",
+        "-Wall",
+        "-Wextra",
+        "-Wpedantic",
+        "-Werror",
+    ],
+    linkopts = [
+        "-Wl,--exclude-libs,ALL",
+        "-Wl,--no-undefined",
+        "-Wl,-soname,libleapp_rt.so",
+    ],
+    linkshared = True,
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        ":bridge",
+        ":headers",
+        ":rust",
+    ],
+)
+
+cc_import(
+    name = "runtime",
+    shared_library = ":libleapp_rt.so",
+    deps = [":headers"],
+)
+
+cc_test(
+    name = "bundle_test",
+    srcs = ["tests/bundle_test.cc"],
+    args = ["$(rootpath //:tests/fixtures/pipeline.yaml)"],
+    copts = [
+        "-std=c++20",
+        "-fno-exceptions",
+    ],
+    data = ["//:tests/fixtures/pipeline.yaml"],
+    deps = [":runtime"],
+)
+
+cc_binary(
+    name = "inference_test",
+    srcs = ["tests/runtime_test.cc"],
+    copts = [
+        "-std=c++20",
+        "-fno-exceptions",
+    ],
+    tags = ["manual"],
+    deps = [":runtime"],
+)

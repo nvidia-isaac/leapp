@@ -347,7 +347,7 @@ The main LEAPP validation path is still:
 
 That validation compares exported model outputs against the captured
 traced outputs. See :doc:`debugging` for validation details and
-:doc:`/leapp_runtime` for Python runtime usage.
+:doc:`/leapp_runtime` for runtime deployment.
 
 Bringing your own model
 =======================
@@ -400,5 +400,5 @@ Important behavior:
   checksums in the YAML.
 * The model path written into the YAML is made relative to the YAML
   directory when possible.
-* ``InferenceManager`` currently runs referenced ``.pt``, ``.pt2``, and
-  ``.onnx`` artifacts.
+* Runtime support depends on the artifact format and installed model libraries;
+  see :doc:`/runtime/installation`.

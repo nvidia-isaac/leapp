@@ -1,0 +1,5 @@
+BasedOnStyle: Google
+Standard: c++20
+CommentPragmas: '^ (IWYU pragma:|SPDX-)'
+InsertBraces: true
+SeparateDefinitionBlocks: Always

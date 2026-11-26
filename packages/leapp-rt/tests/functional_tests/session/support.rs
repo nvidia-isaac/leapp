@@ -1,0 +1,59 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+#![allow(dead_code)]
+
+use lrt::{dlpack::*, MemoryLocation};
+
+pub fn engine() -> lrt::EngineKind {
+    match std::env::var("LEAPP_TEST_ENGINE").as_deref() {
+        Ok("triton") => lrt::EngineKind::Triton,
+        Ok("native") => lrt::EngineKind::Native,
+        Err(std::env::VarError::NotPresent) => lrt::EngineKind::Triton,
+        value => panic!("invalid LEAPP_TEST_ENGINE: {value:?}"),
+    }
+}
+
+pub fn execution_location(device: lrt::ExecutionDevice) -> MemoryLocation {
+    match device {
+        lrt::ExecutionDevice::Cpu => MemoryLocation::Cpu,
+        lrt::ExecutionDevice::Cuda { device_id } => MemoryLocation::Cuda { device_id },
+    }
+}
+
+pub fn placed<T: CpuElement>(
+    values: &[T],
+    shape: &[i64],
+    location: MemoryLocation,
+) -> crate::engines::error::Result<SharedTensor> {
+    crate::engines::memory::dlpack::copy(
+        BorrowedTensor::cpu(values, shape).unwrap(),
+        Some(location),
+    )
+}
+
+// These fixtures retain their storage and never hand pointers to foreign writers.
+// Metadata inspection must not expose outputs that later checks copy or reuse.
+pub trait TestTensor {
+    fn view(&self) -> BorrowedTensor<'_>;
+    fn shape(&self) -> &[i64];
+    fn location(&self) -> MemoryLocation;
+}
+
+impl TestTensor for SharedTensor {
+    fn view(&self) -> BorrowedTensor<'_> {
+        // SAFETY: fixture storage remains ready and immutable throughout inference.
+        unsafe { self.borrow() }
+    }
+
+    fn shape(&self) -> &[i64] {
+        let view = self.view();
+        let tensor = view.descriptor();
+        // SAFETY: inference outputs own valid shape metadata until self is dropped.
+        unsafe { std::slice::from_raw_parts(tensor.shape, tensor.ndim as usize) }
+    }
+
+    fn location(&self) -> MemoryLocation {
+        crate::engines::memory::dlpack::location(self.view().descriptor().device).unwrap()
+    }
+}

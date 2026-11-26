@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 from leapp.leapp_graph.datatypes import TracedData, as_traced
 from leapp.leapp_graph.datatypes.warp import WarpSegment
 from leapp.leapp_graph.datatypes.warp import TracedWpArray, wp

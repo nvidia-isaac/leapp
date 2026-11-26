@@ -1,0 +1,20 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+#[path = "session/execution.rs"]
+mod execution;
+
+#[path = "session/backends.rs"]
+mod backends;
+
+#[path = "session/support.rs"]
+pub(crate) mod support;
+
+#[path = "session/tensorrt.rs"]
+mod tensorrt;
+
+#[path = "session/torchscript.rs"]
+mod torchscript;
+
+#[path = "session/warp.rs"]
+mod warp;
