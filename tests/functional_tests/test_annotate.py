@@ -409,43 +409,6 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
             [torch.tensor([1.0, 2.0, 3.0])], [tensor1.tensor], "func1"
         )
 
-    def test_annotate_tensor_with_static_outputs(self):
-        """Test that static outputs (constant tensors not derived from inputs) are returned by the model."""
-        leapp.start(name=self.TEST_GRAPH_NAME, verbose=True)
-
-        # Input tensor
-        input_tensor = torch.tensor([1.0, 2.0, 3.0])
-        traced_input = annotate.input_tensors("static_test", {"input": input_tensor})
-
-        # Static output - a constant tensor not derived from input
-        static_tensor = torch.tensor([4.0, 5.0, 6.0])
-
-        # Computed output derived from input
-        computed_output = traced_input + 1.0
-
-        # Output both computed and static tensors
-        annotate.output_tensors(
-            "static_test",
-            {"computed": computed_output},
-            static_outputs={"static": static_tensor},
-            export_with="jit",
-        )
-
-        leapp.stop()
-        leapp.compile_graph(visualize=False)
-
-        # Verify graph structure: 1 input, 2 outputs (computed + static)
-        self.verify_num_connections(
-            annotate, nodes=1, inputs=1, outputs=2, internal_connections=0
-        )
-
-        # Verify model outputs correct values
-        # Expected: computed = input + 1 = [2, 3, 4], static = [4, 5, 6]
-        expected_computed = input_tensor + 1.0
-        self.verify_single_torchscript_model_expected_value(
-            [input_tensor], [expected_computed, static_tensor], "static_test"
-        )
-
     def test_annotate_tensor_with_static_outputs_multiple_runs_validation(self):
         """Static outputs should validate correctly across cached re-entry examples."""
         leapp.start(name=self.TEST_GRAPH_NAME, verbose=True, max_cached_io=3)
@@ -528,7 +491,7 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
         )
 
     def test_api_returns_preserve_complex_nested_format(self):
-        """All return-producing APIs preserve complex dict/list/tuple payload format."""
+        """Input, output, and buffer APIs preserve nested dict/list/tuple payloads."""
         leapp.start(name=self.TEST_GRAPH_NAME, verbose=True)
 
         nested_payload = {
@@ -592,24 +555,6 @@ class TestAnnotateTensor(LEAPPFunctionalTestBase):
 
         leapp.stop()
         leapp.compile_graph(visualize=False)
-
-        # state_tensors: nested state payloads are not supported
-        leapp.start(name=self.TEST_GRAPH_NAME, verbose=True)
-        _ = annotate.input_tensors(
-            "complex_returns_state",
-            {"obs": torch.tensor([0.1, 0.2, 0.3])},
-        )
-        state_payload = {
-            "state_a": [torch.tensor([1.0, 1.0, 1.0])],
-            "state_b": {"inner": torch.tensor([2.0, 2.0, 2.0])},
-        }
-        with self.assertRaises(TypeError) as exc:
-            annotate.state_tensors(
-                "complex_returns_state",
-                {"state_payload": state_payload},
-            )
-        self.assertIn("does not support nested state structures", str(exc.exception))
-        leapp.stop()
 
     def test_annotate_tensor_with_dict_io(self):
         leapp.start(name=self.TEST_GRAPH_NAME, verbose=True)

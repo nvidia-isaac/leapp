@@ -78,6 +78,10 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
         leapp.stop()
         leapp.compile_graph(visualize=False)
 
+        self.verify_num_connections(
+            annotate, nodes=1, inputs=2, outputs=1, internal_connections=0
+        )
+
         config = self._load_yaml()
         inputs, outputs = self._get_node_io_from_yaml(config, "policy")
 
@@ -576,33 +580,6 @@ class TestConfigGeneration(LEAPPFunctionalTestBase):
                 ],
             )
         leapp.stop()
-
-    # =========================================================================
-    # Graph structure verification
-    # =========================================================================
-
-    def test_td_inputs_graph_structure(self):
-        """Test that TensorSemantics inputs produce correct graph structure (node count, connections)."""
-        pos = torch.randn(1, 4)
-        vel = torch.randn(1, 4)
-
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        traced_pos, traced_vel = annotate.input_tensors(
-            "struct_node",
-            [
-                TensorSemantics(name="pos", ref=pos, kind=InputKindEnum.JOINT_POSITION),
-                TensorSemantics(name="vel", ref=vel, kind=InputKindEnum.JOINT_VELOCITY),
-            ],
-        )
-
-        output = traced_pos + traced_vel
-        annotate.output_tensors("struct_node", {"command": output})
-        leapp.stop()
-        leapp.compile_graph(visualize=False)
-
-        self.verify_num_connections(
-            annotate, nodes=1, inputs=2, outputs=1, internal_connections=0
-        )
 
     # =========================================================================
     # Reentry with TensorSemantics
