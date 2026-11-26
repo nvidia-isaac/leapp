@@ -576,6 +576,13 @@ class NoneExportBackend(ExportBackend):
             self._load_onnx(model_path, sha256sum)
         elif model_type == "jit":
             self._load_torchscript(model_path, sha256sum)
+        elif model_type == "trt":
+            from leapp.backends.tensorrt_backend import TensorRTBackend
+
+            backend = TensorRTBackend(self.node_context, self.backend_params)
+            backend.load(model_path, sha256sum)
+            self.compiled_model = backend.compiled_model
+            self.runtime_device = backend.runtime_device
         else:
             _get_logger().fatal(
                 f"Unsupported model type: {model_type}", error_type=ValueError
@@ -597,7 +604,7 @@ class NoneExportBackend(ExportBackend):
             return "cpp"
         elif suffix == "py":
             return "py"
-        elif suffix == "engine" or suffix == "plan":
+        elif suffix in ("engine", "plan", "trt"):
             return "trt"
         else:
             _get_logger().fatal(

@@ -355,7 +355,7 @@ Bringing your own model
 Set ``export_with=None`` when you want a node to appear in the graph
 without asking LEAPP to compile it. This is useful for:
 
-* prebuilt ``.pt``, ``.pt2``, or ``.onnx`` artifacts
+* prebuilt ``.pt``, ``.pt2``, ``.onnx``, or TensorRT engine artifacts
 * placeholder nodes that will be filled in later
 * flows where LEAPP should capture I/O and graph edges but not produce a
   model
@@ -401,4 +401,4 @@ Important behavior:
 * The model path written into the YAML is made relative to the YAML
   directory when possible.
 * ``InferenceManager`` currently runs referenced ``.pt``, ``.pt2``, and
-  ``.onnx`` artifacts.
+  ``.onnx`` artifacts, and TensorRT engines.
