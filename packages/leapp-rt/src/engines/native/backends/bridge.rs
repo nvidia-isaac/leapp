@@ -202,6 +202,25 @@ impl BackendPlugin for Model {
         }
     }
 
+    fn forwarded_output(&self, position: usize) -> Option<DLTensor> {
+        let mut tensor = std::mem::MaybeUninit::uninit();
+        // SAFETY: the plugin initializes the descriptor on true and retains its
+        // storage/metadata until release_outputs. The workspace holds its owners.
+        unsafe {
+            (self.library.api.forwarded_output.unwrap())(
+                self.instance,
+                position,
+                tensor.as_mut_ptr(),
+            )
+            .then(|| tensor.assume_init())
+        }
+    }
+
+    fn release_outputs(&mut self) {
+        // SAFETY: all consumers have completed and no forwarded view remains.
+        unsafe { (self.library.api.release_outputs.unwrap())(self.instance) }
+    }
+
     unsafe fn run_dynamic(
         &mut self,
         inputs: &[BorrowedTensor<'_>],
@@ -247,8 +266,10 @@ impl BackendPlugin for Model {
                         "backend returned an owned result for a supplied output"
                     );
                     values.push(None);
+                } else if handle.value.is_null() {
+                    // Lent through forwarded_output until release_outputs.
+                    values.push(None);
                 } else {
-                    ffi::nonnull(handle.value)?;
                     ensure!(
                         handle.destroy.is_some_and(|destroy| std::ptr::fn_addr_eq(
                             destroy,

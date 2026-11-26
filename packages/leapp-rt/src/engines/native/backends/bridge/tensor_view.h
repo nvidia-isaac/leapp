@@ -29,8 +29,8 @@ struct View {
   int32_t device;
 };
 
-// SDK-owned dynamic results. Implementations retain storage and shape metadata
-// until the plugin finishes copying these views into runtime-owned tensors.
+// SDK-owned results lent to the engine. Retain storage and shape metadata
+// through downstream execution until release_outputs.
 struct Outputs {
   virtual ~Outputs() = default;
 

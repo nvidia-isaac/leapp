@@ -245,12 +245,10 @@ struct InputBindings {
   }
 };
 
-// Prepared calls retain TensorImpl/IValue metadata and fixed destination
-// wrappers.
+// Prepared calls retain input wrappers and validate fixed output layouts.
 struct Call {
   Context& context;
   Inputs inputs;
-  std::vector<at::Tensor> destinations;
 
   Call(Context& owner, std::span<const View> in, std::span<const View> out)
       : context(owner), inputs(owner, in) {
@@ -261,13 +259,12 @@ struct Call {
       check(value, owner.outputs[i]);
       TORCH_CHECK(value.device() == owner.target,
                   "Torch output device mismatch");
-      destinations.push_back(value);
     }
   }
 
-  void run(std::span<const View> views,
-           std::span<const adapter::InputRoute> routes,
-           std::span<const adapter::OutputBinding> outputs);
+  std::unique_ptr<Outputs> run(std::span<const View> views,
+                               std::span<const adapter::InputRoute> routes,
+                               std::span<const adapter::OutputBinding> outputs);
 
   size_t input_alignment() const {
     return !context.plan.background_work &&
@@ -280,6 +277,18 @@ struct Call {
 
 struct Outputs : adapter::Outputs {
   std::vector<at::Tensor> values;
+
+  void describe(const std::vector<Port>& ports) {
+    views.reserve(values.size());
+    for (size_t i = 0; i < values.size(); ++i) {
+      const auto& tensor = values[i];
+      views.push_back({{nullptr, 0, ports[i].dtype, tensor.sizes().data(),
+                        static_cast<size_t>(tensor.dim())},
+                       reinterpret_cast<uintptr_t>(tensor.data_ptr()),
+                       tensor.nbytes(),
+                       tensor.is_cuda() ? tensor.get_device() : -1});
+    }
+  }
 };
 
 std::unique_ptr<Call> Context::prepare(std::span<const View> inputs,
@@ -290,13 +299,15 @@ std::unique_ptr<Call> Context::prepare(std::span<const View> inputs,
   return call;
 }
 
-void Call::run(std::span<const View> views,
-               std::span<const adapter::InputRoute> routes,
-               std::span<const adapter::OutputBinding> outputs) {
+std::unique_ptr<Outputs> Call::run(
+    std::span<const View> views, std::span<const adapter::InputRoute> routes,
+    std::span<const adapter::OutputBinding> outputs) {
   InputBindings bindings{inputs, routes};
   // Keep result owners alive until the stream finishes, including on
   // exceptions.
-  std::vector<at::Tensor> values, targets;
+  auto result = std::make_unique<Outputs>();
+  auto& values = result->values;
+  std::vector<at::Tensor> targets;
   Context::Execution execution(context);
   for (const auto& output : outputs) {
     targets.push_back(borrow(output.view));
@@ -318,12 +329,16 @@ void Call::run(std::span<const View> views,
     const auto target =
         std::find_if(outputs.begin(), outputs.end(),
                      [i](const auto& output) { return output.position == i; });
-    const auto& destination = target == outputs.end()
-                                  ? destinations[i]
-                                  : targets[target - outputs.begin()];
-    destination.copy_(values[i], /*non_blocking=*/true);
+    if (target != outputs.end()) {
+      targets[target - outputs.begin()].copy_(values[i], /*non_blocking=*/true);
+    } else {
+      // Forward ordinary contiguous results without an ownership copy. Views
+      // that cannot be represented by the runtime still need materialization.
+      values[i] = values[i].resolve_neg().contiguous();
+    }
   }
   execution.finish();
+  return result;
 }
 
 std::unique_ptr<Outputs> Context::run_dynamic(
@@ -346,7 +361,7 @@ std::unique_ptr<Outputs> Context::run_dynamic(
   }
   // Raw Rust views cannot represent strides or Torch's lazy negative bit.
   // Materialize those before exposing storage; ordinary contiguous values stay
-  // borrowed until Rust snapshots them before returning.
+  // lent through forwarded_output() until release_outputs().
   for (size_t i = 0; i < outputs->values.size(); ++i) {
     if (std::none_of(bindings.begin(), bindings.end(), [i](const auto& output) {
           return output.position == i;
@@ -415,26 +430,20 @@ void Executor::prepare(std::span<const adapter::View> inputs,
   state_->call = state_->context->prepare(inputs, outputs);
 }
 
-void Executor::run(std::span<const adapter::View> inputs,
-                   std::span<const adapter::InputRoute> routes,
-                   std::span<const adapter::OutputBinding> outputs) {
-  state_->call->run(inputs, routes, outputs);
+std::unique_ptr<adapter::Outputs> Executor::run(
+    std::span<const adapter::View> inputs,
+    std::span<const adapter::InputRoute> routes,
+    std::span<const adapter::OutputBinding> outputs) {
+  auto result = state_->call->run(inputs, routes, outputs);
+  result->describe(state_->context->outputs);
+  return result;
 }
 
 std::unique_ptr<adapter::Outputs> Executor::run_dynamic(
     std::span<const adapter::View> inputs,
     std::span<const adapter::OutputBinding> outputs) {
   auto result = state_->context->run_dynamic(inputs, outputs);
-  result->views.reserve(result->values.size());
-  for (size_t i = 0; i < result->values.size(); ++i) {
-    const auto& tensor = result->values[i];
-    result->views.push_back(
-        {{nullptr, 0, state_->context->outputs[i].dtype, tensor.sizes().data(),
-          static_cast<size_t>(tensor.dim())},
-         reinterpret_cast<uintptr_t>(tensor.data_ptr()),
-         tensor.nbytes(),
-         tensor.is_cuda() ? tensor.get_device() : -1});
-  }
+  result->describe(state_->context->outputs);
   return result;
 }
 

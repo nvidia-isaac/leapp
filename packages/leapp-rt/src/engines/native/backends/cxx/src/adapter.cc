@@ -310,7 +310,20 @@ Api make_api(decltype(Api::load) loader) noexcept {
         auto& result = (*static_cast<DynamicOutputs*>(value))[position];
         return result ? Access::take(*result) : TensorHandle{};
       },
-      [](void* value) noexcept { delete static_cast<DynamicOutputs*>(value); }};
+      [](void* value) noexcept { delete static_cast<DynamicOutputs*>(value); },
+      [](const void* value, size_t position, DLTensor* output) noexcept {
+        const auto view =
+            static_cast<const BackendPlugin*>(value)->forwarded_output(
+                position);
+        if (!view) {
+          return false;
+        }
+        *output = view->descriptor();
+        return true;
+      },
+      [](void* value) noexcept {
+        static_cast<BackendPlugin*>(value)->release_outputs();
+      }};
 }
 
 }  // namespace detail

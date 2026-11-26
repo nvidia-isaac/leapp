@@ -9,6 +9,7 @@
 #define LEAPP_NATIVE_BACKEND_PLUGIN_H_
 
 #include <memory>
+#include <optional>
 
 #include "leapp/native/transfers.h"
 
@@ -102,16 +103,17 @@ class BackendPlugin {
   /// @return Address alignment in bytes; one by default.
   virtual size_t output_alignment() const noexcept { return 1; }
 
-  /// @brief Execute prepared bindings with invocation-scoped boundary inputs.
+  /// @brief Execute prepared bindings with invocation-scoped inputs.
   ///
   /// Unrouted arguments keep fixed bindings. The engine establishes input
   /// compatibility and placement. Finish work and restore bindings before
-  /// returning or unwinding. Never retain caller pointers; no retries.
-  /// @param[in] inputs Boundary inputs in Session input order.
-  /// @param[in] routes Argument-position to Session-input-index mappings; empty
-  /// routes reuse all prepared inputs.
+  /// returning or unwinding. Only forwarded_output() may retain completed views
+  /// until release_outputs(); no retries.
+  /// @param[in] inputs Invocation inputs, including forwarded producer outputs.
+  /// @param[in] routes Argument-position to invocation-input-index mappings;
+  /// empty routes reuse all prepared inputs.
   /// @param outputs Writable, disjoint, compatible invocation output overrides,
-  /// alive through completion.
+  /// alive through graph completion and release_outputs().
   /// @return Success or a backend failure; ErrorCode::kUnsupported by default.
   virtual Status run([[maybe_unused]] std::span<const NamedTensor> inputs,
                      [[maybe_unused]] std::span<const InputRoute> routes,
@@ -120,14 +122,31 @@ class BackendPlugin {
             "backend has no prepared execution path"};
   }
 
-  /// @brief Execute without fixed bindings and publish independent results.
+  /// @brief Completed result lent for an unsupplied output of run() or
+  /// run_dynamic().
+  /// Retain storage and shape metadata until release_outputs(), including when
+  /// the result aliases an input. The engine keeps invocation storage alive,
+  /// consumes views read-only, and snapshots public results before releasing.
+  /// Views must match the declared shape, dtype and device and be contiguous.
+  /// @return nullopt when run() wrote the prepared output buffer instead.
+  virtual std::optional<BorrowedTensor> forwarded_output(
+      [[maybe_unused]] size_t position) const noexcept {
+    return std::nullopt;
+  }
+
+  /// @brief Release completed views after the graph finishes, also on failure.
+  virtual void release_outputs() noexcept {}
+
+  /// @brief Execute without fixed bindings and lend or publish results.
   ///
-  /// Return nullopt for supplied destinations and a populated OwnedTensor for
-  /// every other output. Results must be ready, contiguous, retain their source
-  /// device, and match declared count/order/dtype/rank/fixed dimensions.
-  /// Establish SDK guarantees at load time and check unresolved values before
-  /// returning. Transfers::copy isolates SDK storage from inputs and mutable
-  /// state. Do not retain invocation pointers; publish only on success.
+  /// Return nullopt for supplied destinations and for results lent through
+  /// forwarded_output(), and a populated OwnedTensor for every other output.
+  /// Results must be ready, contiguous, retain their source device, and match
+  /// declared count/order/dtype/rank/fixed dimensions. Establish SDK
+  /// guarantees at load time and check unresolved values before returning.
+  /// Transfers::copy isolates owned SDK storage from inputs and mutable state.
+  /// Only forwarded_output() may retain completed views; publish only on
+  /// success.
   /// @param[in] inputs Validated read-only inputs, borrowed for this call only.
   /// @param outputs Invocation destinations satisfying run()'s contract.
   /// @param[in,out] transfers Workspace copy helper, exclusively borrowed for
