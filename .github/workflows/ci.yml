@@ -41,6 +41,7 @@ jobs:
             cuda-version: "12.8.1"
             warp-extra: warp-cu12
             executorch-extra: ""
+            tensorrt-package: ""
           # Python 3.15 is blocked by ONNX Runtime wheel availability.
           - name: max environment
             python-version: "3.14"
@@ -49,6 +50,8 @@ jobs:
             cuda-version: "13.2.1"
             warp-extra: warp-cu13
             executorch-extra: ",executorch"
+            # Builds TensorRT engines in the ExecuTorch tests.
+            tensorrt-package: "torch_tensorrt[executorch]==2.15.0"
 
     steps:
       # The CUDA devel image is minimal; checkout needs git and git-lfs.
@@ -79,6 +82,12 @@ jobs:
         run: >-
           python -m pip install -e ".[dev,test,${{ matrix.warp-extra }}${{ matrix.executorch-extra }}]"
           "torch==${{ matrix.torch-version }}" cmake ninja
+
+      - name: Install Torch-TensorRT
+        if: matrix.tensorrt-package != ''
+        run: >-
+          python -m pip install "${{ matrix.tensorrt-package }}"
+          "torch==${{ matrix.torch-version }}"
 
       - name: Build Warp runtime
         run: >-

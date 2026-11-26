@@ -227,7 +227,7 @@ class LeappNode:
             )
 
             self.export_backend = ExportedProgramExportBackend(self, backend_params)
-        elif backend == "executorch":
+        elif backend == "executorch" or backend == "pte":
             self.backend = "executorch"
             from leapp.backends.executorch_backend import ExecuTorchExportBackend
 
