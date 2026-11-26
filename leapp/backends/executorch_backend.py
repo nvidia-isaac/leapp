@@ -248,12 +248,10 @@ class ExecuTorchExportBackend(ExportBackend):
             program.write_to_file(f)
         program.write_tensor_data_to_file(os.path.dirname(program_path))
 
-    def compile(self, m: torch.nn.Module = None):
+    def compile(self, m: torch.nn.Module):
         from torch.export.passes import move_to_device_pass
 
         _import_executorch()
-        if m is None:
-            m = self.module_builder()
         m = m.eval()
 
         input_values = [tensor_desc.value for tensor_desc in self.node_context.inputs]

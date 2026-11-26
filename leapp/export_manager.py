@@ -15,7 +15,6 @@
 # limitations under the License.
 #
 
-import sys
 import functools
 import inspect
 import os
@@ -24,8 +23,6 @@ import torch
 from leapp.utils.logging import _get_logger
 from leapp.leapp_graph.leapp_node import LeappNode
 from leapp.leapp_graph.traced_node import TracedTensorNode
-from leapp.leapp_graph.function_decorator_node import FunctionDecoratorNode
-from leapp.utils.tracing_lock import TracingLock
 from leapp.leapp_graph.datatypes import (
     TracedTensor,
     is_traced_type,
@@ -50,7 +47,6 @@ from leapp.utils.utils import (
     get_relative_path,
     mirror_all_traced_state,
     extract_return_names,
-    frame_to_namespace,
 )
 from contextlib import nullcontext
 
@@ -150,9 +146,6 @@ class ExportManager:
     def is_interpret_graph_enabled(cls):
         return cls._interpret_graph
 
-    def reset_tracing_lock(self):
-        TracingLock().reset()
-
     def release_buffer_trackers(self):
         # Every tracker of the session, also one a later module() call replaced.
         for tracker in self.buffer_trackers:
@@ -209,7 +202,7 @@ class ExportManager:
                 error_type=Exception,
             )
 
-    def _setup_new_node(self, name, node_class: LeappNode, **kwargs):
+    def _setup_new_node(self, name):
         if name in self.nodes:
             _get_logger().fatal(
                 f"Error: node '{name}' already exists. "
@@ -217,24 +210,7 @@ class ExportManager:
                 error_type=Exception,
             )
 
-        if self.is_dry_run(name):
-            kwargs["export_with"] = None
-            kwargs.setdefault("backend_params", {})
-
-        if node_class is FunctionDecoratorNode:
-            # kept for backward compatibility we still suppport old style initialization
-            # TODO: this needs to be removed in the future
-            node = node_class(
-                name,
-                backend=kwargs.get("export_with", None),
-                backend_params=kwargs.get("backend_params", None),
-                inputs=kwargs.get("inputs", None),
-                outputs=kwargs.get("outputs", None),
-                environment_constants=kwargs.get("environment_constants", None),
-                register_buffers=kwargs.get("register_buffers", None),
-            )
-        else:
-            node = node_class(name, **kwargs)
+        node = TracedTensorNode(name)
 
         node._max_cached_io = self._max_cached_io
         self.nodes[name] = node
@@ -282,13 +258,6 @@ class ExportManager:
     #########################################################
     def input_tensors(self, node_name: str, tensors):
         """Input layout is not preserved; inputs are treated as logically dense."""
-        if TracingLock().is_active:
-            _get_logger().fatal(
-                "Cannot call input_tensors() while a _method()-traced function "
-                "is executing. Mixing active contexts is not allowed.",
-                error_type=Exception,
-            )
-
         tensors, metadata = self._normalize_named_tensor_payload(
             "input_tensors", node_name, tensors
         )
@@ -300,7 +269,7 @@ class ExportManager:
         if node_name in self.nodes:
             traced_tensors_node = self.nodes[node_name]
         else:
-            traced_tensors_node = self._setup_new_node(node_name, TracedTensorNode)
+            traced_tensors_node = self._setup_new_node(node_name)
 
         _caller_identity = get_caller_stack_identity()
 
@@ -488,13 +457,6 @@ class ExportManager:
 
         traced_node = self.nodes[node_name]
 
-        if not isinstance(traced_node, TracedTensorNode):
-            msg = (
-                f"register_buffer() is not supported for node '{node_name}' — "
-                "it was created with the legacy method annotation."
-            )
-            _get_logger().fatal(msg, error_type=Exception)
-
         if not traced_node.is_tracing:
             values = list(tensors.values())
             return values[0] if was_single else tuple(values)
@@ -603,13 +565,6 @@ class ExportManager:
 
         traced_node = self.nodes[node_name]
 
-        if not isinstance(traced_node, TracedTensorNode):
-            msg = (
-                f"state_tensors() is not supported for node '{node_name}' — "
-                "it was created with the legacy method annotation."
-            )
-            _get_logger().fatal(msg, error_type=Exception)
-
         self._validate_flat_state_payload("state_tensors", node_name, tensors)
 
         if not traced_node.is_tracing:
@@ -642,13 +597,6 @@ class ExportManager:
             _get_logger().fatal(msg, error_type=Exception)
 
         traced_node = self.nodes[node_name]
-
-        if not isinstance(traced_node, TracedTensorNode):
-            msg = (
-                f"update_state() is not supported for node '{node_name}' — "
-                "it was created with the legacy method annotation."
-            )
-            _get_logger().fatal(msg, error_type=Exception)
 
         self._validate_flat_state_payload("update_state", node_name, tensors)
 
@@ -735,7 +683,7 @@ class ExportManager:
 
                 # ~~~~~~~~~~~~~~~~~~~ ensure node exists ~~~~~~~~~~~~~~~~~~~~~~~~ #
                 if name not in self.nodes:
-                    self._setup_new_node(name, TracedTensorNode)
+                    self._setup_new_node(name)
 
                 # ~~~~~~~~~~~~~~~~~~~ set up inputs ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
 
@@ -844,96 +792,6 @@ class ExportManager:
             return nullcontext()
 
         return warp_backend.create_warp_op(node)
-
-    def _method(self, **params):
-        """Legacy decorator for tracing functions via sys.settrace + ModuleBuilder.
-
-        This uses the original source-code-capture approach (FunctionDecoratorNode)
-        and is kept for use cases where the newer TracedTensorNode-based method()
-        does not cover all patterns. Not advertised in the public API.
-        """
-
-        def decorator(func):
-
-            if "node_name" in params:
-                name = params["node_name"]
-            else:
-                name = func.__name__
-
-            @functools.wraps(func)
-            def wrapper(*args, **kwargs):
-                if not ExportManager._interpret_graph:
-                    return func(*args, **kwargs)
-
-                if name in self.nodes:
-                    new_node = False
-                    node_context = self.nodes[name]
-                else:
-                    new_node = True
-                    node_context = self._setup_new_node(
-                        name, FunctionDecoratorNode, **params
-                    )
-
-                caller_namespace = frame_to_namespace(sys._getframe(1))
-
-                if new_node:
-                    _get_logger().info(f"****Tracing started for {name}****")
-                    sig = inspect.signature(func)
-                    bound_args = sig.bind(*args, **kwargs)
-                    bound_args.apply_defaults()
-
-                    node_context.inspect_function_inputs(func, args, kwargs)
-                    input_namespace = {**caller_namespace, **bound_args.arguments}
-                    if hasattr(func, "__self__"):
-                        input_namespace["self"] = func.__self__
-                    node_context.capture_inputs_from_namespace(input_namespace)
-                    node_context.compile_trace(func)
-                    node_context.snapshot_buffer_values(input_namespace)
-
-                    trace_fn = node_context.create_trace_function(
-                        os.path.basename(__file__), entry_hook=None
-                    )
-                else:
-                    node_context.validate_function_boundaries(func)
-                    node_context.validate_function_inputs(func, args, kwargs)
-                    trace_fn = node_context.create_trace_function(
-                        os.path.basename(__file__), entry_hook=None
-                    )
-
-                sys._getframe(1).f_trace = trace_fn
-
-                TracingLock().acquire()
-                sys.settrace(trace_fn)
-
-                try:
-                    result = func(*args, **kwargs)
-                finally:
-                    sys.settrace(None)
-                    TracingLock().release()
-
-                if new_node:
-                    _get_logger().info(
-                        f"****Tracing stopped for {node_context.name}****\n\n"
-                    )
-                    node_context.inspect_function_outputs(func, result)
-                    if node_context.output_namespace is not None:
-                        node_context.capture_outputs_from_namespace(
-                            node_context.output_namespace
-                        )
-                    self._assign_completion_index(node_context)
-                else:
-                    node_context.validate_function_outputs(func, result)
-                    if node_context.output_namespace is not None:
-                        node_context.validate_outputs_from_namespace(
-                            node_context.output_namespace
-                        )
-                    node_context.increment_cache_idx()
-
-                return result
-
-            return wrapper
-
-        return decorator
 
     #########################################################
     # export flow control

@@ -48,9 +48,7 @@ class ExportedProgramExportBackend(ExportBackend):
     def get_backend_model_type(self):
         return "pt2"
 
-    def compile(self, m: torch.nn.Module = None):
-        if m is None:
-            m = self.module_builder()
+    def compile(self, m: torch.nn.Module):
         m = m.eval()
 
         input_values = [tensor_desc.value for tensor_desc in self.node_context.inputs]

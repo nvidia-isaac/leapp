@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
+import copy
 import errno
 import importlib.util
 import os
@@ -1953,153 +1954,135 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
                         actual.cpu(), fresh.cpu() @ weight, rtol=1e-4, atol=1e-5
                     )
 
+    def _export_executorch_module(
+        self, name, module, backend_params=None, *, validate=False
+    ):
+        # Direct modules retain mutable buffers that FX capture makes functional.
+        node = LeappNode(name)
+        node._max_cached_io = int(validate)
+        node.add_input("obs", "obs", torch.ones(3))
+        if validate:
+            reference = copy.deepcopy(module)
+            node.add_output("action", "action", reference(torch.ones(3)))
+            second = torch.full((3,), 2.0)
+            node.validate_input_and_update_sources("obs", "obs", second)
+            node.validate_output_and_update_sources(
+                "action", "action", reference(second)
+            )
+            node.increment_cache_idx()
+        backend = ExecuTorchExportBackend(node, backend_params)
+        node.export_backend = backend
+        node.backend = "executorch"
+        backend.compile(module)
+        if validate:
+            passed, hint = node.validate_compiled_model()
+            self.assertTrue(passed, hint)
+        os.makedirs(self.TEST_GRAPH_NAME, exist_ok=True)
+        path, _, checksum = backend.save(self.TEST_GRAPH_NAME)
+        loader = ExecuTorchExportBackend(None, backend.get_backend_metadata())
+        loader.load(path, checksum)
+        return loader.compiled_model, path
+
     @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     def test_executorch_backend_constants(self):
-        """A legacy node is exported from its Python function, so a value it
-        builds from constants alone reaches export. XNNPACK cannot run arange,
-        so the program runs whole in the delegate only because export folds
-        it."""
+        """Fold constant-only operators before lowering to a delegate that lacks them."""
 
-        @annotate._method(export_with="executorch")
-        def legacy_constants(inputL):
-            return inputL + torch.arange(3, dtype=torch.float32)
+        class ConstantPolicy(torch.nn.Module):
+            def forward(self, obs):
+                return obs + torch.arange(3, dtype=torch.float32)
 
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        legacy_constants(torch.ones(3))
-        leapp.stop()
-        self.assertEqual(
-            leapp.compile_graph(visualize=False, validate=True),
-            {legacy_constants.__name__: True},
-        )
-        plan = _execution_plan(
-            os.path.join(self.TEST_GRAPH_NAME, f"{legacy_constants.__name__}.pte")
-        )
-        self.assertEqual([op.name for op in plan.operators], [])
+        program, path = self._export_executorch_module("constants", ConstantPolicy())
+        self.assertEqual([op.name for op in _execution_plan(path).operators], [])
+        for offset in (1.0, -4.0):
+            fresh = torch.full((3,), offset)
+            (actual,) = program(fresh)
+            torch.testing.assert_close(actual, fresh + torch.arange(3))
 
     @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     def test_executorch_backend_written_buffers(self):
-        """ExecuTorch leaves a buffer the program writes uninitialized unless told to
-        keep its value, so these nodes would return zeros where the buffers held
-        20 and 30. One declares its buffer, the other's module owns two. On a GPU
-        machine, CPU inputs still give CPU outputs. A declared counter carries its
-        value between calls, so validation replays sample 0 only after loading the
-        program again."""
+        """Retain persistent/non-persistent initial values and reset saved counters."""
 
-        class Counter(torch.nn.Module):
+        class BufferPolicy(torch.nn.Module):
             def __init__(self):
                 super().__init__()
                 self.register_buffer("count", torch.tensor([10.0, 20.0, 30.0]))
-                # torch.export keeps a persistent=False buffer's value in constants.
                 self.register_buffer(
                     "total", torch.tensor([10.0, 20.0, 30.0]), persistent=False
                 )
 
-        class Overwriter:
+            def forward(self, obs):
+                self.count[0] = obs[0]
+                self.total[0] = obs[0]
+                return (self.count + self.total) / 2
+
+        class Counter(torch.nn.Module):
             def __init__(self):
-                self.values = torch.tensor([10.0, 20.0, 30.0])
-                self.counter = Counter()
+                super().__init__()
+                self.register_buffer("steps", torch.zeros(3))
 
-            @annotate._method(
-                export_with="executorch", register_buffers=["self.values"]
-            )
-            def legacy_declared(self, inputL):
-                self.values[0] = inputL[0]
-                return self.values * 1.0
-
-            @annotate._method(export_with="executorch")
-            def legacy_module(self, inputM):
-                self.counter.count[0] = inputM[0]
-                self.counter.total[0] = inputM[0]
-                return (self.counter.count + self.counter.total) / 2
-
-            @annotate._method(export_with="executorch", register_buffers=["self.steps"])
-            def legacy_counter(self, inputK):
+            def forward(self, obs):
                 self.steps += 1
-                return inputK + self.steps
+                return obs + self.steps
 
-        overwriter = Overwriter()
-        overwriter.steps = torch.zeros(3)
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        for value in (1.0, 2.0):
-            overwriter.legacy_declared(torch.full((3,), value))
-            overwriter.legacy_module(torch.full((3,), value))
-            overwriter.legacy_counter(torch.full((3,), value))
-        leapp.stop()
-        self.assertEqual(
-            leapp.compile_graph(visualize=False, validate=True),
-            {"legacy_declared": True, "legacy_module": True, "legacy_counter": True},
-        )
-        yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
-        seven = torch.full((3,), 7.0)
-        manager = leapp.InferenceManager(yaml_path)
-        outputs = manager.run_policy(
-            {
-                "legacy_declared/inputL": seven,
-                "legacy_module/inputM": seven,
-                "legacy_counter/inputK": seven,
-            }
-        )
-        self.assertEqual(len(outputs), 3)
-        torch.testing.assert_close(
-            outputs.pop("legacy_counter/output1"), torch.full((3,), 8.0)
-        )
-        for actual in outputs.values():
-            torch.testing.assert_close(actual, torch.tensor([7.0, 20.0, 30.0]))
+        program, _ = self._export_executorch_module("buffers", BufferPolicy())
+        for value in (7.0, -2.0):
+            fresh = torch.full((3,), value)
+            (actual,) = program(fresh)
+            self.assertEqual(actual.device, fresh.device)
+            torch.testing.assert_close(actual, torch.tensor([value, 20.0, 30.0]))
+
+        counter, _ = self._export_executorch_module("counter", Counter(), validate=True)
+        fresh = torch.full((3,), 7.0)
+        for step in (1, 2):
+            (actual,) = counter(fresh)
+            torch.testing.assert_close(actual, fresh + step)
+        counter.reload()
+        (actual,) = counter(fresh)
+        torch.testing.assert_close(actual, fresh + 1)
 
     @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     @unittest.skipUnless(torch.cuda.is_available(), "Needs a CUDA GPU")
     def test_executorch_backend_cuda_written_buffer(self):
-        """A CUDA node that returns the buffer it writes leaves the buffer outside
-        the delegate, where it must still start from 20 and 30, not zeros. A CUDA
-        counter must start from its first value again when validation replays
-        sample 0."""
+        """Initialize CUDA buffers returned outside the delegate and reset counters."""
 
-        class Overwriter:
+        class BufferPolicy(torch.nn.Module):
             def __init__(self):
-                self.values = torch.tensor([10.0, 20.0, 30.0])
+                super().__init__()
+                self.register_buffer("values", torch.tensor([10.0, 20.0, 30.0]))
 
-            @annotate._method(
-                export_with="executorch",
-                register_buffers=["self.values"],
-                # With device_io, ExecuTorch cannot place a written buffer the
-                # program returns on the GPU.
-                backend_params={"delegate": "cuda", "device_io": False},
-            )
-            def legacy_cuda(self, inputC):
-                self.values[0] = inputC[0]
+            def forward(self, obs):
+                self.values[0] = obs[0]
                 return self.values
 
-            @annotate._method(
-                export_with="executorch",
-                register_buffers=["self.steps"],
-                backend_params={"delegate": "cuda"},
-            )
-            def legacy_cuda_counter(self, inputK):
-                self.steps += 1
-                return inputK + self.steps
+        class Counter(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.register_buffer("steps", torch.zeros(3))
 
-        overwriter = Overwriter()
-        overwriter.steps = torch.zeros(3)
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        for value in (1.0, 2.0):
-            overwriter.legacy_cuda(torch.full((3,), value))
-            overwriter.legacy_cuda_counter(torch.full((3,), value))
-        leapp.stop()
-        self.assertEqual(
-            leapp.compile_graph(visualize=False, validate=True),
-            {"legacy_cuda": True, "legacy_cuda_counter": True},
+            def forward(self, obs):
+                self.steps += 1
+                return obs + self.steps
+
+        program, _ = self._export_executorch_module(
+            "cuda_buffers", BufferPolicy(), {"delegate": "cuda", "device_io": False}
         )
-        yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
-        seven = torch.full((3,), 7.0)
-        outputs = leapp.InferenceManager(yaml_path).run_policy(
-            {"legacy_cuda/inputC": seven, "legacy_cuda_counter/inputK": seven}
+        for value in (7.0, -2.0):
+            fresh = torch.full((3,), value)
+            (actual,) = program(fresh)
+            self.assertEqual(actual.device, fresh.device)
+            torch.testing.assert_close(actual, torch.tensor([value, 20.0, 30.0]))
+
+        counter, _ = self._export_executorch_module(
+            "cuda_counter", Counter(), {"delegate": "cuda"}, validate=True
         )
-        torch.testing.assert_close(
-            outputs["legacy_cuda/output1"].cpu(), torch.tensor([7.0, 20.0, 30.0])
-        )
-        torch.testing.assert_close(
-            outputs["legacy_cuda_counter/output1"].cpu(), torch.full((3,), 8.0)
-        )
+        fresh = torch.full((3,), 7.0)
+        for step in (1, 2):
+            (actual,) = counter(fresh)
+            self.assertEqual(actual.device, fresh.device)
+            torch.testing.assert_close(actual, fresh + step)
+        counter.reload()
+        (actual,) = counter(fresh)
+        torch.testing.assert_close(actual, fresh + 1)
 
     @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     def test_executorch_backend_no_inputs(self):

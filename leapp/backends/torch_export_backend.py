@@ -34,15 +34,7 @@ class TorchExportBackend(ExportBackend):
         compiled_model = self.compiled_model
         # Freeze the model before saving for optimization
         if compiled_model is not None:
-            preserved_attrs = []
-            if hasattr(self, "node_context") and hasattr(
-                self.node_context, "saved_buffers"
-            ):
-                preserved_attrs = self.node_context.saved_buffers
-
-            compiled_model = torch.jit.freeze(
-                compiled_model.eval(), preserved_attrs=preserved_attrs
-            )
+            compiled_model = torch.jit.freeze(compiled_model.eval())
         else:
             _get_logger().error(f"No compiled model found for {self.node_context.name}")
 
@@ -62,15 +54,7 @@ class TorchExportBackend(ExportBackend):
 
 
 class TorchTraceExportBackend(TorchExportBackend):
-    def compile(self, m: torch.nn.Module = None):
-        if not len(self.node_context.register_buffers) == 0:
-            _get_logger().fatal(
-                "TorchTraceExportBackend does not support buffers, "
-                "consider using export_with='jit-trace'",
-                error_type=Exception,
-            )
-        if m is None:
-            m = self.module_builder()
+    def compile(self, m: torch.nn.Module):
         m = m.eval()
         # Get flat tensor values directly from inputs (not input_formats which preserves nested structure)
         input_values = [tensor_desc.value for tensor_desc in self.node_context.inputs]
@@ -83,9 +67,7 @@ class TorchTraceExportBackend(TorchExportBackend):
 
 
 class TorchScriptExportBackend(TorchExportBackend):
-    def compile(self, m: torch.nn.Module = None):
-        if m is None:
-            m = self.module_builder()
+    def compile(self, m: torch.nn.Module):
         m = m.eval()
         torch.jit._state.enable()
         with warnings.catch_warnings():

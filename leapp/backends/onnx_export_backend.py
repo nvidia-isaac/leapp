@@ -285,7 +285,7 @@ class ONNXExportBackend(ExportBackend):
 
         return onnx_path, md5sum, sha256sum
 
-    def compile(self, m: torch.nn.Module = None) -> SimplifiedONNXProgram:
+    def compile(self, m: torch.nn.Module) -> SimplifiedONNXProgram:
         raise NotImplementedError(
             "TorchExportBackend does not support compilation, please use torch-script or torch-trace instead"
         )
@@ -293,9 +293,7 @@ class ONNXExportBackend(ExportBackend):
 
 
 class ONNXTorchScriptExportBackend(ONNXExportBackend):
-    def compile(self, m: torch.nn.Module = None):
-        if m is None:
-            m = self.module_builder()
+    def compile(self, m: torch.nn.Module):
         m = m.eval()
         self._handle_duplicate_io_names()
 
@@ -549,9 +547,7 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
             output.args = torch.fx.node.map_arg(output.args, separate)
         module.recompile()
 
-    def compile(self, m: torch.nn.Module = None):
-        if m is None:
-            m = self.module_builder()
+    def compile(self, m: torch.nn.Module):
         m = m.eval()
         m = self._canonicalize_type_as(m)
         self._clone_aliased_outputs(m)
