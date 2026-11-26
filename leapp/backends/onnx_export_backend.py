@@ -285,7 +285,7 @@ class ONNXExportBackend(ExportBackend):
 
         return onnx_path, md5sum, sha256sum
 
-    def compile(self, m: torch.nn.Module = None) -> SimplifiedONNXProgram:
+    def compile(self, m: torch.nn.Module) -> SimplifiedONNXProgram:
         raise NotImplementedError(
             "TorchExportBackend does not support compilation, please use torch-script or torch-trace instead"
         )
@@ -293,9 +293,7 @@ class ONNXExportBackend(ExportBackend):
 
 
 class ONNXTorchScriptExportBackend(ONNXExportBackend):
-    def compile(self, m: torch.nn.Module = None):
-        if m is None:
-            m = self.module_builder()
+    def compile(self, m: torch.nn.Module):
         m = m.eval()
         self._handle_duplicate_io_names()
 
@@ -493,6 +491,45 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
         return num_fixed
 
     @staticmethod
+    def _canonicalize_type_as(module):
+        """Avoid Dynamo renaming a constant initializer through a no-op cast.
+
+        Tensor.to(other) preserves type_as dtype, device, and no-copy semantics.
+        Prepare a separate graph so FX/PT2 capture retains its original form.
+        """
+        if not isinstance(module, torch.fx.GraphModule):
+            return module
+
+        def is_constant_type_as(node):
+            matches = (node.op == "call_method" and node.target == "type_as") or (
+                node.op == "call_function"
+                and node.target
+                in (
+                    torch.Tensor.type_as,
+                    torch.ops.aten.type_as,
+                    torch.ops.aten.type_as.default,
+                )
+            )
+            if not matches:
+                return False
+            source = node.args[0] if node.args else node.kwargs["self"]
+            return isinstance(source, torch.fx.Node) and source.op == "get_attr"
+
+        if not any(is_constant_type_as(node) for node in module.graph.nodes):
+            return module
+        graph = torch.fx.Graph()
+        values = {}
+        for original in module.graph.nodes:
+            node = graph.node_copy(original, values.__getitem__)
+            values[original] = node
+            if is_constant_type_as(node):
+                source = node.args[0] if node.args else node.kwargs["self"]
+                other = node.args[1] if len(node.args) > 1 else node.kwargs["other"]
+                node.op, node.target = "call_method", "to"
+                node.args, node.kwargs = (source, other), {}
+        return torch.fx.GraphModule(module, graph)
+
+    @staticmethod
     def _clone_aliased_outputs(module):
         # Dynamo names shared ONNX values in place, losing input or output names.
         if not isinstance(module, torch.fx.GraphModule):
@@ -510,10 +547,9 @@ class ONNXDynamoExportBackend(ONNXExportBackend):
             output.args = torch.fx.node.map_arg(output.args, separate)
         module.recompile()
 
-    def compile(self, m: torch.nn.Module = None):
-        if m is None:
-            m = self.module_builder()
+    def compile(self, m: torch.nn.Module):
         m = m.eval()
+        m = self._canonicalize_type_as(m)
         self._clone_aliased_outputs(m)
         try:
             patch_onnxscript_matcher()

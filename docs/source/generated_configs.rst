@@ -238,8 +238,8 @@ The ``models`` mapping is deterministically ordered. LEAPP guarantees:
    ``backend``
       Selects the runtime loader. For example, ``jit`` loads a TorchScript
       ``.pt`` file, ``pt2`` loads a ``torch.export`` ``.pt2`` file, ``pte``
-      loads an ExecuTorch ``.pte`` file, and ONNX backends load ``.onnx``
-      files.
+      loads an ExecuTorch ``.pte`` file, ``trt`` loads an external TensorRT
+      ``.engine``, ``.plan``, or ``.trt`` file, and ``onnx`` loads an ``.onnx`` file.
 
    ``model_path``
       Names the compiled artifact relative to the YAML file.

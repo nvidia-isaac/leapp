@@ -114,6 +114,10 @@ class NodeManager:
             from leapp.backends.executorch_backend import ExecuTorchExportBackend
 
             return ExecuTorchExportBackend(None, parameters)
+        elif backend == "trt":
+            from leapp.backends.tensorrt_backend import TensorRTBackend
+
+            return TensorRTBackend(None, parameters)
         else:
             _get_logger().fatal(
                 f"Unsupported backend: {backend}", error_type=ValueError

@@ -89,6 +89,26 @@ Prefer ``input_tensors()`` / ``output_tensors()`` when:
 * you want explicit tensor names
 * you need semantic metadata on tensors
 
+Migrating private source-capture annotations
+============================================
+
+``annotate._method()`` is unavailable. Use :func:`~leapp.annotate.method`
+for a function boundary, or explicit :func:`~leapp.annotate.input_tensors`
+and :func:`~leapp.annotate.output_tensors` annotations for distributed code.
+
+The source-capture options ``inputs``, ``outputs``, ``environment_constants``,
+and ``register_buffers`` are not options of the public decorator. Declare
+boundaries explicitly, use :func:`~leapp.annotate.register_buffer` for constants,
+and use :func:`~leapp.annotate.state_tensors` with
+:func:`~leapp.annotate.update_state` for mutable state. Use
+:func:`~leapp.annotate.module` to track reassigned registered module buffers.
+
+Tensor-dependent Python branches and loops are not captured as dynamic control
+flow by these interfaces. Keep that control flow outside the exported node or
+express supported tensor selection with ``torch.where``. Replacing the
+decorator alone does not preserve source-captured control flow or implicit state.
+Saved model artifacts continue to load through :class:`~leapp.InferenceManager`.
+
 Nested data connections
 =======================
 

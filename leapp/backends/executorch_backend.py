@@ -291,33 +291,6 @@ class ExecuTorchExportBackend(ExportBackend):
             ]
         )
 
-    def _refuse_input_writes(self, signature, reason):
-        """Refuse a node that writes one of its inputs in place.
-
-        Only a decomposed program records such a write in its signature.
-        """
-        from torch.export.graph_signature import InputKind
-
-        # torch.export renames the inputs, as inputW to inputw, so name them as
-        # the node does. The user inputs follow the node's inputs in order.
-        placeholders = [
-            spec.arg.name
-            for spec in signature.input_specs
-            if spec.kind == InputKind.USER_INPUT
-        ]
-        written = set(signature.user_inputs_to_mutate.values())
-        names = sorted(
-            desc.name
-            for desc, placeholder in zip(self.node_context.inputs, placeholders)
-            if placeholder in written
-        )
-        if names:
-            _get_logger().fatal(
-                f"Node '{self.node_context.name}' writes its inputs {names} in "
-                f"place, {reason}. Write to a copy instead, as in x = x.clone().",
-                error_type=RuntimeError,
-            )
-
     def _lower(self, exported_program, program_path):
         from executorch.exir import EdgeCompileConfig, to_edge_transform_and_lower
         from executorch.exir.passes.constant_prop_pass import constant_prop_pass
@@ -339,12 +312,6 @@ class ExecuTorchExportBackend(ExportBackend):
             compile_config = EdgeCompileConfig(_check_ir_validity=False)
 
         exported_program = exported_program.run_decompositions({})
-        # ExecuTorch returns an input written in place as an extra first output,
-        # which the node does not declare, or with device_io fails to export it.
-        self._refuse_input_writes(
-            exported_program.graph_signature,
-            "which ExecuTorch cannot export correctly",
-        )
         config = self._backend_config()
         # Fold values computed from constants alone first: an op that only builds
         # a constant may be one the delegate lacks, and left in the graph it
@@ -399,10 +366,6 @@ class ExecuTorchExportBackend(ExportBackend):
         # transpose into alias, as Torch-TensorRT's own lowering does.
         decomposed = exported_program.run_decompositions()
         signature = decomposed.graph_signature
-        # Torch-TensorRT either drops the write or fails to save the program.
-        self._refuse_input_writes(
-            signature, 'which ExecuTorch delegate "tensorrt" cannot keep'
-        )
         # Torch-TensorRT writes a buffer back outside its engines, where
         # ExecuTorch keeps only its shape, so a buffer the node writes starts from
         # zeros, and with device_io a buffer it reads and writes fails to export.
@@ -504,12 +467,10 @@ class ExecuTorchExportBackend(ExportBackend):
             if cache_dir is not None:
                 shutil.rmtree(cache_dir, ignore_errors=True)
 
-    def compile(self, m: torch.nn.Module = None):
+    def compile(self, m: torch.nn.Module):
         from torch.export.passes import move_to_device_pass
 
         _import_executorch()
-        if m is None:
-            m = self.module_builder()
         m = m.eval()
 
         input_values = [tensor_desc.value for tensor_desc in self.node_context.inputs]

@@ -18,7 +18,7 @@ import abc
 import hashlib
 import os
 import shutil
-from typing import Callable, Tuple, Any
+from typing import Tuple, Any
 
 import numpy as np
 import torch
@@ -26,7 +26,6 @@ import onnx
 import onnxruntime as ort
 
 from leapp.utils.logging import _get_logger
-from leapp.backends.module_builder import ModuleBuilder
 from leapp.warp_runtime import resolve_warp_runtime_library
 
 
@@ -406,14 +405,9 @@ class ExportBackend(abc.ABC):
         else:
             self.backend_params = backend_params
 
-        self.module_builder = ModuleBuilder(node_context)
-
         self.compiled_model = None
         self.compiled_module = None
         self.runtime_device = None
-
-    def override_module_builder(self, module_builder: Callable):
-        self.module_builder = module_builder
 
     def _verify_model_location_and_get_hash(self, model_path):
         if not os.path.exists(model_path):
@@ -457,7 +451,7 @@ class ExportBackend(abc.ABC):
         return {}
 
     @abc.abstractmethod
-    def compile(self, m: torch.nn.Module = None) -> Any:
+    def compile(self, m: torch.nn.Module) -> Any:
         """
         Compiles the model.
 
@@ -576,6 +570,13 @@ class NoneExportBackend(ExportBackend):
             self._load_onnx(model_path, sha256sum)
         elif model_type == "jit":
             self._load_torchscript(model_path, sha256sum)
+        elif model_type == "trt":
+            from leapp.backends.tensorrt_backend import TensorRTBackend
+
+            backend = TensorRTBackend(self.node_context, self.backend_params)
+            backend.load(model_path, sha256sum)
+            self.compiled_model = backend.compiled_model
+            self.runtime_device = backend.runtime_device
         else:
             _get_logger().fatal(
                 f"Unsupported model type: {model_type}", error_type=ValueError
@@ -597,7 +598,7 @@ class NoneExportBackend(ExportBackend):
             return "cpp"
         elif suffix == "py":
             return "py"
-        elif suffix == "engine" or suffix == "plan":
+        elif suffix in ("engine", "plan", "trt"):
             return "trt"
         else:
             _get_logger().fatal(

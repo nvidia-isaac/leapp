@@ -24,7 +24,6 @@ import yaml
 
 from .utils.logging import _get_logger
 from .export_manager import ExportManager
-from .utils.tracing_lock import TracingLock
 from .utils.utils import get_system_info
 from .utils.tensor_description import GraphConfigs
 
@@ -86,7 +85,6 @@ def start(
             "calling start() again will reset the graph"
         )
         _get_logger().warning("Resetting graph...")
-        manager.reset_tracing_lock()
 
     if dry_run:
         _get_logger().info("Starting dry run mode")
@@ -111,11 +109,6 @@ def stop():
     """Stop LEAPP graph interpretation and disable tracing."""
     manager = _MANAGER
 
-    if TracingLock().is_active:
-        _get_logger().fatal(
-            "leapp.stop() was called while a traced function is still executing",
-            error_type=Exception,
-        )
     if not ExportManager.is_interpret_graph_enabled():
         _get_logger().fatal(
             "leapp.stop() called with no active tracing session — did you call leapp.start()?",
@@ -235,7 +228,6 @@ class AnnotateAPI:
         "input_tensors",
         "output_tensors",
         "method",
-        "_method",
         "state_tensors",
         "update_state",
         "register_buffer",

@@ -72,10 +72,6 @@ class LeappNode:
         self.name = name
         self._node_index = self.UNSET_NODE_INDEX
 
-        # Attributes expected by export backends (subclasses may override)
-        self.register_buffers = set()
-        self.environment_constants = set()
-
         # model settings
         self._model_captured = False
         self.model_path = None

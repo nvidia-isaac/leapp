@@ -51,7 +51,8 @@ Once available, record `leapp.__version__`, `leapp.__file__`, and relevant publi
 | `output_tensors(..., static_outputs=...)` | Deliberately constant output tensors. Never use to conceal lost tracing. |
 | `annotate.warp_op` | Explicit Warp segment within an existing node; see the Warp subsection below. |
 
-Avoid legacy private `annotate._method` for new integrations; investigate public interfaces first.
+Use `annotate.method` or explicit input/output annotations. The private
+`annotate._method` source-capture decorator is unavailable.
 
 ## Complete annotation and validation recipe
 

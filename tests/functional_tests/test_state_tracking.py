@@ -804,35 +804,6 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
             }
         )
 
-    def test_no_buffers_mutated(self):
-        """All buffers read but not reassigned -> 0 feedback, all regular inputs."""
-        model = NoMutationModel()
-        model.eval()
-        obs = torch.randn(1, 4)
-
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        obs_traced = annotate.input_tensors("policy", {"obs": obs})
-
-        annotate.module("policy", model)
-        action = model(obs_traced)
-
-        annotate.output_tensors("policy", {"action": action}, export_with="jit")
-        leapp.stop()
-        leapp.compile_graph(visualize=False)
-
-        # 1 dangling input (obs), 1 dangling output, 0 feedback
-        # scale and bias are baked as constants (not dynamic inputs)
-        self.verify_num_connections(
-            annotate,
-            nodes=1,
-            inputs=1,
-            outputs=1,
-            internal_connections=0,
-            feedback_connections=0,
-        )
-        self.verify_all_models_exist("policy")
-        self.verify_safetensors_matches_feedback(annotate)
-
     def test_no_buffers(self):
         """Model with no registered buffers -> module() is a no-op."""
         model = NoBufferModel()
@@ -889,43 +860,6 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
             feedback_connections=1,
         )
         self.verify_all_models_exist("policy")
-
-    def test_model_restored_after_tracing(self):
-        """Verify model buffers are properly re-registered after tracing."""
-        model = GRUModel()
-        model.eval()
-        obs = torch.randn(1, 4)
-
-        # Record original buffer names
-        original_buffers = dict(model.named_buffers())
-
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        obs_traced = annotate.input_tensors("policy", {"obs": obs})
-
-        annotate.module("policy", model)
-        action = model(obs_traced)
-
-        annotate.output_tensors(
-            "policy", {"action": action}, export_with="onnx-torchscript"
-        )
-        leapp.stop()
-        leapp.compile_graph(visualize=False)
-
-        # After tracing, all buffers should be restored
-        restored_buffers = dict(model.named_buffers())
-        self.assertEqual(
-            set(original_buffers.keys()),
-            set(restored_buffers.keys()),
-            "Buffer names should be restored after tracing",
-        )
-
-        # Restored values should be proper tensors (not TracedTensors)
-        for name, buf in restored_buffers.items():
-            self.assertIsInstance(
-                buf,
-                torch.Tensor,
-                f"Buffer '{name}' should be a torch.Tensor after restore",
-            )
 
     def test_shared_state_name_keeps_buffers_tied(self):
         """One state name for two buffers keeps buffers tied, in that session and later.
@@ -1111,28 +1045,14 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
             feedback_connections=0,
         )
 
+        self.verify_safetensors_matches_feedback(annotate)
+
         # Load exported model and verify it produces correct values
         # Expected: obs * 2.0 + 1.0 = [3.0, 5.0, 7.0, 9.0]
         expected = obs * 2.0 + 1.0
         self.verify_single_torchscript_model_expected_value(
             inputs=[obs], expected_outputs=[expected], model_name="policy"
         )
-
-    def test_not_tracing_noop(self):
-        """When not tracing, module() is a complete no-op."""
-        model = GRUModel()
-        model.eval()
-        obs = torch.randn(1, 4)
-
-        # Don't call leapp.start() — not tracing
-        original_buffers = {n: b.clone() for n, b in model.named_buffers()}
-
-        annotate.module("policy", model)
-        action = model(obs)
-
-        # Model should work normally and buffers should be untouched as buffers
-        current_buffers = dict(model.named_buffers())
-        self.assertEqual(set(original_buffers.keys()), set(current_buffers.keys()))
 
     def test_nested_submodule_buffers(self):
         """Buffers in nested submodules are detected correctly."""

@@ -100,8 +100,8 @@ feedback inputs from ``pipeline.initial_values``:
    manager.set_input_value("policy", "hidden", hidden_override)
 
 ``value_dict`` exposes values at LEAPP node boundaries; it does not expose
-intermediate operations inside a compiled TorchScript, ONNX, ``pt2``, or
-ExecuTorch model.
+intermediate operations inside a compiled TorchScript, ONNX, ``pt2``,
+ExecuTorch, or TensorRT model.
 
 Feedback State
 ==============

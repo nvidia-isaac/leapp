@@ -88,6 +88,15 @@ representation rather than TorchScript or ONNX. It is a good fit for
 feedforward PyTorch graphs that already compile cleanly through LEAPP's
 FX capture path.
 
+``InferenceManager`` relocates a loaded PT2 program to CUDA when available,
+otherwise CPU. Parameters, constants, tensor factories, and captured device
+transfers move together; dtype conversions are retained. Supply inputs on that
+runtime device, as returned by ``get_mock_input()``. Outputs also use that
+device. The target must support the program's operations; moving a program
+does not provide missing device kernels or guarantee identical CPU/CUDA
+floating-point results. Loading directly with ``torch.export.load`` retains
+the artifact's original placement.
+
 .. code-block:: python
 
    import torch
@@ -268,11 +277,12 @@ and the YAML would record the captured dtype.
 LEAPP asks the runtime to replay each engine as a CUDA graph, which cuts the
 launch cost of each call.
 
-Torch-TensorRT cannot keep a buffer or parameter the node reads and then
-writes, so LEAPP refuses every write to one with ``"tensorrt"``, even a write
-that replaces the whole value first. It also cannot save a buffer, parameter,
-captured tensor or static output that the node returns as it is, or through
-``detach()`` or another step that becomes an alias, so LEAPP refuses that too.
+LEAPP traces input and state updates into functional outputs. If an exported
+program still writes a stored buffer or parameter, LEAPP refuses it with
+``"tensorrt"``: Torch-TensorRT cannot preserve those writes. It also cannot save
+a buffer, parameter, captured tensor or static output that the node returns as
+it is, or through ``detach()`` or another step that becomes an alias, so LEAPP
+refuses that too.
 LEAPP also refuses ``x[:]`` of one: TensorRT can leave such a slice out of its
 engines, for example with a larger ``min_block_size``, and ExecuTorch then
 removes it and the save crashes. Which ops TensorRT takes is known only after
@@ -310,11 +320,8 @@ program by about 1e-3. Set ``torch.backends.cudnn.allow_tf32 = False`` before
 ``leapp.start()``, or pass a larger ``atol`` to ``compile_graph()``. If
 TensorRT cannot build a node, use ``delegate="cuda"`` for it.
 
-Every delegate refuses a node whose exported program writes one of its inputs
-in place, as in ``x.add_(3)`` in a legacy ``annotate._method`` node: depending on the delegate, ExecuTorch would return the input as
-an extra output, fail at export, or drop the write. Write to a copy instead, as
-in ``x = x.clone()``. Boolean masks such as ``x[x > 0]`` do not export with any
-delegate, and the GPU delegates do not export ``nonzero``; both fail at export
+Boolean masks such as ``x[x > 0]`` do not export with any delegate, and the GPU
+delegates do not export ``nonzero``; both fail at export
 with an error. With ``"xnnpack"``, ``nonzero`` of an input with 2 or more
 dimensions returns wrong indices, which validation catches. A node with no
 inputs that writes a buffer fails at export. Export such a node with another
@@ -429,7 +436,7 @@ Bringing your own model
 Set ``export_with=None`` when you want a node to appear in the graph
 without asking LEAPP to compile it. This is useful for:
 
-* prebuilt ``.pt``, ``.pt2``, or ``.onnx`` artifacts
+* prebuilt ``.pt``, ``.pt2``, ``.onnx``, or TensorRT engine artifacts
 * placeholder nodes that will be filled in later
 * flows where LEAPP should capture I/O and graph edges but not produce a
   model
@@ -475,4 +482,4 @@ Important behavior:
 * The model path written into the YAML is made relative to the YAML
   directory when possible.
 * ``InferenceManager`` currently runs referenced ``.pt``, ``.pt2``, and
-  ``.onnx`` artifacts.
+  ``.onnx`` artifacts, and TensorRT engines.

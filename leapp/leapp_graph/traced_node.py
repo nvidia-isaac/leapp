@@ -58,10 +58,23 @@ class _LeappFXGraph(fx.Graph):
         warp_backend = get_warp_backend()
         if warp_backend is not None:
             warp_backend.close_warp_segment()
-        return super().create_node(*args, **kwargs)
+        node = super().create_node(*args, **kwargs)
+        if self.recording and node.op in ("call_function", "call_method"):
+            autocast = {
+                device: torch.get_autocast_dtype(device)
+                for device in ("cpu", "cuda")
+                if torch.is_autocast_enabled(device)
+            }
+            if autocast:
+                node.meta["leapp_autocast"] = autocast
+                self.requires_functionalization = True
+        return node
 
 
 class TracedTensorNode(LeappNode):
+    # Shared across nodes; ExportManager resets it at the session boundary.
+    _next_input_index = 0
+
     def __init__(self, name, *args, **kwargs):
         if args or kwargs:
             _get_logger().warning(
@@ -93,6 +106,18 @@ class TracedTensorNode(LeappNode):
         # Buffer tracker for auto-detecting stateful buffers (set by annotate.module())
         self._buffer_tracker = None
         self._next_buffer_idx = 0
+
+    def add_input(self, input_name, raw_input_name, input_value, semantics=None):
+        descriptions = super().add_input(
+            input_name, raw_input_name, input_value, semantics=semantics
+        )
+        for description in descriptions:
+            description.fx_name = f"input_{TracedTensorNode._next_input_index}"
+            TracedTensorNode._next_input_index += 1
+        return descriptions
+
+    def _get_input_description_by_fx_name(self, name):
+        return next((td for td in self.inputs if td.fx_name == name), None)
 
     def _get_required_io_description(self, name: str, io_list: list, io_kind: str):
         desc = self.get_io_description_by_name(name, io_list)
@@ -498,7 +523,10 @@ class TracedTensorNode(LeappNode):
 
                 proxy = None
                 if self.is_tracing:
-                    node = self.graph.create_node("placeholder", name, (), {})
+                    description = self.get_io_description_by_name(name, self.inputs)
+                    node = self.graph.create_node(
+                        "placeholder", description.fx_name, (), {}
+                    )
                     proxy = Proxy(node, self.tracer)
                 if is_active_traced or type(data) is torch.Tensor:
                     # Declaring binds the object the caller holds rather than
@@ -599,8 +627,8 @@ class TracedTensorNode(LeappNode):
             return as_traced(data, declared.name, self, proxy=declared.proxy)
 
         existing = self.get_io_description_by_name(name, self.inputs)
-        has_placeholder = any(
-            node.op == "placeholder" and node.target == name
+        has_placeholder = existing is not None and any(
+            node.op == "placeholder" and node.target == existing.fx_name
             for node in self.graph.nodes
         )
         if existing is not None and not has_placeholder:
@@ -747,7 +775,7 @@ class TracedTensorNode(LeappNode):
         for node in self.graph.nodes:
             if node.op != "placeholder" or node not in ancestors:
                 continue
-            description = self.get_io_description_by_name(node.target, self.inputs)
+            description = self._get_input_description_by_fx_name(node.target)
             if description is not None and not description.is_dense:
                 _get_logger().fatal(
                     f"Cannot capture node '{self.name}': input '{description.name}' "
@@ -804,9 +832,7 @@ class TracedTensorNode(LeappNode):
         trimmed_inputs = set()
         for node in reversed(nodes_to_remove):
             if node.op == "placeholder":
-                input_description = LeappNode.get_io_description_by_name(
-                    node.target, self.inputs
-                )
+                input_description = self._get_input_description_by_fx_name(node.target)
                 if input_description is None:
                     _get_logger().error(
                         f"Error: when building the graph module for {self.name}, "

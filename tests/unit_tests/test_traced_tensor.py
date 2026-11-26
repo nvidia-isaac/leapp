@@ -31,6 +31,55 @@ warnings.filterwarnings("ignore", message=".*on empty non-base types in `__init_
 warnings.filterwarnings("ignore", message=".*feature will be removed.*")
 
 
+@pytest.mark.parametrize(
+    "device,weight_dtype",
+    [("cpu", torch.float32), ("cpu", torch.bfloat16), ("cuda", torch.bfloat16)],
+)
+def test_autocast_changed_input_replay(tmp_path, device, weight_dtype):
+    """Lower mixed-precision scopes without changing native weights or buffers."""
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    torch.manual_seed(42)
+    model = (
+        torch.nn.Sequential(
+            torch.nn.Linear(16, 32), torch.nn.GELU(), torch.nn.Linear(32, 16)
+        )
+        .to(device=device, dtype=weight_dtype)
+        .eval()
+    )
+    model.register_buffer(
+        "scale", torch.linspace(0.7, 1.3, 256, device=device).reshape(16, 16)
+    )
+    original = {name: value.clone() for name, value in model.state_dict().items()}
+
+    def compute(x):
+        with torch.autocast(device, dtype=torch.bfloat16):
+            low = model(x)
+            with torch.autocast(device, enabled=False):
+                full = (low.float() + x) @ model.scale
+            return low, full
+
+    raw = torch.randn(1, 4, 16, device=device)
+    node = TracedTensorNode("autocast")
+    with torch.no_grad():
+        low, full = compute(node.create_input(raw.clone(), "x"))
+        node.compile_trace({"low": low, "full": full})
+        program = torch.export.export(node.m, (raw,))
+        path = tmp_path / "autocast.pt2"
+        torch.export.save(program, path)
+        reloaded = torch.export.load(path).module()
+        for fresh in (raw, raw * -1.7 + 0.3, raw + 2):
+            expected = compute(fresh)
+            for replay in (node.m, reloaded):
+                actual = replay(fresh)
+                for result, reference in zip(actual, expected):
+                    torch.testing.assert_close(result, reference, rtol=0, atol=0)
+                assert actual[0].dtype == torch.bfloat16
+                assert actual[1].dtype == torch.float32
+    for name, value in model.state_dict().items():
+        torch.testing.assert_close(value, original[name], rtol=0, atol=0)
+
+
 class TensorArithmeticFunctions:
     """Tensor arithmetic functions for testing."""
 
@@ -512,6 +561,28 @@ class TensorArithmeticFunctions:
 @pytest.mark.filterwarnings("ignore::torch.jit.TracerWarning")
 class TestTracedTensor(unittest.TestCase):
     """Test TracedTensor operations."""
+
+    def test_dotted_input_binding_survives_alias_and_graph_reset(self):
+        ctx = TracedTensorNode("dotted")
+        identifiers = None
+        for capture in range(2):
+            if capture:
+                ctx.reset_trace_state()
+            raw = torch.arange(3.0)
+            left = ctx.create_input(raw, "out.state")
+            alias = ctx.create_input(raw.tensor, "alias.state")
+            self.assertIs(alias.proxy.node, left.proxy.node)
+            right = ctx.create_input(torch.ones(3), "out_state")
+            current = [td.fx_name for td in ctx.inputs]
+            if identifiers is None:
+                identifiers = current
+            self.assertEqual(current, identifiers)
+            self.assertEqual(len(ctx.inputs), 2)
+            ctx.compile_trace({"result.state": left * 2 + right})
+            fresh_left, fresh_right = torch.arange(3.0) + 7, torch.full((3,), -3.0)
+            torch.testing.assert_close(
+                ctx.m(fresh_left, fresh_right), fresh_left * 2 + fresh_right
+            )
 
     def test_parameter_constants_preserve_sharing_and_views(self):
         storage = torch.arange(8, dtype=torch.float32)
@@ -2728,11 +2799,7 @@ class TestTracedTensor(unittest.TestCase):
                 buf.add_(5)
                 ctx.compile_trace({"out": torch.stack((x, parent, buf))})
                 fresh = {"x": torch.tensor([10.0, 20.0, 30.0]), "y": torch.arange(3.0)}
-                inputs = tuple(
-                    fresh[node.target]
-                    for node in ctx.m.graph.nodes
-                    if node.op == "placeholder"
-                )
+                inputs = tuple(fresh[description.name] for description in ctx.inputs)
                 self.validate_export(
                     ctx.m,
                     inputs,

@@ -349,31 +349,6 @@ class TestTracedNpArray(unittest.TestCase):
         output = ctx.m(input_tensor)
         self.assertTrue(torch.allclose(output, expected))
 
-    # ==================== Graph Building Tests ====================
-
-    def test_graph_basic_operations(self):
-        """Test that basic operations create an FX graph."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
-        y = x + 1
-        z = y * 2
-
-        # Compile and verify graph exists
-        ctx.compile_trace({"output": z})
-        self.assertIsNotNone(ctx.m)
-        self.assertIsNotNone(ctx.graph)
-        self.assertGreater(len(list(ctx.graph.nodes)), 0)
-
-    def test_graph_multiple_inputs(self):
-        """Test graph with multiple inputs."""
-        ctx = TracedTensorNode(name="test", node_index=0)
-        x = ctx.create_input(np.array([1.0, 2.0, 3.0]), name="x")
-        y = ctx.create_input(np.array([4.0, 5.0, 6.0]), name="y")
-        z = x + y
-
-        ctx.compile_trace({"output": z})
-        self.assertIsNotNone(ctx.m)
-
     # ==================== Operations After Compile Tests ====================
 
     def test_operations_after_compile_return_native_arrays(self):

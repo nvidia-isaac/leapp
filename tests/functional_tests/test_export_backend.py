@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
+import copy
 import errno
 import functools
 import importlib.abc
@@ -81,7 +82,7 @@ def _execution_plan(program_path):
 
 
 class TestBackendImports(unittest.TestCase):
-    """Only nodes that use the ExecuTorch backend fail on a torch older than 2.15."""
+    """Optional runtime requirements do not prevent using other backends."""
 
     def _run(self, torch_version, code):
         script = (
@@ -170,6 +171,123 @@ class TestBackendImports(unittest.TestCase):
         )
         result = self._run(torch.__version__, code)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_tensorrt_is_optional(self):
+        code = (
+            "import sys\n"
+            "sys.modules['tensorrt'] = None\n"
+            "import leapp\n"
+            "from leapp.inference_manager import NodeManager\n"
+            "from leapp.backends.export_backend import NoneExportBackend\n"
+            "assert 'leapp.backends.tensorrt_backend' not in sys.modules\n"
+            "for name in ('jit', 'onnx', 'pt2', 'trt'):\n"
+            "    NodeManager._create_backend(None, name, {})\n"
+        )
+        result = self._run(torch.__version__, code)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class TestTensorRTBackend(LEAPPFunctionalTestBase):
+    @unittest.skipUnless(torch.cuda.is_available(), "TensorRT execution requires CUDA")
+    def test_external_engine_validation_and_relocated_pipeline(self):
+        """Exercise real TRT execution, strict cached validation, artifact copying,
+        and relocated YAML reload in a mixed TRT/TorchScript pipeline. Unit tests
+        cannot establish CUDA stream ordering or numerical execution correctness.
+        """
+        trt = pytest.importorskip("tensorrt")
+        logger = trt.Logger(trt.Logger.WARNING)
+        builder = trt.Builder(logger)
+        network = builder.create_network(0)
+        x = network.add_input("x", trt.float32, (2, 3))
+        y = network.add_input("y", trt.float32, (2, 3))
+        difference = network.add_elementwise(
+            x, y, trt.ElementWiseOperation.SUB
+        ).get_output(0)
+        total = network.add_elementwise(x, y, trt.ElementWiseOperation.SUM).get_output(
+            0
+        )
+        difference.name, total.name = "difference", "total"
+        network.mark_output(difference)
+        network.mark_output(total)
+        serialized = builder.build_serialized_network(
+            network, builder.create_builder_config()
+        )
+        self.assertIsNotNone(serialized)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            engine_path = os.path.join(tmp, "external.trt")
+            with open(engine_path, "wb") as f:
+                f.write(bytes(serialized))
+            leapp.start(name=self.TEST_GRAPH_NAME, max_cached_io=2)
+            try:
+                for offset in (0.0, 4.0):
+                    x, y = annotate.input_tensors(
+                        "engine",
+                        {
+                            "x": torch.arange(6, dtype=torch.float32).reshape(2, 3)
+                            + offset,
+                            "y": torch.full((2, 3), 2.0),
+                        },
+                    )
+                    difference, total = x - y, x + y
+                    annotate.output_tensors(
+                        "engine",
+                        {"difference": difference, "total": total},
+                        export_with=None,
+                        backend_params={
+                            "model_path": engine_path,
+                            "copy_original_model": True,
+                        },
+                    )
+                    difference, total = annotate.input_tensors(
+                        "post", {"difference": difference, "total": total}
+                    )
+                    annotate.output_tensors(
+                        "post",
+                        {"result": difference * 2 + total},
+                        export_with="jit-trace",
+                    )
+            finally:
+                leapp.stop()
+            leapp.compile_graph(visualize=False, validate=True, strict=True)
+            yaml_path = os.path.join(
+                self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml"
+            )
+            with open(yaml_path) as f:
+                self.assertEqual(
+                    yaml.safe_load(f)["models"]["engine"]["parameters"]["backend"],
+                    "trt",
+                )
+
+            relocated = shutil.copytree(
+                self.TEST_GRAPH_NAME, os.path.join(tmp, "relocated")
+            )
+            os.remove(engine_path)
+            shutil.rmtree(self.TEST_GRAPH_NAME)
+            manager = leapp.InferenceManager(
+                os.path.join(relocated, f"{self.TEST_GRAPH_NAME}.yaml")
+            )
+            for device in ("cpu", "cuda"):
+                # Use a nondefault stream, noncontiguous inputs, and changing
+                # values to catch stale bindings and stream/buffer lifetime errors.
+                stream = torch.cuda.Stream()
+                with torch.cuda.stream(stream):
+                    x = (
+                        torch.arange(6, dtype=torch.float32, device=device)
+                        .reshape(3, 2)
+                        .T
+                    )
+                    y = torch.full((2, 3), 3.0, device=device)
+                    result = manager.run_policy({"engine/x": x, "engine/y": y})[
+                        "post/result"
+                    ]
+                    torch.testing.assert_close(result, 3 * x - y)
+                    saved = result.clone()
+                    changed = manager.run_policy(
+                        {"engine/x": x + 7, "engine/y": y - 2}
+                    )["post/result"]
+                    torch.testing.assert_close(changed, 3 * (x + 7) - (y - 2))
+                    torch.testing.assert_close(result, saved)
 
 
 class TestOnnxProviderSelection(unittest.TestCase):
@@ -320,6 +438,45 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
 
     """
 
+    def test_constant_type_as_export_and_replay(self):
+        """Check initializer naming through real Dynamo export and ORT reload.
+
+        FX conversion equivalence alone cannot detect aliased initializer
+        renaming, especially when the constant is also a graph output.
+        """
+        constant = torch.linspace(-0.7, 1.3, 12).reshape(3, 4)
+        double = constant.double()
+
+        def compute(x):
+            converted = constant.type_as(x)
+            return {
+                "noop": x + converted,
+                "cast": x + double.type_as(x),
+                "constant": converted,
+                "reused": x + converted + constant.type_as(x),
+            }
+
+        leapp.start(self.TEST_GRAPH_NAME, max_cached_io=2)
+        try:
+            for shift in (0.0, 0.5):
+                x = leapp.annotate.input_tensors(
+                    "policy", {"x": torch.zeros(2, 3, 4) + shift}
+                )
+                leapp.annotate.output_tensors("policy", compute(x), export_with="onnx")
+        finally:
+            leapp.stop()
+        leapp.compile_graph(visualize=False, validate=True, strict=True)
+        manager = leapp.InferenceManager(
+            os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+        )
+        for shift in (-2.0, 3.0):
+            fresh = torch.arange(24.0).reshape(2, 3, 4) + shift
+            actual = manager.run_policy({"policy/x": fresh})
+            for name, expected in compute(fresh).items():
+                torch.testing.assert_close(
+                    actual[f"policy/{name}"], expected, rtol=0, atol=0
+                )
+
     def test_integer_sort_ties_and_mismatch_diagnostics(self):
         """Cover real CUDA ONNX sorting and integer failure reporting in one test.
 
@@ -467,7 +624,7 @@ class TestOnnxBackend(LEAPPFunctionalTestBase):
                             )
 
     def test_onnx_backend(self):
-        """Exercise real export and verify the matcher patch is active beforehand."""
+        """Exercise real export with the matcher optimization active beforehand."""
 
         @annotate.method(export_with="onnx")
         def funcA(inputA: torch.Tensor):
@@ -1628,6 +1785,104 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
             yaml_data["models"][funcA.__name__]["parameters"]["backend"], "pt2"
         )
 
+    def test_pt2_reload_uses_runtime_device(self):
+        """Relocate saved transfers, factories and constants as one program.
+
+        Exercise CPU export to CUDA and mixed-device export to either target;
+        cached validation alone cannot cover runtime relocation. The combined
+        device/dtype conversion must retain its dtype on changed-input replay.
+        """
+        cases = [("cpu", "cpu")]
+        if torch.cuda.is_available():
+            cases += [("cpu", "cuda"), ("cuda", "cuda"), ("cuda", "cpu")]
+        for device, runtime_device in cases:
+            with self.subTest(device=device, runtime_device=runtime_device):
+                gain = torch.tensor([2.0, 0.5], device=device)
+                lower = torch.tensor([-1.0, 0.0])
+                upper = torch.tensor([1.0, 2.0])
+                leapp.start(name=self.TEST_GRAPH_NAME, max_cached_io=2)
+                try:
+                    for shift in (0.0, 0.5):
+                        x, offset = leapp.annotate.input_tensors(
+                            "policy",
+                            {
+                                "x": torch.tensor([0.5, 3.0], device=device) + shift,
+                                "offset": torch.tensor([0.1, -0.2]) + shift,
+                            },
+                        )
+                        result = (x * gain).to(device="cpu", dtype=torch.float64)
+                        result = result.clamp(lower, upper) + offset
+                        result = result + torch.arange(2, device="cpu")
+                        leapp.annotate.output_tensors(
+                            "policy", {"result": result}, export_with="pt2"
+                        )
+                finally:
+                    leapp.stop()
+                leapp.compile_graph(visualize=False, validate=True, strict=True)
+                with mock.patch(
+                    "leapp.backends.export_backend.ExportBackend._select_runtime_device",
+                    return_value=runtime_device,
+                ):
+                    manager = leapp.InferenceManager(
+                        os.path.join(
+                            self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml"
+                        )
+                    )
+                for values in ([-2.0, 1.0], [0.2, 5.0]):
+                    fresh = torch.tensor(values, device=device)
+                    offset = torch.tensor([0.3, 0.4])
+                    actual = manager.run_policy(
+                        {
+                            "policy/x": fresh.to(runtime_device),
+                            "policy/offset": offset.to(runtime_device),
+                        }
+                    )["policy/result"]
+                    expected = (fresh * gain).to(device="cpu", dtype=torch.float64)
+                    expected = expected.clamp(lower, upper) + offset + torch.arange(2)
+                    self.assertEqual(actual.device.type, runtime_device)
+                    torch.testing.assert_close(actual.cpu(), expected, rtol=0, atol=0)
+
+    def test_pt2_reload_retargets_device_arguments(self):
+        """Cover positional and keyword device arguments without requiring CUDA.
+
+        A meta transfer has no stored tensor data to migrate; after relocation,
+        its operation must compute real values on the requested CPU device.
+        """
+
+        class Convert(torch.nn.Module):
+            def forward(self, x):
+                return x.to(device="meta", dtype=torch.float64) + 1
+
+        node = LeappNode("relocate")
+        node.setup_backend("pt2", {})
+        backend = node.export_backend
+        program = torch.export.export(Convert(), (torch.ones(2),))
+        with tempfile.TemporaryDirectory() as directory:
+            for keyword_device in (False, True):
+                with self.subTest(keyword_device=keyword_device):
+                    if keyword_device:
+                        for fx_node in program.graph.nodes:
+                            if fx_node.target is torch.ops.aten.to.device:
+                                fx_node.kwargs = {
+                                    "device": fx_node.args[1],
+                                    "dtype": fx_node.args[2],
+                                }
+                                fx_node.args = fx_node.args[:1]
+                        program.graph_module.recompile()
+                        program.validate()
+                    backend.exported_program = program
+                    path, _, sha256 = backend.save(directory)
+                    with mock.patch.object(
+                        backend, "_select_runtime_device", return_value="cpu"
+                    ):
+                        backend.load(path, sha256)
+                    for values in ([2.0, 3.0], [-4.0, 0.25]):
+                        fresh = torch.tensor(values)
+                        actual = backend.compiled_model(fresh)
+                        torch.testing.assert_close(
+                            actual, fresh.double() + 1, rtol=0, atol=0
+                        )
+
     @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     def test_executorch_backend(self):
         """Covers the ExecuTorch delegates, which lower and run the graph outside
@@ -1652,9 +1907,7 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
                 if not device_io:
                     backend_params["device_io"] = False
 
-                @annotate.method(
-                    export_with="executorch", backend_params=backend_params
-                )
+                @annotate.method(export_with="pte", backend_params=backend_params)
                 def funcA(inputA: torch.Tensor):
                     return inputA @ weight
 
@@ -1731,153 +1984,168 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
                         actual.cpu(), fresh.cpu() @ weight, rtol=1e-4, atol=1e-5
                     )
 
+        # Tracing exposes an input write through the output, without copyback or
+        # an extra mutation output. Use distinct inputs to expose frozen values.
+        for delegate in dict.fromkeys(delegate for delegate, _ in cases):
+            with self.subTest(input_update=delegate):
+                leapp.start(name=self.TEST_GRAPH_NAME)
+                left, right = annotate.input_tensors(
+                    "input_update", {"left": torch.ones(3), "right": torch.ones(3)}
+                )
+                right.add_(3)
+                annotate.output_tensors(
+                    "input_update",
+                    {"result": left + right * 2},
+                    export_with="pte",
+                    backend_params={"delegate": delegate},
+                )
+                leapp.stop()
+                leapp.compile_graph(visualize=False, validate=True)
+                manager = leapp.InferenceManager(
+                    os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
+                )
+                for offset in (-2.0, 0.25):
+                    left = torch.full((3,), offset, device=device)
+                    right = torch.arange(3, device=device).float() + offset
+                    original = right.clone()
+                    actual = manager.run_policy(
+                        {
+                            "input_update/left": left,
+                            "input_update/right": right,
+                        }
+                    )["input_update/result"]
+                    torch.testing.assert_close(actual, left + (original + 3) * 2)
+                    torch.testing.assert_close(right, original)
+
+    def _export_executorch_module(
+        self, name, module, backend_params=None, *, validate=False
+    ):
+        # Direct modules retain mutable buffers that FX capture makes functional.
+        node = LeappNode(name)
+        node._max_cached_io = int(validate)
+        node.add_input("obs", "obs", torch.ones(3))
+        if validate:
+            reference = copy.deepcopy(module)
+            node.add_output("action", "action", reference(torch.ones(3)))
+            second = torch.full((3,), 2.0)
+            node.validate_input_and_update_sources("obs", "obs", second)
+            node.validate_output_and_update_sources(
+                "action", "action", reference(second)
+            )
+            node.increment_cache_idx()
+        backend = ExecuTorchExportBackend(node, backend_params)
+        node.export_backend = backend
+        node.backend = "executorch"
+        backend.compile(module)
+        if validate:
+            passed, hint = node.validate_compiled_model()
+            self.assertTrue(passed, hint)
+        os.makedirs(self.TEST_GRAPH_NAME, exist_ok=True)
+        path, _, checksum = backend.save(self.TEST_GRAPH_NAME)
+        loader = ExecuTorchExportBackend(None, backend.get_backend_metadata())
+        loader.load(path, checksum)
+        return loader.compiled_model, path
+
     @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     def test_executorch_backend_constants(self):
-        """A legacy node is exported from its Python function, so a value it
-        builds from constants alone reaches export. XNNPACK cannot run arange,
-        so the program runs whole in the delegate only because export folds
-        it."""
+        """Fold constant-only operators before lowering to a delegate that lacks them."""
 
-        @annotate._method(export_with="executorch")
-        def legacy_constants(inputL):
-            return inputL + torch.arange(3, dtype=torch.float32)
+        class ConstantPolicy(torch.nn.Module):
+            def forward(self, obs):
+                return obs + torch.arange(3, dtype=torch.float32)
 
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        legacy_constants(torch.ones(3))
-        leapp.stop()
-        self.assertEqual(
-            leapp.compile_graph(visualize=False, validate=True),
-            {legacy_constants.__name__: True},
-        )
-        plan = _execution_plan(
-            os.path.join(self.TEST_GRAPH_NAME, f"{legacy_constants.__name__}.pte")
-        )
-        self.assertEqual([op.name for op in plan.operators], [])
+        program, path = self._export_executorch_module("constants", ConstantPolicy())
+        self.assertEqual([op.name for op in _execution_plan(path).operators], [])
+        for offset in (1.0, -4.0):
+            fresh = torch.full((3,), offset)
+            (actual,) = program(fresh)
+            torch.testing.assert_close(actual, fresh + torch.arange(3))
 
     @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     def test_executorch_backend_written_buffers(self):
-        """ExecuTorch leaves a buffer the program writes uninitialized unless told to
-        keep its value, so these nodes would return zeros where the buffers held
-        20 and 30. One declares its buffer, and another's module owns two. On a GPU
-        machine, CPU inputs still give CPU outputs. A declared counter carries its
-        value between calls, so validation replays sample 0 only after loading the
-        program again. That node uses the short name "pte"."""
+        """Retain persistent/non-persistent initial values and reset saved counters."""
 
-        class Counter(torch.nn.Module):
+        class BufferPolicy(torch.nn.Module):
             def __init__(self):
                 super().__init__()
                 self.register_buffer("count", torch.tensor([10.0, 20.0, 30.0]))
-                # torch.export keeps a persistent=False buffer's value in constants.
                 self.register_buffer(
                     "total", torch.tensor([10.0, 20.0, 30.0]), persistent=False
                 )
 
-        class Overwriter:
+            def forward(self, obs):
+                self.count[0] = obs[0]
+                self.total[0] = obs[0]
+                return (self.count + self.total) / 2
+
+        class Counter(torch.nn.Module):
             def __init__(self):
-                self.values = torch.tensor([10.0, 20.0, 30.0])
-                self.counter = Counter()
+                super().__init__()
+                self.register_buffer("steps", torch.zeros(3))
 
-            @annotate._method(
-                export_with="executorch", register_buffers=["self.values"]
-            )
-            def legacy_declared(self, inputL):
-                self.values[0] = inputL[0]
-                return self.values * 1.0
-
-            @annotate._method(export_with="executorch")
-            def legacy_module(self, inputM):
-                self.counter.count[0] = inputM[0]
-                self.counter.total[0] = inputM[0]
-                return (self.counter.count + self.counter.total) / 2
-
-            @annotate._method(export_with="pte", register_buffers=["self.steps"])
-            def legacy_counter(self, inputK):
+            def forward(self, obs):
                 self.steps += 1
-                return inputK + self.steps
+                return obs + self.steps
 
-        overwriter = Overwriter()
-        overwriter.steps = torch.zeros(3)
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        for value in (1.0, 2.0):
-            overwriter.legacy_declared(torch.full((3,), value))
-            overwriter.legacy_module(torch.full((3,), value))
-            overwriter.legacy_counter(torch.full((3,), value))
-        leapp.stop()
-        self.assertEqual(
-            leapp.compile_graph(visualize=False, validate=True),
-            {"legacy_declared": True, "legacy_module": True, "legacy_counter": True},
-        )
-        yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
-        seven = torch.full((3,), 7.0)
-        manager = leapp.InferenceManager(yaml_path)
-        outputs = manager.run_policy(
-            {
-                "legacy_declared/inputL": seven,
-                "legacy_module/inputM": seven,
-                "legacy_counter/inputK": seven,
-            }
-        )
-        self.assertEqual(len(outputs), 3)
-        torch.testing.assert_close(
-            outputs.pop("legacy_counter/output1"), torch.full((3,), 8.0)
-        )
-        for actual in outputs.values():
-            torch.testing.assert_close(actual, torch.tensor([7.0, 20.0, 30.0]))
+        program, _ = self._export_executorch_module("buffers", BufferPolicy())
+        for value in (7.0, -2.0):
+            fresh = torch.full((3,), value)
+            (actual,) = program(fresh)
+            self.assertEqual(actual.device, fresh.device)
+            torch.testing.assert_close(actual, torch.tensor([value, 20.0, 30.0]))
+
+        counter, _ = self._export_executorch_module("counter", Counter(), validate=True)
+        fresh = torch.full((3,), 7.0)
+        for step in (1, 2):
+            (actual,) = counter(fresh)
+            torch.testing.assert_close(actual, fresh + step)
+        counter.reload()
+        (actual,) = counter(fresh)
+        torch.testing.assert_close(actual, fresh + 1)
 
     @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     @unittest.skipUnless(torch.cuda.is_available(), "Needs a CUDA GPU")
     def test_executorch_backend_cuda_written_buffer(self):
-        """A CUDA node that returns the buffer it writes leaves the buffer outside
-        the delegate, where it must still start from 20 and 30, not zeros. A CUDA
-        counter must start from its first value again when validation replays
-        sample 0."""
+        """Initialize CUDA buffers returned outside the delegate and reset counters."""
 
-        class Overwriter:
+        class BufferPolicy(torch.nn.Module):
             def __init__(self):
-                self.values = torch.tensor([10.0, 20.0, 30.0])
+                super().__init__()
+                self.register_buffer("values", torch.tensor([10.0, 20.0, 30.0]))
 
-            @annotate._method(
-                export_with="executorch",
-                register_buffers=["self.values"],
-                # With device_io, ExecuTorch cannot place a written buffer the
-                # program returns on the GPU.
-                backend_params={"delegate": "cuda", "device_io": False},
-            )
-            def legacy_cuda(self, inputC):
-                self.values[0] = inputC[0]
+            def forward(self, obs):
+                self.values[0] = obs[0]
                 return self.values
 
-            @annotate._method(
-                export_with="executorch",
-                register_buffers=["self.steps"],
-                backend_params={"delegate": "cuda"},
-            )
-            def legacy_cuda_counter(self, inputK):
-                self.steps += 1
-                return inputK + self.steps
+        class Counter(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.register_buffer("steps", torch.zeros(3))
 
-        overwriter = Overwriter()
-        overwriter.steps = torch.zeros(3)
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        for value in (1.0, 2.0):
-            overwriter.legacy_cuda(torch.full((3,), value))
-            overwriter.legacy_cuda_counter(torch.full((3,), value))
-        leapp.stop()
-        self.assertEqual(
-            leapp.compile_graph(visualize=False, validate=True),
-            {"legacy_cuda": True, "legacy_cuda_counter": True},
+            def forward(self, obs):
+                self.steps += 1
+                return obs + self.steps
+
+        program, _ = self._export_executorch_module(
+            "cuda_buffers", BufferPolicy(), {"delegate": "cuda", "device_io": False}
         )
-        yaml_path = os.path.join(self.TEST_GRAPH_NAME, f"{self.TEST_GRAPH_NAME}.yaml")
-        seven = torch.full((3,), 7.0)
-        outputs = leapp.InferenceManager(yaml_path).run_policy(
-            {"legacy_cuda/inputC": seven, "legacy_cuda_counter/inputK": seven}
+        for value in (7.0, -2.0):
+            fresh = torch.full((3,), value)
+            (actual,) = program(fresh)
+            self.assertEqual(actual.device, fresh.device)
+            torch.testing.assert_close(actual, torch.tensor([value, 20.0, 30.0]))
+
+        counter, _ = self._export_executorch_module(
+            "cuda_counter", Counter(), {"delegate": "cuda"}, validate=True
         )
-        torch.testing.assert_close(
-            outputs["legacy_cuda/output1"].cpu(), torch.tensor([7.0, 20.0, 30.0])
-        )
-        torch.testing.assert_close(
-            outputs["legacy_cuda_counter/output1"].cpu(), torch.full((3,), 8.0)
-        )
+        fresh = torch.full((3,), 7.0)
+        for step in (1, 2):
+            (actual,) = counter(fresh)
+            self.assertEqual(actual.device, fresh.device)
+            torch.testing.assert_close(actual, fresh + step)
+        counter.reload()
+        (actual,) = counter(fresh)
+        torch.testing.assert_close(actual, fresh + 1)
 
     @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     def test_executorch_backend_no_inputs(self):
@@ -2371,30 +2639,89 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
                     None, {"delegate": "tensorrt", "torch_tensorrt_version": recorded}
                 ).load("missing.pte", "0")
 
-        # ExecuTorch would return the written input as an extra first output.
-        # The error names only the input that is written.
-        delegates = ["xnnpack", "cuda"] if torch.cuda.is_available() else ["xnnpack"]
-        for delegate in delegates:
-            device = "cpu" if delegate == "xnnpack" else "cuda"
-            # A stored tensor puts its placeholder before the inputs.
-            scale = torch.full((3,), 2.0, device=device)
+    @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
+    def test_executorch_tensorrt_graph_safety(self):
+        """Reject unsafe saved state before building TensorRT engines.
 
-            @annotate._method(export_with="pte", backend_params={"delegate": delegate})
-            def legacy_writes_input(inputA, inputW):
-                inputW.add_(3)
-                return inputA + inputW * scale
+        Real ExportedProgram signatures cover buffer/parameter writes and stored
+        output aliases. The compiler is stubbed so these guards need no GPU or
+        Torch-TensorRT installation; copies and partial slices must reach it.
+        """
 
-            with self.subTest(delegate=delegate):
-                leapp.start(name=self.TEST_GRAPH_NAME)
-                legacy_writes_input(
-                    torch.ones(3, device=device), torch.ones(3, device=device)
+        class StoredPolicy(torch.nn.Module):
+            def __init__(self, mode):
+                super().__init__()
+                self.mode = mode
+                value = torch.tensor([10.0, 20.0, 30.0])
+                if "parameter" in mode:
+                    self.values = torch.nn.Parameter(value, requires_grad=False)
+                elif mode == "constant":
+                    self.values = value
+                else:
+                    self.register_buffer("values", value)
+
+            def forward(self, obs):
+                value = self.values
+                if self.mode.startswith("write"):
+                    value.add_(obs)
+                    return obs * value, value * 2
+                if self.mode in ("detach", "constant"):
+                    value = value.detach()
+                elif self.mode == "detach_twice":
+                    value = value.detach().detach()
+                elif self.mode == "slice":
+                    value = value[:]
+                elif self.mode == "clone":
+                    value = value.clone()
+                elif self.mode == "partial_slice":
+                    value = value[1:]
+                return obs * 2, value
+
+        cases = (
+            ("write_buffer", 'writes .* delegate "cuda"'),
+            ("write_parameter", r"writes .* with another backend\."),
+            *(
+                (mode, r"returns \['held'\] as a stored tensor")
+                for mode in (
+                    "buffer",
+                    "parameter",
+                    "constant",
+                    "detach",
+                    "detach_twice",
+                    "slice",
                 )
-                leapp.stop()
-                with self.assertRaisesRegex(
-                    RuntimeError,
-                    r"writes its inputs \['inputW'\] in place, which ExecuTorch",
+            ),
+            ("clone", None),
+            ("partial_slice", None),
+        )
+        for mode, message in cases:
+            with self.subTest(mode=mode):
+                node = LeappNode(mode)
+                node.add_input("obs", "obs", torch.ones(3))
+                node.add_output("action", "action", torch.ones(3))
+                node.add_output("held", "held", torch.ones(3))
+                backend = ExecuTorchExportBackend(node, {"delegate": "tensorrt"})
+                inputs = (torch.ones(3),)
+                program = torch.export.export(StoredPolicy(mode), inputs)
+                compiler = types.SimpleNamespace(
+                    dynamo=types.SimpleNamespace(compile=lambda exported_program: None),
+                    compile_and_save=mock.Mock(
+                        side_effect=RuntimeError("build requested")
+                    ),
+                )
+                with (
+                    mock.patch(
+                        "leapp.backends.executorch_backend._import_torch_tensorrt",
+                        return_value=compiler,
+                    ),
+                    mock.patch.object(backend, "_cuda_partitioner"),
+                    self.assertRaisesRegex(RuntimeError, message or "build requested"),
                 ):
-                    leapp.compile_graph(visualize=False)
+                    backend._lower_with_tensorrt(program, inputs, "unused.pte")
+                if message:
+                    compiler.compile_and_save.assert_not_called()
+                else:
+                    compiler.compile_and_save.assert_called_once()
 
     @unittest.skipUnless(HAS_EXECUTORCH, "Needs ExecuTorch and torch 2.15")
     @unittest.skipUnless(torch.cuda.is_available(), "Needs a CUDA GPU")
@@ -2430,154 +2757,7 @@ class TestTorchBackend(LEAPPFunctionalTestBase):
         ):
             leapp.InferenceManager(yaml_path)
 
-        # A buffer or parameter the node writes, and a held value it returns
-        # unchanged, are refused before the engines are built.
-        class Steps(torch.nn.Module):
-            def __init__(self):
-                super().__init__()
-                self.steps = torch.nn.Parameter(
-                    torch.tensor([10.0, 20.0, 30.0], device="cuda"),
-                    requires_grad=False,
-                )
-
-        class Overwriter:
-            def __init__(self):
-                self.values = torch.tensor([10.0, 20.0, 30.0], device="cuda")
-                self.module = Steps()
-
-            @annotate._method(
-                export_with="executorch",
-                register_buffers=["self.values"],
-                backend_params={"delegate": "tensorrt", "device_io": False},
-            )
-            def legacy_buffer(self, inputW):
-                self.values[0] = inputW[0]
-                return self.values * 2.0
-
-            @annotate._method(
-                export_with="executorch", backend_params={"delegate": "tensorrt"}
-            )
-            def legacy_parameter(self, inputW):
-                self.module.steps.add_(1)
-                return inputW * self.module.steps
-
-            @annotate._method(
-                export_with="executorch",
-                register_buffers=["self.values"],
-                backend_params={"delegate": "tensorrt"},
-            )
-            def legacy_returned(self, inputW):
-                return inputW * 2, self.values
-
-            # Torch-TensorRT removes the detach, so this returns the buffer too.
-            @annotate._method(
-                export_with="executorch",
-                register_buffers=["self.values"],
-                backend_params={"delegate": "tensorrt"},
-            )
-            def legacy_detached(self, inputW):
-                return inputW * 2, self.values.detach()
-
-            # Two aliases in a row, so the check follows the whole chain.
-            @annotate._method(
-                export_with="executorch",
-                register_buffers=["self.values"],
-                backend_params={"delegate": "tensorrt"},
-            )
-            def legacy_detached_twice(self, inputW):
-                return inputW * 2, self.values.detach().detach()
-
-            # TensorRT can leave a slice that keeps the whole shape out of its
-            # engines, and ExecuTorch then removes it, so LEAPP refuses it.
-            @annotate._method(
-                export_with="executorch",
-                register_buffers=["self.values"],
-                backend_params={"delegate": "tensorrt"},
-            )
-            def legacy_sliced(self, inputW):
-                return inputW * 2, self.values[:]
-
-            @annotate._method(
-                export_with="executorch",
-                register_buffers=["self.values"],
-                backend_params={"delegate": "tensorrt"},
-            )
-            def legacy_cloned(self, inputW):
-                return inputW * 2, self.values.clone()
-
-            @annotate._method(
-                export_with="executorch",
-                register_buffers=["self.values"],
-                backend_params={"delegate": "tensorrt"},
-            )
-            def legacy_partial_slice(self, inputW):
-                return inputW * 2, self.values[1:]
-
-            @annotate._method(
-                export_with="executorch", backend_params={"delegate": "tensorrt"}
-            )
-            def legacy_returned_parameter(self, inputW):
-                return inputW * 2, self.module.steps
-
-            @annotate._method(
-                export_with="executorch", backend_params={"delegate": "tensorrt"}
-            )
-            def legacy_constant(self, inputW):
-                return inputW * 2, table.detach()
-
-            @annotate._method(
-                export_with="executorch", backend_params={"delegate": "tensorrt"}
-            )
-            def legacy_writes_input(self, inputW):
-                inputW.add_(3)
-                return inputW * 2
-
-        table = torch.tensor([1.0, 2.0, 3.0], device="cuda")
         import torch_tensorrt
-
-        for name, message in (
-            ("legacy_buffer", 'writes .* delegate "cuda"'),
-            ("legacy_parameter", "writes .* with another backend\\."),
-            ("legacy_returned", "returns \\['output2'\\] as a stored tensor"),
-            ("legacy_detached", "returns \\['output2'\\] as a stored tensor"),
-            ("legacy_detached_twice", "returns \\['output2'\\] as a stored tensor"),
-            ("legacy_sliced", "returns \\['output2'\\] as a stored tensor"),
-            ("legacy_returned_parameter", "returns \\['output2'\\] as a stored tensor"),
-            ("legacy_constant", "returns \\['output2'\\] as a stored tensor"),
-            (
-                "legacy_writes_input",
-                "writes its inputs \\['inputW'\\] in place, which ExecuTorch delegate \"tensorrt\"",
-            ),
-        ):
-            with self.subTest(node=name):
-                leapp.start(name=self.TEST_GRAPH_NAME)
-                getattr(Overwriter(), name)(torch.ones(3, device="cuda"))
-                leapp.stop()
-                with (
-                    mock.patch.object(
-                        torch_tensorrt, "compile_and_save"
-                    ) as compile_trt,
-                    self.assertRaisesRegex(RuntimeError, message),
-                ):
-                    leapp.compile_graph(visualize=False)
-                compile_trt.assert_not_called()
-
-        # A copy, or a slice that does not keep the whole shape, is not refused,
-        # so LEAPP goes on to build the engines.
-        for name in ("legacy_cloned", "legacy_partial_slice"):
-            with self.subTest(node=name):
-                leapp.start(name=self.TEST_GRAPH_NAME)
-                getattr(Overwriter(), name)(torch.ones(3, device="cuda"))
-                leapp.stop()
-                with (
-                    mock.patch.object(
-                        torch_tensorrt,
-                        "compile_and_save",
-                        side_effect=RuntimeError("built"),
-                    ),
-                    self.assertRaisesRegex(RuntimeError, "built"),
-                ):
-                    leapp.compile_graph(visualize=False)
 
         with self.subTest(node="static output"):
             leapp.start(name=self.TEST_GRAPH_NAME)
