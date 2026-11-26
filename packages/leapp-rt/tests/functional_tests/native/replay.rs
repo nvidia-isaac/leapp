@@ -37,24 +37,74 @@ fn values(slot: &plan::Slot, transfers: &mut Transfers) -> Vec<f32> {
 #[test]
 #[ignore = "requires ONNX Runtime TensorRT provider and GPU"]
 fn onnx_tensorrt_replay_uses_live_values_and_fixed_feedback() {
-    replay_test(true);
+    replay_test(true, false);
+}
+
+#[test]
+#[ignore = "requires ONNX Runtime TensorRT provider and GPU"]
+fn prebuilt_tensorrt_engines_replace_onnx_conversion() {
+    replay_test(true, true);
 }
 
 #[test]
 #[ignore = "requires ONNX Runtime CUDA provider and GPU"]
 fn onnx_cuda_replay_uses_live_values_and_fixed_feedback() {
-    replay_test(false);
+    replay_test(false, false);
 }
 
-fn replay_test(tensorrt: bool) {
+fn replay_test(tensorrt: bool, prebuilt: bool) {
+    // Build engines once; both stream cases load the same files.
+    let cache = tempfile::tempdir().unwrap();
+    let engines = prebuilt.then(|| tensorrt_engines(cache.path()));
     let owner = crate::engines::memory::cuda::HandoffStream::new(0).unwrap();
     let stream = unsafe { crate::CudaStream::from_raw(owner.address() as *mut _) };
     for stream in [None, Some(stream)] {
-        exercise_replay(stream, tensorrt);
+        exercise_replay(stream, tensorrt, engines.as_ref());
     }
 }
 
-fn exercise_replay(stream: Option<crate::CudaStream>, tensorrt: bool) {
+/// Serialize policy engines with ONNX Runtime's own TensorRT conversion cache.
+fn tensorrt_engines(directory: &std::path::Path) -> HashMap<String, String> {
+    let nodes = ["preprocess", "policy"];
+    let cache = |node| directory.join(node);
+    let options = SessionOptions {
+        device: ExecutionDevice::Cuda { device_id: 0 },
+        onnx_tensorrt: nodes
+            .map(|node| {
+                fs::create_dir(cache(node)).unwrap();
+                let parameters = HashMap::from([
+                    ("trt_engine_cache_enable".into(), "1".into()),
+                    (
+                        "trt_engine_cache_path".into(),
+                        cache(node).display().to_string(),
+                    ),
+                    ("trt_builder_optimization_level".into(), "0".into()),
+                ]);
+                (node.into(), parameters)
+            })
+            .into(),
+        ..Default::default()
+    };
+    let bundle = Bundle::open(fixtures().join("policy.yaml")).unwrap();
+    Session::open(&bundle, options).unwrap().close();
+    nodes
+        .map(|node| {
+            let mut files = fs::read_dir(cache(node))
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| path.extension().is_some_and(|ext| ext == "engine"));
+            let engine = files.next().unwrap().display().to_string();
+            assert!(files.next().is_none());
+            (node.to_owned(), engine)
+        })
+        .into()
+}
+
+fn exercise_replay(
+    stream: Option<crate::CudaStream>,
+    tensorrt: bool,
+    engines: Option<&HashMap<String, String>>,
+) {
     // Cover the shared selector and the existing TensorRT-specific option.
     let shared_selector = !tensorrt || stream.is_some();
     let options = |names: &[&str], replay: bool| SessionOptions {
@@ -74,6 +124,12 @@ fn exercise_replay(stream: Option<crate::CudaStream>, tensorrt: bool) {
                     ]),
                 )
             })
+            .map(|(name, mut parameters): (String, HashMap<_, _>)| {
+                if let Some(engine) = engines.and_then(|engines| engines.get(&name)) {
+                    parameters.insert("engine_path".into(), engine.clone());
+                }
+                (name, parameters)
+            })
             .collect(),
         cuda_graph_replay: names
             .iter()
@@ -86,9 +142,21 @@ fn exercise_replay(stream: Option<crate::CudaStream>, tensorrt: bool) {
     let mut transfers = Transfers::new(CUDA, &SessionOptions::default()).unwrap();
     let directory = tempfile::tempdir().unwrap();
     let bundle = write_bundle(&policy_copy(directory.path()), directory.path());
-    // ORT owns capture eligibility. Excluding this node's only operation forces
-    // fallback, which must reject replay without a LEAPP operator allow-list.
-    if tensorrt {
+    if engines.is_some() {
+        // Only the engines can produce outputs once the ONNX artifacts are unusable.
+        for node in ["preprocess", "policy"] {
+            fs::write(directory.path().join(node).join("model.onnx"), b"not ONNX").unwrap();
+        }
+        fs::remove_file(directory.path().join("policy/weights.bin")).unwrap();
+        let mut conversion = options(&["preprocess", "policy"], false);
+        for parameters in conversion.onnx_tensorrt.values_mut() {
+            parameters.remove("engine_path");
+        }
+        let error = Session::open(&bundle, conversion).err().unwrap();
+        assert_eq!(error.phase(), "load", "{error}");
+    } else if tensorrt {
+        // ORT owns capture eligibility. Excluding this node's only operation forces
+        // fallback, which must reject replay without a LEAPP operator allow-list.
         let mut unsupported = options(&["preprocess"], true);
         unsupported
             .onnx_tensorrt

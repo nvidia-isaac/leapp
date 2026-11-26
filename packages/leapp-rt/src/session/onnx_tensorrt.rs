@@ -3,7 +3,10 @@
 
 use crate::{Bundle, EngineKind, ExecutionDevice, SessionOptions};
 use anyhow::{ensure, Context, Result};
-use std::collections::HashMap;
+use std::{collections::HashMap, path::Path};
+
+/// LEAPP option loading a prebuilt engine instead of building one from ONNX.
+const ENGINE_PATH: &str = "engine_path";
 
 pub(crate) fn validate(bundle: &Bundle, options: &SessionOptions) -> Result<()> {
     for node in &options.cuda_graph_replay {
@@ -37,6 +40,16 @@ pub(crate) fn validate(bundle: &Bundle, options: &SessionOptions) -> Result<()> 
         );
         if options.engine == EngineKind::Native {
             replay_requested(parameters).with_context(|| format!("node {node}"))?;
+        }
+        if let Some(engine) = parameters.get(ENGINE_PATH) {
+            ensure!(
+                options.engine == EngineKind::Native,
+                "node {node}: {ENGINE_PATH} requires native execution"
+            );
+            ensure!(
+                Path::new(engine).is_file(),
+                "node {node}: TensorRT engine {engine} is missing or not a regular file"
+            );
         }
         for (key, value) in parameters {
             ensure!(
@@ -74,6 +87,7 @@ pub(crate) fn provider_options(
             "int8_use_native_calibration_table" => {
                 ("trt_int8_use_native_calibration_table", value.as_str())
             }
+            ENGINE_PATH => continue,
             _ => (key.as_str(), value.as_str()),
         };
         ensure!(
@@ -82,6 +96,10 @@ pub(crate) fn provider_options(
         );
     }
     Ok(result)
+}
+
+pub(crate) fn engine_path(parameters: &HashMap<String, String>) -> Option<&Path> {
+    parameters.get(ENGINE_PATH).map(Path::new)
 }
 
 /// Replay is explicit; do not inherit TensorRT's CUDA graph environment setting.

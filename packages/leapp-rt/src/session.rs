@@ -60,6 +60,7 @@ pub struct SessionOptions {
     /// An entry enables the provider with CUDA fallback; an empty map uses SDK defaults.
     /// Native execution supports opt-in per-node replay with `trt_cuda_graph_enable=1`.
     /// Replay requires fixed CUDA bindings and caller-owned public outputs via `run_into`.
+    /// Native `engine_path` loads a prebuilt engine instead of building one from ONNX.
     /// See documentation for supported options.
     pub onnx_tensorrt: HashMap<String, HashMap<String, String>>,
     /// Native ONNX nodes using per-node CUDA graph replay. TensorRT is used when

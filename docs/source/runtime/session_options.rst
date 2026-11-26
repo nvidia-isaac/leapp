@@ -39,6 +39,7 @@ Placement and execution options
      - Empty by default. Maps ONNX node names to string-valued provider options.
        An entry enables TensorRT; an empty parameter map uses SDK defaults.
        Nodes absent from the map retain ordinary execution. Requires CUDA.
+       ``engine_path`` loads a :ref:`prebuilt engine <runtime-prebuilt-tensorrt-engines>`.
    * - ONNX CUDA graph replay
      - ``cuda_graph_replay`` in all languages
      - Empty by default. Select ONNX node names for CUDA graph replay. Uses the
@@ -184,6 +185,34 @@ values must not contain NUL. ``trt_cuda_graph_enable=1`` (or ``true``) also enab
 replay for a TensorRT-configured node; it has the same buffer and lifecycle
 requirements as ``cuda_graph_replay``. ``0`` and ``false`` disable that provider
 option; other values are rejected. Replay is off unless explicitly requested.
+
+.. _runtime-prebuilt-tensorrt-engines:
+
+Prebuilt TensorRT engines
+-------------------------
+
+Add ``engine_path`` to a node's ``onnx_tensorrt`` options to load a serialized
+TensorRT engine, such as one written by ``trtexec --saveEngine``. ONNX Runtime
+loads that engine when the session opens instead of building one from the
+node's ONNX model, which is not read. The node's other options still apply,
+such as ``trt_cuda_graph_enable``; options that configure engine building have
+no effect.
+
+.. code-block:: python
+
+   options = lrt.SessionOptions(
+       device="cuda:0",
+       onnx_tensorrt={"control": {"engine_path": "/opt/my-app/control.engine"}},
+   )
+
+Build the engine from the node's ONNX model on a compatible GPU, with the
+TensorRT version that ONNX Runtime loads; otherwise opening the session fails.
+Keep the model's input and output names and dtypes, for example by not changing
+I/O formats with ``trtexec --inputIOFormats``. ONNX Runtime binds engine tensors
+by name without checking them when loading, so a mismatched engine fails during
+execution or can produce incorrect results. Dynamic dimensions must fall within
+the engine's optimization profile. The engine is read once when the session
+opens.
 
 .. _runtime-cuda-graph-replay:
 

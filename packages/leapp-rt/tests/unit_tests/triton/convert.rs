@@ -190,6 +190,27 @@ fn onnx_tensorrt_rejects_invalid_selection_before_loading_sdks() {
             "{error}"
         );
     }
+    // The engine kind is checked before the file.
+    for (engine, expected) in [
+        (crate::EngineKind::Native, "missing or not a regular file"),
+        (crate::EngineKind::Triton, "requires native execution"),
+    ] {
+        let fixture = Fixture::new();
+        let parameters = [("engine_path".into(), "missing.engine".into())].into();
+        let error = crate::Session::open(
+            &fixture.open(),
+            crate::SessionOptions {
+                engine,
+                device: ExecutionDevice::Cuda { device_id: 0 },
+                onnx_tensorrt: [("a_policy".into(), parameters)].into(),
+                ..Default::default()
+            },
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error.phase(), "configure");
+        assert!(error.to_string().contains(expected), "{error}");
+    }
     let mut fixture = Fixture::new();
     fixture.value["models"]["a_policy"]["parameters"]["backend"] = yaml("jit");
     let error = crate::Session::open(

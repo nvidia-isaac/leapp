@@ -3,6 +3,8 @@
 
 //! ONNX loading and cached CPU/CUDA bindings, refactored from the native prototype.
 
+mod tensorrt_engine;
+
 use super::{BackendPlugin, InputRoute};
 use crate::{
     bundle::{schema::NodeSpec, shapes::ExecutionShape},
@@ -177,11 +179,19 @@ impl Model {
                 .map_err(ort::Error::<()>::from)
                 .with_context(|| format!("register ONNX custom operators {}", custom.display()))?;
         }
-        let session = builder
-            .commit_from_file(&model.parameters.model_path)
-            .with_context(|| {
-                format!("load ONNX model {}", model.parameters.model_path.display())
-            })?;
+        let engine = tensorrt.and_then(crate::session::onnx_tensorrt::engine_path);
+        let session = if let Some(engine) = engine {
+            let load = || format!("load TensorRT engine {}", engine.display());
+            let (_directory, path) =
+                tensorrt_engine::context_model(model, engine).with_context(load)?;
+            builder.commit_from_file(path).with_context(load)?
+        } else {
+            builder
+                .commit_from_file(&model.parameters.model_path)
+                .with_context(|| {
+                    format!("load ONNX model {}", model.parameters.model_path.display())
+                })?
+        };
         if replay {
             for port in session.inputs().iter().chain(session.outputs()) {
                 let ValueType::Tensor { shape, .. } = port.dtype() else {

@@ -192,6 +192,8 @@ Triton PT2 requires archive devices matching its model instance.
 
 Prebuilt `.plan`/`.engine` TensorRT artifacts are Triton-only and require CUDA,
 a compatible GPU/TensorRT version, and matching port names, shapes, and dtypes.
+Native ONNX nodes can load prebuilt engines with the `onnx_tensorrt` option
+`engine_path`; `onnx/tensorrt_engine.rs` documents the ORT context model.
 The adapter uses optimization profile 0; shape tensors, additional profiles,
 and external custom-plugin configuration are not exposed. Native caller-owned
 outputs can bind directly; Triton copies ensemble results into supplied buffers

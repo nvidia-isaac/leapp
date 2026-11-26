@@ -58,6 +58,19 @@ def check(fixtures, cache, engine):
                 assert engines == snapshot, "Cache was rebuilt on warm open"
             snapshot = engines
         print(f"PASS {engine}: profiles, cache reuse, operator exclusion {excluded}")
+    if engine == "native":
+        # Reload the cached FP16 engine directly, without ONNX conversion.
+        (prebuilt,) = (cache / "Identity").glob("*.engine")
+        options = lrt.SessionOptions(
+            device="cuda:0",
+            output_device="cpu",
+            onnx_tensorrt={"arithmetic": {"engine_path": str(prebuilt)}},
+        )
+        with lrt.Session.open(bundle, options) as session:
+            result = session.run(inputs)
+            for port, values in expected.items():
+                np.testing.assert_allclose(np.from_dlpack(result[port]), values)
+        print(f"PASS {engine}: prebuilt TensorRT engine")
     invalid_options = [({"precision_mode": "invalid"}, "precision")]
     if engine == "native":
         invalid_options.extend(
