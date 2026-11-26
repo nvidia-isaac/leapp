@@ -30,8 +30,7 @@ pub fn session_open(
     device: ffi::Location,
     output_location: ffi::Location,
     overrides: &[ffi::Placement],
-    onnx_tensorrt: &[ffi::OnnxTensorRT],
-    cuda_graph_replay: &[ffi::ReplayNode],
+    node_options: &[ffi::NodeOptions],
     output: &mut SessionHandle,
 ) -> ffi::StatusData {
     if output.0.is_some() {
@@ -74,17 +73,10 @@ pub fn session_open(
         options.output_placement.overrides.insert(name, location);
     }
     options.device = device;
-    for entry in cuda_graph_replay {
-        let node = match std::str::from_utf8(&entry.name) {
-            Ok(node) => node.to_owned(),
-            Err(_) => return crate::invalid("CUDA replay node name is not UTF-8"),
-        };
-        options.cuda_graph_replay.insert(node);
-    }
-    for entry in onnx_tensorrt {
+    for entry in node_options {
         let node = match std::str::from_utf8(&entry.node) {
             Ok(v) => v.to_owned(),
-            Err(_) => return crate::invalid("ONNX TensorRT node name is not UTF-8"),
+            Err(_) => return crate::invalid("node options name is not UTF-8"),
         };
         let mut parameters = std::collections::HashMap::new();
         for parameter in &entry.parameters {
@@ -92,11 +84,11 @@ pub fn session_open(
                 std::str::from_utf8(&parameter.key),
                 std::str::from_utf8(&parameter.value),
             ) else {
-                return crate::invalid("TensorRT parameter key or value is not UTF-8");
+                return crate::invalid("node option key or value is not UTF-8");
             };
             parameters.insert(key.to_owned(), value.to_owned());
         }
-        options.onnx_tensorrt.insert(node, parameters);
+        options.node_options.insert(node, parameters);
     }
     crate::binding_status(
         leapp_rt_bindings::SessionHandle::open(bundle, options).map(|runtime| {

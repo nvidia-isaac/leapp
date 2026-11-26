@@ -191,7 +191,9 @@ def main():
                     lrt.SessionOptions(
                         engine=args.engine,
                         device="cuda:0",
-                        onnx_tensorrt={"accumulator": {}},
+                        node_options={
+                            "accumulator": {"execution_provider": "tensorrt"}
+                        },
                     ),
                 ):
                     raise AssertionError(

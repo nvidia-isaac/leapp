@@ -35,15 +35,15 @@ class ErrorCode(IntEnum):
 class SessionOptions:
     """Construction-time engine and device placement.
 
-    See documentation for onnx_tensorrt options.
+    node_options maps node names to options interpreted by each node's backend;
+    see documentation for supported options.
     """
 
     device: str = "cpu"
     output_device: str | None = None
     output_overrides: dict[str, str | None] = field(default_factory=dict)
     engine: str = _DEFAULT_ENGINE
-    onnx_tensorrt: dict[str, dict[str, str]] = field(default_factory=dict)
-    cuda_graph_replay: set[str] = field(default_factory=set)
+    node_options: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
 __all__ = [

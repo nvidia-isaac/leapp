@@ -85,7 +85,7 @@ pub(crate) fn open(
     graph: &crate::session::graph::Graph<'_>,
     options: &crate::SessionOptions,
 ) -> Result<Arc<dyn Engine>, RuntimeError> {
-    crate::session::onnx_tensorrt::validate(bundle, options)
+    crate::session::node_options::validate(bundle, options)
         .map_err(|error| RuntimeError::new("configure", error))?;
     // Symbols exist only when some port declares variable-axis bounds.
     if options.engine == EngineKind::Triton && !bundle.0.description.symbols.is_empty() {

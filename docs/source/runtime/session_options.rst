@@ -34,18 +34,11 @@ Placement and execution options
        overrides the default location. An unset value preserves backend placement
        for that output even when the default requests a transfer. Unknown names
        fail session construction. Caller-supplied buffers choose their own locations.
-   * - ONNX TensorRT acceleration
-     - ``onnx_tensorrt`` in all languages
-     - Empty by default. Maps ONNX node names to string-valued provider options.
-       An entry enables TensorRT; an empty parameter map uses SDK defaults.
-       Nodes absent from the map retain ordinary execution. Requires CUDA.
-       ``engine_path`` loads a :ref:`prebuilt engine <runtime-prebuilt-tensorrt-engines>`.
-   * - ONNX CUDA graph replay
-     - ``cuda_graph_replay`` in all languages
-     - Empty by default. Select ONNX node names for CUDA graph replay. Uses the
-       CUDA provider unless the node is also listed in ``onnx_tensorrt``. Requires
-       fixed CUDA bindings and caller-owned public outputs; see
-       :ref:`runtime-cuda-graph-replay`.
+   * - Node options
+     - ``node_options`` in all languages
+     - Empty by default. Maps node names to string options interpreted by each
+       node's backend; see :ref:`runtime-node-options`. ONNX nodes can select
+       TensorRT, load prebuilt engines, and enable CUDA graph replay.
    * - Caller-owned CUDA streams
      - Not exposed / not exposed / ``cuda_streams``
      - Empty by default. Rust maps CUDA device IDs to borrowed stream handles.
@@ -106,18 +99,57 @@ CPU-buffer examples in :doc:`getting_started`.
          };
 
 
-ONNX TensorRT options
----------------------
+.. _runtime-node-options:
 
-Set ``SessionOptions.onnx_tensorrt`` to a map from ONNX node names to
-string-valued provider options. CUDA execution is required. Each entry enables
-TensorRT for that node; an empty option map uses provider defaults. Unknown
-nodes and non-ONNX models are rejected.
+Node options
+------------
+
+Set ``SessionOptions.node_options`` to a map from node names to string-valued
+options interpreted by each node's backend; nodes without an entry use their
+backend's defaults. Keys are ``name`` or ``namespace.name``. Each backend defines
+its keys and namespaces: a namespace can hold settings that the runtime
+interprets or options forwarded to the backend's own library. Unknown nodes,
+keys, and namespaces are rejected when the session opens. ONNX is currently the
+only backend that accepts options.
+
+ONNX node options require CUDA execution:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Key
+     - Behavior
+   * - ``execution_provider``
+     - ``cuda`` (default) or ``tensorrt``. TensorRT falls back to the CUDA
+       provider for operations it does not run.
+   * - ``engine_path``
+     - Loads a :ref:`prebuilt TensorRT engine <runtime-prebuilt-tensorrt-engines>`;
+       requires ``tensorrt``.
+   * - ``cuda_graph_replay``
+     - Enables :ref:`CUDA graph replay <runtime-cuda-graph-replay>` on the
+       active provider with ``1`` or ``true``; ``0`` or ``false`` disables it.
+   * - ``tensorrt.<option>``
+     - ONNX Runtime TensorRT provider option, forwarded unchanged; requires
+       ``tensorrt``. The aliases ``precision_mode`` (``FP32``, ``FP16``,
+       ``BF16``, or ``INT8``), ``max_workspace_size_bytes``,
+       ``int8_calibration_table_name``, and ``int8_use_native_calibration_table``
+       are translated to the provider's option names.
+   * - ``cuda.<option>``
+     - ONNX Runtime CUDA provider option, forwarded unchanged. It also applies
+       when the CUDA provider is TensorRT's fallback.
+
+Within the namespaces, ``device_id``, ``user_compute_stream``, and
+``has_user_compute_stream`` are controlled by session options, and
+``trt_cuda_graph_enable`` and ``enable_cuda_graph`` by ``cuda_graph_replay``;
+setting them is rejected. Keys and values must not contain NUL.
 
 Use the documentation matching your installed ONNX Runtime and TensorRT versions:
 
 * `ONNX Runtime TensorRT provider reference
   <https://onnxruntime.ai/docs/execution-providers/TensorRT-ExecutionProvider.html#execution-provider-options>`_
+  and `CUDA provider reference
+  <https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html>`_
   for option names, accepted values, defaults, and compatibility requirements.
 * `NVIDIA TensorRT documentation
   <https://docs.nvidia.com/deeplearning/tensorrt/latest/>`_
@@ -143,9 +175,10 @@ they do not change the model's precision:
 
          options = lrt.SessionOptions(
              device="cuda:0",
-             onnx_tensorrt={"control": {
-                 "trt_engine_cache_enable": "1",
-                 "trt_engine_cache_path": "/var/cache/my-app/control",
+             node_options={"control": {
+                 "execution_provider": "tensorrt",
+                 "tensorrt.trt_engine_cache_enable": "1",
+                 "tensorrt.trt_engine_cache_path": "/var/cache/my-app/control",
              }},
          )
 
@@ -157,9 +190,10 @@ they do not change the model's precision:
          lrt::SessionOptions options;
          options.device = lrt::ExecutionDevice::kCuda;
          options.device_id = 0;
-         options.onnx_tensorrt["control"] = {
-             {"trt_engine_cache_enable", "1"},
-             {"trt_engine_cache_path", "/var/cache/my-app/control"},
+         options.node_options["control"] = {
+             {"execution_provider", "tensorrt"},
+             {"tensorrt.trt_engine_cache_enable", "1"},
+             {"tensorrt.trt_engine_cache_path", "/var/cache/my-app/control"},
          };
 
    .. tab-item:: Rust
@@ -169,40 +203,37 @@ they do not change the model's precision:
 
          let options = lrt::SessionOptions {
              device: lrt::ExecutionDevice::Cuda { device_id: 0 },
-             onnx_tensorrt: std::collections::HashMap::from([
+             node_options: std::collections::HashMap::from([
                  ("control".into(), std::collections::HashMap::from([
-                     ("trt_engine_cache_enable".into(), "1".into()),
-                     ("trt_engine_cache_path".into(), "/var/cache/my-app/control".into()),
+                     ("execution_provider".into(), "tensorrt".into()),
+                     ("tensorrt.trt_engine_cache_enable".into(), "1".into()),
+                     ("tensorrt.trt_engine_cache_path".into(), "/var/cache/my-app/control".into()),
                  ])),
              ]),
              ..Default::default()
          };
 
 
-``device_id``, ``user_compute_stream``, and ``has_user_compute_stream`` are
-controlled by session options and cannot be set in the provider map. Keys and
-values must not contain NUL. ``trt_cuda_graph_enable=1`` (or ``true``) also enables
-replay for a TensorRT-configured node; it has the same buffer and lifecycle
-requirements as ``cuda_graph_replay``. ``0`` and ``false`` disable that provider
-option; other values are rejected. Replay is off unless explicitly requested.
-
 .. _runtime-prebuilt-tensorrt-engines:
 
 Prebuilt TensorRT engines
 -------------------------
 
-Add ``engine_path`` to a node's ``onnx_tensorrt`` options to load a serialized
-TensorRT engine, such as one written by ``trtexec --saveEngine``. ONNX Runtime
+Add ``engine_path`` to a TensorRT node's options to load a serialized TensorRT
+engine, such as one written by ``trtexec --saveEngine``. ONNX Runtime
 loads that engine when the session opens instead of building one from the
 node's ONNX model, which is not read. The node's other options still apply,
-such as ``trt_cuda_graph_enable``; options that configure engine building have
-no effect.
+such as ``cuda_graph_replay``; options that configure engine building have no
+effect.
 
 .. code-block:: python
 
    options = lrt.SessionOptions(
        device="cuda:0",
-       onnx_tensorrt={"control": {"engine_path": "/opt/my-app/control.engine"}},
+       node_options={"control": {
+           "execution_provider": "tensorrt",
+           "engine_path": "/opt/my-app/control.engine",
+       }},
    )
 
 Build the engine from the node's ONNX model on a compatible GPU, with the
@@ -220,9 +251,10 @@ ONNX CUDA graph replay
 ----------------------
 
 CUDA graph replay reduces repeated launch work for selected ONNX nodes. Enable
-it with ``cuda_graph_replay`` using node names, not qualified port names. It
-uses the CUDA provider by default; nodes also listed in ``onnx_tensorrt`` use
-TensorRT instead. An unknown node, a non-ONNX model, or CPU execution is rejected.
+it with the node option ``cuda_graph_replay``; it uses the CUDA provider, or
+TensorRT when ``execution_provider`` is ``tensorrt``. ``1`` or ``true`` enables
+replay and ``0`` or ``false`` disables it; other values are rejected. Replay is
+off unless explicitly requested.
 
 .. tab-set::
 
@@ -234,7 +266,7 @@ TensorRT instead. An unknown node, a non-ONNX model, or CPU execution is rejecte
          options = lrt.SessionOptions(
              device="cuda:0",
              output_device="cuda:0",
-             cuda_graph_replay={"control"},
+             node_options={"control": {"cuda_graph_replay": "1"}},
          )
 
    .. tab-item:: C++
@@ -246,7 +278,7 @@ TensorRT instead. An unknown node, a non-ONNX model, or CPU execution is rejecte
          options.device = lrt::ExecutionDevice::kCuda;
          options.device_id = 0;
          options.output_location = lrt::MemoryLocation{lrt::MemoryType::kCuda, 0};
-         options.cuda_graph_replay = {"control"};
+         options.node_options["control"]["cuda_graph_replay"] = "1";
 
    .. tab-item:: Rust
       :sync: rust
@@ -259,7 +291,10 @@ TensorRT instead. An unknown node, a non-ONNX model, or CPU execution is rejecte
                  default_location: Some(lrt::MemoryLocation::Cuda { device_id: 0 }),
                  ..Default::default()
              },
-             cuda_graph_replay: std::collections::HashSet::from(["control".into()]),
+             node_options: std::collections::HashMap::from([(
+                 "control".into(),
+                 std::collections::HashMap::from([("cuda_graph_replay".into(), "1".into())]),
+             )]),
              ..Default::default()
          };
 

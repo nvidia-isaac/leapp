@@ -53,8 +53,8 @@ fn yaml(text: &str) -> Value {
 
 #[test]
 fn onnx_tensorrt_preserves_per_node_triton_parameters() {
-    let parameters = HashMap::from([
-        ("precision_mode".into(), "FP16".into()),
+    let tensorrt = HashMap::from([
+        ("precision_mode".to_owned(), "FP16".to_owned()),
         ("max_workspace_size_bytes".into(), "1048576".into()),
         ("trt_engine_cache_enable".into(), "1".into()),
         ("trt_engine_cache_path".into(), "cache/policy".into()),
@@ -65,22 +65,39 @@ fn onnx_tensorrt_preserves_per_node_triton_parameters() {
         ("trt_op_types_to_exclude".into(), "Identity".into()),
         ("unknown_option".into(), "1".into()),
     ]);
-    let normalized = crate::session::onnx_tensorrt::provider_options(&parameters).unwrap();
+    let node_options = |provider: &str, tensorrt: &HashMap<String, String>| {
+        let mut options: HashMap<_, _> = tensorrt
+            .iter()
+            .map(|(key, value)| (format!("tensorrt.{key}"), value.clone()))
+            .collect();
+        options.insert("execution_provider".into(), provider.into());
+        options
+    };
+    // Native translates Triton-style aliases; other keys keep ORT's names.
+    let parameters = node_options("tensorrt", &tensorrt);
+    let normalized = crate::session::node_options::Onnx::parse(&parameters)
+        .unwrap()
+        .tensorrt_options;
     assert_eq!(normalized["trt_fp16_enable"], "1");
     assert_eq!(normalized["trt_max_workspace_size"], "1048576");
     assert_eq!(normalized["trt_profile_min_shapes"], "features:1x3");
     assert_eq!(normalized["trt_op_types_to_exclude"], "Identity");
     assert_eq!(normalized["unknown_option"], "1");
 
-    for parameters in [
-        parameters,
-        HashMap::new(),
-        HashMap::from([
-            ("precision_mode".into(), "invalid".into()),
-            ("trt_engine_cache_path".into(), "".into()),
-            ("trt_builder_optimization_level".into(), "invalid".into()),
-            ("unknown_option".into(), "".into()),
-        ]),
+    // Triton receives `tensorrt.*` without the prefix or translation.
+    for (provider, tensorrt) in [
+        ("tensorrt", tensorrt),
+        ("tensorrt", HashMap::new()),
+        (
+            "tensorrt",
+            HashMap::from([
+                ("precision_mode".into(), "invalid".into()),
+                ("trt_engine_cache_path".into(), "".into()),
+                ("trt_builder_optimization_level".into(), "invalid".into()),
+                ("unknown_option".into(), "".into()),
+            ]),
+        ),
+        ("cuda", HashMap::new()),
     ] {
         let fixture = Fixture::new();
         let bundle = fixture.open();
@@ -88,9 +105,13 @@ fn onnx_tensorrt_preserves_per_node_triton_parameters() {
         configure_tensorrt(
             &mut pipeline,
             &bundle,
-            &HashMap::from([("a_policy".into(), parameters.clone())]),
+            &HashMap::from([("a_policy".into(), node_options(provider, &tensorrt))]),
         );
         assert!(pipeline.models[0].config.optimization.is_none());
+        if provider == "cuda" {
+            assert!(pipeline.models[1].config.optimization.is_none());
+            continue;
+        }
         let accelerators = &pipeline.models[1]
             .config
             .optimization
@@ -102,50 +123,128 @@ fn onnx_tensorrt_preserves_per_node_triton_parameters() {
             .gpu_execution_accelerator;
         assert_eq!(accelerators.len(), 1);
         assert_eq!(accelerators[0].name, "tensorrt");
-        assert_eq!(accelerators[0].parameters, parameters);
+        assert_eq!(accelerators[0].parameters, tensorrt);
     }
 }
 
 #[test]
-fn onnx_tensorrt_rejects_invalid_selection_before_loading_sdks() {
-    for (node, device, parameters, expected) in [
-        (
-            "missing",
-            ExecutionDevice::Cuda { device_id: 0 },
-            HashMap::new(),
-            "unknown ONNX TensorRT node",
-        ),
+fn node_options_reject_invalid_selection_before_loading_sdks() {
+    use crate::EngineKind::{Native, Triton};
+    let cuda = ExecutionDevice::Cuda { device_id: 0 };
+    let trt = ("execution_provider", "tensorrt");
+    let missing_engine = ("engine_path", "missing.engine");
+    for (node, engine, device, parameters, expected) in [
+        ("missing", Native, cuda, &[trt][..], "unknown node"),
         (
             "a_policy",
+            Native,
             ExecutionDevice::Cpu,
-            HashMap::new(),
-            "requires CUDA",
+            &[trt],
+            "require CUDA",
         ),
         (
             "a_policy",
-            ExecutionDevice::Cuda { device_id: 0 },
-            [("user_compute_stream".into(), "123".into())].into(),
+            Native,
+            cuda,
+            &[("execution_provider", "cpu")],
+            "execution_provider must be",
+        ),
+        (
+            "a_policy",
+            Native,
+            cuda,
+            &[("trt_fp16_enable", "1")],
+            "unknown ONNX node option",
+        ),
+        (
+            "a_policy",
+            Native,
+            cuda,
+            &[("openvino.device", "CPU")],
+            "unknown ONNX node option namespace",
+        ),
+        (
+            "a_policy",
+            Native,
+            cuda,
+            &[("tensorrt.trt_fp16_enable", "1")],
+            "requires execution_provider tensorrt",
+        ),
+        (
+            "a_policy",
+            Native,
+            cuda,
+            &[("cuda.user_compute_stream", "1")],
             "controlled by SessionOptions",
         ),
         (
             "a_policy",
-            ExecutionDevice::Cuda { device_id: 0 },
-            [("trt_engine_cache_path".into(), "bad\0path".into())].into(),
+            Native,
+            cuda,
+            &[trt, ("tensorrt.trt_cuda_graph_enable", "1")],
+            "controlled by cuda_graph_replay",
+        ),
+        (
+            "a_policy",
+            Native,
+            cuda,
+            &[trt, ("tensorrt.trt_engine_cache_path", "a\0b")],
             "must not contain NUL",
         ),
         (
             "a_policy",
-            ExecutionDevice::Cuda { device_id: 0 },
-            [("trt_cuda_graph_enable".into(), "invalid".into())].into(),
-            "trt_cuda_graph_enable must be",
+            Native,
+            cuda,
+            &[("cuda_graph_replay", "x")],
+            "cuda_graph_replay must be",
+        ),
+        (
+            "a_policy",
+            Triton,
+            cuda,
+            &[("cuda.use_tf32", "1")],
+            "require native execution",
+        ),
+        (
+            "a_policy",
+            Triton,
+            cuda,
+            &[trt, ("cuda_graph_replay", "1")],
+            "require native execution",
+        ),
+        (
+            "a_policy",
+            Native,
+            cuda,
+            &[missing_engine],
+            "engine_path requires execution_provider tensorrt",
+        ),
+        (
+            "a_policy",
+            Native,
+            cuda,
+            &[trt, missing_engine],
+            "missing or not a regular file",
+        ),
+        (
+            "a_policy",
+            Triton,
+            cuda,
+            &[trt, missing_engine],
+            "require native execution",
         ),
     ] {
         let fixture = Fixture::new();
+        let parameters = parameters
+            .iter()
+            .map(|&(key, value)| (key.to_owned(), value.to_owned()))
+            .collect();
         let error = crate::Session::open(
             &fixture.open(),
             crate::SessionOptions {
+                engine,
                 device,
-                onnx_tensorrt: [(node.into(), parameters)].into(),
+                node_options: [(node.into(), parameters)].into(),
                 ..Default::default()
             },
         )
@@ -155,75 +254,28 @@ fn onnx_tensorrt_rejects_invalid_selection_before_loading_sdks() {
         assert_eq!(error.code(), ErrorCode::InvalidArgument);
         assert!(error.to_string().contains(expected), "{error}");
     }
-    for (node, engine, device) in [
-        (
-            "missing",
-            crate::EngineKind::Native,
-            ExecutionDevice::Cuda { device_id: 0 },
-        ),
-        ("a_policy", crate::EngineKind::Native, ExecutionDevice::Cpu),
-        (
-            "a_policy",
-            crate::EngineKind::Triton,
-            ExecutionDevice::Cuda { device_id: 0 },
-        ),
-    ] {
-        let fixture = Fixture::new();
-        let error = crate::Session::open(
-            &fixture.open(),
-            crate::SessionOptions {
-                engine,
-                device,
-                cuda_graph_replay: [node.into()].into(),
-                ..Default::default()
-            },
-        )
-        .err()
-        .unwrap();
-        assert_eq!(error.phase(), "configure");
-        assert!(
-            error.to_string().contains(if node == "missing" {
-                "unknown CUDA replay node"
-            } else {
-                "requires native ONNX CUDA execution"
-            }),
-            "{error}"
-        );
-    }
-    // The engine kind is checked before the file.
-    for (engine, expected) in [
-        (crate::EngineKind::Native, "missing or not a regular file"),
-        (crate::EngineKind::Triton, "requires native execution"),
-    ] {
-        let fixture = Fixture::new();
-        let parameters = [("engine_path".into(), "missing.engine".into())].into();
-        let error = crate::Session::open(
-            &fixture.open(),
-            crate::SessionOptions {
-                engine,
-                device: ExecutionDevice::Cuda { device_id: 0 },
-                onnx_tensorrt: [("a_policy".into(), parameters)].into(),
-                ..Default::default()
-            },
-        )
-        .err()
-        .unwrap();
-        assert_eq!(error.phase(), "configure");
-        assert!(error.to_string().contains(expected), "{error}");
-    }
     let mut fixture = Fixture::new();
     fixture.value["models"]["a_policy"]["parameters"]["backend"] = yaml("jit");
     let error = crate::Session::open(
         &fixture.open(),
         crate::SessionOptions {
-            device: ExecutionDevice::Cuda { device_id: 0 },
-            onnx_tensorrt: [("a_policy".into(), HashMap::new())].into(),
+            device: cuda,
+            node_options: [(
+                "a_policy".into(),
+                HashMap::from([trt].map(|(k, v)| (k.into(), v.into()))),
+            )]
+            .into(),
             ..Default::default()
         },
     )
     .err()
     .unwrap();
-    assert!(error.to_string().contains("requires ONNX"));
+    assert!(
+        error
+            .to_string()
+            .contains("jit nodes accept no node options"),
+        "{error}"
+    );
 }
 
 #[test]

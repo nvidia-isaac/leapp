@@ -6,6 +6,7 @@
 mod tensorrt_engine;
 
 use super::{BackendPlugin, InputRoute};
+use crate::session::node_options::Onnx;
 use crate::{
     bundle::{schema::NodeSpec, shapes::ExecutionShape},
     dlpack::{BorrowedTensor, DLTensor, SharedTensor},
@@ -94,14 +95,10 @@ impl Model {
         model: &NodeSpec,
         location: MemoryLocation,
         stream: Option<crate::CudaStream>,
-        tensorrt: Option<&HashMap<String, String>>,
-        replay: bool,
+        options: Option<&HashMap<String, String>>,
     ) -> Result<Self> {
-        let replay = replay
-            || tensorrt
-                .map(crate::session::onnx_tensorrt::replay_requested)
-                .transpose()?
-                .unwrap_or(false);
+        let onnx = options.map(Onnx::parse).transpose()?.unwrap_or_default();
+        let replay = onnx.replay;
         if replay {
             ensure!(
                 matches!(location, MemoryLocation::Cuda { .. }),
@@ -132,26 +129,27 @@ impl Model {
             .map_err(ort::Error::<()>::from)?;
         if let MemoryLocation::Cuda { device_id } = location {
             let mut providers = Vec::new();
-            if let Some(parameters) = tensorrt {
-                let mut provider =
-                    ort::ep::TensorRT::default().with_device_id(i32::try_from(device_id)?);
-                provider = provider
+            let mut provider = ort::ep::CUDA::default()
+                .with_device_id(i32::try_from(device_id)?)
+                .with_tf32(false);
+            // `cuda.*` also configures the CUDA provider as TensorRT's fallback.
+            for (key, value) in &onnx.cuda_options {
+                provider = provider.with_arbitrary_config(key, value);
+            }
+            if onnx.tensorrt {
+                let mut tensorrt = ort::ep::TensorRT::default()
+                    .with_device_id(i32::try_from(device_id)?)
                     .with_arbitrary_config("trt_cuda_graph_enable", if replay { "1" } else { "0" });
-                for (key, value) in crate::session::onnx_tensorrt::provider_options(parameters)? {
-                    if key != "trt_cuda_graph_enable" {
-                        provider = provider.with_arbitrary_config(key, value);
-                    }
+                for (key, value) in &onnx.tensorrt_options {
+                    tensorrt = tensorrt.with_arbitrary_config(key, value);
                 }
                 if let Some(stream) = stream {
                     // SAFETY: the caller retains the validated stream through every peer.
-                    provider = unsafe { provider.with_compute_stream(stream.as_raw().cast()) };
+                    tensorrt = unsafe { tensorrt.with_compute_stream(stream.as_raw().cast()) };
                 }
-                providers.push(provider.build().error_on_failure());
+                providers.push(tensorrt.build().error_on_failure());
             }
-            let mut provider = ort::ep::CUDA::default()
-                .with_device_id(i32::try_from(device_id)?)
-                .with_tf32(false)
-                .with_cuda_graph(replay && tensorrt.is_none());
+            provider = provider.with_cuda_graph(replay && !onnx.tensorrt);
             if let Some(stream) = stream {
                 // SAFETY: initialization validated this stream. CudaStream's
                 // caller retains it through every peer sharing the ORT session.
@@ -179,8 +177,7 @@ impl Model {
                 .map_err(ort::Error::<()>::from)
                 .with_context(|| format!("register ONNX custom operators {}", custom.display()))?;
         }
-        let engine = tensorrt.and_then(crate::session::onnx_tensorrt::engine_path);
-        let session = if let Some(engine) = engine {
+        let session = if let Some(engine) = onnx.engine {
             let load = || format!("load TensorRT engine {}", engine.display());
             let (_directory, path) =
                 tensorrt_engine::context_model(model, engine).with_context(load)?;
@@ -239,6 +236,10 @@ impl BackendPlugin for Model {
             prepared: None,
             loaded: self.loaded.clone(),
         }))
+    }
+
+    fn replay(&self) -> bool {
+        self.loaded.replay
     }
 
     fn can_prepare(&self) -> bool {

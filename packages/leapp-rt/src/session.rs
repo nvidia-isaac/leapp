@@ -13,7 +13,7 @@
 //! reread artifacts; mutable backend model state may remain shared and is not reset.
 pub(crate) mod graph;
 mod initial_state;
-pub(crate) mod onnx_tensorrt;
+pub(crate) mod node_options;
 #[cfg(test)]
 #[path = "../tests/unit_tests/session.rs"]
 mod tests;
@@ -26,10 +26,7 @@ use crate::{
 };
 use anyhow::{ensure, Context};
 use indexmap::{IndexMap, IndexSet};
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 /// Output placement keyed by logical output names.
 #[derive(Debug, Clone, Default)]
@@ -56,17 +53,13 @@ pub struct SessionOptions {
     /// Select the engine once at initialization; new sessions inherit that selection.
     /// Defaults to native.
     pub engine: EngineKind,
-    /// ONNX node names mapped to Triton's TensorRT accelerator parameters.
-    /// An entry enables the provider with CUDA fallback; an empty map uses SDK defaults.
-    /// Native execution supports opt-in per-node replay with `trt_cuda_graph_enable=1`.
-    /// Replay requires fixed CUDA bindings and caller-owned public outputs via `run_into`.
-    /// Native `engine_path` loads a prebuilt engine instead of building one from ONNX.
-    /// See documentation for supported options.
-    pub onnx_tensorrt: HashMap<String, HashMap<String, String>>,
-    /// Native ONNX nodes using per-node CUDA graph replay. TensorRT is used when
-    /// selected in `onnx_tensorrt`; otherwise replay uses the CUDA provider.
-    /// Requires fixed CUDA bindings and caller-owned public outputs via `run_into`.
-    pub cuda_graph_replay: HashSet<String>,
+    /// Options by bundle node name, interpreted by that node's backend. Keys are
+    /// `name` or `namespace.name`. ONNX nodes accept `execution_provider` (`cuda`
+    /// or `tensorrt`), `engine_path` for a prebuilt TensorRT engine, and
+    /// `cuda_graph_replay`, plus ONNX Runtime provider options under `tensorrt.`
+    /// and `cuda.`. Replay requires fixed CUDA bindings and caller-owned public
+    /// outputs via `run_into`. See documentation for supported options.
+    pub node_options: HashMap<String, HashMap<String, String>>,
     /// Caller-owned streams by CUDA device ID, used by native GPU execution and
     /// transfers. Missing devices use internal streams. Triton ignores this map.
     /// Peers inherit the same handles; keep them alive through every peer's close.

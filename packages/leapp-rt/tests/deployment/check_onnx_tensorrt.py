@@ -10,6 +10,14 @@ import lrt
 import numpy as np
 
 
+def tensorrt(options):
+    """Select TensorRT and namespace its ONNX Runtime provider options."""
+    return {
+        "execution_provider": "tensorrt",
+        **{f"tensorrt.{key}": value for key, value in options.items()},
+    }
+
+
 def check(fixtures, cache, engine):
     bundle = lrt.Bundle.open(fixtures / "named_ports_dynamic.yaml")
     left = np.arange(4, dtype=np.float32)
@@ -44,7 +52,7 @@ def check(fixtures, cache, engine):
             engine=engine,
             device="cuda:0",
             output_device="cpu",
-            onnx_tensorrt={"arithmetic": parameters},
+            node_options={"arithmetic": tensorrt(parameters)},
         )
         snapshot = None
         for _ in range(2):
@@ -64,7 +72,12 @@ def check(fixtures, cache, engine):
         options = lrt.SessionOptions(
             device="cuda:0",
             output_device="cpu",
-            onnx_tensorrt={"arithmetic": {"engine_path": str(prebuilt)}},
+            node_options={
+                "arithmetic": {
+                    "execution_provider": "tensorrt",
+                    "engine_path": str(prebuilt),
+                }
+            },
         )
         with lrt.Session.open(bundle, options) as session:
             result = session.run(inputs)
@@ -94,7 +107,7 @@ def check(fixtures, cache, engine):
                 lrt.SessionOptions(
                     engine=engine,
                     device="cuda:0",
-                    onnx_tensorrt={"arithmetic": parameters},
+                    node_options={"arithmetic": tensorrt(parameters)},
                 ),
             ):
                 raise AssertionError(f"Invalid parameters accepted: {parameters}")

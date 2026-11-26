@@ -75,8 +75,7 @@ impl NativeEngine {
                     spec,
                     location,
                     compute_stream,
-                    options.onnx_tensorrt.get(name),
-                    options.cuda_graph_replay.contains(name),
+                    options.node_options.get(name),
                 )
                 .map_err(|e| backends::error("load", e.context(format!("load node {name}"))))
             })
@@ -173,14 +172,7 @@ impl NativeEngine {
         };
         // Workspace's field order also protects buffers on failed preparation.
         for call in &workspace.plan.calls {
-            let replay = options.cuda_graph_replay.contains(&call.name)
-                || options
-                    .onnx_tensorrt
-                    .get(&call.name)
-                    .map(crate::session::onnx_tensorrt::replay_requested)
-                    .transpose()
-                    .map_err(|e| RuntimeError::new("prepare", e))?
-                    .unwrap_or(false);
+            let replay = workspace.models[call.model].replay();
             let mut external_inputs = Vec::new();
             let mut staged_inputs = Vec::new();
             for (position, &id) in call.inputs.iter().enumerate() {

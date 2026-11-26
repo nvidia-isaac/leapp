@@ -35,10 +35,11 @@ int main(int argc, char** argv) {
       return 2;
     }
     options.device = lrt::ExecutionDevice::kCuda;
-    options.onnx_tensorrt["accumulator"] = {
-        {"trt_engine_cache_enable", "1"},
-        {"trt_engine_cache_path", argv[4]},
-        {"trt_builder_optimization_level", "0"}};
+    options.node_options["accumulator"] = {
+        {"execution_provider", "tensorrt"},
+        {"tensorrt.trt_engine_cache_enable", "1"},
+        {"tensorrt.trt_engine_cache_path", argv[4]},
+        {"tensorrt.trt_builder_optimization_level", "0"}};
   }
   lrt::Session session;
   status = lrt::Session::Open(bundle, options, &session);

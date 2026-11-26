@@ -36,20 +36,31 @@ pub(super) fn configure_tensorrt(
     options: &HashMap<String, HashMap<String, String>>,
 ) {
     for (node, model) in bundle.0.description.models.keys().zip(&mut pipeline.models) {
-        if let Some(parameters) = options.get(node) {
-            model
-                .config
-                .optimization
-                .mut_or_insert_default()
-                .execution_accelerators
-                .mut_or_insert_default()
-                .gpu_execution_accelerator
-                .push(Accelerator {
-                    name: "tensorrt".into(),
-                    parameters: parameters.clone(),
-                    ..Default::default()
-                });
-        }
+        // Validation admits only TensorRT selections for Triton ONNX nodes.
+        let Some(parameters) = options.get(node).filter(|parameters| {
+            parameters
+                .get("execution_provider")
+                .is_some_and(|provider| provider == "tensorrt")
+        }) else {
+            continue;
+        };
+        // Triton accepts its own TensorRT aliases, so forward `tensorrt.*` untranslated.
+        let parameters = parameters
+            .iter()
+            .filter_map(|(key, value)| Some((key.strip_prefix("tensorrt.")?.into(), value.clone())))
+            .collect();
+        model
+            .config
+            .optimization
+            .mut_or_insert_default()
+            .execution_accelerators
+            .mut_or_insert_default()
+            .gpu_execution_accelerator
+            .push(Accelerator {
+                name: "tensorrt".into(),
+                parameters,
+                ..Default::default()
+            });
     }
 }
 

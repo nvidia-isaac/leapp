@@ -145,6 +145,7 @@ struct PreparedProbe {
     input: usize,
     outputs: Vec<usize>,
     runs: Arc<AtomicUsize>,
+    replay: bool,
 }
 
 impl BackendPlugin for PreparedProbe {
@@ -155,7 +156,12 @@ impl BackendPlugin for PreparedProbe {
             runs: self.runs.clone(),
             alignment: self.alignment,
             outcome: self.outcome,
+            replay: self.replay,
         }))
+    }
+
+    fn replay(&self) -> bool {
+        self.replay
     }
 
     fn can_prepare(&self) -> bool {
@@ -240,22 +246,13 @@ fn prepared_execution_uses_one_entry_point_and_never_retries_errors() {
             input: 0,
             outputs: Vec::new(),
             runs: runs.clone(),
+            replay,
         };
         let engine = NativeEngine::with_models(
             plan(1),
             vec![Box::new(model)],
             None,
-            &SessionOptions {
-                onnx_tensorrt: if replay {
-                    HashMap::from([(
-                        "node0".into(),
-                        HashMap::from([("trt_cuda_graph_enable".into(), "1".into())]),
-                    )])
-                } else {
-                    HashMap::new()
-                },
-                ..Default::default()
-            },
+            &SessionOptions::default(),
         )
         .unwrap();
         let mut destination = [0_f32];
@@ -431,7 +428,7 @@ fn failed_preparation_drops_all_trait_objects_before_workspace_slots() {
 
 #[test]
 fn replay_checks_all_bindings_before_any_backend_runs() {
-    for (replay, tensorrt) in [(false, false), (true, false), (true, true)] {
+    for replay in [false, true] {
         let runs = Arc::new(AtomicUsize::new(0));
         let models = (0..2)
             .map(|_| {
@@ -441,34 +438,12 @@ fn replay_checks_all_bindings_before_any_backend_runs() {
                     input: 0,
                     outputs: Vec::new(),
                     runs: runs.clone(),
+                    replay,
                 }) as Box<dyn BackendPlugin>
             })
             .collect();
-        let engine = NativeEngine::with_models(
-            plan(2),
-            models,
-            None,
-            &SessionOptions {
-                cuda_graph_replay: (0..2)
-                    .filter(|_| replay && !tensorrt)
-                    .map(|i| format!("node{i}"))
-                    .collect(),
-                onnx_tensorrt: (0..2)
-                    .filter(|_| tensorrt)
-                    .map(|i| {
-                        (
-                            format!("node{i}"),
-                            HashMap::from([(
-                                "trt_cuda_graph_enable".into(),
-                                if replay { "1" } else { "0" }.into(),
-                            )]),
-                        )
-                    })
-                    .collect(),
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        let engine =
+            NativeEngine::with_models(plan(2), models, None, &SessionOptions::default()).unwrap();
         let run = |input: &[f32], output: &mut [f32]| {
             engine.run(
                 &[("input", BorrowedTensor::cpu(input, &[1]).unwrap())],

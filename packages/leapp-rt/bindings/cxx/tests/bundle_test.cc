@@ -59,12 +59,12 @@ int main(int argc, char** argv) {
            Parameters{"a_policy", invalid_utf8, "cache"},
            Parameters{"a_policy", "trt_engine_cache_path", invalid_utf8}}) {
     lrt::SessionOptions options;
-    options.onnx_tensorrt[node][key] = value;
+    options.node_options[node][key] = value;
     lrt::Session session;
     const auto invalid = lrt::Session::Open(bundle, options, &session);
     Check(invalid.code() == lrt::ErrorCode::kInvalidArgument &&
               invalid.message().find("UTF-8") != std::string::npos,
-          "invalid TensorRT node, key or value returns Status");
+          "invalid node option name, key or value returns Status");
     Check(!session.bundle().is_valid(), "invalid UTF-8 preserves empty session");
   }
   Check(bundle.yaml_path() == path, "absolute path");

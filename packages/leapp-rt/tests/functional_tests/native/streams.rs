@@ -85,7 +85,11 @@ fn external_streams_support_onnx_tensorrt() {
         SessionOptions {
             engine: crate::EngineKind::Native,
             device: ExecutionDevice::Cuda { device_id: 0 },
-            onnx_tensorrt: [("accumulator".into(), HashMap::new())].into(),
+            node_options: [(
+                "accumulator".into(),
+                HashMap::from([("execution_provider".into(), "tensorrt".into())]),
+            )]
+            .into(),
             ..Default::default()
         },
     );

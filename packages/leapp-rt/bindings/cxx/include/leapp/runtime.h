@@ -41,12 +41,10 @@ struct SessionOptions {
   uint32_t device_id = 0;
   std::optional<MemoryLocation> output_location;
   std::unordered_map<std::string, std::optional<MemoryLocation>> output_overrides;
-  // ONNX node -> Triton TensorRT accelerator parameters. Empty parameters
-  // enable SDK defaults. See documentation for supported options.
+  // Node name -> options interpreted by that node's backend. See documentation
+  // for supported options.
   std::unordered_map<std::string, std::unordered_map<std::string, std::string>>
-      onnx_tensorrt;
-  // Native ONNX nodes opting into CUDA graph replay with fixed CUDA buffers.
-  std::vector<std::string> cuda_graph_replay;
+      node_options;
 };
 
 /// @brief Retained outputs; copies share allocations.

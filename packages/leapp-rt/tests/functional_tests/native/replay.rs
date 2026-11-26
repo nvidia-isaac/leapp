@@ -69,16 +69,17 @@ fn tensorrt_engines(directory: &std::path::Path) -> HashMap<String, String> {
     let cache = |node| directory.join(node);
     let options = SessionOptions {
         device: ExecutionDevice::Cuda { device_id: 0 },
-        onnx_tensorrt: nodes
+        node_options: nodes
             .map(|node| {
                 fs::create_dir(cache(node)).unwrap();
                 let parameters = HashMap::from([
-                    ("trt_engine_cache_enable".into(), "1".into()),
+                    ("execution_provider".into(), "tensorrt".into()),
+                    ("tensorrt.trt_engine_cache_enable".into(), "1".into()),
                     (
-                        "trt_engine_cache_path".into(),
+                        "tensorrt.trt_engine_cache_path".into(),
                         cache(node).display().to_string(),
                     ),
-                    ("trt_builder_optimization_level".into(), "0".into()),
+                    ("tensorrt.trt_builder_optimization_level".into(), "0".into()),
                 ]);
                 (node.into(), parameters)
             })
@@ -105,36 +106,24 @@ fn exercise_replay(
     tensorrt: bool,
     engines: Option<&HashMap<String, String>>,
 ) {
-    // Cover the shared selector and the existing TensorRT-specific option.
-    let shared_selector = !tensorrt || stream.is_some();
     let options = |names: &[&str], replay: bool| SessionOptions {
         device: ExecutionDevice::Cuda { device_id: 0 },
-        onnx_tensorrt: names
+        node_options: names
             .iter()
-            .filter(|_| tensorrt)
-            .map(|name| {
-                (
-                    (*name).into(),
-                    HashMap::from([
-                        (
-                            "trt_cuda_graph_enable".into(),
-                            if replay && !shared_selector { "1" } else { "0" }.into(),
-                        ),
-                        ("trt_builder_optimization_level".into(), "0".into()),
-                    ]),
-                )
-            })
-            .map(|(name, mut parameters): (String, HashMap<_, _>)| {
-                if let Some(engine) = engines.and_then(|engines| engines.get(&name)) {
+            .map(|&name| {
+                let replay = if replay { "1" } else { "0" };
+                let mut parameters = HashMap::from([("cuda_graph_replay".into(), replay.into())]);
+                if tensorrt {
+                    parameters.extend([
+                        ("execution_provider".into(), "tensorrt".into()),
+                        ("tensorrt.trt_builder_optimization_level".into(), "0".into()),
+                    ]);
+                }
+                if let Some(engine) = engines.and_then(|engines| engines.get(name)) {
                     parameters.insert("engine_path".into(), engine.clone());
                 }
-                (name, parameters)
+                (name.to_owned(), parameters)
             })
-            .collect(),
-        cuda_graph_replay: names
-            .iter()
-            .filter(|_| replay && shared_selector)
-            .map(|name| (*name).to_owned())
             .collect(),
         cuda_streams: stream.map(|stream| (0, stream)).into_iter().collect(),
         ..Default::default()
@@ -149,7 +138,7 @@ fn exercise_replay(
         }
         fs::remove_file(directory.path().join("policy/weights.bin")).unwrap();
         let mut conversion = options(&["preprocess", "policy"], false);
-        for parameters in conversion.onnx_tensorrt.values_mut() {
+        for parameters in conversion.node_options.values_mut() {
             parameters.remove("engine_path");
         }
         let error = Session::open(&bundle, conversion).err().unwrap();
@@ -159,10 +148,10 @@ fn exercise_replay(
         // fallback, which must reject replay without a LEAPP operator allow-list.
         let mut unsupported = options(&["preprocess"], true);
         unsupported
-            .onnx_tensorrt
+            .node_options
             .get_mut("preprocess")
             .unwrap()
-            .insert("trt_op_types_to_exclude".into(), "Add".into());
+            .insert("tensorrt.trt_op_types_to_exclude".into(), "Add".into());
         let error = Session::open(&bundle, unsupported).err().unwrap();
         assert!(
             error
@@ -171,6 +160,15 @@ fn exercise_replay(
             "{error}"
         );
     }
+    // `cuda.*` reaches ONNX Runtime's CUDA provider, including as TensorRT's fallback.
+    let mut unknown = options(&["preprocess", "policy"], false);
+    unknown
+        .node_options
+        .get_mut("preprocess")
+        .unwrap()
+        .insert("cuda.unknown_cuda_option".into(), "1".into());
+    let error = Session::open(&bundle, unknown).err().unwrap();
+    assert!(error.to_string().contains("unknown_cuda_option"), "{error}");
     let mut normal = Session::open(&bundle, options(&["preprocess", "policy"], false)).unwrap();
     let mut replay = Session::open(&bundle, options(&["preprocess", "policy"], true)).unwrap();
     assert!(normal.new_session().is_ok());
