@@ -3,6 +3,9 @@
 
 //! ONNX loading and cached CPU/CUDA bindings, refactored from the native prototype.
 
+// ORT TensorRT shape-input workaround: see onnx/tensorrt_shape_inputs.rs.
+mod tensorrt_shape_inputs;
+
 use super::{BackendPlugin, InputRoute};
 use crate::{
     bundle::{schema::NodeSpec, shapes::ExecutionShape},
@@ -87,6 +90,8 @@ struct Loaded {
     output_locations: Vec<MemoryLocation>,
     location: MemoryLocation,
     replay: bool,
+    // ORT TensorRT shape-input workaround: see onnx/tensorrt_shape_inputs.rs.
+    shape_inputs: tensorrt_shape_inputs::ShapeInputs,
 }
 
 impl Model {
@@ -121,6 +126,8 @@ impl Model {
         initialize(&directory)?;
         location.validate()?;
         let _device = select_device(location)?;
+        // ORT TensorRT shape-input workaround: see onnx/tensorrt_shape_inputs.rs.
+        let shape_inputs = tensorrt_shape_inputs::ShapeInputs::select(model, tensorrt.is_some());
         let mut builder = Session::builder()?
             .with_no_environment_execution_providers()
             .map_err(ort::Error::<()>::from)?
@@ -137,7 +144,9 @@ impl Model {
                     ort::ep::TensorRT::default().with_device_id(i32::try_from(device_id)?);
                 provider = provider
                     .with_arbitrary_config("trt_cuda_graph_enable", if replay { "1" } else { "0" });
-                for (key, value) in crate::session::onnx_tensorrt::provider_options(parameters)? {
+                let options = crate::session::onnx_tensorrt::provider_options(parameters)?;
+                // ORT TensorRT shape-input workaround: see onnx/tensorrt_shape_inputs.rs.
+                for (key, value) in shape_inputs.provider_options(options) {
                     if key != "trt_cuda_graph_enable" {
                         provider = provider.with_arbitrary_config(key, value);
                     }
@@ -179,8 +188,9 @@ impl Model {
                 .map_err(ort::Error::<()>::from)
                 .with_context(|| format!("register ONNX custom operators {}", custom.display()))?;
         }
-        let session = builder
-            .commit_from_file(&model.parameters.model_path)
+        // ORT TensorRT shape-input workaround: see onnx/tensorrt_shape_inputs.rs.
+        let session = shape_inputs
+            .commit(&mut builder, &model.parameters.model_path)
             .with_context(|| {
                 format!("load ONNX model {}", model.parameters.model_path.display())
             })?;
@@ -196,8 +206,10 @@ impl Model {
                 );
             }
         }
-        let input_names =
+        let mut input_names =
             check_ports(model.input_ports(), session.inputs()).context("ONNX inputs")?;
+        // ORT TensorRT shape-input workaround: see onnx/tensorrt_shape_inputs.rs.
+        shape_inputs.rename(&mut input_names);
         let output_names =
             check_ports(model.output_ports(), session.outputs()).context("ONNX outputs")?;
         let output_locations = output_locations(&session, &output_names)?;
@@ -213,6 +225,7 @@ impl Model {
                 output_shapes: model.output_ports().map(|(_, s)| s.clone()).collect(),
                 location,
                 replay,
+                shape_inputs,
             }),
         })
     }
@@ -325,10 +338,15 @@ impl BackendPlugin for Model {
                 .map(|name| CString::new(name.as_str()).map_err(Into::into))
                 .collect::<Result<Vec<_>>>()?;
             let mut values = Vec::with_capacity(names.len());
-            for &input in inputs {
+            // ORT TensorRT shape-input workaround: see onnx/tensorrt_shape_inputs.rs.
+            let shape_inputs = &self.loaded.shape_inputs;
+            for (position, &input) in inputs.iter().enumerate() {
                 // SAFETY: the workspace keeps this read-only region alive until
                 // the prepared call is dropped, before releasing its allocations.
-                values.push(unsafe { borrowed_value(input.descriptor())? });
+                let value = shape_inputs.with_input(position, input.descriptor(), |view| unsafe {
+                    borrowed_value(view)
+                });
+                values.push(value?);
             }
             for &writable in outputs {
                 // SAFETY: the caller retains exclusive fixed output storage.
@@ -336,7 +354,14 @@ impl BackendPlugin for Model {
             }
             let input_metadata = inputs
                 .iter()
-                .map(|&input| InputMetadata::new(input))
+                .enumerate()
+                .map(|(position, &input)| {
+                    let mut metadata = InputMetadata::new(input)?;
+                    if let Some(count) = shape_inputs.count(position) {
+                        metadata.shape = vec![count];
+                    }
+                    Ok(metadata)
+                })
                 .collect::<Result<Vec<_>>>()?;
             let run_options = ort::session::RunOptions::new()?;
             let count = inputs.len();
@@ -440,9 +465,14 @@ impl BackendPlugin for Model {
         // The executor owns these already-routed inputs through completion.
         let values = inputs
             .iter()
-            .map(|&view| {
+            .enumerate()
+            .map(|(position, &view)| {
+                // ORT TensorRT shape-input workaround: see onnx/tensorrt_shape_inputs.rs.
+                let shape_inputs = &self.loaded.shape_inputs;
                 // SAFETY: the invocation retains each owner until the SDK binding drops.
-                unsafe { borrowed_value(view.descriptor()) }
+                shape_inputs.with_input(position, view.descriptor(), |view| unsafe {
+                    borrowed_value(view)
+                })
             })
             .collect::<Result<Vec<_>>>()?;
         let mut binding = session.create_binding()?;
