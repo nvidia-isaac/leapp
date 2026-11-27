@@ -90,7 +90,6 @@ class ExportManager:
             # model.
             self.keep_buffers_tied = False
             self._semantics = {}
-            self._semantics_frozen = False
             self._next_completed_node_index = 0
 
             ExportManager._initialized = True
@@ -136,7 +135,6 @@ class ExportManager:
         self.nodes = {}
         self.release_buffer_trackers()
         self._semantics = {}
-        self._semantics_frozen = False
         self._next_completed_node_index = 0
         TracedTensorNode._next_input_index = 0
 
@@ -160,21 +158,12 @@ class ExportManager:
         allow_unregistered_ports=False,
     ):
         """Declare or replace node metadata before compilation begins."""
-        if self._semantics_frozen:
-            raise RuntimeError(
-                "Set semantics before calling compile_graph(); start a new capture to change them"
-            )
         self._get_semantics(node_name).set_semantics(
             inputs=inputs,
             outputs=outputs,
             states=states,
             allow_unregistered_ports=allow_unregistered_ports,
         )
-
-    def freeze_semantics(self):
-        self._semantics_frozen = True
-        for semantics in self._semantics.values():
-            semantics._frozen = True
 
     @classmethod
     def set_interpret_graph(cls, is_enabled: bool):
