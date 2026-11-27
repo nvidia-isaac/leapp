@@ -47,7 +47,7 @@ annotate.output_tensors("pipeline", joint_position(
 
 ## Declare semantics independently of values
 
-Use `annotate.set_semantics(node_name, *, inputs=None, outputs=None, states=None, allow_unregistered_ports=False)` when descriptions are known separately from tensor values. Supply a list or tuple of named `TensorSemantics` descriptors for each direction. Their names identify the ports; `ref` is optional for this call. Quantity convenience helpers still require their tensor argument.
+Use `annotate.set_semantics(node_name, *, inputs=None, outputs=None, states=None, allow_unregistered_ports=False)` when descriptions are known separately from tensor values. Supply a list or tuple of named `TensorSemantics` descriptors for each direction. Their names identify the public ports, including dotted feature keys such as `observation.state`; generated FX identifiers are internal. `ref` is optional for this call. Quantity convenience helpers still require their tensor argument.
 
 Call after `leapp.start()` and before `compile_graph()`, including after `stop()`. Any function or module can supply the descriptions without holding the tensors or original data source. Existing ports are checked by default. Use `allow_unregistered_ports=True` to predefine descriptions and create an ordinary named node before values exist. Tensor annotations reuse that node. Unmatched predefinitions fail compilation; known shapes and intrinsic semantic rules are validated as soon as available.
 

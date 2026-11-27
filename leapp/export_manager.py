@@ -151,11 +151,7 @@ class ExportManager:
         if not isinstance(node_name, str) or not node_name.strip():
             raise ValueError("node_name must be a non-empty string")
         created = node_name not in self.nodes
-        node = (
-            self._setup_new_node(node_name)
-            if created
-            else self.nodes[node_name]
-        )
+        node = self._setup_new_node(node_name) if created else self.nodes[node_name]
         try:
             node.set_semantics(
                 inputs=inputs,

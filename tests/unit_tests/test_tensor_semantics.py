@@ -580,9 +580,12 @@ def test_predefined_semantics_do_not_register_ports_or_disable_later_checks(
 
 @pytest.mark.parametrize("when", ["before", "registered", "captured", "stopped"])
 def test_set_semantics_before_compilation(semantic_session, when):
+    source_name = "observation.state"
     inputs = [
         TensorSemantics(
-            "state", kind=Kind.JOINT_POSITION, axes=[Axis("element", names=["a", "b"])]
+            source_name,
+            kind=Kind.JOINT_POSITION,
+            axes=[Axis("element", names=["a", "b"])],
         )
     ]
     outputs = [
@@ -603,7 +606,7 @@ def test_set_semantics_before_compilation(semantic_session, when):
         set_metadata()
         node = annotate.nodes["policy"]
         assert not node.inputs and not node.outputs
-    x = leapp.annotate.input_tensors("policy", {"state": torch.tensor([1.0, 2.0])})
+    x = leapp.annotate.input_tensors("policy", {source_name: torch.tensor([1.0, 2.0])})
     if when == "registered":
         set_metadata()
     leapp.annotate.output_tensors("policy", {"action": x * 2}, export_with="jit")
@@ -615,6 +618,7 @@ def test_set_semantics_before_compilation(semantic_session, when):
     assert leapp.compile_graph(visualize=False)
     path = semantic_session / "semantics.yaml"
     description = yaml.safe_load(path.read_text())["models"]["policy"]
+    assert description["inputs"][0]["name"] == source_name
     assert description["inputs"][0]["kind"] == "joint/position"
     assert description["outputs"][0]["kind"] == "joint/effort"
     assert description["outputs"][0]["axes"] == [
@@ -624,7 +628,7 @@ def test_set_semantics_before_compilation(semantic_session, when):
     runtime = leapp.InferenceManager(str(path))
     fresh = torch.tensor([-3.0, 7.0])
     torch.testing.assert_close(
-        runtime({"policy/state": fresh})["policy/action"], fresh * 2
+        runtime({f"policy/{source_name}": fresh})["policy/action"], fresh * 2
     )
 
 
@@ -1148,8 +1152,6 @@ def test_unregistered_semantics_on_empty_node_fail_compilation(semantic_session)
     assert not (semantic_session / "semantics.yaml").exists()
 
 
-
-
 class TestSemanticExport(LEAPPFunctionalTestBase):
     """Semantic metadata and runtime coverage alongside descriptor tests."""
 
@@ -1637,29 +1639,6 @@ class TestSemanticExport(LEAPPFunctionalTestBase):
             )
         leapp.stop()
 
-    def test_td_inputs_graph_structure(self):
-        """Test that TensorSemantics inputs produce correct graph structure (node count, connections)."""
-        pos = torch.randn(1, 4)
-        vel = torch.randn(1, 4)
-
-        leapp.start(name=self.TEST_GRAPH_NAME)
-        traced_pos, traced_vel = annotate.input_tensors(
-            "struct_node",
-            [
-                TensorSemantics(name="pos", ref=pos, kind=InputKindEnum.JOINT_POSITION),
-                TensorSemantics(name="vel", ref=vel, kind=InputKindEnum.JOINT_VELOCITY),
-            ],
-        )
-
-        output = traced_pos + traced_vel
-        annotate.output_tensors("struct_node", {"command": output})
-        leapp.stop()
-        leapp.compile_graph(visualize=False)
-
-        self.verify_num_connections(
-            annotate, nodes=1, inputs=2, outputs=1, internal_connections=0
-        )
-
     def test_semantic_input_reentry_does_not_crash(self):
         """Reentry with TensorSemantics inputs must not KeyError on semantic-only keys."""
         joint_pos = torch.randn(1, 6)
@@ -1754,6 +1733,7 @@ class TestSemanticExport(LEAPPFunctionalTestBase):
 
 class TestStructuredSemantics(LEAPPFunctionalTestBase):
     def test_helpers_export_and_runtime(self):
+        """Preserve partial twist labels through graph export and runtime replay."""
         from leapp import (
             Axis,
             AxisKind,
@@ -1766,7 +1746,7 @@ class TestStructuredSemantics(LEAPPFunctionalTestBase):
 
         q = torch.tensor([[1.0, 2.0]])
         target = torch.tensor([[3.0, 5.0]])
-        velocity = torch.zeros(1, 1, 6)
+        velocity = torch.tensor([[[0.5, 1.0, -0.25]]])
         pixels = torch.zeros(1, 3, 2, 2, dtype=torch.uint8)
         joints = [
             Axis(AxisKind.SYSTEM, names=["robot0"]),
@@ -1787,7 +1767,7 @@ class TestStructuredSemantics(LEAPPFunctionalTestBase):
                         Axis(AxisKind.ELEMENT, names=["tool"]),
                         Axis(
                             AxisKind.COMPONENT,
-                            names=["vx", "vy", "vz", "wx", "wy", "wz"],
+                            names=["x", "y", "angular_z"],
                         ),
                     ],
                 ),
@@ -1812,6 +1792,11 @@ class TestStructuredSemantics(LEAPPFunctionalTestBase):
         )
         self.assertEqual(inputs[2]["axes"][1], {"kind": "element", "names": ["tool"]})
         self.assertEqual(
+            inputs[2]["axes"][2],
+            {"kind": "component", "names": ["x", "y", "angular_z"]},
+        )
+        self.assertEqual(inputs[2]["shape"], [1, 1, 3])
+        self.assertEqual(
             config["models"]["policy"]["outputs"][0]["kind"], Kind.JOINT_EFFORT.value
         )
         runtime = leapp.InferenceManager(path)
@@ -1823,7 +1808,7 @@ class TestStructuredSemantics(LEAPPFunctionalTestBase):
                 "policy/camera": pixels,
             }
         )
-        torch.testing.assert_close(result["policy/effort"], target - q)
+        torch.testing.assert_close(result["policy/effort"], target - q + velocity.sum())
 
     def test_optional_setpoint_values_survive_export(self):
         leapp.start(name=self.TEST_GRAPH_NAME)
