@@ -81,13 +81,13 @@ exist, during capture, after stopping capture, or after compilation:
 
    import torch
    import leapp
-   from leapp import annotate, joint_position, joint_effort
+   from leapp import annotate, TensorSemantics, Kind
 
    leapp.start("policy_graph")
    annotate.set_semantics(
        "policy",
-       inputs=[joint_position("q")],
-       outputs=[joint_effort("action")],
+       inputs=[TensorSemantics("q", kind=Kind.JOINT_POSITION)],
+       outputs=[TensorSemantics("action", kind=Kind.JOINT_EFFORT)],
    )
    q = annotate.input_tensors("policy", {"q": torch.zeros(2)})
    annotate.output_tensors("policy", {"action": q * 2}, export_with="jit")
@@ -95,12 +95,15 @@ exist, during capture, after stopping capture, or after compilation:
    leapp.compile_graph(visualize=False)
 
    # Replace this port's description after compilation.
-   annotate.set_semantics("policy", outputs=[joint_position("action")])
+   annotate.set_semantics(
+       "policy", outputs=[TensorSemantics("action", kind=Kind.JOINT_POSITION)]
+   )
    leapp.save_semantics()
 
 Names come from ``TensorSemantics.name``. No placeholder, tensor reference, or
-separate node-selection call is needed. ``states=[joint_position("memory")]``
-sets both the input and output descriptions for a state named ``memory``.
+separate node-selection call is needed.
+``states=[TensorSemantics("memory", kind=Kind.JOINT_POSITION)]`` sets both the
+input and output descriptions for a state named ``memory``.
 ``state_tensors()`` can create a node, including one with only recurrent inputs.
 State feedback still requires ``update_state()`` and finalization through
 ``output_tensors()``.
@@ -117,7 +120,9 @@ For a saved artifact, use the same setter on its loaded node:
 .. code-block:: python
 
    runtime = leapp.InferenceManager("policy_graph/policy_graph.yaml")
-   runtime.nodes["policy"].set_semantics(outputs=[joint_effort("action")])
+   runtime.nodes["policy"].set_semantics(
+       outputs=[TensorSemantics("action", kind=Kind.JOINT_EFFORT)]
+   )
    runtime.save_semantics()
 
 Saving updates the existing YAML. Model files, numerical results, and graph
