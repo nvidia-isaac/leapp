@@ -18,7 +18,9 @@ class NodeSemantics:
         self._ports = {"inputs": {}, "outputs": {}}
         self._frozen = False
 
-    def set_semantics(self, *, inputs=None, outputs=None, states=None):
+    def set_semantics(
+        self, *, inputs=None, outputs=None, states=None, allow_unregistered_ports=False
+    ):
         """Atomically replace descriptions for supplied named ports.
 
         Names come from ``TensorSemantics.name``. Omitted fields are cleared;
@@ -28,6 +30,8 @@ class NodeSemantics:
             raise RuntimeError(
                 "Set semantics before calling compile_graph(); start a new capture to change them"
             )
+        if not isinstance(allow_unregistered_ports, bool):
+            raise TypeError("allow_unregistered_ports must be a boolean")
         if states is not None and not isinstance(states, (list, tuple)):
             raise TypeError("states must be a list of TensorSemantics")
         updates = {}
@@ -46,6 +50,11 @@ class NodeSemantics:
                     raise ValueError("TensorSemantics requires a non-empty port name")
                 if name in pending:
                     raise ValueError(f"Duplicate {direction} semantics for '{name}'")
+                if not allow_unregistered_ports and name not in self._ports[direction]:
+                    raise ValueError(
+                        f"Invalid {direction[:-1]} port name {name!r} for node {self.name!r}. "
+                        "To predefine semantics, pass allow_unregistered_ports=True."
+                    )
                 # Drop ref before copying: even a bound legacy annotation must
                 # not keep a sample tensor (or a whole traced graph) alive here.
                 snapshot = copy(description)
@@ -76,7 +85,7 @@ class NodeSemantics:
             named = copy(semantics)
             named.name = name
             named.validate_shape(description.shape)
-            self.set_semantics(**{direction: [named]})
+            self.set_semantics(**{direction: [named]}, allow_unregistered_ports=True)
         else:
             existing = self._entries[direction].get(name)
             if existing is not None:

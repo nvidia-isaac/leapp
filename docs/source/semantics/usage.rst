@@ -88,6 +88,7 @@ exist, during capture, or after stopping capture, before compilation begins:
        "policy",
        inputs=[TensorSemantics("q", kind=Kind.JOINT_POSITION)],
        outputs=[TensorSemantics("action", kind=Kind.JOINT_EFFORT)],
+       allow_unregistered_ports=True,
    )
    q = annotate.input_tensors("policy", {"q": torch.zeros(2)})
    annotate.output_tensors("policy", {"action": q * 2}, export_with="jit")
@@ -101,8 +102,15 @@ exist, during capture, or after stopping capture, before compilation begins:
 
 Names come from ``TensorSemantics.name``. No placeholder, tensor reference, or
 separate node-selection call is needed.
+By default, the named ports must already be registered in the specified
+direction. Pass ``allow_unregistered_ports=True`` to predefine descriptions
+before their ports exist. The option applies to that call only and defers port
+existence checks until registration and compilation. Semantic fields and known
+shapes still validate immediately.
+
 ``states=[TensorSemantics("memory", kind=Kind.JOINT_POSITION)]`` sets both the
 input and output descriptions for a state named ``memory``.
+Both ports must exist unless predefinition is enabled.
 ``state_tensors()`` can create a node, including one with only recurrent inputs.
 State feedback still requires ``update_state()`` and finalization through
 ``output_tensors()``.
@@ -110,8 +118,9 @@ State feedback still requires ``update_state()`` and finalization through
 Every explicit valid call replaces the full description of the supplied ports.
 Omitted fields are cleared; other ports retain their descriptions. Validation
 is atomic across the entire call. Shape-independent rules are checked at once;
-layout checks run when tensor shapes become known. Descriptions for nonexistent
-ports fail at compilation. Starting ``compile_graph()`` freezes semantic
+layout checks run when tensor shapes become known. Unmatched names fail
+immediately by default. Unresolved predefinitions fail at compilation.
+Starting ``compile_graph()`` freezes semantic
 registration and overrides, including updates to existing descriptions. Later
 updates raise ``RuntimeError``. A new ``start()`` creates a fresh session with
 fresh metadata.

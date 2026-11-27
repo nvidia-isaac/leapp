@@ -406,19 +406,26 @@ Annotations
 
 .. code-block:: python
 
-   annotate.set_semantics(node_name, *, inputs=None, outputs=None, states=None)
+   annotate.set_semantics(node_name, *, inputs=None, outputs=None, states=None,
+                          allow_unregistered_ports=False)
 
 Declare or replace node metadata independently of tensor values. Call after
-``leapp.start()`` to select the current session, before or after tensor
-registration, but always before ``compile_graph()``. A declaration creates the node's metadata
-entry without adding executable graph ports. Subsequent tensor annotations
-create the computation and associate its ports with that entry.
+``leapp.start()`` to select the current session, before ``compile_graph()``.
+By default, each named port must already be registered on that node in the
+specified direction. An invalid port name raises ``ValueError`` with guidance
+to pass ``allow_unregistered_ports=True`` for predefinition.
+
+``allow_unregistered_ports=True`` permits descriptions before their ports exist.
+It creates metadata entries without adding executable ports. Subsequent tensor
+annotations associate their ports with those entries. Missing ports are checked
+at compilation. Semantic fields and known shapes validate in both modes.
 
 Each argument accepts a list or tuple of named ``TensorSemantics`` descriptors.
 Names come from the descriptors; no dictionary keys or tensor references are
 required. Inputs and outputs have separate namespaces. ``states`` applies each
 descriptor to both the matching input and output; it does not create feedback
 connections. Declare those with ``state_tensors()`` and ``update_state()``.
+Both state ports must exist unless ``allow_unregistered_ports=True`` is supplied.
 
 Each valid call replaces the complete description for every supplied port;
 omitted fields are cleared and other ports remain unchanged. Missing names,
