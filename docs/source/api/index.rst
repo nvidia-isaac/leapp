@@ -410,7 +410,7 @@ Annotations
 
 Declare or replace node metadata independently of tensor values. Call after
 ``leapp.start()`` to select the current session, before or after tensor
-registration, or after compilation. A declaration creates the node's metadata
+registration, but always before ``compile_graph()``. A declaration creates the node's metadata
 entry without adding executable graph ports. Subsequent tensor annotations
 create the computation and associate its ports with that entry.
 
@@ -424,21 +424,10 @@ Each valid call replaces the complete description for every supplied port;
 omitted fields are cleared and other ports remain unchanged. Missing names,
 duplicate names in a direction, incompatible layouts, and setpoint outputs
 raise errors without changing prior metadata. Shape checks wait until a port
-exists. Unresolved names fail compilation. Compiled nodes reject unknown ports.
-Existing inline tensor annotations use the same store and replacement rules.
-
-``leapp.save_semantics()`` and loaded nodes
--------------------------------------------
-
-After compilation, ``leapp.save_semantics()`` saves current semantics to the
-existing graph YAML without recompiling or rewriting model artifacts.
-
-In a later process, select a node from ``InferenceManager.nodes`` and call its
-``set_semantics(inputs=None, outputs=None, states=None)`` method with the same
-keyword arguments. ``manager.save_semantics()`` persists the updated metadata
-to the loaded YAML. These calls change metadata only; they do not convert tensor
-values, change shapes, or alter graph connections. See
-:doc:`/semantics/usage` for an example.
+exists. Unresolved names fail compilation. Starting ``compile_graph()`` freezes
+semantic registration and overrides; later updates raise ``RuntimeError``.
+Start a new capture to change them. Existing inline tensor annotations use the
+same store and replacement rules.
 
 ``annotate.input_tensors()``
 ----------------------------
