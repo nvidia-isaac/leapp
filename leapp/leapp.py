@@ -123,6 +123,11 @@ def stop():
         manager.patcher.uninstall()
 
 
+def save_semantics():
+    """Save current compiled-node metadata without compiling numerical models."""
+    _MANAGER.save_semantics()
+
+
 def compile_graph(
     visualize=True,
     verbose=None,
@@ -225,6 +230,7 @@ class AnnotateAPI:
     """Annotation-only facade over ExportManager."""
 
     _ALLOWED_APIS = {
+        "set_semantics",
         "input_tensors",
         "output_tensors",
         "method",

@@ -66,10 +66,63 @@ annotations. Start with the controller example below, then see
 
 .. note::
 
-   Semantic annotation is only available for
-   :func:`~leapp.annotate.input_tensors` and
-   :func:`~leapp.annotate.output_tensors`. It is **not** supported for
-   :func:`~leapp.annotate.method` nodes.
+   ``annotate.set_semantics()`` describes named ports independently of values.
+   Inline descriptors with a ``ref`` are also accepted by ``input_tensors()``,
+   ``output_tensors()``, ``state_tensors()``, and ``update_state()``. For
+   ``method()`` nodes, use ``set_semantics()`` with the generated port names.
+
+Independent descriptions and overrides
+======================================
+
+Semantics belong to a node's named ports. You can register them before tensors
+exist, during capture, after stopping capture, or after compilation:
+
+.. code-block:: python
+
+   import torch
+   import leapp
+   from leapp import annotate, joint_position, joint_effort
+
+   leapp.start("policy_graph")
+   annotate.set_semantics(
+       "policy",
+       inputs=[joint_position("q")],
+       outputs=[joint_effort("action")],
+   )
+   q = annotate.input_tensors("policy", {"q": torch.zeros(2)})
+   annotate.output_tensors("policy", {"action": q * 2}, export_with="jit")
+   leapp.stop()
+   leapp.compile_graph(visualize=False)
+
+   # Replace this port's description after compilation.
+   annotate.set_semantics("policy", outputs=[joint_position("action")])
+   leapp.save_semantics()
+
+Names come from ``TensorSemantics.name``. No placeholder, tensor reference, or
+separate node-selection call is needed. ``states=[joint_position("memory")]``
+sets both the input and output descriptions for a state named ``memory``.
+``state_tensors()`` can create a node, including one with only recurrent inputs.
+State feedback still requires ``update_state()`` and finalization through
+``output_tensors()``.
+
+Every explicit valid call replaces the full description of the supplied ports.
+Omitted fields are cleared; other ports retain their descriptions. Validation
+is atomic across the entire call. Shape-independent rules are checked at once;
+layout checks run when tensor shapes become known. Descriptions for nonexistent
+ports fail at compilation, or immediately on a compiled node. A new
+``start()`` creates a fresh session with fresh metadata.
+
+For a saved artifact, use the same setter on its loaded node:
+
+.. code-block:: python
+
+   runtime = leapp.InferenceManager("policy_graph/policy_graph.yaml")
+   runtime.nodes["policy"].set_semantics(outputs=[joint_effort("action")])
+   runtime.save_semantics()
+
+Saving updates the existing YAML. Model files, numerical results, and graph
+connections are unchanged. Changing a description of units or a frame does not
+convert the underlying values.
 
 General Usage
 =============
@@ -299,10 +352,8 @@ supported.
 Limitations
 ===========
 
-#. ``input_tensors`` and ``output_tensors`` only --- semantic annotations
-   are not available for :func:`~leapp.annotate.method` nodes. These
-   nodes derive their I/O descriptions automatically from function
-   signatures and traced values.
+#. **Known port names** --- ``method()`` nodes derive port names from function
+   signatures and traced values. Use those names with ``set_semantics()``.
 #. **No mixing** --- when using ``TensorSemantics``, all items must be
    ``TensorSemantics``. You cannot mix raw tensors and ``TensorSemantics``
    in the same list or tuple.
