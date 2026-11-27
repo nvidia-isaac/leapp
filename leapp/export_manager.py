@@ -725,7 +725,9 @@ class ExportManager:
             self.buffer_trackers.append(tracker)
         tracker.inject()
 
-        self.nodes[node_name]._buffer_tracker = tracker
+        node_trackers = self.nodes[node_name]._buffer_trackers
+        node_trackers[:] = [item for item in node_trackers if item._model is not model]
+        node_trackers.append(tracker)
 
     def method(self, **params):
         def decorator(func):

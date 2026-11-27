@@ -495,8 +495,10 @@ See :doc:`/semantics/usage` for examples.
   ``TensorSemantics`` descriptors with tensor values. Descriptors apply to both
   state ports. Nested state structures are unsupported.
 * Returns one traced value for one state, otherwise a tuple in declaration order.
-* Only states passed to ``update_state()`` become feedback outputs; others
-  remain regular inputs.
+* Every state requires an ``update_state()`` before ``output_tensors()``
+  finalizes capture. Missing updates raise ``ValueError`` naming the node and
+  states. Pass the current traced value to retain an unchanged state.
+  Use ``input_tensors()`` for ordinary inputs.
 
 ``annotate.update_state()``
 ---------------------------

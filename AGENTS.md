@@ -285,6 +285,10 @@ User-facing integration recipes belong here, not in this file.
 
 ## Guardrails when changing behavior
 
+- Reject explicit states missing `update_state()` when `output_tensors()`
+  finalizes capture. Name the node and missing states, and direct ordinary
+  inputs to `input_tensors()`. Collect all annotated modules on the node before
+  this check, registering mutated buffers and removing unchanged ones.
 - Keep semantic metadata in each node's direction/name map, independent of
   tensor values and input/output descriptions. Registration validates the map;
   YAML generation and visualization look up current metadata for surviving

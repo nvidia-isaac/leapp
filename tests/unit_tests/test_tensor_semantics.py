@@ -959,6 +959,13 @@ def test_state_annotations_support_bound_semantics(semantic_session):
     memory = leapp.annotate.state_tensors(
         "policy", leapp.joint_position("memory", torch.zeros(2))
     )
+    with pytest.raises(
+        ValueError,
+        match=r"State tensors \['memory'\] in node 'policy'.*update_state\(\).*input_tensors\(\)",
+    ):
+        leapp.annotate.output_tensors(
+            "policy", {"action": memory + 1}, export_with="jit"
+        )
     leapp.annotate.update_state("policy", leapp.joint_velocity("memory", memory + 1))
     leapp.annotate.output_tensors("policy", {}, export_with="jit")
     node = annotate.nodes["policy"]

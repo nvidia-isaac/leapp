@@ -102,8 +102,8 @@ class TracedTensorNode(LeappNode):
         # State tensor tracking: name -> {"input": TracedTensor, "output": TracedTensor | None}
         self._state_tensors: dict[str, dict] = {}
 
-        # Buffer tracker for auto-detecting stateful buffers (set by annotate.module())
-        self._buffer_tracker = None
+        # Buffer trackers for modules annotated on this node.
+        self._buffer_trackers = []
         self._next_buffer_idx = 0
 
     def add_input(self, input_name, raw_input_name, input_value, semantics=None):
@@ -288,9 +288,13 @@ class TracedTensorNode(LeappNode):
         # Auto-collect buffer mutations before merging state outputs.
         # collect() may remove non-mutated buffers from _state_tensors and
         # bake them as constants, so it must run before get_state_outputs().
-        if self._buffer_tracker is not None and not self._buffer_tracker._collected:
-            self._buffer_tracker.collect()
-            self._buffer_tracker.restore()
+        trackers = [
+            tracker for tracker in self._buffer_trackers if not tracker._collected
+        ]
+        for tracker in trackers:
+            tracker.collect()
+        for tracker in trackers:
+            tracker.restore()
 
         # Merge state outputs into the tensor dict before processing
         state_outputs = self.get_state_outputs()
@@ -948,19 +952,19 @@ class TracedTensorNode(LeappNode):
     def get_state_outputs(self) -> dict[str, TracedTensor]:
         """Get state outputs using the original state names.
 
-        Only states explicitly updated via update_state() become feedback outputs.
-        States declared without an update are treated as regular inputs.
+        Every declared state must have an explicit update before finalization.
         """
         inactive_states = [
             name for name, info in self._state_tensors.items() if info["output"] is None
         ]
         if inactive_states:
-            _get_logger().warning(
-                f"State tensors {inactive_states} in node '{self.name}' were not updated via "
-                "update_state(). They will be treated as regular inputs and will not create feedback outputs."
+            _get_logger().fatal(
+                f"State tensors {inactive_states} in node '{self.name}' have no update. "
+                "Call annotate.update_state() for every declared state before "
+                "annotate.output_tensors(). For ordinary inputs, use "
+                "annotate.input_tensors().",
+                error_type=ValueError,
             )
-            for name in inactive_states:
-                self._state_tensors.pop(name, None)
 
         result = {}
         for name, state_info in self._state_tensors.items():

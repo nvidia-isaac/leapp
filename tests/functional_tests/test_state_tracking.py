@@ -165,18 +165,28 @@ class TestStateTensors(LEAPPFunctionalTestBase):
             source_outputs={"policy/action": obs_value * 2.0},
         )
 
-    def test_state_tensor_without_update_state_becomes_regular_input(self):
-        """State tensors without update_state() should not create feedback."""
+    def test_missing_state_update_rejects_finalization_and_allows_retry(self):
+        """Reject incomplete feedback, then export and replay explicit identity updates."""
         leapp.start(name=self.TEST_GRAPH_NAME)
 
         obs_value = torch.tensor([1.0, 2.0, 3.0])
         initial_counter = torch.tensor([5.0, -3.0, 0.5])
 
         obs = annotate.input_tensors("policy", {"observation": obs_value})
-        counter = annotate.state_tensors("policy", {"counter": initial_counter})
+        counter, held = annotate.state_tensors(
+            "policy", {"counter": initial_counter, "held": torch.ones(3)}
+        )
+        annotate.update_state("policy", {"held": held})
 
+        with self.assertRaisesRegex(
+            ValueError,
+            r"State tensors \['counter'\] in node 'policy'.*update_state\(\).*input_tensors\(\)",
+        ):
+            annotate.output_tensors("policy", {"action": obs * 2}, export_with="jit")
+
+        annotate.update_state("policy", {"counter": counter})
         action = obs + counter
-        annotate.output_tensors("policy", {"action": action}, export_with="onnx")
+        annotate.output_tensors("policy", {"action": action}, export_with="jit")
 
         leapp.stop()
         leapp.compile_graph(visualize=False)
@@ -184,17 +194,16 @@ class TestStateTensors(LEAPPFunctionalTestBase):
         self.verify_num_connections(
             annotate,
             nodes=1,
-            inputs=2,
+            inputs=1,
             outputs=1,
             internal_connections=0,
-            feedback_connections=0,
+            feedback_connections=2,
         )
         self.verify_all_models_exist("policy")
         self.verify_safetensors_matches_feedback(annotate)
         self.verify_inference_manager(
             source_inputs={
                 "policy/observation": obs_value,
-                "policy/counter": initial_counter,
             },
             source_outputs={"policy/action": obs_value + initial_counter},
         )
@@ -920,8 +929,9 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
         output_tensors(), a buffer registered under more names or set to None, a
         module() call that fails, a session restarted with start(), a second
         session, and the model of an earlier module() call of the node, which is
-        checked for plain buffers and run. A buffer that requires grad stays as
-        before, so autograd through it still reaches the parameter.
+        checked for plain buffers, run, and exported with feedback. A buffer
+        that requires grad stays as before, so autograd through it still
+        reaches the parameter.
         """
         from leapp.leapp_graph.datatypes import is_traced_type
 
@@ -1001,6 +1011,8 @@ class TestBufferTracking(LEAPPFunctionalTestBase):
                     self.assertEqual(buf.data_ptr(), pointers[name], name)
                 torch.export.export(model, (torch.randn(1, 4),))
                 if case == "earlier_module_call":
+                    leapp.compile_graph(visualize=False)
+                    self.verify_num_connections(annotate, feedback_connections=1)
                     check_plain(other, other_keys)
                     other(torch.randn(1, 4))
 
