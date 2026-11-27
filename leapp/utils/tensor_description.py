@@ -16,6 +16,7 @@
 #
 
 import collections.abc
+from copy import deepcopy
 from dataclasses import dataclass, fields
 from typing import Optional, Any, Dict, Tuple, List
 
@@ -110,6 +111,8 @@ class TensorDescription:
         # Capture-only Python identifier, assigned once when registered as an
         # FX input. Public names and aliases remain unchanged.
         self.fx_name = None
+        # Keep the declared identity when an export backend renames this port.
+        self.declared_name = name
         # Capture-only layout facts must precede safe_deepcopy's dense snapshot.
         tensor = to_export_torch_tensor(value)
         self.strides = None
@@ -161,7 +164,7 @@ class TensorDescription:
     def update_semantics(self, values: Dict[str, Any]):
         """Set semantic fields from a dict."""
         if self.semantics is not None:
-            semantics = self.semantics
+            semantics = deepcopy(self.semantics)
         else:
             semantics = TensorSemantics(name=self.name, ref=self.value)
         semantics.update(values)
@@ -214,6 +217,11 @@ class TensorDescription:
     def aliases(self) -> List[str]:
         """Return every declared name for this tensor."""
         return self._aliases
+
+    @property
+    def declared_names(self) -> Tuple[str, ...]:
+        """Capture-time port names, independent of the backend's exported name."""
+        return (self.declared_name, *self._aliases[1:])
 
     @property
     def name_str(self) -> str:
@@ -374,6 +382,10 @@ def unwrap_tensor_semantics(data):
     tensors = {}
     semantics_map = {}
     for sem in data:
+        if sem.ref is None:
+            raise TypeError(
+                "Tensor annotations require ref; use annotate.set_semantics() for metadata only"
+            )
         tensors[sem.name] = sem.ref
         semantics_map[sem.name] = sem
 

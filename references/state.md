@@ -6,7 +6,11 @@ Online references: [state](https://nvidia-isaac.github.io/leapp/guides/graph.htm
 
 ## Explicit state across an episode
 
-`state_tensors` takes a flat dict of named Torch tensors inside an existing node. Nested state is unsupported; expose tensor leaves under distinct stable names. `update_state` uses those same names and preserves shape and dtype. An unupdated state remains an ordinary input. Constants belong in `annotate.register_buffer`, not feedback.
+`state_tensors` creates or reuses the named node. Pass raw values as a flat dict of named tensors, or pass bound `TensorSemantics` descriptors directly or as a homogeneous list. Nested state is unsupported; expose tensor leaves under distinct stable names. `update_state` uses those same names and preserves shape and dtype. One state returns its value; multiple states return a tuple in declaration order. Every declared state requires an update before `output_tensors()` finalizes capture. Missing updates raise an error naming the node and states. To retain an unchanged state, explicitly pass its current traced value to `update_state()`. Ordinary inputs belong in `input_tensors()`; constants belong in `annotate.register_buffer`.
+
+To describe state before its values exist, use `annotate.set_semantics("pipeline", states=[...], allow_unregistered_ports=True)` after `leapp.start()`. This creates the node if needed and stores descriptions for both the input and output namespaces. Actual state feedback still requires `state_tensors()`, `update_state()`, and finalization through `output_tensors()`. See [semantics](semantics.md) for replacement and validation rules.
+
+For [Warp capture](warp.md), retain an `input_tensors()` boundary on each pass. The current state-only entry point does not advance Warp discovery into the second capture pass. State-only node creation is available for ordinary tensor capture.
 
 This runnable example demonstrates state ownership and sequence parity without modifying the original step function:
 

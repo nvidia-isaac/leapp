@@ -97,6 +97,9 @@ class Axis:
 class TensorSemantics:
     """User-facing semantic metadata for a tensor.
 
+    ``ref`` is optional for value-independent ``annotate.set_semantics()`` calls.
+    Layout validation is deferred until a tensor or port shape is available.
+
     ``axes``, ``is_setpoint``, ``reference``, and ``expressed_in`` are
     experimental keyword-only fields. Existing kinds and element names retain
     their original behavior.
@@ -141,7 +144,7 @@ class TensorSemantics:
         """error checking, auto conditioning"""
         existing_period_ms = self.temporal_period_ms
         self.temporal_period_ms = None
-        if not is_tracable_tensor_type(
+        if self.ref is not None and not is_tracable_tensor_type(
             self.ref
         ):  # this checks for both base types and traced types
             _get_logger().fatal(
@@ -211,18 +214,26 @@ class TensorSemantics:
         if self.axes is not None:
             if not isinstance(self.axes, list):
                 raise TypeError("axes must be a list or None")
-            _, shape = value_to_name_and_shape(self.ref)
-            if len(self.axes) != len(shape):
-                raise ValueError("axes must have one entry per tensor dimension")
-            for size, axis in zip(shape, self.axes):
+            for axis in self.axes:
                 if axis is None:
                     continue
                 if not isinstance(axis, Axis):
                     raise TypeError("axes entries must be Axis or None")
-                if axis.names is not None and len(axis.names) != size:
-                    raise ValueError("Axis label count must match its tensor dimension")
             if sum(a is not None and a.kind == AxisKind.TIME for a in self.axes) > 1:
                 raise ValueError("A tensor may contain at most one time axis")
+            if self.ref is not None:
+                _, shape = value_to_name_and_shape(self.ref)
+                self.validate_shape(shape)
+
+    def validate_shape(self, shape):
+        """Validate layout when a tensor or compiled port shape becomes available."""
+        if self.axes is None:
+            return
+        if len(self.axes) != len(shape):
+            raise ValueError("axes must have one entry per tensor dimension")
+        for size, axis in zip(shape, self.axes):
+            if axis is not None and axis.names is not None and len(axis.names) != size:
+                raise ValueError("Axis label count must match its tensor dimension")
 
     def to_dict(self) -> Dict[str, Any]:
         """Return all non-None semantic fields, excluding internal fields.

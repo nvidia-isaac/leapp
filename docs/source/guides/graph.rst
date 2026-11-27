@@ -58,10 +58,11 @@ the next invocation rather than as ordinary forward data flow.
    leapp.stop()
    leapp.compile_graph(validate=True)
 
-Only states passed to ``update_state()`` become feedback state. A state declared
-with ``state_tensors()`` but never updated remains a regular node input. State
-ports are intended for feedback wiring; use ``input_tensors()`` and
-``output_tensors()`` for normal non-feedback data flow.
+Every state declared with ``state_tensors()`` requires an ``update_state()``
+before ``output_tensors()`` finalizes capture. Missing updates raise a
+``ValueError`` naming the node and states. To retain an unchanged state, pass
+its current traced value to ``update_state()``. Use ``input_tensors()`` and
+``output_tensors()`` for ordinary data flow.
 
 Automatic buffer tracking with ``annotate.module``
 ==================================================

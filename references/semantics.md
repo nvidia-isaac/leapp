@@ -45,9 +45,21 @@ annotate.output_tensors("pipeline", joint_position(
 ), export_with="onnx")
 ```
 
-## Passing and axis contracts
+## Declare semantics independently of values
 
-`TensorSemantics` works with `input_tensors` / `output_tensors`, not `method`. Pass one object or a homogeneous list directly, never wrappers inside a dict or mixed with raw tensors in a list. Use separate calls for semantic and raw ports when needed; keep names unique within each node's inputs or outputs. Semantic fields are optional, so an empty wrapper adds no value over a named raw tensor.
+Use `annotate.set_semantics(node_name, *, inputs=None, outputs=None, states=None, allow_unregistered_ports=False)` when descriptions are known separately from tensor values. Supply a list or tuple of named `TensorSemantics` descriptors for each direction. Their names identify the public ports, including dotted feature keys such as `observation.state`; generated FX identifiers are internal. `ref` is optional for this call. Quantity convenience helpers still require their tensor argument.
+
+Call after `leapp.start()` and before `compile_graph()`, including after `stop()`. Any function or module can supply the descriptions without holding the tensors or original data source. Existing ports are checked by default. Use `allow_unregistered_ports=True` to predefine descriptions and create an ordinary named node before values exist. Tensor annotations reuse that node. Unmatched predefinitions fail compilation; known shapes and intrinsic semantic rules are validated as soon as available.
+
+Each valid call replaces the entire description of the supplied ports, clearing omitted fields and preserving other ports. Updates validate atomically. `states=[...]` applies each named description to both input and output namespaces; it does not create feedback. Both state ports must exist unless predefinition is enabled. Input and output names belong to separate namespaces, so the same name may occur in both. Duplicate declarations within one direction are rejected, including multiple predefinitions that resolve to one shared port.
+
+The node keeps a persistent direction/name map. Tensor registration does not consume entries or copy them onto port descriptions. YAML generation and visualization look up current metadata for surviving ports. Pruned inputs and buffers baked as constants retain their metadata without becoming executable inputs. An output sharing a removed input's name remains independent and is still validated on re-entry. Backend renaming preserves the declared identity internally. A new `start()` resets the map. Register replacements before compilation; later changes do not update saved artifacts, and loaded-artifact editing has no API here.
+
+For method-based nodes, keep function arguments as ordinary tensors and use `set_semantics()` with the method's actual argument and return port names. Preserve existing method boundaries when the task only adds metadata.
+
+## Inline annotations and axis contracts
+
+For metadata supplied with values, pass one bound `TensorSemantics` object or a homogeneous list directly to `input_tensors`, `output_tensors`, `state_tensors`, or `update_state`. Each descriptor needs a concrete `ref`. Wrappers inside a dict or mixed with raw tensors in a list are unsupported. Use separate calls for semantic and raw ports when needed; keep names unique within each node's inputs or outputs. Inline annotations write to the same node map and use full-description replacement. Semantic fields are optional, so an empty bound wrapper adds no value over a named raw tensor.
 
 `axes` supplies one `Axis` or `None` per tensor dimension. For `[batch, joints]`, use `[None, Axis(AxisKind.ELEMENT, names=joint_names)]`. Supplied names must match the dimension size. Preserve actual layout and order; do not call a batch axis `SYSTEM` unless it truly indexes complete systems (such as robots, vehicles, or machines) or invent labels for latent dimensions.
 
@@ -57,26 +69,32 @@ Use at most one `Axis(AxisKind.TIME, period_ms=...)`; its period must be finite 
 
 ## Example when a controller needs action chunks
 
-This runnable example illustrates an external joint-position contract with four future targets. It is not a template requiring all pipelines to add names, timing, or graph configs. In a real project, keep the existing computation and use its actual joint order, quantity, and timing. No custom fields are needed here.
+This runnable example predefines an external joint-position contract with four future targets, then registers ordinary named tensors. Use the application's actual joint order, quantity, and timing. Names, timing, and graph configs remain optional when the consumer does not require them.
 
 ```python
 import torch
 import leapp
-from leapp import annotate, joint_position, Axis, AxisKind, GraphConfigs
+from leapp import annotate, TensorSemantics, Kind, Axis, AxisKind, GraphConfigs
 
 joint_names = ["hip", "knee", "ankle"]
 leapp.start("semantic_graph")
 try:
-    q = annotate.input_tensors("pipeline", joint_position(
-        "joint_pos", torch.randn(3),
-        axes=[Axis(AxisKind.ELEMENT, names=joint_names)],
-    ))
+    annotate.set_semantics(
+        "pipeline",
+        inputs=[TensorSemantics(
+            "joint_pos", kind=Kind.JOINT_POSITION,
+            axes=[Axis(AxisKind.ELEMENT, names=joint_names)],
+        )],
+        outputs=[TensorSemantics(
+            "joint_targets", kind=Kind.JOINT_POSITION,
+            axes=[Axis(AxisKind.TIME, period_ms=20),
+                  Axis(AxisKind.ELEMENT, names=joint_names)],
+        )],
+        allow_unregistered_ports=True,
+    )
+    q = annotate.input_tensors("pipeline", {"joint_pos": torch.randn(3)})
     actions = q.unsqueeze(0).repeat(4, 1)
-    annotate.output_tensors("pipeline", joint_position(
-        "joint_targets", actions,
-        axes=[Axis(AxisKind.TIME, period_ms=20),
-              Axis(AxisKind.ELEMENT, names=joint_names)],
-    ), export_with="onnx")
+    annotate.output_tensors("pipeline", {"joint_targets": actions}, export_with="onnx")
 finally:
     leapp.stop()
 leapp.compile_graph(visualize=False, validate=True, strict=True,
