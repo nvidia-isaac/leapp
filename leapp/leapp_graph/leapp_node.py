@@ -508,7 +508,10 @@ class LeappNode:
         """
         io_descriptions, _ = describe_io(io_name, raw_io_name, io_value)
         for io_description in io_descriptions:
-            if io_description.name_str in self.trimmed_inputs:
+            if (
+                current_io_list is self.inputs
+                and io_description.name_str in self.trimmed_inputs
+            ):
                 # we skip validation for inputs that are not used in the model
                 continue
             existing_io_description = LeappNode.get_io_description_by_name(

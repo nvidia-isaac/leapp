@@ -859,26 +859,44 @@ def test_semantics_for_baked_module_buffers_remain_in_store(semantic_session):
             return observation - self.mean
 
     model = Normalizer()
-    observation = leapp.annotate.input_tensors("policy", {"obs": torch.ones(2)})
-    leapp.annotate.module("policy", model)
-    leapp.annotate.set_semantics(
-        "policy", inputs=[TensorSemantics("mean", kind=Kind.JOINT_POSITION)]
-    )
-    node = annotate.nodes["policy"]
-    original = node._semantics["inputs"]["mean"]
-    leapp.annotate.output_tensors(
-        "policy", {"action": model(observation)}, export_with="jit"
-    )
+    for index in range(2):
+        observation = leapp.annotate.input_tensors(
+            "policy", {"obs": torch.full((2,), float(index + 1))}
+        )
+        leapp.annotate.module("policy", model)
+        if index == 0:
+            leapp.annotate.set_semantics(
+                "policy", inputs=[TensorSemantics("mean", kind=Kind.JOINT_POSITION)]
+            )
+            node = annotate.nodes["policy"]
+            original = node._semantics["inputs"]["mean"]
+        leapp.annotate.output_tensors(
+            "policy",
+            TensorSemantics("mean", model(observation), kind=Kind.JOINT_VELOCITY),
+            export_with="jit",
+        )
     assert node._semantics["inputs"]["mean"] is original
     assert [port.name for port in node.inputs] == ["obs"]
     leapp.stop()
     assert leapp.compile_graph(visualize=False)
     path = semantic_session / "semantics.yaml"
-    inputs = yaml.safe_load(path.read_text())["models"]["policy"]["inputs"]
-    assert [port["name"] for port in inputs] == ["obs"]
+    description = yaml.safe_load(path.read_text())["models"]["policy"]
+    assert [port["name"] for port in description["inputs"]] == ["obs"]
+    assert description["outputs"][0]["name"] == "mean"
+    assert description["outputs"][0]["kind"] == "joint/velocity"
     runtime = torch.jit.load(str(semantic_session / "policy.pt"), map_location="cpu")
     fresh = torch.tensor([7.0, -4.0])
     torch.testing.assert_close(runtime(fresh), fresh - model.mean)
+
+
+@pytest.mark.parametrize("value", [torch.zeros(3), torch.zeros(2, dtype=torch.float64)])
+def test_pruned_input_name_does_not_bypass_output_validation(value):
+    node = LeappNode("policy")
+    node.add_output("mean", "mean", torch.zeros(2))
+    node.trimmed_inputs.add("mean")
+    node.validate_input_and_update_sources("mean", "mean", value)
+    with pytest.raises(Exception, match="description has changed"):
+        node.reentry_validate_outputs({"mean": value})
 
 
 def test_semantic_reentry_skips_pruned_inputs(semantic_session):

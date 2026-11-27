@@ -294,6 +294,8 @@ User-facing integration recipes belong here, not in this file.
   YAML generation and visualization look up current metadata for surviving
   ports. Preserve declared identity through backend renaming and keep valid
   metadata for intentionally removed inputs out of executable I/O.
+- Apply pruned-input validation exemptions only to inputs. Outputs and state
+  updates sharing a removed input's name must still validate and cache samples.
 - Tracing can enter branches that are not needed to produce the declared
   outputs. Report recoverable capture or translation failures with
   `_get_logger().error(...)`, which logs without raising; do not abort the
