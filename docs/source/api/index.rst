@@ -417,9 +417,10 @@ to pass ``allow_unregistered_ports=True`` for predefinition.
 
 ``allow_unregistered_ports=True`` permits descriptions before their ports exist.
 It creates the named node if needed, without requiring concrete tensors or
-adding ports. Later tensor annotations reuse that node and attach the pending
-descriptions to their ports. Missing ports are checked at compilation. Semantic
-fields and known shapes validate in both modes.
+adding ports. Semantics stay in the node's map, keyed by direction and declared
+port name. Tensor registration does not consume or copy them onto ports. YAML
+generation looks up each surviving port's current description. Missing ports
+are checked at compilation. Semantic fields and known shapes validate in both modes.
 
 Each argument accepts a list or tuple of named ``TensorSemantics`` descriptors.
 Names come from the descriptors; no dictionary keys or tensor references are

@@ -167,7 +167,7 @@ class ExportManager:
             if created:
                 del self.nodes[node_name]
             raise
-        if created and not any(node._pending_semantics.values()):
+        if created and not any(node._semantics.values()):
             del self.nodes[node_name]
 
     @classmethod

@@ -111,6 +111,8 @@ class TensorDescription:
         # Capture-only Python identifier, assigned once when registered as an
         # FX input. Public names and aliases remain unchanged.
         self.fx_name = None
+        # Keep the declared identity when an export backend renames this port.
+        self.declared_name = name
         # Capture-only layout facts must precede safe_deepcopy's dense snapshot.
         tensor = to_export_torch_tensor(value)
         self.strides = None
@@ -166,12 +168,7 @@ class TensorDescription:
         else:
             semantics = TensorSemantics(name=self.name, ref=self.value)
         semantics.update(values)
-        owner = getattr(self, "_semantic_owner", None)
-        if owner is not None:
-            node, direction = owner
-            node.set_semantics(**{direction: [semantics]})
-        else:
-            self.init_semantics(semantics)
+        self.init_semantics(semantics)
 
     # --- Core methods ---
 
@@ -220,6 +217,11 @@ class TensorDescription:
     def aliases(self) -> List[str]:
         """Return every declared name for this tensor."""
         return self._aliases
+
+    @property
+    def declared_names(self) -> Tuple[str, ...]:
+        """Capture-time port names, independent of the backend's exported name."""
+        return (self.declared_name, *self._aliases[1:])
 
     @property
     def name_str(self) -> str:
