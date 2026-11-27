@@ -344,8 +344,7 @@ Semantic metadata
                    *, axes=None, is_setpoint=None, reference=None,
                    expressed_in=None)
 
-* ``name`` supplies the port name. ``ref`` supplies the tensor value for tensor
-  annotations; omit it when using ``annotate.set_semantics()``.
+* ``name`` supplies the port name; ``ref`` supplies the tensor value.
 * ``kind`` accepts ``Kind``, ``InputKindEnum``, ``OutputKindEnum``,
   custom strings, or ``None``. The legacy input/output enums are deprecated
   and emit ``FutureWarning`` when used in an annotation.
@@ -409,133 +408,66 @@ Annotations
    annotate.set_semantics(node_name, *, inputs=None, outputs=None, states=None,
                           allow_unregistered_ports=False)
 
-Declare or replace node metadata independently of tensor values. Call after
-``leapp.start()`` to select the current session, before ``compile_graph()``.
-By default, each named port must already be registered on that node in the
-specified direction. An invalid port name raises ``ValueError`` with guidance
-to pass ``allow_unregistered_ports=True`` for predefinition.
+* Declares or replaces metadata independently of tensor values. Call after
+  ``start()`` and before ``compile_graph()``, including after ``stop()``.
+* ``inputs``, ``outputs``, and ``states`` accept lists or tuples of named
+  ``TensorSemantics`` descriptors. Input and output names are independent.
+* By default, names must match registered ports in the specified direction.
+  Unknown names raise ``ValueError``.
+* ``allow_unregistered_ports=True`` permits predefinition and creates the node
+  if needed, without adding executable ports. Unresolved names fail compilation.
+* ``states`` describes both state ports; both must exist unless predefinition
+  is enabled. Use ``state_tensors()`` and ``update_state()`` to create feedback.
+* Each valid call replaces the full description of supplied ports, clearing
+  omitted fields and preserving other ports. Inline annotations share this store
+  and replacement policy.
+* Missing or duplicate names, incompatible layouts, and output setpoints fail
+  atomically. Known shapes validate immediately; otherwise, checks wait for
+  registration.
+* Metadata stays in the node's direction/name map. YAML generation looks it up
+  for surviving ports. Registration does not consume it.
+* Set metadata before compilation, which may rename ports. Later edits do not
+  update saved artifacts. A new ``start()`` resets the store.
 
-``allow_unregistered_ports=True`` permits descriptions before their ports exist.
-It creates the named node if needed, without requiring concrete tensors or
-adding ports. Semantics stay in the node's map, keyed by direction and declared
-port name. Tensor registration does not consume or copy them onto ports. YAML
-generation looks up each surviving port's current description. Missing ports
-are checked at compilation. Semantic fields and known shapes validate in both modes.
-
-Each argument accepts a list or tuple of named ``TensorSemantics`` descriptors.
-Names come from the descriptors; no dictionary keys or tensor references are
-required. Inputs and outputs have separate namespaces. ``states`` applies each
-descriptor to both the matching input and output; it does not create feedback
-connections. Declare those with ``state_tensors()`` and ``update_state()``.
-Both state ports must exist unless ``allow_unregistered_ports=True`` is supplied.
-
-Each valid call replaces the complete description for every supplied port;
-omitted fields are cleared and other ports remain unchanged. Missing names,
-duplicate names in a direction, incompatible layouts, and setpoint outputs
-raise errors without changing prior metadata. Shape checks wait until a port
-exists. Unresolved names fail compilation. Set semantics before calling
-``compile_graph()``, which may rename ports. Later changes do not update saved
-artifacts. A new ``start()`` creates a fresh semantic store. Existing inline
-tensor annotations use the same store and replacement rules.
+See :doc:`/semantics/usage` for examples.
 
 ``annotate.input_tensors()``
 ----------------------------
-
-Create traced tensor inputs for programmatic node definition.
-
-Signature
-~~~~~~~~~
 
 .. code-block:: python
 
    traced_tensors = annotate.input_tensors(node_name: str, tensors)
 
-Parameters
-~~~~~~~~~~
-
-* ``node_name`` (str, required): Unique node identifier.
-* ``tensors`` (required): Either a dict of named raw tensors or a
-  ``TensorSemantics`` / list of ``TensorSemantics``. Bare tensors and
-  other unnamed top-level collections are not supported. See
-  :doc:`/semantics/usage`.
-
-Returns
-~~~~~~~
-
-* A single traced value for a single input, or a tuple in dict key order
-  for multiple inputs.
-
-Behavior
-~~~~~~~~
-
-* Creates a new traced tensor node context (or reuses the existing one
-  if called again with the same ``node_name``).
-* Wraps input tensors in ``TracedTensor`` objects that use ``torch.fx``
-  to record operations.
-* Operations on ``TracedTensor`` objects are captured even across helper
-  functions.
-* Must be paired with ``output_tensors()`` to finalize the node.
-
-Notes
-~~~~~
-
-* ``leapp.start()`` must have been called.
-* ``TracedTensor`` supports most PyTorch tensor operations.
-* Do not mix ``TracedTensor`` values from different node contexts in a
-  single operation.
+* Creates or reuses the named node during an active session.
+* ``tensors`` accepts a dict of named raw tensors, a ``TensorSemantics``, or a
+  homogeneous list/tuple of descriptors. Bare tensors and unnamed collections
+  are unsupported.
+* Returns one traced value for one input, otherwise a tuple in declaration order.
+* Records operations across helper functions. Do not mix traced values from
+  different node contexts in one operation.
+* Pair with ``output_tensors()`` to finalize capture.
 
 ``annotate.output_tensors()``
 -----------------------------
 
-Mark traced tensor outputs and finalize a traced tensor node.
-
-Signature
-~~~~~~~~~
-
 .. code-block:: python
 
-   annotate.output_tensors(
-       node_name: str,
-       tensors,
-       static_outputs=None,
-       **kwargs,
-   )
+   annotate.output_tensors(node_name: str, tensors, static_outputs=None, **kwargs)
 
-Parameters
-~~~~~~~~~~
-
-* ``node_name`` (str, required): Must match the corresponding
-  ``input_tensors()`` call.
-* ``tensors`` (required): Same form as ``input_tensors``.
-* ``static_outputs`` (optional): Constant outputs not derived from
-  traced inputs. Same naming contract as ``tensors``. Underlying values
-  must be plain ``torch.Tensor``, not ``TracedTensor``.
-* ``**kwargs``:
-
-  * ``export_with`` (str | None): Export backend. Common values
-    ``"jit"``, ``"onnx"``, and ``"exported-program"`` (alias ``"pt2"``).
-    Other variants are ``"jit-script"``, ``"jit-trace"``,
-    ``"onnx-dynamo"``, and ``"onnx-torchscript"``. ``"executorch"``
-    writes an ExecuTorch ``.pte`` program. See :doc:`/guides/export`.
-  * ``backend_params`` (dict): Backend-specific parameters.
-
-Behavior
-~~~~~~~~
-
-* Finalizes the traced node by marking which tensors are outputs.
-* Compiles the recorded computation graph into an exportable model.
-* Automatically prunes inputs that do not contribute to outputs.
-* Returns the underlying raw tensors (unwrapped from ``TracedTensor``).
-* After this call, the node's ``TracedTensor`` instances are no longer
-  tracing.
+* Finalizes the existing named node and builds its exportable graph.
+* ``tensors`` uses the same naming forms as ``input_tensors()``.
+* ``static_outputs`` declares constant outputs using the same naming forms.
+  Values must be plain ``torch.Tensor`` objects, not traced tensors.
+* ``export_with`` selects the backend: ``"jit"``, ``"onnx"``, ``"pt2"``
+  (``"exported-program"``), or ``"executorch"``. Variants include
+  ``"jit-script"``, ``"jit-trace"``, ``"onnx-dynamo"``, and
+  ``"onnx-torchscript"``. See :doc:`/guides/export`.
+* ``backend_params`` supplies backend-specific options.
+* Prunes unused inputs, returns unwrapped output values, and ends tracing for
+  that node's current capture.
 
 ``annotate.method()``
 ---------------------
-
-Decorator that traces a function or method as a single node.
-
-Signature
-~~~~~~~~~
 
 .. code-block:: python
 
@@ -543,223 +475,93 @@ Signature
    def your_function(...):
        ...
 
-Parameters
-~~~~~~~~~~
-
-* ``node_name`` (str, optional): Custom node name. Defaults to the
-  function name.
-* ``export_with`` (str | None, optional): Export backend. Common values
-  ``"jit"``, ``"onnx"``, and ``"exported-program"`` (alias ``"pt2"``).
-* ``backend_params`` (dict, optional): Backend-specific parameters.
-
-Behavior
-~~~~~~~~
-
-* Wraps the function to trace its execution.
-* Captures inputs from the function signature and outputs from the
-  return value.
-* Creates a ``TracedTensorNode`` internally.
-* If interpretation is disabled, the function runs normally without
-  tracing.
-* Tensor-valued default arguments that are not explicitly passed are
-  captured as node-local constants.
-
-Notes
-~~~~~
-
-* Recommended shorthand for self-contained functions.
-* You may still use other ``annotate.*`` APIs inside a decorated method
-  to annotate additional inputs or state values.
+* Traces a self-contained function or method as one ``TracedTensorNode``.
+* ``node_name`` defaults to the function name. ``export_with`` and
+  ``backend_params`` select the backend and its options.
+* Uses the function signature for inputs and the return value for outputs.
+  Unpassed tensor-valued defaults become node-local constants.
+* Other annotations may declare additional inputs or states inside the function.
+* Runs normally when interpretation is disabled.
 
 ``annotate.state_tensors()``
 ----------------------------
-
-Declare recurrent / state tensors for a traced node.
-
-Signature
-~~~~~~~~~
 
 .. code-block:: python
 
    annotate.state_tensors(node_name: str, tensors)
 
-Parameters
-~~~~~~~~~~
-
-* ``node_name`` (str, required): Traced node identifier; created if necessary.
-* ``tensors`` (required): A dict of state names to initial tensors, or named
-  ``TensorSemantics`` descriptors with ``ref`` values. Bound descriptions apply
-  to both the input and output state ports.
-
-Returns
-~~~~~~~
-
-* A single traced state tensor for a one-entry dict, or a tuple in dict
-  key order for multi-entry dicts.
-
-Behavior
-~~~~~~~~
-
-* Registers state placeholders as additional node inputs.
-* Marks them as feedback-capable.
-* Only states later passed to ``update_state()`` become feedback
-  outputs. Otherwise they remain regular inputs.
-* Nested state structures are not supported.
+* Creates or reuses the named node and registers state inputs.
+* ``tensors`` accepts a dict of names to initial tensors or named
+  ``TensorSemantics`` descriptors with tensor values. Descriptors apply to both
+  state ports. Nested state structures are unsupported.
+* Returns one traced value for one state, otherwise a tuple in declaration order.
+* Only states passed to ``update_state()`` become feedback outputs; others
+  remain regular inputs.
 
 ``annotate.update_state()``
 ---------------------------
-
-Update output values for state tensors declared with
-``annotate.state_tensors()``.
-
-Signature
-~~~~~~~~~
 
 .. code-block:: python
 
    annotate.update_state(node_name: str, tensors)
 
-Parameters
-~~~~~~~~~~
-
-* ``node_name`` (str, required): Existing traced node.
-* ``tensors`` (required): A dict from declared state names to updated traced
-  values, or named ``TensorSemantics`` descriptors with updated traced ``ref``
-  values. Their descriptions replace output metadata only.
-
-Returns
-~~~~~~~
-
-* Passthrough of the provided values: single value for a one-entry dict,
-  tuple for multi-entry.
-
-Behavior
-~~~~~~~~
-
-* Binds new output values to state tensors declared with
-  ``state_tensors()``.
-* Validates that updated values match the original state shape and
-  dtype.
-* During graph export, these become feedback outputs.
+* Updates states declared by ``state_tensors()`` on an existing node.
+* ``tensors`` accepts a dict of state names to updated traced values or named
+  ``TensorSemantics`` descriptors. Descriptors replace output metadata only.
+* Checks state shape and dtype. Updated states become feedback outputs.
+* Returns the supplied values: one value for one state, otherwise a tuple in
+  declaration order.
 
 ``annotate.register_buffer()``
 ------------------------------
-
-Declare tensors allocated outside a traced node that the node writes and
-reads, such as accumulators.
-
-Signature
-~~~~~~~~~
 
 .. code-block:: python
 
    annotate.register_buffer(node_name: str,
                             tensors: torch.Tensor | list | tuple | dict)
 
-Parameters
-~~~~~~~~~~
-
-* ``node_name`` (str, required): Existing traced node.
-* ``tensors`` (required): A tensor, a list or tuple of tensors, or a dict
-  mapping buffer names to tensors. Names are generated when not given.
-
-Returns
-~~~~~~~
-
-* Traced values backed by the given tensors: a single value for one
-  tensor, otherwise a tuple in input order.
-
-Behavior
-~~~~~~~~
-
-* Work on the returned values inside the node, including in-place
-  resets, is part of the exported model and runs on every call.
-* Without it, a reset of an outside buffer before the node's first use of
-  traced data is not exported, and the exported model accumulates across
-  calls. Validation reports this as a replayed sample that differs.
-* Outside a tracing session, the tensors are returned unchanged.
-
-Notes
-~~~~~
-
-* Call after ``input_tensors()`` on every call of the node.
-* Pass Torch tensors. For a Warp array, register ``wp.to_torch(array)``
-  and use ``wp.from_torch(result, dtype=array.dtype)`` in its place.
+* Registers outside tensors written and read by the node, such as accumulators.
+  Call after ``input_tensors()`` on every node execution.
+* ``tensors`` accepts a Torch tensor, list/tuple, or named dict. Unnamed buffers
+  receive generated names.
+* Returns traced values backed by those tensors: one value for one buffer,
+  otherwise a tuple in input order. Use the returned values inside the node.
+* Captures in-place resets on every execution. Without registration, resets
+  before the first use of traced data are not exported and replay can accumulate
+  across calls.
+* For Warp, register ``wp.to_torch(array)`` and use
+  ``wp.from_torch(result, dtype=array.dtype)`` in its place.
+* Returns tensors unchanged outside tracing.
 
 ``annotate.module()``
 ---------------------
 
-Register an ``nn.Module`` for automatic buffer tracking inside a traced
-node.
-
-Signature
-~~~~~~~~~
-
 .. code-block:: python
 
-   annotate.module(node_name: str,
-                   model: torch.nn.Module,
+   annotate.module(node_name: str, model: torch.nn.Module,
                    buffer_names: list[str] | None = None)
 
-Parameters
-~~~~~~~~~~
-
-* ``node_name`` (str, required): Existing traced node.
-* ``model`` (``torch.nn.Module``, required): Module whose registered
-  buffers should be tracked.
-* ``buffer_names`` (list[str] | None, optional): Subset of buffer names
-  to track. If omitted, all registered buffers are tracked.
-
-Behavior
-~~~~~~~~
-
-* Temporarily injects tracked versions of model buffers so the forward
-  pass is traced through them.
-* Detects buffer reassignment during execution.
-* Emits mutated buffers as feedback state and preserves untouched
-  buffers as frozen constants.
-
-Notes
-~~~~~
-
-* Call after ``input_tensors()`` and before the module forward pass.
-* Reassignment is tracked; in-place mutation like
-  ``self.h.copy_(...)`` is not.
+* Tracks registered module buffers on an existing node. Call after
+  ``input_tensors()`` and before the forward pass.
+* ``buffer_names`` selects a subset; omitted, all registered buffers are tracked.
+* Temporarily injects traced buffers, emits reassigned buffers as feedback,
+  and preserves untouched buffers as constants.
+* Tracks reassignment, not in-place updates such as ``self.h.copy_(...)``.
 
 ``annotate.mirror_leapp_tags()``
 --------------------------------
-
-Transfer LEAPP's internal port representation from one value to another when
-data is duplicated without using standard PyTorch operations.
-
-Signature
-~~~~~~~~~
 
 .. code-block:: python
 
    target = annotate.mirror_leapp_tags(source, target)
 
-Parameters
-~~~~~~~~~~
-
-* ``source`` (required): A value that was registered as a node output, so it
-  carries the producing node and output port.
-* ``target`` (required): Value that receives the traced state. Must contain
-  exactly the same values as ``source``.
-
-Behavior
-~~~~~~~~
-
-#. Verifies that ``source`` and ``target`` contain exactly the same
-   values.
-#. If verification passes, copies the producing node, output port, and
-   tracing proxy from ``source`` to ``target``.
-#. If data does not match, logs an error and raises rather than copying
-   incorrect tracing metadata.
-#. Returns the target. Torch and Warp targets are upgraded in place, so the
-   return value can be ignored. A raw ``np.ndarray`` cannot be upgraded in
-   place, so NumPy callers must assign the returned value.
-#. Outside graph interpretation, returns the target unchanged.
+* Transfers tracing metadata between equivalent copies made outside standard
+  PyTorch operations. ``source`` must be a registered node output.
+* Requires exactly matching values; a mismatch logs an error and raises.
+* Copies the producing node, output port, and tracing proxy to ``target``.
+* Returns the target. Torch and Warp targets are upgraded in place; raw NumPy
+  targets require assigning the return value.
+* Returns the target unchanged outside graph interpretation.
 
 See :doc:`/guides/buffers` for between-node copy examples.
 
