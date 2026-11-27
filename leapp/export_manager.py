@@ -33,7 +33,6 @@ from leapp.leapp_graph.datatypes.patching import (
     warn_if_script_functions_in_scope,
 )
 from leapp.utils.semantics import TensorSemantics
-from leapp.utils.node_semantics import NodeSemantics
 from leapp.utils.tensor_description import (
     verify_data_exact_match,
     flatten_io_structure,
@@ -89,7 +88,6 @@ class ExportManager:
             # cleared: state computed later from such a buffer can reach any
             # model.
             self.keep_buffers_tied = False
-            self._semantics = {}
             self._next_completed_node_index = 0
 
             ExportManager._initialized = True
@@ -134,19 +132,11 @@ class ExportManager:
     def reset_nodes(self):
         self.nodes = {}
         self.release_buffer_trackers()
-        self._semantics = {}
         self._next_completed_node_index = 0
         TracedTensorNode._next_input_index = 0
 
     def get_nodes(self):
         return self.nodes
-
-    def _get_semantics(self, node_name: str):
-        if not isinstance(node_name, str) or not node_name.strip():
-            raise ValueError("node_name must be a non-empty string")
-        if node_name not in self._semantics:
-            self._semantics[node_name] = NodeSemantics(node_name)
-        return self._semantics[node_name]
 
     def set_semantics(
         self,
@@ -158,12 +148,27 @@ class ExportManager:
         allow_unregistered_ports=False,
     ):
         """Declare or replace node metadata before compilation begins."""
-        self._get_semantics(node_name).set_semantics(
-            inputs=inputs,
-            outputs=outputs,
-            states=states,
-            allow_unregistered_ports=allow_unregistered_ports,
+        if not isinstance(node_name, str) or not node_name.strip():
+            raise ValueError("node_name must be a non-empty string")
+        created = node_name not in self.nodes
+        node = (
+            self._setup_new_node(node_name)
+            if created
+            else self.nodes[node_name]
         )
+        try:
+            node.set_semantics(
+                inputs=inputs,
+                outputs=outputs,
+                states=states,
+                allow_unregistered_ports=allow_unregistered_ports,
+            )
+        except Exception:
+            if created:
+                del self.nodes[node_name]
+            raise
+        if created and not any(node._pending_semantics.values()):
+            del self.nodes[node_name]
 
     @classmethod
     def set_interpret_graph(cls, is_enabled: bool):
@@ -202,14 +207,8 @@ class ExportManager:
         self._next_completed_node_index += 1
 
     def validate_nodes_ready_for_compile(self):
-        unused = set(self._semantics) - set(self.nodes)
-        if any(
-            any(entries for entries in self._semantics[name]._entries.values())
-            for name in unused
-        ):
-            raise ValueError(
-                f"Semantics declared for uncaptured nodes: {sorted(unused)}"
-            )
+        for node in self.nodes.values():
+            node.validate_semantics()
         incomplete_nodes = [
             name
             for name, node in self.nodes.items()
@@ -236,8 +235,6 @@ class ExportManager:
                 "Run the same annotated path again before compiling the graph.",
                 error_type=Exception,
             )
-        for node in self.nodes.values():
-            node._semantics._validate_ports()
 
     def _setup_new_node(self, name):
         if name in self.nodes:
@@ -250,7 +247,6 @@ class ExportManager:
         node = TracedTensorNode(name)
 
         node._max_cached_io = self._max_cached_io
-        node._semantics = self._get_semantics(name)
         self.nodes[name] = node
         return node
 
@@ -612,7 +608,7 @@ class ExportManager:
             return self._passthrough_dict_values(tensors)
 
         if node_name not in self.nodes:
-            self._setup_new_node(node_name, TracedTensorNode)
+            self._setup_new_node(node_name)
 
         traced_node = self.nodes[node_name]
 
