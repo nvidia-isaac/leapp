@@ -43,6 +43,7 @@ Once available, record `leapp.__version__`, `leapp.__file__`, and relevant publi
 | API | Use |
 |-----|-----|
 | `input_tensors` + `output_tensors` | Primary interface for explicit names, semantic metadata, and nodes spanning existing helpers or files. |
+| `annotate.set_semantics` | Define or replace named input/output/state metadata independently of tensor values; see [semantics](references/semantics.md). |
 | `@annotate.method(...)` | Shorthand when one existing function naturally defines a node. `node_name` defaults to the function name. |
 | `leapp.FunctionPatch(module, name, replacement)` | Traceable adapter for an unsupported function, registered through `start(patching=[...])`; not a node declaration. |
 | `annotate.module(name, model)` | Track registered `nn.Module` buffers used in a node; reassigned buffers become feedback. |
@@ -137,7 +138,7 @@ Choose opset and optimizations for the actual runtime. Disabling validation, `sk
 
 For recurrent policies, history buffers, or episode resets, read [state and episode lifecycle](references/state.md).
 
-- `state_tensors` requires an existing node and a **flat dict of named Torch tensors**; nested state is unsupported. `update_state` must use declared names and preserve each state's shape and dtype. One entry returns a value; multiple entries return a tuple in insertion order.
+- `state_tensors` creates or reuses the named node. Raw state values use a **flat dict of named tensors**; bound `TensorSemantics` descriptors are also accepted. Nested state is unsupported. `update_state` must use declared names and preserve each state's shape and dtype. One entry returns a value; multiple entries return a tuple in insertion order. See [state](references/state.md) for the Warp capture boundary requirement.
 - Only states passed to `update_state()` become explicit feedback; an unupdated state remains a regular input. Keep evolving state distinct from frozen parameters and constants.
 - After opening the node, call `annotate.module("node", model, buffer_names=[...])` before model execution to select registered buffers; omit `buffer_names` to track all. It tracks reassignment (`self.h = new_h`), not in-place updates (`self.h.copy_(...)`) or plain attributes. Use explicit state annotations for existing mutation patterns where possible; a pure function patch cannot represent mutation.
 - Inferred cross-node feedback needs **at least two iterations** between `start()` and `stop()`. Explicit state/module feedback can be declared in one trace; still validate multiple time steps and initial/reset state. Confirm `pipeline.feedback_flow` and the saved initial values.
@@ -170,6 +171,16 @@ Supported NumPy/Torch conversions such as `torch.from_numpy()` and `.numpy()` ca
 ## Optional deployment semantics
 
 Add semantics when a user requests them or an identified downstream consumer needs tensor meaning to bind observations, map joint order, interpret commands, or apply action chunks. They are not required for tracing, export, numerical validation, or state feedback. Default to named raw tensors for ordinary internal node connections; do not annotate every intermediate value or add nodes solely for metadata.
+
+Use `annotate.set_semantics(node_name, inputs=[...], outputs=[...], states=[...])`
+for metadata supplied separately from values. Named `TensorSemantics`
+descriptors need no `ref` for this call. Call after `start()` and before
+`compile_graph()`, including after `stop()`. Existing ports are checked by
+default; `allow_unregistered_ports=True` permits predefinition and creates the
+node if needed. Later calls replace the supplied descriptions in full. The
+node owns the metadata independently of its executable ports; export reads
+the current map. See [semantics](references/semantics.md) for validation,
+state directions, and inline annotation conventions.
 
 When needed, read [deployment semantics](references/semantics.md). **Prefer quantity helpers or `Kind` with `Axis`** over custom strings or `extra` for new integrations whose consumers support them. These APIs remain experimental. Keep annotations compact: reuse existing ordered names, specify only consumed fields, and avoid repeated wrappers or metadata factories. Do not guess physical meaning for normalized features, latent vectors, or mixed observations. State/reset contracts are covered separately in [state](references/state.md).
 

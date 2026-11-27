@@ -25,6 +25,7 @@ skill installations.
 | Tracing, `TracedData` / `TracedTensor` / `TracedNpArray`, indexing, mutation, node-boundary identity, FX proxies, NumPy dispatch | [SKILL.md](SKILL.md), especially "Preserve graph connections and computation" and "Diagnose trace loss before changing exporters"; implementation in `leapp/leapp_graph/` |
 | Warp tracing (`TracedWpArray`, APIC, `warp_op`) | [Warp guide](references/warp.md) |
 | Public annotate/lifecycle API or docs examples | `docs/source/api/index.rst` plus the matching guide under `docs/source/` |
+| Semantic declarations, validation, or serialization | `docs/source/semantics/usage.rst`, `leapp/leapp_graph/leapp_node.py`, and `tests/unit_tests/test_tensor_semantics.py` |
 | Graph PNG layout | `packages/leapp-visualization/` |
 | Export backends | `leapp/backends/` |
 | Export/validation diagnostic messages and hint selection | `leapp/utils/diagnostics.py`; model execution, logging, and raising remain with the caller |
@@ -60,6 +61,15 @@ Public imports are only what `leapp/__init__.py` exports. Annotation names
 allowed on `leapp.annotate` are listed in `AnnotateAPI._ALLOWED_APIS` in
 `leapp/leapp.py`. Do not add a consumer API without updating both, the
 docs, and tests.
+
+## Keep agent guidance current
+
+For every new feature or change to APIs, behavior, or guidance, review both
+`AGENTS.md` and `SKILL.md`. Update the affected guidance and linked references
+in the same change. Keep repository development and testing rules in
+`AGENTS.md`, and application integration instructions in `SKILL.md` and its
+references. Keep shared guidance consistent across these files and verify
+changed examples against the implemented API.
 
 ## Testing
 
@@ -144,6 +154,9 @@ Required regression coverage for affected behavior:
   including final exported-node validation rejecting wrong outputs.
 - Annotation semantics: update the matching `tests/test_examples/` case when
   its example is affected. Examples are part of CI.
+- Keep semantic regression coverage in
+  `tests/unit_tests/test_tensor_semantics.py`, including registration timing,
+  overrides, aliases, pruning, and exported metadata.
 
 ### Test cost and CI
 
@@ -272,6 +285,11 @@ User-facing integration recipes belong here, not in this file.
 
 ## Guardrails when changing behavior
 
+- Keep semantic metadata in each node's direction/name map, independent of
+  tensor values and input/output descriptions. Registration validates the map;
+  YAML generation and visualization look up current metadata for surviving
+  ports. Preserve declared identity through backend renaming and keep valid
+  metadata for intentionally removed inputs out of executable I/O.
 - Tracing can enter branches that are not needed to produce the declared
   outputs. Report recoverable capture or translation failures with
   `_get_logger().error(...)`, which logs without raising; do not abort the
